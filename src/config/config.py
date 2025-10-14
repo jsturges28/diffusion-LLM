@@ -6,7 +6,8 @@ from pathlib import Path
 class PrepareDatasetConfig:
     huggingface_dataset_path: str = "roneneldan/TinyStories"
     field: str = "text"
-    save_path: Path = Path("data/TinyStories")
+    shard_size: int = 1000
+    save_path: Path = Path("data/tinystories")
 
 
 @dataclass
