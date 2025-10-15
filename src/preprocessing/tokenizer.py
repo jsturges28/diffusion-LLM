@@ -1,17 +1,17 @@
-import random
-import glob
 import tiktoken
+import numpy as np
+from tqdm import tqdm
 from pathlib import Path
 from dataclasses import dataclass
 from typing import List, Iterable
 
-from src.config.config import PreprocessingConfig
+from src.config.config import TokenizerConfig
 
 
 @dataclass
 class BPETokenizer:
     '''
-    We use Byte-Pair Encoding to preprocess the vocabulary
+    Byte-Pair Encoding to tokenize the vocabulary
     '''
     name: str
     bos_id: int
@@ -32,5 +32,49 @@ class BPETokenizer:
         return full_text
     
 
-def get_text_files(root: Path, shuffle: bool,seed: int) -> Iterable[Path]:
+def read_text(path: Path) -> str:
+    with path.open("r", encoding="utf-8") as f:
+        return f.read().strip()
     
+
+def get_text_files(root: Path) -> List[Path]:
+    """
+    Glob .txt files under `root`. If `root` is a file, yield it directly.
+    Supports sharded layouts like: data/tinystories/shard_0000/000000.txt, ...
+    """
+    if root.is_file():
+        return [root]
+    
+    files = list(root.rglob("*.txt"))
+    if not files:
+        raise RuntimeError(f"No .txt files under {root}.")
+    
+    files.sort()
+
+    return files
+
+
+def tokenize_files(files: List[Path], tokenizer: BPETokenizer) -> np.ndarray:
+    """
+    Produce a single flat list of token IDs by concatenating
+    BOS + encoded(doc) + EOS for each input file.
+    """
+    encodings: List[int] = []
+    for file in tqdm(files, desc="Tokenizing files", unit="file"):
+        text = read_text(file)
+        if text:
+            encoding = tokenizer.encode_with_specials(text)
+            encodings.extend(encoding)
+
+    return np.asarray(encodings, dtype=np.int64)
+    
+
+def build_token_stream(config: TokenizerConfig, tokenizer: BPETokenizer) -> np.ndarray:
+    """
+    Convenience to tokenize all files under the data root
+    """
+    files = get_text_files(config.data_root)
+    if not files:
+        raise RuntimeError(f"No .txt files under {config.data_root}")
+    
+    return tokenize_files(files, tokenizer)

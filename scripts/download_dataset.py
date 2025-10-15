@@ -38,7 +38,7 @@ def save_dataset_to_txt(dataset, field: str, shard_size: int, save_dir: Path):
 
     print(f"Downloading dataset {dataset}, splitting into shard size {shard_size}...")
 
-    for i, sample in enumerate(tqdm(dataset, total=total, unit="sample", desc="writing shards")):
+    for i, sample in enumerate(tqdm(dataset, total=total, unit="sample", desc="Downloading samples")):
         shard_id = i // shard_size
         shard_dir = save_dir / f"shard_{shard_id:04d}"
         shard_dir.mkdir(exist_ok=True)
