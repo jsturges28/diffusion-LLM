@@ -32,3 +32,10 @@ class PreprocessingConfig:
     shuffle: bool = True
     seed: int = 42
     force_uint16: bool = True
+
+
+@dataclass
+class ModelConfig:
+    hidden_multiplier: int = 4
+    max_period: float = 10000.0
+    max_diffusion_steps: int = 1000
