@@ -5,10 +5,7 @@ from transformers.models.auto.tokenization_auto import AutoTokenizer
 from transformers.models.auto.modeling_auto import AutoModel, AutoModelForCausalLM
 
 from src.inference.llada_sampler import llada_generate_with_history
-from src.inference.mdm_sampler import MDMSamplerConfig, mdm_generate_with_history
 from src.inference.render_gif import history_to_gif
-#from src.preprocessing.preprocess import run
-#from src.config.config import PreprocessingConfig, TokenizerConfig
 
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser("Main controller")
@@ -75,23 +72,6 @@ def main():
                 remasking="low_confidence",
                 history_stride=args.history_stride,
             )
-
-        else:
-            # Keep existing Qwen MDM demo as an alternate backend
-            tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
-            model = AutoModelForCausalLM.from_pretrained(
-                "Qwen/Qwen2.5-0.5B-Instruct",
-                torch_dtype=torch.bfloat16 if device.type == "cuda" else None,
-                device_map="auto" if device.type == "cuda" else None,
-            ).eval()
-            #model.to(device)
-
-            cfg = MDMSamplerConfig(
-                model_name="Qwen/Qwen2.5-0.5B-Instruct",
-                steps=args.steps,
-                max_new_tokens=args.gen_length,
-            )
-            final_text, history = mdm_generate_with_history(model, tok, args.prompt, cfg)
 
         print("\n--- Prompt ---")
         print(args.prompt)
