@@ -1,0 +1,652 @@
+
+===== FRAME 0 =====
+REST░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+
+===== FRAME 1 =====
+REST APIs are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░.
+
+===== FRAME 2 =====
+REST APIs are a set of░ and░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░.
+
+===== FRAME 3 =====
+REST APIs are a set of░ and protocols that allow░ to░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░.
+
+===== FRAME 4 =====
+REST APIs are a set of rules and protocols that allow clients to interact with░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░.
+
+===== FRAME 5 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services.░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ the░.
+
+===== FRAME 6 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ the░.
+
+===== FRAME 7 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ the░.
+
+===== FRAME 8 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (░ational State░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ to the░.
+
+===== FRAME 9 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer)░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ to the console.
+
+===== FRAME 10 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ is then printed to the console.
+
+===== FRAME 11 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░. The JSON response is then printed to the console.
+
+===== FRAME 12 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ GET request to░░░░░░░░░░. The JSON response is then printed to the console.
+
+===== FRAME 13 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ library to░ a GET request to the░░░░░░░░░. The JSON response is then printed to the console.
+
+===== FRAME 14 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ the `requests` library to░ a GET request to the░░░░░░░░░. The JSON response is then printed to the console.
+
+===== FRAME 15 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+```
+░░░░ the `requests` library to send a GET request to the░░░░░░░░░. The JSON response is then printed to the console.
+
+===== FRAME 16 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+```
+
+This░ uses the `requests` library to send a GET request to the░░░░░░░░░. The JSON response is then printed to the console.
+
+===== FRAME 17 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+░░)
+```
+
+This░ uses the `requests` library to send a GET request to the░░░░░░░░░. The JSON response is then printed to the console.
+
+===== FRAME 18 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░.json░
+print░)
+```
+
+This░ uses the `requests` library to send a GET request to the░░░░░░░░░. The JSON response is then printed to the console.
+
+===== FRAME 19 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+░ =░.json░
+print░)
+```
+
+This░ uses the `requests` library to send a GET request to the░░░░░░░░░. The JSON response is then printed to the console.
+
+===== FRAME 20 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+░ = response.json()
+print░)
+```
+
+This░ uses the `requests` library to send a GET request to the░░░░░░░░░. The JSON response is then printed to the console.
+
+===== FRAME 21 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+data = response.json()
+print(data)
+```
+
+This░ uses the `requests` library to send a GET request to the░░░░░░░░░. The JSON response is then printed to the console.
+
+===== FRAME 22 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░.get░)
+data = response.json()
+print(data)
+```
+
+This░ uses the `requests` library to send a GET request to the░░░░░░░░░. The JSON response is then printed to the console.
+
+===== FRAME 23 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+response░░.get░)
+data = response.json()
+print(data)
+```
+
+This░ uses the `requests` library to send a GET request to the░░░░░░░░░. The JSON response is then printed to the console.
+
+===== FRAME 24 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+response = requests.get░)
+data = response.json()
+print(data)
+```
+
+This░ uses the `requests` library to send a GET request to the░░░░░░░░░. The JSON response is then printed to the console.
+
+===== FRAME 25 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the░░░░░░░░░. The JSON response is then printed to the console.
+
+===== FRAME 26 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the░░░░░░░ JSON░. The JSON response is then printed to the console.
+
+===== FRAME 27 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the░░░░░░ in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 28 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the░ URL and░░░ in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 29 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and░ the░ in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 30 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 31 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 32 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░url░░░░api░.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 33 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+url =░░░api░.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 34 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+url = '░://api░.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 35 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 36 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+░ requests░
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 37 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 38 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+```░
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 39 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+
+```python
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 40 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are░ to░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░:
+
+```python
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 41 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are designed to be░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░:
+
+```python
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 42 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are designed to be░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ GET request░░░░:
+
+```python
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 43 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are designed to be░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ GET request to a░░:
+
+```python
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 44 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are designed to be░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ GET request to a REST API:
+
+```python
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 45 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are designed to be░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ to░ a GET request to a REST API:
+
+```python
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 46 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are designed to be░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░requests░ library to░ a GET request to a REST API:
+
+```python
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 47 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are designed to be░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ `requests` library to░ a GET request to a REST API:
+
+```python
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 48 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are designed to be░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ using the `requests` library to░ a GET request to a REST API:
+
+```python
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 49 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are designed to be░░░░░░░░░░░░░░░░░░░░░░░
+░░░░ Python░ using the `requests` library to░ a GET request to a REST API:
+
+```python
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 50 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are designed to be░░░░░░░░░░░░░░░░░░░░░░░
+░Here░░ Python example using the `requests` library to░ a GET request to a REST API:
+
+```python
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 51 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are designed to be░░░░░░░░░░░░░░░░░░░░░░░
+
+Here░ a Python example using the `requests` library to░ a GET request to a REST API:
+
+```python
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 52 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are designed to be░░░░░░░░░░░░░░░░░░░░░░.
+
+Here░ a Python example using the `requests` library to send a GET request to a REST API:
+
+```python
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 53 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are designed to be░ and░░░░░░░░░░░░░░░░░░░░.
+
+Here is a Python example using the `requests` library to send a GET request to a REST API:
+
+```python
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 54 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are designed to be░ and░.░ APIs░░░░░░░░░░░░░░░░.
+
+Here is a Python example using the `requests` library to send a GET request to a REST API:
+
+```python
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 55 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are designed to be░ and scalable. REST APIs░░░░░░░░░░░░░░░░.
+
+Here is a Python example using the `requests` library to send a GET request to a REST API:
+
+```python
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 56 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are designed to be░ and scalable. REST APIs use HTTP░░░░░░░░░░░░░░.
+
+Here is a Python example using the `requests` library to send a GET request to a REST API:
+
+```python
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 57 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are designed to be░ and scalable. REST APIs use HTTP methods to░░░░░░░░░░░░.
+
+Here is a Python example using the `requests` library to send a GET request to a REST API:
+
+```python
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 58 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are designed to be simple and scalable. REST APIs use HTTP methods to░ with░░░░░░░░░░.
+
+Here is a Python example using the `requests` library to send a GET request to a REST API:
+
+```python
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 59 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are designed to be simple and scalable. REST APIs use HTTP methods to interact with░░ and░░░░░░░.
+
+Here is a Python example using the `requests` library to send a GET request to a REST API:
+
+```python
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 60 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are designed to be simple and scalable. REST APIs use HTTP methods to interact with the service and░░░░░░░.
+
+Here is a Python example using the `requests` library to send a GET request to a REST API:
+
+```python
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 61 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are designed to be simple and scalable. REST APIs use HTTP methods to interact with the service and░░░░ in░ format.
+
+Here is a Python example using the `requests` library to send a GET request to a REST API:
+
+```python
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 62 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are designed to be simple and scalable. REST APIs use HTTP methods to interact with the service and░░░ data in JSON format.
+
+Here is a Python example using the `requests` library to send a GET request to a REST API:
+
+```python
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 63 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are designed to be simple and scalable. REST APIs use HTTP methods to interact with the service and typically░ with data in JSON format.
+
+Here is a Python example using the `requests` library to send a GET request to a REST API:
+
+```python
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
+
+===== FRAME 64 =====
+REST APIs are a set of rules and protocols that allow clients to interact with web services. They are based on the principles of REST (Representational State Transfer) and are designed to be simple and scalable. REST APIs use HTTP methods to interact with the service and typically respond with data in JSON format.
+
+Here is a Python example using the `requests` library to send a GET request to a REST API:
+
+```python
+import requests
+
+url = 'https://api.example.com/data'
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+This code uses the `requests` library to send a GET request to the specified URL and retrieve the data in JSON format. The JSON response is then printed to the console.
