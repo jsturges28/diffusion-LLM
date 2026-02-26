@@ -94,7 +94,7 @@ def main():
 
         if args.gif:
             history = [sanitize_frame(frame) for frame in history]
-            history_to_gif(history, args.gif_path)
+            history_to_gif(history, args.gif_path, header_text=args.prompt)
             print(f"\nSaved GIF: {args.gif_path}")
 
         return
