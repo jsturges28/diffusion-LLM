@@ -34,7 +34,7 @@ def history_to_gif(
 
         # --- Draw header (prompt) ---
         if header_text:
-            draw.text((10, y), "USER PROMPT: \n", font=font, fill=(180, 180, 180))
+            draw.text((10, y), "USER PROMPT:", font=font, fill=(180, 180, 180))
             y += line_h
 
             # crude wrap
@@ -55,7 +55,7 @@ def history_to_gif(
             y += 10
 
         # --- Draw response heading (always shown) ---
-        draw.text((10, y), "LLaDA RESPONSE:", font=font, fill=(180, 180, 180))
+        draw.text((10, y), "LLaDA RESPONSE (Diffusion):", font=font, fill=(180, 180, 180))
         y += line_h + 2
 
         # --- Draw diffusion text ---
