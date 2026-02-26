@@ -1,0 +1,44 @@
+These use block_length = gen_length → num_blocks = 1 → no divisibility issues.
+
+(steps=64, gen_length=128, block_length=128)
+(steps=128, gen_length=128, block_length=128) (nice quality/animation)
+(steps=256, gen_length=128, block_length=128) (smoother but slower)
+(steps=64, gen_length=160, block_length=160)
+(steps=128, gen_length=160, block_length=160)
+(steps=192, gen_length=160, block_length=160)
+(steps=64, gen_length=256, block_length=256)
+(steps=128, gen_length=256, block_length=256)
+(steps=256, gen_length=256, block_length=256)
+
+Block diffusion (semi-autoregressive; often used for instruct stability)
+
+LLaDA’s docs call out that block_length < gen_length implies semi-autoregressive remasking.
+They also mention block diffusion can mitigate excessive EOS behavior in the instruct model.
+
+gen_length = 160, block_length = 32 → num_blocks = 5
+
+Valid steps must be a multiple of 5:
+
+(steps=100, gen_length=160, block_length=32) (20 steps/block)
+(steps=125, gen_length=160, block_length=32) (25 steps/block)
+(steps=150, gen_length=160, block_length=32) (30 steps/block)
+gen_length = 256, block_length = 32 → num_blocks = 8
+
+Valid steps must be a multiple of 8:
+
+(steps=64, gen_length=256, block_length=32) (8 steps/block; fast)
+(steps=128, gen_length=256, block_length=32) (16 steps/block; solid)
+(steps=192, gen_length=256, block_length=32) (24 steps/block; smoother)
+gen_length = 256, block_length = 64 → num_blocks = 4
+
+Valid steps must be a multiple of 4:
+
+(steps=64, gen_length=256, block_length=64) (16 steps/block)
+(steps=128, gen_length=256, block_length=64) (32 steps/block)
+(steps=160, gen_length=256, block_length=64) (40 steps/block)
+gen_length = 128, block_length = 32 → num_blocks = 4
+
+Valid steps must be a multiple of 4:
+
+(steps=64, gen_length=128, block_length=32) (16 steps/block)
+(steps=128, gen_length=128, block_length=32) (32 steps/block)
