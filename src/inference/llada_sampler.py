@@ -66,6 +66,9 @@ def generate(model: Any, prompt: torch.Tensor, attention_mask: torch.Tensor | No
     x = torch.full((prompt.shape[0], prompt.shape[1] + gen_length), mask_id, dtype=torch.long).to(model.device)
     x[:, :prompt.shape[1]] = prompt.clone()
 
+    if record_history:
+        history.append(x.clone())
+        
     if attention_mask is not None:
         attention_mask = torch.cat([attention_mask, torch.ones((prompt.shape[0], gen_length), dtype=attention_mask.dtype, device=model.device)], dim=-1)
 
@@ -134,9 +137,7 @@ def generate(model: Any, prompt: torch.Tensor, attention_mask: torch.Tensor | No
             x[transfer_index] = x0[transfer_index]
 
             if record_history:
-                global_step = num_block * steps + i
-                if global_step % history_stride == 0 or (num_block == num_blocks - 1 and i == steps - 1):
-                    history.append(x.clone())
+                history.append(x.clone())
     
     return x, history
 

@@ -1,6 +1,9 @@
 import argparse
-from pathlib import Path
+import json
 import torch
+
+from datetime import datetime
+from pathlib import Path
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 from transformers.models.auto.modeling_auto import AutoModel, AutoModelForCausalLM
 
@@ -23,10 +26,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--cfg_scale", type=float, default=0.0)
     ap.add_argument("--history_stride", type=int, default=1)
 
-    ap.add_argument("--save_history", action="store_true")
-    ap.add_argument("--history_path", type=Path, default=Path("artifacts/history.txt"))
-    ap.add_argument("--gif", action="store_true")
-    ap.add_argument("--gif_path", type=Path, default=Path("artifacts/diffusion.gif"))
+    ap.add_argument("--artifacts_dir", type=Path, default=Path("artifacts"))
     return ap.parse_args()
 
 
@@ -35,6 +35,13 @@ def sanitize_frame(s: str) -> str:
     s = s.replace("<|eot_id|>", "")
     s = s.replace("<|endoftext|>", "")
     return s
+
+
+def make_run_dir(base: Path, backend: str) -> Path:
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    run_dir = base / f"{ts}_{backend}"
+    run_dir.mkdir(parents=True, exist_ok=False)
+    return run_dir
 
 
 def main():
@@ -78,24 +85,48 @@ def main():
         print("\n--- Diffusion Output ---")
         print(sanitize_frame(final_text))
 
-        if args.save_history:
-            # Save history frames as plain text for debugging / seminar notes
-            out_txt = args.history_path
-            out_txt.parent.mkdir(parents=True, exist_ok=True)
+        run_dir = make_run_dir(args.artifacts_dir, args.backend)
 
-            with out_txt.open("w", encoding="utf-8") as f:
-                for i, frame in enumerate(history):
-                    frame = sanitize_frame(frame)
-                    f.write(f"\n===== FRAME {i} =====\n")
-                    f.write(frame)
-                    f.write("\n")
+        # ---- Save metadata ----
+        metadata = {
+            "backend": args.backend,
+            "model": args.model,
+            "prompt": args.prompt,
+            "final_text": sanitize_frame(final_text),
+            "params": {
+                "steps": args.steps,
+                "gen_length": args.gen_length,
+                "block_length": args.block_length,
+                "temperature": args.temperature,
+                "cfg_scale": args.cfg_scale,
+                "history_stride": args.history_stride,
+                "remasking": "low_confidence",
+            },
+        }
 
-            print(f"Saved history text: {out_txt}")
+        meta_path = run_dir / "metadata.json"
+        meta_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
 
-        if args.gif:
-            history = [sanitize_frame(frame) for frame in history]
-            history_to_gif(history, args.gif_path, header_text=args.prompt)
-            print(f"\nSaved GIF: {args.gif_path}")
+        # ---- Save final text ----
+        final_path = run_dir / "final.txt"
+        final_path.write_text(sanitize_frame(final_text), encoding="utf-8")
+
+        # ---- Save history ----
+        hist_path = run_dir / "history.txt"
+        with hist_path.open("w", encoding="utf-8") as f:
+            for i, frame in enumerate(history):
+                frame = sanitize_frame(frame)
+                f.write(f"\n===== FRAME {i} =====\n")
+                f.write(frame)
+                f.write("\n")
+
+        # ---- Save GIF ----
+        gif_path = run_dir / "diffusion.gif"
+        gif_history = [sanitize_frame(frame) for frame in history]
+        history_to_gif(gif_history, gif_path, header_text=args.prompt)
+
+        print(f"\nSaved run artifacts to: {run_dir}")
+        print(f"- {meta_path.name}, {final_path.name}, {hist_path.name}, {gif_path.name}")
 
         return
     
