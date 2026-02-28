@@ -14,6 +14,10 @@ def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser("Main controller")
 
     ap.add_argument("--sample", action="store_true")
+    ap.add_argument("--serve", action="store_true",
+                    help="Launch the web UI server.")
+    ap.add_argument("--host", type=str, default="0.0.0.0")
+    ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--backend", type=str, default="llada", choices=["llada", "qwen_mdm"])
 
     ap.add_argument("--prompt", type=str, default="Explain what a hash map is and give a Python example.")
@@ -48,6 +52,16 @@ def main():
     args = parse_args()
     #if args.prepare_data:
         #run(preprocess_config=PreprocessingConfig(), token_config=TokenizerConfig())
+
+    if args.serve:
+        import uvicorn
+        uvicorn.run(
+            "src.web.server:app",
+            host=args.host,
+            port=args.port,
+            log_level="info",
+        )
+        return
 
     if args.sample:
         # If using device_map="auto", don't call model.to(device)
@@ -130,7 +144,9 @@ def main():
 
         return
     
-    print("No action specified. Use --sample. Example: python main.py --sample --gif")
+    print("No action specified. Use --sample or --serve.")
+    print("  python main.py --sample")
+    print("  python main.py --serve")
 
 
 if __name__ == '__main__':

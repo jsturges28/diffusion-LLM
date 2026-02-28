@@ -6,7 +6,9 @@ This repository demonstrates **diffusion-style text generation**: instead of gen
 
 We use [LLaDA 8B Instruct](https://huggingface.co/GSAI-ML/LLaDA-8B-Instruct) — the first competitive large-scale discrete diffusion language model — as our backbone. The model was pre-trained from scratch on 2.3T tokens and fine-tuned on 4.5M instruction pairs, achieving performance comparable to LLaMA 3 8B on standard benchmarks ([paper](https://arxiv.org/abs/2502.09992)).
 
-The demo produces a **GIF animation** showing the diffusion process: a fully masked canvas gradually resolving into coherent text, with configurable sampling parameters (steps, block length, temperature, classifier-free guidance).
+The project has two interfaces:
+- **CLI** — run a single prompt and save artifacts (final text, frame history, GIF animation).
+- **Web UI** — launch a local server and watch the diffusion process unfold live in the browser, with streaming intermediate frames over WebSocket.
 
 
 ## How It Works
@@ -15,7 +17,7 @@ The demo produces a **GIF animation** showing the diffusion process: a fully mas
 
 Autoregressive LLMs generate one token at a time, left to right:
 
-$$p(x_1, \ldots, x_T) = \prod_{t=1}^T p(x_t \mid x_{<t})$$
+$p(x_1, \ldots, x_T) = \prod_{t=1}^T p(x_t \mid x_{<t})$
 
 LLaDA instead uses a **masked diffusion** process:
 
@@ -40,23 +42,30 @@ The training loss is cross-entropy on masked positions only, weighted by 1/*t*, 
 
 ```
 .
-├── main.py                        # CLI entry point
+├── main.py                           # CLI entry point (--sample, --serve)
 ├── README.md
 ├── requirements.txt
 ├── LICENSE
-├── parameter_triples.txt          # Notes on parameter combinations
+├── parameter_triples.txt             # Notes on valid parameter combinations
 ├── src/
-│   └── inference/
-│       ├── llada_sampler.py       # LLaDA sampling loop + history recording
-│       └── render_gif.py          # Render diffusion history frames to GIF
-├── artifacts/                     # Auto-generated run outputs
+│   ├── inference/
+│   │   ├── llada_sampler.py          # Core LLaDA sampling loop + history recording
+│   │   ├── streaming_sampler.py      # Async generator wrapper for live streaming
+│   │   └── render_gif.py             # Render diffusion history frames to GIF
+│   └── web/
+│       ├── server.py                 # FastAPI + WebSocket server
+│       └── static/
+│           ├── index.html            # Single-page app
+│           ├── style.css             # Dark terminal aesthetic
+│           └── app.js                # WebSocket client + frame rendering
+├── artifacts/                        # Auto-generated run outputs (--sample)
 │   └── <timestamp>_llada/
-│       ├── metadata.json          # Run config + final text
-│       ├── final.txt              # Decoded output
-│       ├── history.txt            # All intermediate frames
-│       └── diffusion.gif          # Animated diffusion visualization
+│       ├── metadata.json             # Run config + final text
+│       ├── final.txt                 # Decoded output
+│       ├── history.txt               # All intermediate frames
+│       └── diffusion.gif             # Animated diffusion visualization
 └── archive/
-    └── README_old.md              # Previous project direction
+    └── README_old.md                 # Previous project direction
 ```
 
 
@@ -74,6 +83,22 @@ The model weights (~16 GB) are downloaded automatically from Hugging Face on fir
 
 
 ## Quickstart
+
+### Web UI (recommended)
+
+```bash
+python3 main.py --serve
+```
+
+Open [http://localhost:8000](http://localhost:8000) in a browser. The model loads in the background (~30 seconds on first run) — a loading overlay shows progress. Once ready, type a prompt, adjust parameters, and click **Generate** to watch the diffusion process stream live.
+
+Optional flags:
+
+```bash
+python3 main.py --serve --host 0.0.0.0 --port 8000
+```
+
+### CLI
 
 ```bash
 python3 main.py --sample --prompt "Explain what a hash map is and give a Python example."
@@ -102,12 +127,12 @@ Each run creates a timestamped directory under `artifacts/` containing the metad
 - [x] Intermediate frame history recording
 - [x] GIF rendering of the diffusion process
 - [x] CLI with per-run artifact output (metadata, text, GIF)
+- [x] Interactive web UI with live diffusion visualization (FastAPI + WebSocket)
 
 ### Possible Extensions
 
 - [ ] Alignment with reinforcement learning (RLHF / DPO)
 - [ ] MDM fine-tuning on custom instruction data
-- [ ] Interactive web UI for live diffusion visualization
 - [ ] Side-by-side comparison with autoregressive generation
 
 
