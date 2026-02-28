@@ -92,6 +92,127 @@ var frameHistory = [];
 var lastRunParams = null;
 var lastFinalText = null;
 
+// Idle donut animation (runs until first generation).
+var donutTimer = null;
+var donutA = 1;
+var donutB = 1;
+var hasEverGenerated = false;
+
+// ---- Idle ASCII donut (donut.c) ----
+// Adapted from the classic donut.c by Andy Sloane.
+// Renders a spinning 3D torus as ASCII art inside
+// the output area until the user's first generation.
+
+var DONUT_COLS = 80;
+var DONUT_ROWS = 22;
+var DONUT_LUMINANCE = ".,-~:;=!*#$@";
+
+function renderDonutFrame() {
+  var size = DONUT_COLS * DONUT_ROWS;
+  var buffer = new Array(size);
+  var zbuffer = new Array(size);
+
+  donutA += 0.07;
+  donutB += 0.03;
+
+  var cosA = Math.cos(donutA);
+  var sinA = Math.sin(donutA);
+  var cosB = Math.cos(donutB);
+  var sinB = Math.sin(donutB);
+
+  for (var k = 0; k < size; k++) {
+    buffer[k] = " ";
+    zbuffer[k] = 0;
+  }
+
+  for (var theta = 0; theta < 6.28; theta += 0.07) {
+    var cosTheta = Math.cos(theta);
+    var sinTheta = Math.sin(theta);
+
+    for (var phi = 0; phi < 6.28; phi += 0.02) {
+      var sinPhi = Math.sin(phi);
+      var cosPhi = Math.cos(phi);
+      var circleX = cosTheta + 2;
+      var oneOverZ = 1 / (
+        sinPhi * circleX * sinA
+        + sinTheta * cosA + 5
+      );
+      var t = (
+        sinPhi * circleX * cosA
+        - sinTheta * sinA
+      );
+
+      var xp = 0 | (
+        40 + 30 * oneOverZ
+        * (cosPhi * circleX * cosB - t * sinB)
+      );
+      var yp = 0 | (
+        11 + 15 * oneOverZ
+        * (cosPhi * circleX * sinB + t * cosB)
+      );
+      var idx = xp + DONUT_COLS * yp;
+      var luminance = 0 | (8 * (
+        (sinTheta * sinA - sinPhi * cosTheta * cosA)
+        * cosB
+        - sinPhi * cosTheta * sinA
+        - sinTheta * cosA
+        - cosPhi * cosTheta * sinB
+      ));
+
+      if (
+        yp >= 0 && yp < DONUT_ROWS
+        && xp >= 0 && xp < DONUT_COLS
+        && oneOverZ > zbuffer[idx]
+      ) {
+        zbuffer[idx] = oneOverZ;
+        buffer[idx] = DONUT_LUMINANCE[
+          luminance > 0 ? luminance : 0
+        ];
+      }
+    }
+  }
+
+  var lines = [];
+  for (var row = 0; row < DONUT_ROWS; row++) {
+    var start = row * DONUT_COLS;
+    lines.push(
+      buffer.slice(start, start + DONUT_COLS).join("")
+    );
+  }
+  return lines.join("\n");
+}
+
+function startDonut() {
+  if (donutTimer !== null || hasEverGenerated) {
+    return;
+  }
+
+  var pre = document.createElement("pre");
+  pre.id = "donut-pre";
+  outputArea.textContent = "";
+  outputArea.appendChild(pre);
+  outputArea.classList.add("donut-active");
+
+  pre.textContent = renderDonutFrame();
+
+  donutTimer = setInterval(function () {
+    pre.textContent = renderDonutFrame();
+  }, 50);
+}
+
+function stopDonut() {
+  if (donutTimer === null) {
+    return;
+  }
+  clearInterval(donutTimer);
+  donutTimer = null;
+  outputArea.classList.remove("donut-active");
+  var pre = document.getElementById("donut-pre");
+  if (pre) {
+    pre.remove();
+  }
+}
+
 // ---- Background floating characters ----
 
 function spawnFloaters() {
@@ -478,6 +599,11 @@ function startGeneration() {
     return;
   }
 
+  if (!hasEverGenerated) {
+    hasEverGenerated = true;
+    stopDonut();
+  }
+
   frameHistory = [];
   lastRunParams = null;
   lastFinalText = null;
@@ -647,4 +773,5 @@ document.addEventListener("keydown", function (e) {
 
 updateRangeLabels();
 validateAllParams();
+startDonut();
 connect();

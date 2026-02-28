@@ -508,6 +508,29 @@ button {
   font-style: italic;
 }
 
+/* Idle donut animation overlay inside output area. */
+
+#output-area.donut-active {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+#donut-pre {
+  margin: 0;
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: 1.35;
+  color: var(--accent);
+  text-shadow: 0 0 6px var(--mask-glow);
+  white-space: pre;
+  word-break: normal;
+  pointer-events: none;
+  user-select: none;
+}
+
 /* Mask vs resolved character styling */
 
 .char-mask {
