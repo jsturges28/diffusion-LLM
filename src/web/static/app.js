@@ -2,48 +2,101 @@
 
 "use strict";
 
-const MASK_CHAR = "\u2591"; // ░
-const RECONNECT_DELAY_MS = 2000;
-const MAX_RECONNECT_DELAY_MS = 16000;
+var MASK_CHAR = "\u2591"; // ░
+var RECONNECT_DELAY_MS = 2000;
+var MAX_RECONNECT_DELAY_MS = 16000;
+
+// ---- Parameter bounds (two tiers) ----
+
+var LIMITS_RECOMMENDED = {
+  steps:        { min: 8,   max: 150  },
+  gen_length:   { min: 16,  max: 160  },
+  block_length: { min: 8,   max: 160  },
+  temperature:  { min: 0.0, max: 1.0  },
+  cfg_scale:    { min: 0.0, max: 2.0  },
+};
+
+var LIMITS_EXPERIMENTAL = {
+  steps:        { min: 1,   max: 1024 },
+  gen_length:   { min: 1,   max: 1024 },
+  block_length: { min: 1,   max: 1024 },
+  temperature:  { min: 0.0, max: 10.0 },
+  cfg_scale:    { min: 0.0, max: 20.0 },
+};
+
+// Human-readable labels for error messages.
+var PARAM_LABELS = {
+  steps: "Steps",
+  gen_length: "Gen Length",
+  block_length: "Block Length",
+  temperature: "Temperature",
+  cfg_scale: "CFG Scale",
+};
 
 // ---- DOM refs ----
 
-const promptInput = document.getElementById("prompt-input");
-const btnGenerate = document.getElementById("btn-generate");
-const btnCancel = document.getElementById("btn-cancel");
-const outputArea = document.getElementById("output-area");
-const outputPlaceholder = document.getElementById("output-placeholder");
-const connectionBadge = document.getElementById("connection-badge");
-const statusStep = document.getElementById("status-step");
-const statusElapsed = document.getElementById("status-elapsed");
-const statusMessage = document.getElementById("status-message");
-const loadingOverlay = document.getElementById("loading-overlay");
+var promptInput = document.getElementById("prompt-input");
+var btnGenerate = document.getElementById("btn-generate");
+var btnCancel = document.getElementById("btn-cancel");
+var outputArea = document.getElementById("output-area");
+var connectionBadge = document.getElementById("connection-badge");
+var statusStep = document.getElementById("status-step");
+var statusElapsed = document.getElementById("status-elapsed");
+var statusMessage = document.getElementById("status-message");
+var loadingOverlay = document.getElementById("loading-overlay");
+var validationHint = document.getElementById("validation-hint");
+var toggleExperimental = document.getElementById("toggle-experimental");
 
-const paramSteps = document.getElementById("param-steps");
-const paramGenLength = document.getElementById("param-gen-length");
-const paramBlockLength = document.getElementById("param-block-length");
-const paramTemperature = document.getElementById("param-temperature");
-const paramCfgScale = document.getElementById("param-cfg-scale");
+var paramSteps = document.getElementById("param-steps");
+var paramGenLength = document.getElementById("param-gen-length");
+var paramBlockLength = document.getElementById("param-block-length");
+var paramTemperature = document.getElementById("param-temperature");
+var paramCfgScale = document.getElementById("param-cfg-scale");
+var paramRemasking = document.getElementById("param-remasking");
+
+var rangeSteps = document.getElementById("range-steps");
+var rangeGenLength = document.getElementById("range-gen-length");
+var rangeBlockLength = document.getElementById("range-block-length");
+var rangeTemperature = document.getElementById("range-temperature");
+var rangeCfgScale = document.getElementById("range-cfg-scale");
+
+var PARAM_INPUTS = {
+  steps: paramSteps,
+  gen_length: paramGenLength,
+  block_length: paramBlockLength,
+  temperature: paramTemperature,
+  cfg_scale: paramCfgScale,
+};
+
+var RANGE_LABELS = {
+  steps: rangeSteps,
+  gen_length: rangeGenLength,
+  block_length: rangeBlockLength,
+  temperature: rangeTemperature,
+  cfg_scale: rangeCfgScale,
+};
 
 // ---- State ----
 
-let ws = null;
-let isGenerating = false;
-let reconnectDelay = RECONNECT_DELAY_MS;
-let reconnectTimer = null;
+var ws = null;
+var isGenerating = false;
+var modelReady = false;
+var paramsValid = true;
+var reconnectDelay = RECONNECT_DELAY_MS;
+var reconnectTimer = null;
 
 // ---- Background floating characters ----
 
 function spawnFloaters() {
-  const container = document.getElementById("bg-floaters");
+  var container = document.getElementById("bg-floaters");
   if (!container) {
     return;
   }
-  const chars = "01░▒▓█▄▀⣿⡇⠿⣀⣤⣿ΣΔΩλ∂∇";
-  const COUNT = 30;
+  var chars = "01\u2591\u2592\u2593\u2588\u2584\u2580\u28FF\u2847\u283F\u28C0\u28E4\u28FF\u03A3\u0394\u03A9\u03BB\u2202\u2207";
+  var COUNT = 30;
 
-  for (let i = 0; i < COUNT; i++) {
-    const el = document.createElement("span");
+  for (var i = 0; i < COUNT; i++) {
+    var el = document.createElement("span");
     el.className = "floater";
     el.textContent = chars[Math.floor(Math.random() * chars.length)];
     el.style.left = Math.random() * 100 + "%";
@@ -56,6 +109,147 @@ function spawnFloaters() {
 
 spawnFloaters();
 
+// ---- Limits helpers ----
+
+function activeLimits() {
+  if (toggleExperimental.checked) {
+    return LIMITS_EXPERIMENTAL;
+  }
+  return LIMITS_RECOMMENDED;
+}
+
+function updateRangeLabels() {
+  var limits = activeLimits();
+  var keys = Object.keys(RANGE_LABELS);
+  for (var i = 0; i < keys.length; i++) {
+    var key = keys[i];
+    var bound = limits[key];
+    RANGE_LABELS[key].textContent =
+      "(" + bound.min + "\u2013" + bound.max + ")";
+  }
+}
+
+function applyLimits() {
+  var limits = activeLimits();
+  var keys = Object.keys(PARAM_INPUTS);
+  for (var i = 0; i < keys.length; i++) {
+    var key = keys[i];
+    var input = PARAM_INPUTS[key];
+    var bound = limits[key];
+    input.min = bound.min;
+    input.max = bound.max;
+
+    var val = parseFloat(input.value);
+    if (!isNaN(val)) {
+      if (val < bound.min) {
+        input.value = bound.min;
+      } else if (val > bound.max) {
+        input.value = bound.max;
+      }
+    }
+  }
+  updateRangeLabels();
+  validateAllParams();
+}
+
+// ---- Comprehensive validation ----
+// Runs on every input change. Checks bounds, negativity,
+// and divisibility. Disables Generate when invalid.
+
+function validateAllParams() {
+  var limits = activeLimits();
+  var errors = [];
+
+  // Clear all warn classes first.
+  var keys = Object.keys(PARAM_INPUTS);
+  for (var i = 0; i < keys.length; i++) {
+    PARAM_INPUTS[keys[i]].classList.remove("input-warn");
+  }
+
+  // Check each parameter against its bounds.
+  for (var j = 0; j < keys.length; j++) {
+    var key = keys[j];
+    var input = PARAM_INPUTS[key];
+    var raw = input.value.trim();
+    var val = parseFloat(raw);
+    var bound = limits[key];
+    var label = PARAM_LABELS[key];
+
+    if (raw === "" || isNaN(val)) {
+      input.classList.add("input-warn");
+      errors.push(label + " is empty or invalid.");
+      continue;
+    }
+
+    if (val < bound.min) {
+      input.classList.add("input-warn");
+      if (val < 0) {
+        errors.push(
+          label + " cannot be negative."
+        );
+      } else {
+        errors.push(
+          label + " must be at least " + bound.min + "."
+        );
+      }
+      continue;
+    }
+
+    if (val > bound.max) {
+      input.classList.add("input-warn");
+      errors.push(
+        label + " must be at most " + bound.max + "."
+      );
+    }
+  }
+
+  // Divisibility checks (only when individual values are valid).
+  var genLength = parseInt(paramGenLength.value, 10);
+  var blockLength = parseInt(paramBlockLength.value, 10);
+  var steps = parseInt(paramSteps.value, 10);
+
+  var genOk = !paramGenLength.classList.contains("input-warn");
+  var blkOk = !paramBlockLength.classList.contains("input-warn");
+  var stpOk = !paramSteps.classList.contains("input-warn");
+
+  if (genOk && blkOk && blockLength > 0 && genLength % blockLength !== 0) {
+    paramGenLength.classList.add("input-warn");
+    paramBlockLength.classList.add("input-warn");
+    errors.push(
+      "Gen Length (" + genLength +
+      ") must be divisible by Block Length (" +
+      blockLength + ")."
+    );
+  } else if (genOk && blkOk && stpOk && blockLength > 0 && genLength % blockLength === 0) {
+    var numBlocks = genLength / blockLength;
+    if (numBlocks > 0 && steps % numBlocks !== 0) {
+      paramSteps.classList.add("input-warn");
+      errors.push(
+        "Steps (" + steps +
+        ") must be divisible by num_blocks (" +
+        numBlocks + ")."
+      );
+    }
+  }
+
+  // Update hint and button state.
+  if (errors.length > 0) {
+    validationHint.textContent = errors[0];
+    validationHint.hidden = false;
+    paramsValid = false;
+    if (modelReady && !isGenerating) {
+      btnGenerate.disabled = true;
+    }
+  } else {
+    validationHint.hidden = true;
+    validationHint.textContent = "";
+    paramsValid = true;
+    if (modelReady && !isGenerating) {
+      btnGenerate.disabled = false;
+    }
+  }
+}
+
 // ---- WebSocket connection ----
 
 function connect() {
@@ -63,8 +257,8 @@ function connect() {
     return;
   }
 
-  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  const url = protocol + "//" + location.host + "/ws";
+  var protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  var url = protocol + "//" + location.host + "/ws";
   ws = new WebSocket(url);
 
   ws.onopen = function () {
@@ -74,6 +268,7 @@ function connect() {
 
   ws.onclose = function () {
     setBadge("disconnected");
+    modelReady = false;
     btnGenerate.disabled = true;
     scheduleReconnect();
   };
@@ -83,7 +278,7 @@ function connect() {
   };
 
   ws.onmessage = function (event) {
-    let data;
+    var data;
     try {
       data = JSON.parse(event.data);
     } catch (_unused) {
@@ -101,7 +296,10 @@ function scheduleReconnect() {
     reconnectTimer = null;
     connect();
   }, reconnectDelay);
-  reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY_MS);
+  reconnectDelay = Math.min(
+    reconnectDelay * 2,
+    MAX_RECONNECT_DELAY_MS
+  );
 }
 
 // ---- Message handler ----
@@ -126,22 +324,27 @@ function handleMessage(data) {
 function handleModelStatus(data) {
   if (data.status === "loading") {
     setBadge("loading");
+    modelReady = false;
     loadingOverlay.classList.remove("hidden");
     btnGenerate.disabled = true;
   } else if (data.status === "ready") {
     setBadge("ready");
+    modelReady = true;
     loadingOverlay.classList.add("hidden");
-    btnGenerate.disabled = false;
+    if (paramsValid && !isGenerating) {
+      btnGenerate.disabled = false;
+    }
   }
 }
 
 function handleFrame(data) {
   renderFrame(data.text);
-  const step = data.index;
-  const total = data.total_steps;
+  var step = data.index;
+  var total = data.total_steps;
   statusStep.textContent = "Step " + step + "/" + total;
   if (typeof data.elapsed === "number") {
-    statusElapsed.textContent = "Elapsed: " + data.elapsed.toFixed(1) + "s";
+    statusElapsed.textContent =
+      "Elapsed: " + data.elapsed.toFixed(1) + "s";
   }
 }
 
@@ -155,7 +358,8 @@ function handleDone(data) {
 
 function handleError(data) {
   setGenerating(false);
-  statusMessage.textContent = "Error: " + (data.message || "unknown");
+  statusMessage.textContent =
+    "Error: " + (data.message || "unknown");
   statusMessage.style.color = "var(--danger)";
   setTimeout(function () {
     statusMessage.style.color = "";
@@ -165,21 +369,21 @@ function handleError(data) {
 // ---- Rendering ----
 
 function renderFrame(text) {
-  const fragment = document.createDocumentFragment();
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
+  var fragment = document.createDocumentFragment();
+  for (var i = 0; i < text.length; i++) {
+    var ch = text[i];
     if (ch === MASK_CHAR) {
-      const span = document.createElement("span");
+      var span = document.createElement("span");
       span.className = "char-mask";
       span.textContent = ch;
       fragment.appendChild(span);
     } else if (ch === "\n") {
       fragment.appendChild(document.createTextNode("\n"));
     } else {
-      const span = document.createElement("span");
-      span.className = "char-resolved";
-      span.textContent = ch;
-      fragment.appendChild(span);
+      var span2 = document.createElement("span");
+      span2.className = "char-resolved";
+      span2.textContent = ch;
+      fragment.appendChild(span2);
     }
   }
   outputArea.textContent = "";
@@ -188,7 +392,7 @@ function renderFrame(text) {
 
 function renderFinalText(text) {
   outputArea.textContent = "";
-  const span = document.createElement("span");
+  var span = document.createElement("span");
   span.className = "char-resolved";
   span.textContent = text;
   outputArea.appendChild(span);
@@ -211,8 +415,10 @@ function setGenerating(active) {
   paramBlockLength.disabled = active;
   paramTemperature.disabled = active;
   paramCfgScale.disabled = active;
+  paramRemasking.disabled = active;
+  toggleExperimental.disabled = active;
 
-  if (!active) {
+  if (!active && modelReady && paramsValid) {
     btnGenerate.disabled = false;
   }
 }
@@ -221,6 +427,7 @@ function resetStatus() {
   statusStep.textContent = "Step \u2014/\u2014";
   statusElapsed.textContent = "Elapsed: \u2014";
   statusMessage.textContent = "";
+  statusMessage.style.color = "";
 }
 
 // ---- Actions ----
@@ -232,8 +439,11 @@ function startGeneration() {
   if (isGenerating) {
     return;
   }
+  if (!paramsValid) {
+    return;
+  }
 
-  const prompt = promptInput.value.trim();
+  var prompt = promptInput.value.trim();
   if (!prompt) {
     statusMessage.textContent = "Prompt is empty.";
     return;
@@ -251,6 +461,8 @@ function startGeneration() {
     block_length: parseInt(paramBlockLength.value, 10),
     temperature: parseFloat(paramTemperature.value),
     cfg_scale: parseFloat(paramCfgScale.value),
+    remasking: paramRemasking.value,
+    experimental: toggleExperimental.checked,
   }));
 }
 
@@ -275,6 +487,16 @@ promptInput.addEventListener("keydown", function (e) {
   }
 });
 
+toggleExperimental.addEventListener("change", applyLimits);
+
+paramSteps.addEventListener("input", validateAllParams);
+paramGenLength.addEventListener("input", validateAllParams);
+paramBlockLength.addEventListener("input", validateAllParams);
+paramTemperature.addEventListener("input", validateAllParams);
+paramCfgScale.addEventListener("input", validateAllParams);
+
 // ---- Boot ----
 
+updateRangeLabels();
+validateAllParams();
 connect();

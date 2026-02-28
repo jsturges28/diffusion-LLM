@@ -27,13 +27,23 @@ logger = logging.getLogger("llada_web")
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MODEL_NAME = "GSAI-ML/LLaDA-8B-Instruct"
 
-PARAM_LIMITS = {
-    "steps": (1, 512),
+PARAM_LIMITS_RECOMMENDED = {
+    "steps": (8, 150),
+    "gen_length": (16, 160),
+    "block_length": (8, 160),
+    "temperature": (0.0, 1.0),
+    "cfg_scale": (0.0, 2.0),
+}
+
+PARAM_LIMITS_EXPERIMENTAL = {
+    "steps": (1, 1024),
     "gen_length": (1, 1024),
     "block_length": (1, 1024),
-    "temperature": (0.0, 2.0),
-    "cfg_scale": (0.0, 10.0),
+    "temperature": (0.0, 10.0),
+    "cfg_scale": (0.0, 20.0),
 }
+
+VALID_REMASKING = {"low_confidence", "random"}
 
 app = FastAPI(title="LLaDA Diffusion Visualizer")
 
@@ -95,38 +105,54 @@ def _validate_params(
     data: dict[str, Any],
 ) -> dict[str, Any]:
     """Extract and clamp generation parameters from a message."""
+    experimental = bool(data.get("experimental", False))
+    limits = (
+        PARAM_LIMITS_EXPERIMENTAL
+        if experimental
+        else PARAM_LIMITS_RECOMMENDED
+    )
+
     prompt = str(data.get("prompt", "")).strip()
     if not prompt:
         raise ValueError("prompt must not be empty")
 
+    remasking = str(
+        data.get("remasking", "low_confidence")
+    )
+    if remasking not in VALID_REMASKING:
+        raise ValueError(
+            f"remasking must be one of {VALID_REMASKING},"
+            f" got '{remasking}'"
+        )
+
     steps = int(
         _clamp(
             float(data.get("steps", 128)),
-            *PARAM_LIMITS["steps"],
+            *limits["steps"],
         )
     )
     gen_length = int(
         _clamp(
             float(data.get("gen_length", 128)),
-            *PARAM_LIMITS["gen_length"],
+            *limits["gen_length"],
         )
     )
     block_length = int(
         _clamp(
             float(data.get("block_length", 32)),
-            *PARAM_LIMITS["block_length"],
+            *limits["block_length"],
         )
     )
     temperature = float(
         _clamp(
             float(data.get("temperature", 0.0)),
-            *PARAM_LIMITS["temperature"],
+            *limits["temperature"],
         )
     )
     cfg_scale = float(
         _clamp(
             float(data.get("cfg_scale", 0.0)),
-            *PARAM_LIMITS["cfg_scale"],
+            *limits["cfg_scale"],
         )
     )
 
@@ -149,6 +175,7 @@ def _validate_params(
         "block_length": block_length,
         "temperature": temperature,
         "cfg_scale": cfg_scale,
+        "remasking": remasking,
     }
 
 
@@ -223,6 +250,7 @@ async def websocket_endpoint(ws: WebSocket) -> None:
                         ],
                         temperature=params["temperature"],
                         cfg_scale=params["cfg_scale"],
+                        remasking=params["remasking"],
                         cancel_event=cancel_event,
                     )
                     async for frame in generator:
