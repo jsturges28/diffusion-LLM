@@ -495,6 +495,65 @@ paramBlockLength.addEventListener("input", validateAllParams);
 paramTemperature.addEventListener("input", validateAllParams);
 paramCfgScale.addEventListener("input", validateAllParams);
 
+// ---- Modal logic (About / Help) ----
+
+var linkAbout = document.getElementById("link-about");
+var linkHelp = document.getElementById("link-help");
+var modalAbout = document.getElementById("modal-about");
+var modalHelp = document.getElementById("modal-help");
+
+function openModal(modal) {
+  modal.classList.remove("hidden");
+}
+
+function closeModal(modal) {
+  modal.classList.add("hidden");
+}
+
+linkAbout.addEventListener("click", function (e) {
+  e.preventDefault();
+  openModal(modalAbout);
+});
+
+linkHelp.addEventListener("click", function (e) {
+  e.preventDefault();
+  openModal(modalHelp);
+});
+
+// Close on X button click.
+var closeButtons = document.querySelectorAll(".modal-close");
+for (var ci = 0; ci < closeButtons.length; ci++) {
+  (function (btn) {
+    btn.addEventListener("click", function () {
+      var overlay = btn.closest(".modal-overlay");
+      if (overlay) {
+        closeModal(overlay);
+      }
+    });
+  })(closeButtons[ci]);
+}
+
+// Close on backdrop click (outside .modal-box).
+[modalAbout, modalHelp].forEach(function (modal) {
+  modal.addEventListener("click", function (e) {
+    if (e.target === modal) {
+      closeModal(modal);
+    }
+  });
+});
+
+// Close on Escape key.
+document.addEventListener("keydown", function (e) {
+  if (e.key === "Escape") {
+    if (!modalAbout.classList.contains("hidden")) {
+      closeModal(modalAbout);
+    }
+    if (!modalHelp.classList.contains("hidden")) {
+      closeModal(modalHelp);
+    }
+  }
+});
+
 // ---- Boot ----
 
 updateRangeLabels();

@@ -134,6 +134,25 @@ body {
   font-weight: 500;
 }
 
+#header-nav {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.header-link {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  transition: color 0.15s;
+}
+
+.header-link:hover {
+  color: var(--accent);
+}
+
 .badge {
   font-size: 11px;
   padding: 2px 10px;
@@ -574,6 +593,148 @@ button {
   background: var(--accent);
   border-radius: 2px;
   transition: width 0.15s;
+}
+
+/* ---- Modals (About / Help) ---- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(4px);
+  transition: opacity 0.25s;
+}
+
+.modal-overlay.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.modal-box {
+  position: relative;
+  width: 90%;
+  max-width: 560px;
+  max-height: 80vh;
+  overflow-y: auto;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 28px 28px 24px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.modal-box::-webkit-scrollbar {
+  width: 6px;
+}
+
+.modal-box::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.modal-box::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.modal-close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.modal-close:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.modal-box h2 {
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  margin-bottom: 16px;
+}
+
+.modal-body h3 {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-top: 18px;
+  margin-bottom: 6px;
+}
+
+.modal-body p {
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.modal-body strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.modal-body em {
+  color: var(--text-primary);
+  font-style: italic;
+}
+
+.modal-body ol {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding-left: 20px;
+  line-height: 1.8;
+  margin-bottom: 8px;
+}
+
+.modal-body dl {
+  font-size: 12px;
+  line-height: 1.6;
+  margin-bottom: 8px;
+}
+
+.modal-body dt {
+  color: var(--text-primary);
+  font-weight: 500;
+  margin-top: 10px;
+}
+
+.modal-body dd {
+  color: var(--text-secondary);
+  margin-left: 0;
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
+  margin-top: 2px;
+}
+
+.modal-links {
+  margin-top: 12px;
+}
+
+.modal-links a {
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 12px;
+}
+
+.modal-links a:hover {
+  text-decoration: underline;
 }
 
 /* ---- Responsive ---- */
