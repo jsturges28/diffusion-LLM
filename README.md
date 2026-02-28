@@ -92,6 +92,8 @@ python3 main.py --serve
 
 Open [http://localhost:8000](http://localhost:8000) in a browser. The model loads in the background (~30 seconds on first run) — a loading overlay shows progress. Once ready, type a prompt, adjust parameters, and click **Generate** to watch the diffusion process stream live.
 
+The UI includes controls for all sampling parameters (steps, generation length, block length, temperature, CFG scale, remasking strategy) with recommended bounds enforced by default. An **Experimental** toggle lifts the bounds for exploratory use, with inline range hints and real-time validation that disables Generate when constraints are violated.
+
 Optional flags:
 
 ```bash
@@ -123,11 +125,13 @@ Each run creates a timestamped directory under `artifacts/` containing the metad
 
 - [x] LLaDA-8B-Instruct model loading (bfloat16, `device_map="auto"`)
 - [x] Iterative masked diffusion sampler with low-confidence remasking
-- [x] Configurable steps, generation length, block length, temperature, CFG
+- [x] Configurable steps, generation length, block length, temperature, CFG, remasking
 - [x] Intermediate frame history recording
 - [x] GIF rendering of the diffusion process
 - [x] CLI with per-run artifact output (metadata, text, GIF)
 - [x] Interactive web UI with live diffusion visualization (FastAPI + WebSocket)
+- [x] Recommended parameter bounds with Experimental mode toggle
+- [x] Real-time client-side validation (bounds, divisibility, negative values)
 
 ### Possible Extensions
 
