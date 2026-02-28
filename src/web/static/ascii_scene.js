@@ -11,7 +11,30 @@
   var DENSITY_RAMP = " .:-=+*#%@";
   var CELL_W = 10;
   var CELL_H = 16;
-  var TITLE_TEXT = "Diffusion LLM";
+  // Pre-rendered ASCII art title (patorjk.com "Slant").
+  var TITLE_LINES = [
+    "    ____   _  ____ ____              _                  __     __     __  ___",
+    "   / __ \\ (_)/ __// __/__  __ _____ (_)____   ____     / /    / /    /  |/  /",
+    "  / / / // // /_ / /_ / / / // ___// // __ \\ / __ \\   / /    / /    / /|_/ /",
+    " / /_/ // // __// __// /_/ /(__  )/ // /_/ // / / /  / /___ / /___ / /  / /",
+    "/_____//_//_/  /_/   \\__,_//____//_/ \\____//_/ /_/  /_____//_____//_/  /_/",
+  ];
+  var TITLE_WIDTH = 0;
+  for (var tw = 0; tw < TITLE_LINES.length; tw++) {
+    if (TITLE_LINES[tw].length > TITLE_WIDTH) {
+      TITLE_WIDTH = TITLE_LINES[tw].length;
+    }
+  }
+
+  // Count non-space characters for diffusion reveal.
+  var TITLE_CHAR_COUNT = 0;
+  for (var tc = 0; tc < TITLE_LINES.length; tc++) {
+    for (var cc = 0; cc < TITLE_LINES[tc].length; cc++) {
+      if (TITLE_LINES[tc][cc] !== " ") {
+        TITLE_CHAR_COUNT++;
+      }
+    }
+  }
 
   // Diffusion reveal timing (seconds).
   var REVEAL_DURATION = 3.0;
@@ -21,7 +44,7 @@
     REVEAL_DURATION + HOLD_DURATION + FADE_DURATION;
 
   var NOISE_CHARS =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
+    "/\\|_()-=+*#%@!~:;.,<>[]{}^&$";
 
   var CAR_SPEED = 110; // px per second
 
@@ -323,8 +346,12 @@
     ctx.fill();
   }
 
-  function drawDiffusionTitle(
-    ctx, width, height, time
+  // Draws the ASCII art title directly on the visible
+  // canvas so every character is pixel-perfect. Called
+  // AFTER asciiConvert() to overlay on top of the
+  // luminance-converted scene.
+  function overlayAsciiTitle(
+    vCtx, cols, rows, cellW, cellH, time
   ) {
     var cycleTime = time % CYCLE_DURATION;
     var revealFraction;
@@ -343,54 +370,65 @@
       revealFraction = 0;
     }
 
-    // Large, heavy font so each letter's strokes span
-    // 2-3 ASCII columns after downsampling. Weight 900
-    // plus a strokeText outline makes strokes ~20-25px
-    // thick, which the 10px ASCII grid resolves cleanly.
-    var fontSize = Math.max(
-      48,
-      Math.min(width * 0.12, 130)
-    );
-    ctx.font =
-      "900 " + Math.round(fontSize) + "px monospace";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.lineJoin = "round";
-    ctx.lineCap = "round";
-
-    var titleY = height * 0.22;
-    var totalLen = TITLE_TEXT.length;
     var revealedCount = Math.floor(
-      revealFraction * totalLen
+      revealFraction * TITLE_CHAR_COUNT
     );
 
-    var metrics = ctx.measureText(TITLE_TEXT);
-    var totalWidth = metrics.width;
-    var charWidth = totalWidth / totalLen;
-    var startX =
-      (width - totalWidth) / 2 + charWidth / 2;
+    // Center the title block horizontally and place
+    // it near the top of the grid.
+    var startCol = Math.floor(
+      (cols - TITLE_WIDTH) / 2
+    );
+    var startRow = 1;
+    if (startCol < 0) {
+      startCol = 0;
+    }
 
-    // Stroke width fattens each letter's edges so
-    // they survive the luminance downsampling.
-    var strokeW = Math.max(3, fontSize * 0.07);
-    ctx.lineWidth = strokeW;
+    var fontSize = Math.max(8, cellH - 2);
+    vCtx.font = fontSize + "px monospace";
+    vCtx.textBaseline = "top";
 
-    for (var i = 0; i < totalLen; i++) {
-      var cx = startX + i * charWidth;
+    var charsSeen = 0;
+    for (var r = 0; r < TITLE_LINES.length; r++) {
+      var line = TITLE_LINES[r];
+      var gridRow = startRow + r;
+      if (gridRow >= rows) {
+        break;
+      }
 
-      if (i < revealedCount) {
-        ctx.strokeStyle = "#fff";
-        ctx.strokeText(TITLE_TEXT[i], cx, titleY);
-        ctx.fillStyle = "#fff";
-        ctx.fillText(TITLE_TEXT[i], cx, titleY);
-      } else {
-        var noiseIdx =
-          (i * 97 + Math.floor(time * 12)) %
-          NOISE_CHARS.length;
-        ctx.fillStyle = "rgba(255,255,255,0.2)";
-        ctx.fillText(
-          NOISE_CHARS[noiseIdx], cx, titleY
-        );
+      for (var c = 0; c < line.length; c++) {
+        var gridCol = startCol + c;
+        if (gridCol >= cols) {
+          break;
+        }
+
+        var ch = line[c];
+        var px = gridCol * cellW;
+        var py = gridRow * cellH;
+
+        if (ch === " ") {
+          continue;
+        }
+
+        // Clear the cell so the title overwrites
+        // the scene beneath it.
+        vCtx.fillStyle = "#000";
+        vCtx.fillRect(px, py, cellW, cellH);
+
+        charsSeen++;
+        if (charsSeen <= revealedCount) {
+          vCtx.fillStyle = "rgba(0,255,65,1.0)";
+          vCtx.fillText(ch, px, py);
+        } else {
+          var noiseIdx =
+            (charsSeen * 53 +
+              Math.floor(time * 14)) %
+            NOISE_CHARS.length;
+          vCtx.fillStyle = "rgba(0,255,65,0.2)";
+          vCtx.fillText(
+            NOISE_CHARS[noiseIdx], px, py
+          );
+        }
       }
     }
   }
@@ -430,8 +468,6 @@
       ((time * CAR_SPEED) % (width + carBodyW * 2)) +
       carBodyW;
     drawCar(ctx, carX, groundY, carScale);
-
-    drawDiffusionTitle(ctx, width, height, time);
   }
 
   // --------------------------------------------------
@@ -589,6 +625,14 @@
           rows,
           CELL_W,
           CELL_H
+        );
+        overlayAsciiTitle(
+          visibleCanvas.getContext("2d"),
+          cols,
+          rows,
+          CELL_W,
+          CELL_H,
+          elapsed
         );
       }
 
