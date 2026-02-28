@@ -38,6 +38,7 @@ var PARAM_LABELS = {
 var promptInput = document.getElementById("prompt-input");
 var btnGenerate = document.getElementById("btn-generate");
 var btnCancel = document.getElementById("btn-cancel");
+var btnSave = document.getElementById("btn-save");
 var outputArea = document.getElementById("output-area");
 var connectionBadge = document.getElementById("connection-badge");
 var statusStep = document.getElementById("status-step");
@@ -80,10 +81,16 @@ var RANGE_LABELS = {
 
 var ws = null;
 var isGenerating = false;
+var isSaving = false;
 var modelReady = false;
 var paramsValid = true;
 var reconnectDelay = RECONNECT_DELAY_MS;
 var reconnectTimer = null;
+
+// Accumulated data for the most recent completed run.
+var frameHistory = [];
+var lastRunParams = null;
+var lastFinalText = null;
 
 // ---- Background floating characters ----
 
@@ -338,6 +345,7 @@ function handleModelStatus(data) {
 }
 
 function handleFrame(data) {
+  frameHistory.push(data.text);
   renderFrame(data.text);
   var step = data.index;
   var total = data.total_steps;
@@ -353,7 +361,17 @@ function handleDone(data) {
   statusMessage.textContent = "Done.";
   if (data.final_text) {
     renderFinalText(data.final_text);
+    lastFinalText = data.final_text;
   }
+  lastRunParams = {
+    steps: parseInt(paramSteps.value, 10),
+    gen_length: parseInt(paramGenLength.value, 10),
+    block_length: parseInt(paramBlockLength.value, 10),
+    temperature: parseFloat(paramTemperature.value),
+    cfg_scale: parseFloat(paramCfgScale.value),
+    remasking: paramRemasking.value,
+  };
+  setSaveAvailable(true);
 }
 
 function handleError(data) {
@@ -423,6 +441,17 @@ function setGenerating(active) {
   }
 }
 
+function setSaveAvailable(available) {
+  if (available && frameHistory.length > 0) {
+    btnSave.hidden = false;
+    btnSave.disabled = false;
+    btnSave.textContent = "Save";
+  } else {
+    btnSave.hidden = true;
+    btnSave.disabled = true;
+  }
+}
+
 function resetStatus() {
   statusStep.textContent = "Step \u2014/\u2014";
   statusElapsed.textContent = "Elapsed: \u2014";
@@ -448,6 +477,11 @@ function startGeneration() {
     statusMessage.textContent = "Prompt is empty.";
     return;
   }
+
+  frameHistory = [];
+  lastRunParams = null;
+  lastFinalText = null;
+  setSaveAvailable(false);
 
   outputArea.textContent = "";
   resetStatus();
@@ -475,10 +509,65 @@ function cancelGeneration() {
   statusMessage.textContent = "Cancelled.";
 }
 
+function saveRun() {
+  if (isSaving) {
+    return;
+  }
+  if (frameHistory.length === 0 || !lastFinalText) {
+    return;
+  }
+
+  isSaving = true;
+  btnSave.disabled = true;
+  btnSave.textContent = "Saving\u2026";
+  statusMessage.textContent = "";
+  statusMessage.style.color = "";
+
+  var payload = {
+    prompt: promptInput.value.trim(),
+    params: lastRunParams,
+    frames: frameHistory,
+    final_text: lastFinalText,
+  };
+
+  fetch("/api/save", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+    .then(function (response) {
+      return response.json();
+    })
+    .then(function (result) {
+      isSaving = false;
+      if (result.success) {
+        btnSave.textContent = "Saved";
+        statusMessage.textContent =
+          "Saved to " + result.path;
+        statusMessage.style.color = "var(--accent)";
+      } else {
+        btnSave.disabled = false;
+        btnSave.textContent = "Save";
+        statusMessage.textContent =
+          "Save failed: " + (result.message || "unknown");
+        statusMessage.style.color = "var(--danger)";
+      }
+    })
+    .catch(function (error) {
+      isSaving = false;
+      btnSave.disabled = false;
+      btnSave.textContent = "Save";
+      statusMessage.textContent =
+        "Save failed: " + error.message;
+      statusMessage.style.color = "var(--danger)";
+    });
+}
+
 // ---- Event listeners ----
 
 btnGenerate.addEventListener("click", startGeneration);
 btnCancel.addEventListener("click", cancelGeneration);
+btnSave.addEventListener("click", saveRun);
 
 promptInput.addEventListener("keydown", function (e) {
   if (e.key === "Enter" && !e.shiftKey) {

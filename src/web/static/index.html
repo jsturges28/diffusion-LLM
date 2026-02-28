@@ -117,6 +117,7 @@
         <div class="param-group param-group-btn">
           <button id="btn-generate" disabled>Generate</button>
           <button id="btn-cancel" class="btn-cancel" hidden>Cancel</button>
+          <button id="btn-save" class="btn-save" hidden disabled>Save</button>
         </div>
       </div>
 
@@ -190,6 +191,15 @@
           <dt>Remasking</dt>
           <dd>Strategy for choosing which tokens to re-mask between steps. <em>Low Confidence</em> re-masks the least confident predictions. <em>Random</em> selects randomly.</dd>
         </dl>
+        <h3>Saving results</h3>
+        <p>After a generation completes, a <strong>Save</strong> button appears next to the controls. Clicking it saves the run to a timestamped folder under <code>Results/</code> containing:</p>
+        <ul>
+          <li><strong>metadata.json</strong> — prompt, parameters, and final output text.</li>
+          <li><strong>final.txt</strong> — the decoded final text.</li>
+          <li><strong>history.txt</strong> — frame-by-frame snapshots of the diffusion process.</li>
+          <li><strong>diffusion.gif</strong> — an animated GIF visualizing the denoising progression.</li>
+        </ul>
+        <p>The button is disabled during generation and after a successful save to prevent duplicates. Starting a new generation resets it.</p>
         <h3>Experimental mode</h3>
         <p>The toggle above the parameter controls removes the recommended bounds, allowing extreme values for exploratory purposes. The default bounds represent the range that produces more consistent, stable results.</p>
       </div>

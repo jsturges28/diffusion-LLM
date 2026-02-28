@@ -7,19 +7,24 @@ a WebSocket endpoint that streams diffusion frames to the browser.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, List
 
 import torch
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 from transformers.models.auto.modeling_auto import AutoModel
 from transformers.models.auto.tokenization_auto import (
     AutoTokenizer,
 )
 
+from src.inference.render_gif import history_to_gif
 from src.inference.streaming_sampler import streaming_generate
 
 logger = logging.getLogger("llada_web")
@@ -44,6 +49,25 @@ PARAM_LIMITS_EXPERIMENTAL = {
 }
 
 VALID_REMASKING = {"low_confidence", "random"}
+
+RESULTS_DIR = Path("Results")
+
+
+class SaveRunParams(BaseModel):
+    steps: int
+    gen_length: int
+    block_length: int
+    temperature: float
+    cfg_scale: float
+    remasking: str
+
+
+class SaveRunRequest(BaseModel):
+    prompt: str
+    params: SaveRunParams
+    frames: List[str] = Field(min_length=1)
+    final_text: str
+
 
 app = FastAPI(title="LLaDA Diffusion Visualizer")
 
@@ -275,6 +299,79 @@ async def websocket_endpoint(ws: WebSocket) -> None:
     except WebSocketDisconnect:
         cancel_event.set()
         logger.info("Client disconnected.")
+
+
+def _make_run_dir(base: Path) -> Path:
+    """Create a timestamped subdirectory for this run."""
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    run_dir = base / f"{timestamp}_llada"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
+
+
+def _save_run_blocking(body: SaveRunRequest) -> str:
+    """Write all result files to disk (blocking I/O).
+
+    Returns the run directory path as a string.
+    """
+    run_dir = _make_run_dir(RESULTS_DIR)
+
+    metadata = {
+        "backend": "llada",
+        "model": MODEL_NAME,
+        "prompt": body.prompt,
+        "final_text": body.final_text,
+        "params": body.params.model_dump(),
+    }
+    meta_path = run_dir / "metadata.json"
+    meta_path.write_text(
+        json.dumps(metadata, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    final_path = run_dir / "final.txt"
+    final_path.write_text(
+        body.final_text, encoding="utf-8"
+    )
+
+    hist_path = run_dir / "history.txt"
+    with hist_path.open("w", encoding="utf-8") as fh:
+        for i, frame_text in enumerate(body.frames):
+            fh.write(f"\n===== FRAME {i} =====\n")
+            fh.write(frame_text)
+            fh.write("\n")
+
+    gif_path = run_dir / "diffusion.gif"
+    history_to_gif(
+        body.frames,
+        gif_path,
+        header_text=body.prompt,
+    )
+
+    return str(run_dir)
+
+
+@app.post("/api/save")
+async def save_run(body: SaveRunRequest) -> JSONResponse:
+    """Persist a completed generation run to Results/."""
+    try:
+        run_path = await asyncio.to_thread(
+            _save_run_blocking, body
+        )
+    except Exception as exc:
+        logger.exception("Failed to save run: %s", exc)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "message": str(exc),
+            },
+        )
+
+    logger.info("Saved run to %s", run_path)
+    return JSONResponse(
+        content={"success": True, "path": run_path}
+    )
 
 
 app.mount(

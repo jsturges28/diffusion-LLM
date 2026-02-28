@@ -2,5 +2,6 @@
 .venv
 data/
 artifacts/
+Results/
 *__pycache__/
 *.pyc
