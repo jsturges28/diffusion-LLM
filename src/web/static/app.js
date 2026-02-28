@@ -77,6 +77,11 @@ var RANGE_LABELS = {
   cfg_scale: rangeCfgScale,
 };
 
+// Settings DOM refs.
+var linkSettings = document.getElementById("link-settings");
+var modalSettings = document.getElementById("modal-settings");
+var selectIdleDisplay = document.getElementById("select-idle-display");
+
 // ---- State ----
 
 var ws = null;
@@ -92,7 +97,8 @@ var frameHistory = [];
 var lastRunParams = null;
 var lastFinalText = null;
 
-// Idle donut animation (runs until first generation).
+// Idle animation state.
+var idleDisplayMode = "default";
 var donutTimer = null;
 var donutA = 1;
 var donutB = 1;
@@ -211,6 +217,25 @@ function stopDonut() {
   if (pre) {
     pre.remove();
   }
+}
+
+// ---- Idle animation dispatchers ----
+
+function startIdleAnimation() {
+  if (hasEverGenerated) {
+    return;
+  }
+  outputArea.textContent = "";
+  if (idleDisplayMode === "donut") {
+    startDonut();
+  } else {
+    window.startAsciiScene(outputArea);
+  }
+}
+
+function stopIdleAnimation() {
+  stopDonut();
+  window.stopAsciiScene();
 }
 
 // ---- Background floating characters ----
@@ -601,7 +626,7 @@ function startGeneration() {
 
   if (!hasEverGenerated) {
     hasEverGenerated = true;
-    stopDonut();
+    stopIdleAnimation();
   }
 
   frameHistory = [];
@@ -710,12 +735,14 @@ paramBlockLength.addEventListener("input", validateAllParams);
 paramTemperature.addEventListener("input", validateAllParams);
 paramCfgScale.addEventListener("input", validateAllParams);
 
-// ---- Modal logic (About / Help) ----
+// ---- Modal logic (About / Help / Settings) ----
 
 var linkAbout = document.getElementById("link-about");
 var linkHelp = document.getElementById("link-help");
 var modalAbout = document.getElementById("modal-about");
 var modalHelp = document.getElementById("modal-help");
+
+var allModals = [modalAbout, modalHelp, modalSettings];
 
 function openModal(modal) {
   modal.classList.remove("hidden");
@@ -735,6 +762,11 @@ linkHelp.addEventListener("click", function (e) {
   openModal(modalHelp);
 });
 
+linkSettings.addEventListener("click", function (e) {
+  e.preventDefault();
+  openModal(modalSettings);
+});
+
 // Close on X button click.
 var closeButtons = document.querySelectorAll(".modal-close");
 for (var ci = 0; ci < closeButtons.length; ci++) {
@@ -749,7 +781,7 @@ for (var ci = 0; ci < closeButtons.length; ci++) {
 }
 
 // Close on backdrop click (outside .modal-box).
-[modalAbout, modalHelp].forEach(function (modal) {
+allModals.forEach(function (modal) {
   modal.addEventListener("click", function (e) {
     if (e.target === modal) {
       closeModal(modal);
@@ -760,18 +792,34 @@ for (var ci = 0; ci < closeButtons.length; ci++) {
 // Close on Escape key.
 document.addEventListener("keydown", function (e) {
   if (e.key === "Escape") {
-    if (!modalAbout.classList.contains("hidden")) {
-      closeModal(modalAbout);
-    }
-    if (!modalHelp.classList.contains("hidden")) {
-      closeModal(modalHelp);
+    for (var i = 0; i < allModals.length; i++) {
+      if (
+        !allModals[i].classList.contains("hidden")
+      ) {
+        closeModal(allModals[i]);
+      }
     }
   }
 });
+
+// ---- Settings: idle display toggle ----
+
+selectIdleDisplay.addEventListener(
+  "change",
+  function () {
+    var newMode = selectIdleDisplay.value;
+    if (newMode === idleDisplayMode) {
+      return;
+    }
+    stopIdleAnimation();
+    idleDisplayMode = newMode;
+    startIdleAnimation();
+  }
+);
 
 // ---- Boot ----
 
 updateRangeLabels();
 validateAllParams();
-startDonut();
+startIdleAnimation();
 connect();

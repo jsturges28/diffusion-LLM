@@ -26,6 +26,7 @@
       <nav id="header-nav">
         <a href="#" id="link-about" class="header-link">About</a>
         <a href="#" id="link-help" class="header-link">Help</a>
+        <a href="#" id="link-settings" class="header-link">Settings</a>
         <span id="connection-badge" class="badge badge-disconnected">
           disconnected
         </span>
@@ -206,6 +207,23 @@
     </div>
   </div>
 
+  <!-- Settings modal -->
+  <div id="modal-settings" class="modal-overlay hidden">
+    <div class="modal-box modal-box-sm">
+      <button class="modal-close" aria-label="Close">&times;</button>
+      <h2>Settings</h2>
+      <div class="modal-body">
+        <div class="settings-row">
+          <label for="select-idle-display">Idle Display</label>
+          <select id="select-idle-display">
+            <option value="default" selected>Default (ASCII Scene)</option>
+            <option value="donut">donut.c (Spinning Torus)</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Model loading overlay -->
   <div id="loading-overlay">
     <div id="loading-content">
@@ -217,6 +235,7 @@
     </div>
   </div>
 
+  <script src="/ascii_scene.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
