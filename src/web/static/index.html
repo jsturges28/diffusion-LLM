@@ -134,6 +134,23 @@
       </div>
     </section>
 
+    <!-- Frame scrubber (visible after generation completes) -->
+    <section id="scrubber-section" hidden>
+      <div id="scrubber-controls">
+        <button id="btn-scrub-start" class="scrub-btn" title="First frame">&laquo;</button>
+        <button id="btn-scrub-prev" class="scrub-btn" title="Previous frame">&lsaquo;</button>
+        <input type="range" id="scrubber-slider" min="0" max="0" value="0" />
+        <button id="btn-scrub-next" class="scrub-btn" title="Next frame">&rsaquo;</button>
+        <button id="btn-scrub-end" class="scrub-btn" title="Last frame">&raquo;</button>
+        <span id="scrubber-label">Frame 0 / 0</span>
+      </div>
+      <div id="remask-controls" hidden>
+        <span id="remask-count">0 tokens selected</span>
+        <button id="btn-clear-remask" class="btn-secondary">Clear</button>
+        <button id="btn-resume" class="btn-resume" disabled>Resume</button>
+      </div>
+    </section>
+
     <!-- Status bar -->
     <footer id="status-bar">
       <span id="status-step">Step —/—</span>
