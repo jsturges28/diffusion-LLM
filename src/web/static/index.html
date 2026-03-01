@@ -209,10 +209,19 @@
           <dt>Remasking</dt>
           <dd>Strategy for choosing which tokens to re-mask between steps. <em>Low Confidence</em> re-masks the least confident predictions. <em>Random</em> selects randomly.</dd>
         </dl>
+        <h3>Interactive remasking</h3>
+        <p>After a generation completes, a <strong>frame scrubber</strong> appears below the output area. Use it to explore how the diffusion process unfolded step by step:</p>
+        <ol>
+          <li>Drag the slider or use the <strong>&lsaquo; &rsaquo;</strong> buttons to navigate frame by frame. You can also press the <strong>Left / Right arrow keys</strong>, or <strong>Home / End</strong> to jump to the first or last frame.</li>
+          <li>Click any resolved (non-mask) token to <strong>remask</strong> it. Selected tokens turn orange. Click again to deselect.</li>
+          <li>When at least one token is selected, click <strong>Resume</strong> to continue the diffusion process from that frame with your changes applied. The model re-runs for the remaining steps, resolving the remasked positions along with any that were still masked.</li>
+          <li>You can resume multiple times. Each resume extends the frame history and the scrubber updates to include the new frames.</li>
+        </ol>
+        <p>Your remask edits (frame number and token positions) are recorded automatically and included in saved results.</p>
         <h3>Saving results</h3>
         <p>After a generation completes, a <strong>Save</strong> button appears next to the controls. Clicking it saves the run to a timestamped folder under <code>Results/</code> containing:</p>
         <ul>
-          <li><strong>metadata.json</strong> — prompt, parameters, and final output text.</li>
+          <li><strong>metadata.json</strong> — prompt, parameters, final output text, and any remask edits.</li>
           <li><strong>final.txt</strong> — the decoded final text.</li>
           <li><strong>history.txt</strong> — frame-by-frame snapshots of the diffusion process.</li>
           <li><strong>diffusion.gif</strong> — an animated GIF visualizing the denoising progression.</li>

@@ -100,7 +100,17 @@ Open [http://localhost:8000](http://localhost:8000) in a browser. The model load
 
 The UI includes controls for all sampling parameters (steps, generation length, block length, temperature, CFG scale, remasking strategy) with recommended bounds enforced by default. An **Experimental** toggle lifts the bounds for exploratory use, with inline range hints and real-time validation that disables Generate when constraints are violated.
 
-After a run completes, a **Save** button appears. Clicking it writes the run results to a timestamped folder under `Results/` containing `metadata.json`, `final.txt`, `history.txt` (frame-by-frame diffusion snapshots), and `diffusion.gif` (animated visualization).
+After a run completes, a **Save** button appears and a **frame scrubber** slides into view below the output area.
+
+#### Interactive remasking
+
+The scrubber lets you step through every intermediate frame of the diffusion process. Navigate with the slider, the arrow buttons, or the keyboard (Left / Right arrow keys, Home / End). At any frame you can click individual resolved tokens to **remask** them (they turn orange), then press **Resume** to re-run the remaining diffusion steps from that point with your edits applied. The model treats the entire generation region as a single block during resume, so remasked tokens in any position can be resolved.
+
+You can resume multiple times — each resume extends the frame history and the scrubber updates accordingly. Remask edits (frame index and token positions) are recorded automatically and included in saved metadata.
+
+#### Saving
+
+Clicking **Save** writes the run results to a timestamped folder under `Results/` containing `metadata.json` (including any remask edits), `final.txt`, `history.txt` (frame-by-frame diffusion snapshots), and `diffusion.gif` (animated visualization).
 
 Optional flags:
 
@@ -141,6 +151,8 @@ Each run creates a timestamped directory under `artifacts/` containing the metad
 - [x] Recommended parameter bounds with Experimental mode toggle
 - [x] Real-time client-side validation (bounds, divisibility, negative values)
 - [x] Save run results from the web UI (metadata, history, final text, GIF)
+- [x] Interactive remasking: frame scrubber, click-to-remask tokens, resume diffusion from any frame
+- [x] Remask edit metadata saved with run results
 
 ### Possible Extensions
 
