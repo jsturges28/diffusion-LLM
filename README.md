@@ -6,9 +6,7 @@ This repository demonstrates **diffusion-style text generation**: instead of gen
 
 We use [LLaDA 8B Instruct](https://huggingface.co/GSAI-ML/LLaDA-8B-Instruct) — the first competitive large-scale discrete diffusion language model — as our backbone. The model was pre-trained from scratch on 2.3T tokens and fine-tuned on 4.5M instruction pairs, achieving performance comparable to LLaMA 3 8B on standard benchmarks ([paper](https://arxiv.org/abs/2502.09992)).
 
-The project has two interfaces:
-- **CLI** — run a single prompt and save artifacts (final text, frame history, GIF animation).
-- **Web UI** — launch a local server and watch the diffusion process unfold live in the browser, with streaming intermediate frames over WebSocket.
+A local **web UI** (FastAPI + WebSocket) lets you watch the diffusion process unfold live in the browser, streaming intermediate frames as the model iteratively unmasks tokens over N steps.
 
 
 ## How It Works
@@ -30,28 +28,31 @@ The training loss is cross-entropy on masked positions only, weighted by 1/*t*, 
 
 | Parameter | Description |
 |---|---|
-| `--steps` | Number of denoising steps. More steps = higher quality, slower generation. |
-| `--gen_length` | Length of the masked canvas (output token count). |
-| `--block_length` | Block size for semi-autoregressive sampling. When < `gen_length`, blocks are generated left-to-right, with diffusion within each block. Set equal to `gen_length` for pure diffusion. |
-| `--temperature` | Gumbel noise temperature for categorical sampling. 0 = greedy (argmax). |
-| `--cfg_scale` | Classifier-free guidance strength. 0 = disabled. Higher values increase prompt adherence. |
-| `--remasking` | Strategy: `low_confidence` (default, re-mask least confident tokens) or `random`. |
+| Steps | Number of denoising steps. More steps = higher quality, slower generation. |
+| Generation length | Length of the masked canvas (output token count). |
+| Block length | Block size for semi-autoregressive sampling. When < generation length, blocks are generated left-to-right, with diffusion within each block. Set equal to generation length for pure diffusion. |
+| Temperature | Gumbel noise temperature for categorical sampling. 0 = greedy (argmax). |
+| CFG scale | Classifier-free guidance strength. 0 = disabled. Higher values increase prompt adherence. |
+| Remasking | Strategy: `low_confidence` (default, re-mask least confident tokens) or `random`. |
+
+All parameters are configurable in the web UI with recommended bounds enforced by default. An **Experimental** toggle lifts the bounds for exploratory use.
 
 
 ## Project Structure
 
 ```
 .
-├── main.py                           # CLI entry point (--sample, --serve)
+├── main.py                           # Web server entry point
 ├── README.md
 ├── requirements.txt
 ├── LICENSE
-├── parameter_triples.txt             # Notes on valid parameter combinations
 ├── src/
 │   ├── inference/
 │   │   ├── llada_sampler.py          # Core LLaDA sampling loop + history recording
 │   │   ├── streaming_sampler.py      # Async generator wrapper for live streaming
 │   │   └── render_gif.py             # Render diffusion history frames to GIF
+│   ├── analytics/
+│   │   └── metrics.py                # Run parsing and convergence metrics
 │   └── web/
 │       ├── server.py                 # FastAPI + WebSocket server
 │       └── static/
@@ -61,20 +62,13 @@ The training loss is cross-entropy on masked positions only, weighted by 1/*t*, 
 │           ├── analytics.html        # Analytics Suite page
 │           ├── analytics.css         # Analytics-specific styles
 │           └── analytics.js          # Analytics charts + run browser
-├── artifacts/                        # Auto-generated run outputs (--sample)
-│   └── <timestamp>_llada/
-│       ├── metadata.json             # Run config + final text
-│       ├── final.txt                 # Decoded output
-│       ├── history.txt               # All intermediate frames
-│       └── diffusion.gif             # Animated diffusion visualization
 ├── Results/                          # Saved runs from the web UI (Save button)
 │   └── <timestamp>_llada/
 │       ├── metadata.json
 │       ├── final.txt
 │       ├── history.txt
 │       └── diffusion.gif
-└── archive/
-    └── README_old.md                 # Previous project direction
+└── archive/                          # Old reference files and notes
 ```
 
 
@@ -93,15 +87,11 @@ The model weights (~16 GB) are downloaded automatically from Hugging Face on fir
 
 ## Quickstart
 
-### Web UI (recommended)
-
 ```bash
-python3 main.py --serve
+python3 main.py
 ```
 
 Open [http://localhost:8000](http://localhost:8000) in a browser. The model loads in the background (~30 seconds on first run) — a loading overlay shows progress. Once ready, type a prompt, adjust parameters, and click **Generate** to watch the diffusion process stream live.
-
-The UI includes controls for all sampling parameters (steps, generation length, block length, temperature, CFG scale, remasking strategy) with recommended bounds enforced by default. An **Experimental** toggle lifts the bounds for exploratory use, with inline range hints and real-time validation that disables Generate when constraints are violated.
 
 After a run completes, a **Save** button appears and a **frame scrubber** slides into view below the output area.
 
@@ -139,28 +129,8 @@ Clicking **Save** writes the run results to a timestamped folder under `Results/
 Optional flags:
 
 ```bash
-python3 main.py --serve --host 0.0.0.0 --port 8000
+python3 main.py --host 0.0.0.0 --port 8000
 ```
-
-### CLI
-
-```bash
-python3 main.py --sample --prompt "Explain what a hash map is and give a Python example."
-```
-
-With custom parameters:
-
-```bash
-python3 main.py --sample \
-  --prompt "Write a haiku about recursion." \
-  --steps 128 \
-  --gen_length 128 \
-  --block_length 32 \
-  --temperature 0.4 \
-  --cfg_scale 0.0
-```
-
-Each run creates a timestamped directory under `artifacts/` containing the metadata, final text, frame history, and the diffusion GIF.
 
 
 ## Implementation Status
@@ -170,7 +140,6 @@ Each run creates a timestamped directory under `artifacts/` containing the metad
 - [x] Configurable steps, generation length, block length, temperature, CFG, remasking
 - [x] Intermediate frame history recording
 - [x] GIF rendering of the diffusion process
-- [x] CLI with per-run artifact output (metadata, text, GIF)
 - [x] Interactive web UI with live diffusion visualization (FastAPI + WebSocket)
 - [x] Recommended parameter bounds with Experimental mode toggle
 - [x] Real-time client-side validation (bounds, divisibility, negative values)

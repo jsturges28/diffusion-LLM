@@ -1,7 +1,7 @@
 .cursor
 .venv
 data/
-artifacts/
+archive/
 Results/
 *__pycache__/
 *.pyc
