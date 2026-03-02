@@ -130,6 +130,30 @@ var btnClearRemask =
   document.getElementById("btn-clear-remask");
 var btnResume =
   document.getElementById("btn-resume");
+var btnEditFrames =
+  document.getElementById("btn-edit-frames");
+
+// Guided edit mode DOM refs.
+var guidedEditControls =
+  document.getElementById("guided-edit-controls");
+var guidedEditStatus =
+  document.getElementById("guided-edit-status");
+var guidedEditCount =
+  document.getElementById("guided-edit-count");
+var btnSelectFrame =
+  document.getElementById("btn-select-frame");
+var btnLockIn =
+  document.getElementById("btn-lock-in");
+var btnClearGuided =
+  document.getElementById("btn-clear-guided");
+var btnEditAnother =
+  document.getElementById("btn-edit-another");
+var btnRunToHere =
+  document.getElementById("btn-run-to-here");
+var btnResumeEnd =
+  document.getElementById("btn-resume-end");
+var btnExitEdit =
+  document.getElementById("btn-exit-edit");
 
 // ---- State ----
 
@@ -147,12 +171,25 @@ var frameTokens = [];
 var perFrameElapsed = [];
 var lastRunParams = null;
 var lastFinalText = null;
+var originalTotalFrames = 0;
+var originalFrameHistory = [];
+var originalFrameTokens = [];
 
 // Scrubber and remasking state.
 var scrubberActive = false;
 var currentScrubFrame = 0;
 var remaskedPositions = {};
+var perFrameRemasked = {};
 var remaskEdits = [];
+
+// Guided multi-frame edit mode state.
+// null | "select" | "edit" | "choice"
+//      | "select_target" | "generating"
+var remaskMode = null;
+var remaskModeEdits = [];
+var scrubberMinFrame = 0;
+var guidedResumeAction = null;
+var guidedTargetFrame = null;
 
 // Resume state: when resuming, incoming frames are
 // appended starting at resumeFrameOffset.
@@ -646,19 +683,36 @@ function handleDone(data) {
       parseFloat(paramCfgScale.value),
     remasking: paramRemasking.value,
   };
+  if (originalTotalFrames === 0) {
+    originalTotalFrames = frameHistory.length;
+    originalFrameHistory = frameHistory.slice();
+    originalFrameTokens = frameTokens.slice();
+  }
+
   setSaveAvailable(true);
-  activateScrubber();
+
+  if (remaskMode === "generating") {
+    handleGuidedDone();
+  } else {
+    activateScrubber();
+  }
 }
 
 function handleError(data) {
   setGenerating(false);
   isResuming = false;
+  if (remaskMode !== null) {
+    resetGuidedMode();
+  }
   statusMessage.textContent =
     "Error: " + (data.message || "unknown");
   statusMessage.style.color = "var(--danger)";
   setTimeout(function () {
     statusMessage.style.color = "";
   }, 5000);
+  if (frameHistory.length > 1) {
+    activateScrubber();
+  }
 }
 
 // ---- Rendering ----
@@ -706,6 +760,7 @@ function renderFrameWithTokens(frameIndex) {
     return;
   }
 
+  var allowClick = remaskMode === "edit";
   var fragment =
     document.createDocumentFragment();
 
@@ -727,7 +782,7 @@ function renderFrameWithTokens(frameIndex) {
     } else {
       span.className =
         "token-span token-resolved"
-        + " token-clickable";
+        + (allowClick ? " token-clickable" : "");
       span.textContent = tok.t;
     }
     fragment.appendChild(span);
@@ -735,6 +790,60 @@ function renderFrameWithTokens(frameIndex) {
 
   outputArea.textContent = "";
   outputArea.appendChild(fragment);
+}
+
+function renderTargetPlaceholder(frameIndex) {
+  outputArea.textContent = "";
+
+  var lastEditFrame = (remaskModeEdits.length > 0)
+    ? remaskModeEdits[
+        remaskModeEdits.length - 1
+      ].frame_index
+    : scrubberMinFrame;
+
+  var notice = document.createElement("span");
+  notice.className = "preview-notice";
+
+  var label = document.createElement("span");
+  label.className = "preview-frame-label";
+  label.textContent = "Frame " + frameIndex;
+
+  notice.appendChild(label);
+  notice.appendChild(
+    document.createTextNode(
+      " \u2014 will be generated. "
+      + "Output will diverge from this "
+      + "preview based on edits to "
+      + "Frame " + lastEditFrame + "."
+    )
+  );
+  outputArea.appendChild(notice);
+
+  var origTokens = originalFrameTokens[frameIndex];
+  var origText = originalFrameHistory[frameIndex];
+
+  if (origTokens || origText) {
+    var wrapper = document.createElement("div");
+    wrapper.className = "preview-content";
+
+    if (origTokens) {
+      for (var i = 0; i < origTokens.length; i++) {
+        var tok = origTokens[i];
+        var span = document.createElement("span");
+        span.className = tok.m
+          ? "token-span token-mask"
+          : "token-span token-resolved";
+        span.textContent = tok.m ? MASK_CHAR : tok.t;
+        wrapper.appendChild(span);
+      }
+    } else {
+      var textSpan = document.createElement("span");
+      textSpan.className = "char-resolved";
+      textSpan.textContent = origText;
+      wrapper.appendChild(textSpan);
+    }
+    outputArea.appendChild(wrapper);
+  }
 }
 
 // ---- Scrubber ----
@@ -751,10 +860,14 @@ function activateScrubber() {
     String(frameHistory.length - 1);
   scrubberSlider.value =
     String(currentScrubFrame);
+  scrubberSlider.disabled = false;
   updateScrubberLabel();
 
   scrubberSection.hidden = false;
+  btnEditFrames.hidden = false;
+  guidedEditControls.hidden = true;
   clearRemaskedPositions();
+  unlockScrubberNav();
 
   navigateToFrame(currentScrubFrame);
 }
@@ -767,34 +880,72 @@ function deactivateScrubber() {
 }
 
 function updateScrubberLabel() {
+  var maxLabel = (
+    remaskMode === "select_target"
+    && originalTotalFrames > 0
+  ) ? originalTotalFrames - 1
+    : frameHistory.length - 1;
   scrubberLabel.textContent =
     "Frame " + currentScrubFrame
-    + " / " + (frameHistory.length - 1);
+    + " / " + maxLabel;
 }
 
 function navigateToFrame(index) {
+  saveFrameSelections(currentScrubFrame);
+
+  var minFrame = (
+    remaskMode === "select"
+    || remaskMode === "select_target"
+  ) ? scrubberMinFrame : 0;
+  var maxFrame = (
+    remaskMode === "select_target"
+    && originalTotalFrames > 0
+  ) ? originalTotalFrames - 1
+    : frameHistory.length - 1;
   index = Math.max(
-    0,
-    Math.min(index, frameHistory.length - 1)
+    minFrame,
+    Math.min(index, maxFrame)
   );
   currentScrubFrame = index;
   scrubberSlider.value = String(index);
   updateScrubberLabel();
 
-  clearRemaskedPositions();
-  renderFrameWithTokens(index);
+  restoreFrameSelections(index);
+
+  if (index < frameHistory.length) {
+    renderFrameWithTokens(index);
+  } else {
+    renderTargetPlaceholder(index);
+  }
   updateRemaskControls();
 }
 
 function updateRemaskControls() {
+  if (remaskMode !== null) {
+    remaskControls.hidden = true;
+    updateGuidedUI();
+    return;
+  }
+
   var count = Object.keys(remaskedPositions).length;
-  if (count > 0) {
+  var otherFrameCount = countEditedFrames(
+    currentScrubFrame
+  );
+  var anyEdits = count > 0 || otherFrameCount > 0;
+
+  if (anyEdits) {
     remaskControls.hidden = false;
-    remaskCount.textContent =
-      count + " token"
+    var label = count + " token"
       + (count !== 1 ? "s" : "")
       + " selected";
-    btnResume.disabled = false;
+    if (otherFrameCount > 0) {
+      label += " (" + otherFrameCount
+        + " other frame"
+        + (otherFrameCount !== 1 ? "s" : "")
+        + " edited)";
+    }
+    remaskCount.textContent = label;
+    btnResume.disabled = count === 0;
   } else {
     remaskControls.hidden = true;
     btnResume.disabled = true;
@@ -803,7 +954,38 @@ function updateRemaskControls() {
 
 function clearRemaskedPositions() {
   remaskedPositions = {};
+  perFrameRemasked = {};
   updateRemaskControls();
+}
+
+function saveFrameSelections(frameIndex) {
+  if (Object.keys(remaskedPositions).length > 0) {
+    perFrameRemasked[frameIndex] =
+      Object.assign({}, remaskedPositions);
+  } else {
+    delete perFrameRemasked[frameIndex];
+  }
+}
+
+function restoreFrameSelections(frameIndex) {
+  if (perFrameRemasked[frameIndex]) {
+    remaskedPositions = Object.assign(
+      {}, perFrameRemasked[frameIndex]
+    );
+  } else {
+    remaskedPositions = {};
+  }
+}
+
+function countEditedFrames(excludeFrame) {
+  var count = 0;
+  var keys = Object.keys(perFrameRemasked);
+  for (var i = 0; i < keys.length; i++) {
+    if (Number(keys[i]) !== excludeFrame) {
+      count++;
+    }
+  }
+  return count;
 }
 
 function toggleRemaskPosition(pos) {
@@ -812,8 +994,248 @@ function toggleRemaskPosition(pos) {
   } else {
     remaskedPositions[pos] = true;
   }
+  saveFrameSelections(currentScrubFrame);
   renderFrameWithTokens(currentScrubFrame);
-  updateRemaskControls();
+  if (remaskMode !== null) {
+    updateGuidedUI();
+  } else {
+    updateRemaskControls();
+  }
+}
+
+// ---- Guided multi-frame edit mode ----
+
+function resetGuidedMode() {
+  remaskMode = null;
+  guidedResumeAction = null;
+  guidedTargetFrame = null;
+  remaskModeEdits = [];
+  guidedEditControls.hidden = true;
+  scrubberSlider.disabled = false;
+  scrubberSlider.min = "0";
+  unlockScrubberNav();
+}
+
+function unlockScrubberNav() {
+  btnScrubStart.disabled = false;
+  btnScrubPrev.disabled = false;
+  btnScrubNext.disabled = false;
+  btnScrubEnd.disabled = false;
+}
+
+function lockScrubberNav() {
+  btnScrubStart.disabled = true;
+  btnScrubPrev.disabled = true;
+  btnScrubNext.disabled = true;
+  btnScrubEnd.disabled = true;
+  scrubberSlider.disabled = true;
+}
+
+function enterRemaskMode() {
+  remaskMode = "select";
+  scrubberMinFrame = 0;
+  remaskModeEdits = [];
+  guidedResumeAction = null;
+  clearRemaskedPositions();
+
+  scrubberSlider.min = "0";
+  btnEditFrames.hidden = true;
+  remaskControls.hidden = true;
+  guidedEditControls.hidden = false;
+
+  navigateToFrame(0);
+  updateGuidedUI();
+}
+
+function exitRemaskMode() {
+  resetGuidedMode();
+  clearRemaskedPositions();
+  btnEditFrames.hidden = false;
+  navigateToFrame(frameHistory.length - 1);
+  renderFrameWithTokens(currentScrubFrame);
+}
+
+function updateGuidedUI() {
+  if (remaskMode === null) {
+    guidedEditControls.hidden = true;
+    return;
+  }
+
+  guidedEditControls.hidden = false;
+
+  btnSelectFrame.hidden = true;
+  btnLockIn.hidden = true;
+  btnClearGuided.hidden = true;
+  btnEditAnother.hidden = true;
+  btnRunToHere.hidden = true;
+  btnResumeEnd.hidden = true;
+  guidedEditCount.hidden = true;
+
+  var count =
+    Object.keys(remaskedPositions).length;
+
+  switch (remaskMode) {
+    case "select":
+      guidedEditStatus.textContent =
+        "Navigate to a frame, then select it"
+        + " for editing.";
+      btnSelectFrame.hidden = false;
+      scrubberSlider.disabled = false;
+      scrubberSlider.min =
+        String(scrubberMinFrame);
+      unlockScrubberNav();
+      break;
+
+    case "edit":
+      guidedEditStatus.textContent =
+        "Click tokens to remask on Frame "
+        + currentScrubFrame + ".";
+      btnLockIn.hidden = false;
+      btnLockIn.disabled = count === 0;
+      if (count > 0) {
+        guidedEditCount.hidden = false;
+        guidedEditCount.textContent =
+          count + " token"
+          + (count !== 1 ? "s" : "")
+          + " selected";
+        btnClearGuided.hidden = false;
+      }
+      lockScrubberNav();
+      break;
+
+    case "choice":
+      guidedEditStatus.textContent =
+        count + " token"
+        + (count !== 1 ? "s" : "")
+        + " locked on Frame "
+        + currentScrubFrame + ".";
+      btnEditAnother.hidden = false;
+      btnResumeEnd.hidden = false;
+      lockScrubberNav();
+      break;
+
+    case "select_target":
+      guidedEditStatus.textContent =
+        "Navigate to the target frame,"
+        + " then run to it.";
+      btnRunToHere.hidden = false;
+      scrubberSlider.disabled = false;
+      scrubberSlider.min =
+        String(scrubberMinFrame);
+      scrubberSlider.max = String(
+        (originalTotalFrames > 0)
+          ? originalTotalFrames - 1
+          : frameHistory.length - 1
+      );
+      unlockScrubberNav();
+      break;
+
+    case "generating":
+      guidedEditStatus.textContent =
+        "Generating\u2026";
+      lockScrubberNav();
+      break;
+  }
+}
+
+function selectCurrentFrame() {
+  remaskMode = "edit";
+  renderFrameWithTokens(currentScrubFrame);
+  updateGuidedUI();
+}
+
+function lockInEdits() {
+  var positions =
+    Object.keys(remaskedPositions).map(Number);
+  if (positions.length === 0) {
+    return;
+  }
+  remaskModeEdits.push({
+    frame_index: currentScrubFrame,
+    token_positions: positions.slice(),
+  });
+  remaskMode = "choice";
+  updateGuidedUI();
+}
+
+function doGuidedResume(action) {
+  guidedResumeAction = action;
+
+  var lastEdit =
+    remaskModeEdits[remaskModeEdits.length - 1];
+  var positions = lastEdit.token_positions;
+  var frameIndex = lastEdit.frame_index;
+
+  remaskEdits.push({
+    frame_index: frameIndex,
+    token_positions: positions.slice(),
+  });
+
+  perFrameRemasked = {};
+  remaskedPositions = {};
+
+  resumeFrameOffset = frameIndex;
+  frameHistory.length = resumeFrameOffset;
+  frameTokens.length = resumeFrameOffset;
+  isResuming = true;
+
+  remaskMode = "generating";
+  updateGuidedUI();
+
+  setSaveAvailable(false);
+  resetStatus();
+  statusMessage.textContent = "Resuming\u2026";
+  setGenerating(true);
+
+  var message = {
+    type: "resume",
+    frame_index: frameIndex,
+    remask_positions: positions,
+  };
+
+  if (
+    action === "another"
+    && guidedTargetFrame !== null
+  ) {
+    message.max_frames =
+      guidedTargetFrame - frameIndex + 1;
+  }
+
+  ws.send(JSON.stringify(message));
+}
+
+function handleGuidedDone() {
+  if (guidedResumeAction === "another") {
+    var target = Math.min(
+      guidedTargetFrame,
+      frameHistory.length - 1
+    );
+
+    scrubberActive = true;
+    scrubberSection.hidden = false;
+    guidedEditControls.hidden = false;
+    btnEditFrames.hidden = true;
+    remaskControls.hidden = true;
+
+    scrubberSlider.min = String(target);
+    scrubberSlider.max =
+      String(frameHistory.length - 1);
+    scrubberSlider.value = String(target);
+
+    currentScrubFrame = target;
+    remaskMode = "edit";
+    guidedResumeAction = null;
+    guidedTargetFrame = null;
+    remaskedPositions = {};
+    perFrameRemasked = {};
+
+    updateScrubberLabel();
+    renderFrameWithTokens(target);
+    updateGuidedUI();
+  } else {
+    resetGuidedMode();
+    activateScrubber();
+  }
 }
 
 // ---- UI state helpers ----
@@ -899,7 +1321,12 @@ function startGeneration() {
   perFrameElapsed = [];
   lastRunParams = null;
   lastFinalText = null;
+  originalTotalFrames = 0;
+  originalFrameHistory = [];
+  originalFrameTokens = [];
   remaskEdits = [];
+  perFrameRemasked = {};
+  resetGuidedMode();
   isResuming = false;
   resumeFrameOffset = 0;
   setSaveAvailable(false);
@@ -935,7 +1362,13 @@ function cancelGeneration() {
   ws.send(JSON.stringify({ type: "cancel" }));
   setGenerating(false);
   isResuming = false;
+  if (remaskMode !== null) {
+    resetGuidedMode();
+  }
   statusMessage.textContent = "Cancelled.";
+  if (frameHistory.length > 1) {
+    activateScrubber();
+  }
 }
 
 function startResume() {
@@ -949,6 +1382,8 @@ function startResume() {
     return;
   }
 
+  saveFrameSelections(currentScrubFrame);
+
   var positions =
     Object.keys(remaskedPositions).map(Number);
   if (positions.length === 0) {
@@ -959,6 +1394,9 @@ function startResume() {
     frame_index: currentScrubFrame,
     token_positions: positions.slice(),
   });
+
+  perFrameRemasked = {};
+  remaskedPositions = {};
 
   resumeFrameOffset = currentScrubFrame;
   frameHistory.length = resumeFrameOffset;
@@ -998,6 +1436,20 @@ function saveRun() {
     ? perFrameElapsed[perFrameElapsed.length - 1]
     : null;
 
+  var tokenIds = [];
+  for (var fi = 0; fi < frameTokens.length; fi++) {
+    var ft = frameTokens[fi];
+    if (ft) {
+      var ids = [];
+      for (var ti = 0; ti < ft.length; ti++) {
+        ids.push(ft[ti].id);
+      }
+      tokenIds.push(ids);
+    } else {
+      tokenIds.push(null);
+    }
+  }
+
   var payload = {
     prompt: promptInput.value.trim(),
     params: lastRunParams,
@@ -1005,6 +1457,7 @@ function saveRun() {
     final_text: lastFinalText,
     elapsed_seconds: totalElapsed,
     per_frame_elapsed: perFrameElapsed.slice(),
+    frame_token_ids: tokenIds,
   };
 
   if (remaskEdits.length > 0) {
@@ -1094,11 +1547,17 @@ paramCfgScale.addEventListener(
 scrubberSlider.addEventListener(
   "input",
   function () {
+    saveFrameSelections(currentScrubFrame);
     var val = parseInt(scrubberSlider.value, 10);
     currentScrubFrame = val;
     updateScrubberLabel();
-    clearRemaskedPositions();
-    renderFrameWithTokens(val);
+    restoreFrameSelections(val);
+    if (val < frameHistory.length) {
+      renderFrameWithTokens(val);
+    } else {
+      renderTargetPlaceholder(val);
+    }
+    updateRemaskControls();
   }
 );
 
@@ -1126,14 +1585,21 @@ btnScrubNext.addEventListener(
 btnScrubEnd.addEventListener(
   "click",
   function () {
-    navigateToFrame(frameHistory.length - 1);
+    var endFrame = (
+      remaskMode === "select_target"
+      && originalTotalFrames > 0
+    ) ? originalTotalFrames - 1
+      : frameHistory.length - 1;
+    navigateToFrame(endFrame);
   }
 );
 
 btnClearRemask.addEventListener(
   "click",
   function () {
-    clearRemaskedPositions();
+    remaskedPositions = {};
+    delete perFrameRemasked[currentScrubFrame];
+    updateRemaskControls();
     renderFrameWithTokens(currentScrubFrame);
   }
 );
@@ -1142,11 +1608,78 @@ btnResume.addEventListener(
   "click", startResume
 );
 
+// Guided edit mode event listeners.
+btnEditFrames.addEventListener(
+  "click", enterRemaskMode
+);
+
+btnSelectFrame.addEventListener(
+  "click", selectCurrentFrame
+);
+
+btnLockIn.addEventListener(
+  "click", lockInEdits
+);
+
+btnClearGuided.addEventListener(
+  "click",
+  function () {
+    remaskedPositions = {};
+    delete perFrameRemasked[currentScrubFrame];
+    renderFrameWithTokens(currentScrubFrame);
+    updateGuidedUI();
+  }
+);
+
+btnEditAnother.addEventListener(
+  "click",
+  function () {
+    var lastEdit = remaskModeEdits[
+      remaskModeEdits.length - 1
+    ];
+    scrubberMinFrame =
+      lastEdit.frame_index + 1;
+    remaskMode = "select_target";
+    var maxFrame = (originalTotalFrames > 0)
+      ? originalTotalFrames - 1
+      : frameHistory.length - 1;
+    scrubberSlider.min =
+      String(scrubberMinFrame);
+    scrubberSlider.max = String(maxFrame);
+    scrubberSlider.disabled = false;
+    unlockScrubberNav();
+    navigateToFrame(scrubberMinFrame);
+    updateGuidedUI();
+  }
+);
+
+btnRunToHere.addEventListener(
+  "click",
+  function () {
+    guidedTargetFrame = currentScrubFrame;
+    doGuidedResume("another");
+  }
+);
+
+btnResumeEnd.addEventListener(
+  "click",
+  function () {
+    doGuidedResume("end");
+  }
+);
+
+btnExitEdit.addEventListener(
+  "click", exitRemaskMode
+);
+
 // Token click delegation on the output area.
 outputArea.addEventListener(
   "click",
   function (e) {
     if (!scrubberActive) {
+      return;
+    }
+    if (remaskMode !== "edit") {
       return;
     }
     var target = e.target;
@@ -1171,6 +1704,14 @@ document.addEventListener(
     if (!scrubberActive || isGenerating) {
       return;
     }
+    if (
+      remaskMode === "edit"
+      || remaskMode === "choice"
+      || remaskMode === "generating"
+    ) {
+      return;
+    }
+    // "select" and "select_target" allow navigation.
     var tag = document.activeElement.tagName;
     if (
       tag === "INPUT"
@@ -1190,9 +1731,12 @@ document.addEventListener(
       navigateToFrame(0);
     } else if (e.key === "End") {
       e.preventDefault();
-      navigateToFrame(
-        frameHistory.length - 1
-      );
+      var endFrame = (
+        remaskMode === "select_target"
+        && originalTotalFrames > 0
+      ) ? originalTotalFrames - 1
+        : frameHistory.length - 1;
+      navigateToFrame(endFrame);
     }
   }
 );

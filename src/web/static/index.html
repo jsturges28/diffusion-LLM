@@ -144,11 +144,23 @@
         <button id="btn-scrub-next" class="scrub-btn" title="Next frame">&rsaquo;</button>
         <button id="btn-scrub-end" class="scrub-btn" title="Last frame">&raquo;</button>
         <span id="scrubber-label">Frame 0 / 0</span>
+        <button id="btn-edit-frames" class="btn-edit-frames" hidden>Edit Frames</button>
       </div>
       <div id="remask-controls" hidden>
         <span id="remask-count">0 tokens selected</span>
         <button id="btn-clear-remask" class="btn-secondary">Clear</button>
         <button id="btn-resume" class="btn-resume" disabled>Resume</button>
+      </div>
+      <div id="guided-edit-controls" hidden>
+        <span id="guided-edit-status"></span>
+        <span id="guided-edit-count" hidden></span>
+        <button id="btn-select-frame" class="btn-guided" hidden>Select Frame</button>
+        <button id="btn-lock-in" class="btn-lock-in" hidden disabled>&#x1F512; Lock In</button>
+        <button id="btn-clear-guided" class="btn-secondary" hidden>Clear</button>
+        <button id="btn-edit-another" class="btn-guided" hidden>Edit Another Frame</button>
+        <button id="btn-run-to-here" class="btn-guided" hidden>Run to Here</button>
+        <button id="btn-resume-end" class="btn-guided btn-resume-end" hidden>Resume to End</button>
+        <button id="btn-exit-edit" class="btn-secondary">Exit</button>
       </div>
     </section>
 
@@ -211,13 +223,14 @@
           <dd>Strategy for choosing which tokens to re-mask between steps. <em>Low Confidence</em> re-masks the least confident predictions. <em>Random</em> selects randomly.</dd>
         </dl>
         <h3>Interactive remasking</h3>
-        <p>After a generation completes, a <strong>frame scrubber</strong> appears below the output area. Use it to explore how the diffusion process unfolded step by step:</p>
+        <p>After a generation completes, a <strong>frame scrubber</strong> appears below the output area. Use the slider or <strong>&lsaquo; &rsaquo;</strong> buttons to explore frames. Press <strong>Left / Right arrow keys</strong> or <strong>Home / End</strong> to navigate.</p>
+        <p>To edit tokens, click <strong>Edit Frames</strong> to enter the guided editing flow:</p>
         <ol>
-          <li>Drag the slider or use the <strong>&lsaquo; &rsaquo;</strong> buttons to navigate frame by frame. You can also press the <strong>Left / Right arrow keys</strong>, or <strong>Home / End</strong> to jump to the first or last frame.</li>
-          <li>Click any resolved (non-mask) token to <strong>remask</strong> it. Selected tokens turn orange. Click again to deselect.</li>
-          <li>When at least one token is selected, click <strong>Resume</strong> to continue the diffusion process from that frame with your changes applied. The model re-runs for the remaining steps, resolving the remasked positions along with any that were still masked.</li>
-          <li>You can resume multiple times. Each resume extends the frame history and the scrubber updates to include the new frames.</li>
+          <li><strong>Select a frame:</strong> Navigate to the frame you want to edit and click <strong>Select Frame</strong>.</li>
+          <li><strong>Remask tokens:</strong> Click resolved tokens to remask them (they turn orange). Click again to deselect. When ready, click <strong>Lock In</strong>.</li>
+          <li><strong>Choose next action:</strong> Click <strong>Edit Another Frame</strong> to resume from this point, then pick a later frame for further edits. Or click <strong>Resume to End</strong> to finish.</li>
         </ol>
+        <p>Each &ldquo;Edit Another Frame&rdquo; resumes the diffusion from your edits, then lets you pick a <em>later</em> frame in the new trajectory for additional changes. This allows chained multi-frame edits that build on each other.</p>
         <p>Your remask edits (frame number and token positions) are recorded automatically and included in saved results.</p>
         <h3>Saving results</h3>
         <p>After a generation completes, a <strong>Save</strong> button appears next to the controls. Clicking it saves the run to a timestamped folder under <code>Results/</code> containing:</p>

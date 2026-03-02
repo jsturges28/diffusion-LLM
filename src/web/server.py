@@ -31,7 +31,6 @@ from transformers.models.auto.tokenization_auto import (
 )
 
 from src.analytics.metrics import (
-    compute_churn,
     compute_convergence,
     list_runs,
     load_run_metadata,
@@ -92,6 +91,9 @@ class SaveRunRequest(BaseModel):
     final_text: str
     elapsed_seconds: Optional[float] = None
     per_frame_elapsed: Optional[List[float]] = None
+    frame_token_ids: Optional[
+        List[Optional[List[int]]]
+    ] = None
     remask_edits: Optional[List[RemaskEdit]] = None
 
 
@@ -305,13 +307,33 @@ async def _stream_frames(
     generator: Any,
     ws: WebSocket,
     start_time: float,
-) -> None:
+    *,
+    max_frames: int | None = None,
+) -> bool:
     """Iterate an async frame generator and send each
-    frame over the WebSocket with elapsed time."""
+    frame over the WebSocket with elapsed time.
+
+    Returns True if the generator yielded a ``done``
+    message naturally.  Returns False when stopped
+    early because *max_frames* was reached or the
+    generator was cancelled before finishing.
+    """
+    frame_count = 0
+    done_sent = False
     async for frame in generator:
         elapsed = time.monotonic() - start_time
         frame["elapsed"] = round(elapsed, 2)
         await ws.send_json(frame)
+        if frame.get("type") == "done":
+            done_sent = True
+        elif frame.get("type") == "frame":
+            frame_count += 1
+            if (
+                max_frames is not None
+                and frame_count >= max_frames
+            ):
+                break
+    return done_sent
 
 
 @app.websocket("/ws")
@@ -519,6 +541,7 @@ async def _handle_resume(
     start_time = time.monotonic()
 
     frame_index = resume_params["frame_index"]
+    max_frames: int | None = data.get("max_frames")
     base_tensor = last_run_state["tensor_history"][
         frame_index
     ]
@@ -570,16 +593,38 @@ async def _handle_resume(
                     resume_tensor_history
                 ),
             )
-            await _stream_frames(
-                generator, ws, start_time
+            done_sent = await _stream_frames(
+                generator,
+                ws,
+                start_time,
+                max_frames=max_frames,
             )
 
             last_run_state[
                 "tensor_history"
             ].extend(resume_tensor_history)
-            last_run_state["total_steps"] = len(
-                last_run_state["tensor_history"]
-            ) - 1
+
+            if done_sent:
+                last_run_state["total_steps"] = len(
+                    last_run_state["tensor_history"]
+                ) - 1
+            else:
+                final_text = ""
+                if resume_tensor_history:
+                    final_text = (
+                        tokenizer.batch_decode(
+                            resume_tensor_history[
+                                -1
+                            ],
+                            skip_special_tokens=True,
+                        )[0]
+                    )
+                await ws.send_json(
+                    {
+                        "type": "done",
+                        "final_text": final_text,
+                    }
+                )
 
         except Exception as exc:
             logger.exception(
@@ -657,6 +702,16 @@ def _save_run_blocking(body: SaveRunRequest) -> str:
             fh.write(frame_text)
             fh.write("\n")
 
+    if body.frame_token_ids is not None:
+        tokens_path = run_dir / "tokens.json"
+        tokens_path.write_text(
+            json.dumps(
+                body.frame_token_ids,
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
     gif_path = run_dir / "diffusion.gif"
     history_to_gif(
         body.frames,
@@ -710,7 +765,7 @@ def _compute_run_metrics(
     run_id: str,
 ) -> Dict[str, Any]:
     """Blocking helper: parse history and compute
-    convergence + churn for a single run."""
+    convergence metrics for a single run."""
     run_dir = RESULTS_DIR / run_id
     if not run_dir.is_dir():
         raise FileNotFoundError(
@@ -726,12 +781,10 @@ def _compute_run_metrics(
     meta = load_run_metadata(run_dir)
     frames = parse_history(history_path)
     convergence = compute_convergence(frames)
-    churn = compute_churn(frames)
 
     result: Dict[str, Any] = {
         "run_id": run_id,
         "convergence": convergence,
-        "churn": churn,
         "total_frames": len(frames),
     }
 
@@ -742,6 +795,10 @@ def _compute_run_metrics(
     if "elapsed_seconds" in meta:
         result["elapsed_seconds"] = (
             meta["elapsed_seconds"]
+        )
+    if "remask_edits" in meta:
+        result["remask_edits"] = (
+            meta["remask_edits"]
         )
 
     return result
@@ -800,6 +857,18 @@ async def analytics_compare(
             })
 
     return JSONResponse(content=results)
+
+
+@app.get("/api/analytics/system")
+async def analytics_system_info() -> JSONResponse:
+    """Return hardware info for the analytics UI."""
+    gpu_name: str | None = None
+    if torch.cuda.is_available():
+        gpu_name = torch.cuda.get_device_name(0)
+
+    return JSONResponse(
+        content={"gpu_name": gpu_name}
+    )
 
 
 app.mount(

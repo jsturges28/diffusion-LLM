@@ -115,22 +115,38 @@
         <div id="detail-meta"></div>
 
         <div class="chart-section">
-          <h3>Convergence</h3>
+          <div class="chart-header-row">
+            <h3>Convergence</h3>
+            <div class="zoom-controls">
+              <button class="zoom-btn" data-chart="convergence"
+                data-action="in" title="Zoom in">+</button>
+              <button class="zoom-btn" data-chart="convergence"
+                data-action="out" title="Zoom out">&minus;</button>
+              <button class="zoom-btn" data-chart="convergence"
+                data-action="reset" title="Reset zoom">&#8634;</button>
+            </div>
+          </div>
           <div class="chart-wrap">
             <canvas id="chart-convergence"></canvas>
           </div>
         </div>
 
-        <div class="chart-section">
-          <h3>Token Churn</h3>
-          <div class="chart-wrap">
-            <canvas id="chart-churn"></canvas>
-          </div>
-        </div>
-
         <div class="chart-section" id="timing-section"
           hidden>
-          <h3>Timing</h3>
+          <div class="chart-header-row">
+            <h3>
+              Timing
+              <span id="gpu-label" class="gpu-label"></span>
+            </h3>
+            <div class="zoom-controls">
+              <button class="zoom-btn" data-chart="timing"
+                data-action="in" title="Zoom in">+</button>
+              <button class="zoom-btn" data-chart="timing"
+                data-action="out" title="Zoom out">&minus;</button>
+              <button class="zoom-btn" data-chart="timing"
+                data-action="reset" title="Reset zoom">&#8634;</button>
+            </div>
+          </div>
           <div class="chart-wrap">
             <canvas id="chart-timing"></canvas>
           </div>
@@ -153,12 +169,6 @@
           </div>
         </div>
 
-        <div class="chart-section">
-          <h3>Churn Overlay</h3>
-          <div class="chart-wrap chart-wrap-lg">
-            <canvas id="chart-compare-churn"></canvas>
-          </div>
-        </div>
       </section>
     </div>
 
@@ -171,6 +181,8 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js"></script>
   <script src="/analytics.js"></script>
 </body>
 </html>

@@ -1,7 +1,7 @@
 """Compute intrinsic diffusion metrics from saved runs.
 
 Reads history.txt and metadata.json from Results/ directories
-and produces convergence, churn, and timing statistics for the
+and produces convergence and timing statistics for the
 Analytics Suite frontend.
 """
 
@@ -93,54 +93,6 @@ def compute_convergence(
             "resolved_ratio": round(
                 resolved / total, 6
             ),
-        })
-
-    return results
-
-
-def compute_churn(
-    frames: List[str],
-) -> List[Dict[str, Any]]:
-    """Compute token churn between consecutive frames.
-
-    Churn counts positions where a non-mask character
-    changed to a *different* non-mask character between
-    frame N-1 and frame N. High churn indicates the
-    diffusion process is unstable at that step.
-
-    Returns one dict per transition (length = len-1)
-    with keys:
-      frame          — target frame index (1-based)
-      changed_count  — positions that flipped
-    """
-    assert len(frames) > 0
-
-    results: List[Dict[str, Any]] = []
-    for i in range(1, len(frames)):
-        prev = frames[i - 1].replace(
-            "\n", ""
-        ).replace("\r", "")
-        curr = frames[i].replace(
-            "\n", ""
-        ).replace("\r", "")
-
-        min_len = min(len(prev), len(curr))
-        changed = 0
-        for j in range(min_len):
-            prev_ch = prev[j]
-            curr_ch = curr[j]
-            prev_resolved = prev_ch != MASK_CHAR
-            curr_resolved = curr_ch != MASK_CHAR
-            if (
-                prev_resolved
-                and curr_resolved
-                and prev_ch != curr_ch
-            ):
-                changed += 1
-
-        results.append({
-            "frame": i,
-            "changed_count": changed,
         })
 
     return results

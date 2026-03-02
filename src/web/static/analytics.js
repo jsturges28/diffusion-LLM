@@ -27,6 +27,8 @@ var btnCloseDetail =
   document.getElementById("btn-close-detail");
 var timingSection =
   document.getElementById("timing-section");
+var gpuLabel =
+  document.getElementById("gpu-label");
 
 var comparePanel =
   document.getElementById("compare-panel");
@@ -41,6 +43,17 @@ Chart.defaults.font.family =
   "'JetBrains Mono', monospace";
 Chart.defaults.font.size = 10;
 
+// Fixed-position tooltip: anchored to the top-left
+// of the chart area so it never obscures data lines.
+Chart.Tooltip.positioners.topLeft =
+  function (elements, eventPosition) {
+    var chart = this.chart;
+    return {
+      x: chart.chartArea.left + 8,
+      y: chart.chartArea.top + 8,
+    };
+  };
+
 // ---- State ----
 
 var allRuns = [];
@@ -48,18 +61,24 @@ var sortKey = "created_at";
 var sortAsc = false;
 var checkedIds = {};
 var activeRunId = null;
+var gpuName = null;
 
 var chartConvergence = null;
-var chartChurn = null;
 var chartTiming = null;
 var chartCompareConv = null;
-var chartCompareChurn = null;
+
+// Map of chart name to Chart instance for zoom.
+var chartInstances = {};
 
 var COMPARE_COLORS = [
   "#00ff41", "#00aaff", "#ff9f1c",
   "#ff4444", "#aa66ff", "#ffee00",
   "#ff66aa", "#66ffcc",
 ];
+
+// Colors for resumed timing segments.
+var TIMING_COLOR = "#00aaff";
+var TIMING_RESUMED = "#66ccff";
 
 // ---- Data fetching ----
 
@@ -79,6 +98,11 @@ function fetchCompare(ids) {
   var url = "/api/analytics/compare?ids="
     + ids.map(encodeURIComponent).join(",");
   return fetch(url)
+    .then(function (r) { return r.json(); });
+}
+
+function fetchSystemInfo() {
+  return fetch("/api/analytics/system")
     .then(function (r) { return r.json(); });
 }
 
@@ -135,6 +159,64 @@ function checkedRunIds() {
 function updateCompareButton() {
   var ids = checkedRunIds();
   btnCompare.disabled = ids.length < 2;
+}
+
+function buildRemaskFrameSet(remaskEdits) {
+  var set = {};
+  if (!remaskEdits) { return set; }
+  for (var i = 0; i < remaskEdits.length; i++) {
+    var fi = remaskEdits[i].frame_index;
+    set[fi] = remaskEdits[i].token_positions;
+  }
+  return set;
+}
+
+// Build cumulative elapsed values so the timing
+// line never drops to 0 after a resume. Returns
+// {values, resumeStartSet} where resumeStartSet
+// maps frame indices of each resume's first frame
+// to true.
+function buildCumulativeTiming(raw, remaskSet) {
+  var values = [];
+  var resumeStartSet = {};
+  var offset = 0;
+
+  for (var i = 0; i < raw.length; i++) {
+    if (i > 0 && raw[i] < raw[i - 1]) {
+      offset = values[i - 1];
+      resumeStartSet[i] = true;
+    }
+    values.push(
+      +(raw[i] + offset).toFixed(3)
+    );
+  }
+  return {
+    values: values,
+    resumeStartSet: resumeStartSet,
+  };
+}
+
+// Shared zoom plugin options for scroll + pinch.
+function zoomPluginOptions() {
+  return {
+    zoom: {
+      wheel: { enabled: true },
+      pinch: { enabled: true },
+      mode: "x",
+    },
+    pan: {
+      enabled: true,
+      mode: "x",
+    },
+  };
+}
+
+// Shared tooltip title callback that prefixes
+// the frame number so it reads "Frame 112"
+// on its own line rather than just "112".
+function tooltipTitle(items) {
+  if (items.length === 0) { return ""; }
+  return "Frame " + items[0].label;
 }
 
 // ---- Sorting ----
@@ -367,139 +449,75 @@ function loadRunCharts(runId, run) {
     chartConvergence = destroyChart(
       chartConvergence
     );
-    chartChurn = destroyChart(chartChurn);
     chartTiming = destroyChart(chartTiming);
 
-    var convCanvas = document.getElementById(
-      "chart-convergence"
-    );
-    var churnCanvas = document.getElementById(
-      "chart-churn"
-    );
-    var timingCanvas = document.getElementById(
-      "chart-timing"
+    var remaskEdits = data.remask_edits || [];
+    var remaskSet = buildRemaskFrameSet(
+      remaskEdits
     );
 
-    // Convergence chart.
-    var convLabels = [];
-    var convData = [];
-    for (
-      var i = 0;
-      i < data.convergence.length;
-      i++
-    ) {
-      convLabels.push(data.convergence[i].frame);
-      convData.push(
-        +(data.convergence[i].resolved_ratio
-          * 100).toFixed(2)
-      );
-    }
-
-    chartConvergence = new Chart(
-      convCanvas.getContext("2d"),
-      {
-        type: "line",
-        data: {
-          labels: convLabels,
-          datasets: [{
-            label: "% Resolved",
-            data: convData,
-            borderColor: "#00ff41",
-            backgroundColor: "rgba(0,255,65,0.1)",
-            fill: true,
-            tension: 0.2,
-            pointRadius: 0,
-            borderWidth: 1.5,
-          }],
-        },
-        options: chartLineOptions(
-          "Frame", "% Resolved"
-        ),
-      }
-    );
-
-    // Churn chart.
-    var churnLabels = [];
-    var churnData = [];
-    for (
-      var j = 0;
-      j < data.churn.length;
-      j++
-    ) {
-      churnLabels.push(data.churn[j].frame);
-      churnData.push(data.churn[j].changed_count);
-    }
-
-    chartChurn = new Chart(
-      churnCanvas.getContext("2d"),
-      {
-        type: "bar",
-        data: {
-          labels: churnLabels,
-          datasets: [{
-            label: "Tokens Changed",
-            data: churnData,
-            backgroundColor: "rgba(255,159,28,0.5)",
-            borderColor: "#ff9f1c",
-            borderWidth: 1,
-          }],
-        },
-        options: chartBarOptions(
-          "Frame", "Changed"
-        ),
-      }
-    );
-
-    // Timing chart (only if data exists).
-    if (
-      data.per_frame_elapsed
-      && data.per_frame_elapsed.length > 0
-    ) {
-      timingSection.hidden = false;
-
-      var timeLabels = [];
-      var timeData = [];
-      for (
-        var t = 0;
-        t < data.per_frame_elapsed.length;
-        t++
-      ) {
-        timeLabels.push(t);
-        timeData.push(
-          +data.per_frame_elapsed[t].toFixed(3)
-        );
-      }
-
-      chartTiming = new Chart(
-        timingCanvas.getContext("2d"),
-        {
-          type: "line",
-          data: {
-            labels: timeLabels,
-            datasets: [{
-              label: "Elapsed (s)",
-              data: timeData,
-              borderColor: "#00aaff",
-              backgroundColor:
-                "rgba(0,170,255,0.08)",
-              fill: true,
-              tension: 0.2,
-              pointRadius: 0,
-              borderWidth: 1.5,
-            }],
-          },
-          options: chartLineOptions(
-            "Frame", "Seconds"
-          ),
-        }
-      );
-    } else {
-      timingSection.hidden = true;
-    }
+    renderConvergenceChart(data, remaskSet);
+    renderTimingChart(data, remaskSet);
   });
 }
 
-function chartLineOptions(xLabel, yLabel) {
+function renderConvergenceChart(data, remaskSet) {
+  var canvas = document.getElementById(
+    "chart-convergence"
+  );
+
+  var labels = [];
+  var values = [];
+  for (
+    var i = 0;
+    i < data.convergence.length;
+    i++
+  ) {
+    labels.push(data.convergence[i].frame);
+    values.push(
+      +(data.convergence[i].resolved_ratio
+        * 100).toFixed(2)
+    );
+  }
+
+  chartConvergence = new Chart(
+    canvas.getContext("2d"),
+    {
+      type: "line",
+      data: {
+        labels: labels,
+        datasets: [{
+          label: "% Resolved",
+          data: values,
+          borderColor: "#00ff41",
+          backgroundColor: "rgba(0,255,65,0.1)",
+          fill: true,
+          tension: 0.2,
+          pointRadius: 0,
+          borderWidth: 1.5,
+          segment: {
+            borderColor: function (ctx) {
+              if (remaskSet[ctx.p1DataIndex]) {
+                return "#00aaff";
+              }
+              return undefined;
+            },
+            borderWidth: function (ctx) {
+              if (remaskSet[ctx.p1DataIndex]) {
+                return 2.5;
+              }
+              return undefined;
+            },
+          },
+        }],
+      },
+      options: convergenceOptions(remaskSet),
+    }
+  );
+  chartInstances.convergence = chartConvergence;
+}
+
+function convergenceOptions(remaskSet) {
   return {
     responsive: true,
     maintainAspectRatio: false,
@@ -509,19 +527,40 @@ function chartLineOptions(xLabel, yLabel) {
     },
     plugins: {
       legend: { display: false },
+      tooltip: {
+        position: "topLeft",
+        caretSize: 0,
+        callbacks: {
+          title: tooltipTitle,
+          label: function (ctx) {
+            return ctx.dataset.label + ": "
+              + ctx.formattedValue;
+          },
+          afterLabel: function (ctx) {
+            var pos = remaskSet[ctx.dataIndex];
+            if (!pos) { return ""; }
+            return "User remasked "
+              + pos.length + " token"
+              + (pos.length !== 1 ? "s" : "")
+              + ": ["
+              + pos.join(", ") + "]";
+          },
+        },
+      },
+      zoom: zoomPluginOptions(),
     },
     scales: {
       x: {
         title: {
           display: true,
-          text: xLabel,
+          text: "Frame",
         },
         ticks: { maxTicksLimit: 12 },
       },
       y: {
         title: {
           display: true,
-          text: yLabel,
+          text: "% Resolved",
         },
         beginAtZero: true,
       },
@@ -529,25 +568,134 @@ function chartLineOptions(xLabel, yLabel) {
   };
 }
 
-function chartBarOptions(xLabel, yLabel) {
+function renderTimingChart(data, remaskSet) {
+  if (
+    !data.per_frame_elapsed
+    || data.per_frame_elapsed.length === 0
+  ) {
+    timingSection.hidden = true;
+    return;
+  }
+  timingSection.hidden = false;
+
+  if (gpuName) {
+    gpuLabel.textContent = "(" + gpuName + ")";
+  }
+
+  var canvas = document.getElementById(
+    "chart-timing"
+  );
+
+  var cumResult = buildCumulativeTiming(
+    data.per_frame_elapsed, remaskSet
+  );
+  var values = cumResult.values;
+  var resumeSet = cumResult.resumeStartSet;
+
+  var labels = [];
+  for (var t = 0; t < values.length; t++) {
+    labels.push(t);
+  }
+
+  chartTiming = new Chart(
+    canvas.getContext("2d"),
+    {
+      type: "line",
+      data: {
+        labels: labels,
+        datasets: [{
+          label: "Elapsed (s)",
+          data: values,
+          borderColor: TIMING_COLOR,
+          backgroundColor:
+            "rgba(0,170,255,0.08)",
+          fill: true,
+          tension: 0.2,
+          pointRadius: 0,
+          borderWidth: 1.5,
+          segment: {
+            borderColor: function (ctx) {
+              var fi = ctx.p1DataIndex;
+              if (remaskSet[fi]) {
+                return "#00ff41";
+              }
+              if (isInResumedRange(
+                fi, resumeSet
+              )) {
+                return TIMING_RESUMED;
+              }
+              return undefined;
+            },
+            borderWidth: function (ctx) {
+              if (remaskSet[ctx.p1DataIndex]) {
+                return 2.5;
+              }
+              return undefined;
+            },
+          },
+        }],
+      },
+      options: timingOptions(remaskSet),
+    }
+  );
+  chartInstances.timing = chartTiming;
+}
+
+// Check whether a frame index falls within a
+// resumed range (after a resume boundary but
+// not the remask point itself).
+function isInResumedRange(fi, resumeSet) {
+  var keys = Object.keys(resumeSet);
+  for (var k = 0; k < keys.length; k++) {
+    if (fi >= parseInt(keys[k], 10)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function timingOptions(remaskSet) {
   return {
     responsive: true,
     maintainAspectRatio: false,
+    interaction: {
+      mode: "index",
+      intersect: false,
+    },
     plugins: {
       legend: { display: false },
+      tooltip: {
+        position: "topLeft",
+        caretSize: 0,
+        callbacks: {
+          title: tooltipTitle,
+          label: function (ctx) {
+            return ctx.dataset.label + ": "
+              + ctx.formattedValue;
+          },
+          afterLabel: function (ctx) {
+            var pos = remaskSet[ctx.dataIndex];
+            if (!pos) { return ""; }
+            return "Resume point ("
+              + pos.length
+              + " tokens remasked)";
+          },
+        },
+      },
+      zoom: zoomPluginOptions(),
     },
     scales: {
       x: {
         title: {
           display: true,
-          text: xLabel,
+          text: "Frame",
         },
         ticks: { maxTicksLimit: 12 },
       },
       y: {
         title: {
           display: true,
-          text: yLabel,
+          text: "Seconds",
         },
         beginAtZero: true,
       },
@@ -567,22 +715,13 @@ function showComparison(ids) {
     chartCompareConv = destroyChart(
       chartCompareConv
     );
-    chartCompareChurn = destroyChart(
-      chartCompareChurn
-    );
 
     var convCanvas = document.getElementById(
       "chart-compare-conv"
     );
-    var churnCanvas = document.getElementById(
-      "chart-compare-churn"
-    );
 
     var convDatasets = [];
-    var churnDatasets = [];
-
     var maxConvLen = 0;
-    var maxChurnLen = 0;
 
     for (var i = 0; i < results.length; i++) {
       if (results[i].error) { continue; }
@@ -591,20 +730,11 @@ function showComparison(ids) {
         maxConvLen =
           results[i].convergence.length;
       }
-      if (results[i].churn.length
-        > maxChurnLen) {
-        maxChurnLen =
-          results[i].churn.length;
-      }
     }
 
     var convLabels = [];
     for (var cl = 0; cl < maxConvLen; cl++) {
       convLabels.push(cl);
-    }
-    var churnLabels = [];
-    for (var chl = 1; chl <= maxChurnLen; chl++) {
-      churnLabels.push(chl);
     }
 
     for (var j = 0; j < results.length; j++) {
@@ -635,26 +765,6 @@ function showComparison(ids) {
         pointRadius: 0,
         borderWidth: 1.5,
       });
-
-      var chData = [];
-      for (
-        var chi = 0;
-        chi < res.churn.length;
-        chi++
-      ) {
-        chData.push(
-          res.churn[chi].changed_count
-        );
-      }
-      churnDatasets.push({
-        label: label,
-        data: chData,
-        borderColor: color,
-        backgroundColor: color + "44",
-        tension: 0.2,
-        pointRadius: 0,
-        borderWidth: 1.5,
-      });
     }
 
     chartCompareConv = new Chart(
@@ -667,20 +777,6 @@ function showComparison(ids) {
         },
         options: compareChartOptions(
           "Frame", "% Resolved"
-        ),
-      }
-    );
-
-    chartCompareChurn = new Chart(
-      churnCanvas.getContext("2d"),
-      {
-        type: "line",
-        data: {
-          labels: churnLabels,
-          datasets: churnDatasets,
-        },
-        options: compareChartOptions(
-          "Frame", "Changed"
         ),
       }
     );
@@ -717,6 +813,14 @@ function compareChartOptions(xLabel, yLabel) {
         position: "bottom",
         labels: { boxWidth: 12, padding: 8 },
       },
+      tooltip: {
+        position: "topLeft",
+        caretSize: 0,
+        callbacks: {
+          title: tooltipTitle,
+        },
+      },
+      zoom: zoomPluginOptions(),
     },
     scales: {
       x: {
@@ -740,6 +844,29 @@ function compareChartOptions(xLabel, yLabel) {
 function hideComparison() {
   comparePanel.hidden = true;
 }
+
+// ---- Zoom button handlers ----
+
+function handleZoomClick(e) {
+  var btn = e.target.closest(".zoom-btn");
+  if (!btn) { return; }
+  var chartName = btn.getAttribute("data-chart");
+  var action = btn.getAttribute("data-action");
+  var chart = chartInstances[chartName];
+  if (!chart) { return; }
+
+  if (action === "in") {
+    chart.zoom(1.4);
+  } else if (action === "out") {
+    chart.zoom(0.7);
+  } else if (action === "reset") {
+    chart.resetZoom();
+  }
+}
+
+document.addEventListener(
+  "click", handleZoomClick
+);
 
 // ---- Event handlers ----
 
@@ -834,5 +961,11 @@ btnCompare.addEventListener("click", function () {
 });
 
 // ---- Boot ----
+
+fetchSystemInfo().then(function (info) {
+  if (info.gpu_name) {
+    gpuName = info.gpu_name;
+  }
+});
 
 loadAndRender();
