@@ -144,6 +144,7 @@ var reconnectTimer = null;
 // Accumulated data for the most recent completed run.
 var frameHistory = [];
 var frameTokens = [];
+var perFrameElapsed = [];
 var lastRunParams = null;
 var lastFinalText = null;
 
@@ -607,10 +608,12 @@ function handleFrame(data) {
     frameTokens.push(null);
   }
 
+  if (typeof data.elapsed === "number") {
+    perFrameElapsed.push(data.elapsed);
+  }
+
   renderFrame(data.text);
 
-  var globalIndex =
-    frameHistory.length - 1;
   var displayStep = isResuming
     ? "Resuming " + data.index
       + "/" + data.total_steps
@@ -893,6 +896,7 @@ function startGeneration() {
 
   frameHistory = [];
   frameTokens = [];
+  perFrameElapsed = [];
   lastRunParams = null;
   lastFinalText = null;
   remaskEdits = [];
@@ -990,11 +994,17 @@ function saveRun() {
   statusMessage.textContent = "";
   statusMessage.style.color = "";
 
+  var totalElapsed = perFrameElapsed.length > 0
+    ? perFrameElapsed[perFrameElapsed.length - 1]
+    : null;
+
   var payload = {
     prompt: promptInput.value.trim(),
     params: lastRunParams,
     frames: frameHistory,
     final_text: lastFinalText,
+    elapsed_seconds: totalElapsed,
+    per_frame_elapsed: perFrameElapsed.slice(),
   };
 
   if (remaskEdits.length > 0) {

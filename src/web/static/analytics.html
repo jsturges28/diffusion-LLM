@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport"
+    content="width=device-width, initial-scale=1.0" />
+  <title>Analytics — LLaDA Diffusion Visualizer</title>
+  <link rel="preconnect"
+    href="https://fonts.googleapis.com" />
+  <link rel="preconnect"
+    href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&display=swap"
+    rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/analytics.css" />
+</head>
+<body>
+  <div id="bg-grid"></div>
+
+  <div id="analytics-app">
+    <!-- Header -->
+    <header id="header">
+      <h1>
+        <span class="title-accent">LLaDA</span>
+        Analytics
+      </h1>
+      <nav id="header-nav">
+        <a href="/" class="header-link">Generator</a>
+        <span class="header-link-sep">|</span>
+        <span class="header-link header-link-active">
+          Analytics
+        </span>
+      </nav>
+    </header>
+
+    <!-- Toolbar -->
+    <section id="toolbar">
+      <div id="toolbar-left">
+        <label for="group-by-select">Group by</label>
+        <select id="group-by-select">
+          <option value="none" selected>None</option>
+          <option value="prompt">Prompt</option>
+          <option value="steps">Steps</option>
+          <option value="gen_length">Gen Length</option>
+          <option value="block_length">
+            Block Length
+          </option>
+          <option value="temperature">
+            Temperature
+          </option>
+          <option value="cfg_scale">CFG Scale</option>
+          <option value="remasking">Remasking</option>
+        </select>
+      </div>
+      <div id="toolbar-right">
+        <button id="btn-compare" disabled>
+          Compare Selected
+        </button>
+        <button id="btn-refresh">Refresh</button>
+      </div>
+    </section>
+
+    <!-- Main content: table + detail -->
+    <div id="main-split">
+      <!-- Runs table -->
+      <section id="runs-panel">
+        <div id="runs-table-wrap">
+          <table id="runs-table">
+            <thead>
+              <tr>
+                <th class="col-check">
+                  <input type="checkbox"
+                    id="select-all" title="Select all" />
+                </th>
+                <th class="col-prompt sortable"
+                  data-key="prompt">Prompt</th>
+                <th class="sortable"
+                  data-key="steps">Steps</th>
+                <th class="sortable"
+                  data-key="gen_length">Gen Len</th>
+                <th class="sortable"
+                  data-key="block_length">Blk Len</th>
+                <th class="sortable"
+                  data-key="temperature">Temp</th>
+                <th class="sortable"
+                  data-key="cfg_scale">CFG</th>
+                <th class="sortable"
+                  data-key="remasking">Remask</th>
+                <th class="sortable"
+                  data-key="elapsed_seconds">Time</th>
+                <th class="sortable"
+                  data-key="created_at">Date</th>
+              </tr>
+            </thead>
+            <tbody id="runs-tbody"></tbody>
+          </table>
+        </div>
+        <p id="runs-empty" class="empty-msg" hidden>
+          No saved runs found. Generate and save a run
+          from the
+          <a href="/">Generator</a> first.
+        </p>
+      </section>
+
+      <!-- Detail / charts panel -->
+      <section id="detail-panel" hidden>
+        <div id="detail-header">
+          <h2 id="detail-title">Run Details</h2>
+          <button id="btn-close-detail"
+            class="btn-icon" title="Close">&times;
+          </button>
+        </div>
+
+        <div id="detail-meta"></div>
+
+        <div class="chart-section">
+          <h3>Convergence</h3>
+          <div class="chart-wrap">
+            <canvas id="chart-convergence"></canvas>
+          </div>
+        </div>
+
+        <div class="chart-section">
+          <h3>Token Churn</h3>
+          <div class="chart-wrap">
+            <canvas id="chart-churn"></canvas>
+          </div>
+        </div>
+
+        <div class="chart-section" id="timing-section"
+          hidden>
+          <h3>Timing</h3>
+          <div class="chart-wrap">
+            <canvas id="chart-timing"></canvas>
+          </div>
+        </div>
+      </section>
+
+      <!-- Comparison panel (replaces detail) -->
+      <section id="compare-panel" hidden>
+        <div id="compare-header">
+          <h2>Comparison</h2>
+          <button id="btn-close-compare"
+            class="btn-icon" title="Close">&times;
+          </button>
+        </div>
+
+        <div class="chart-section">
+          <h3>Convergence Overlay</h3>
+          <div class="chart-wrap chart-wrap-lg">
+            <canvas id="chart-compare-conv"></canvas>
+          </div>
+        </div>
+
+        <div class="chart-section">
+          <h3>Churn Overlay</h3>
+          <div class="chart-wrap chart-wrap-lg">
+            <canvas id="chart-compare-churn"></canvas>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <footer id="analytics-footer">
+      <span>
+        Metrics computed from saved
+        <code>Results/</code> data.
+      </span>
+    </footer>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="/analytics.js"></script>
+</body>
+</html>

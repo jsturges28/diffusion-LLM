@@ -1,0 +1,201 @@
+"""Compute intrinsic diffusion metrics from saved runs.
+
+Reads history.txt and metadata.json from Results/ directories
+and produces convergence, churn, and timing statistics for the
+Analytics Suite frontend.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+from typing import Any, Dict, List
+
+MASK_CHAR = "\u2591"  # ░
+FRAME_HEADER_RE = re.compile(
+    r"^={5}\s+FRAME\s+\d+\s+={5}$"
+)
+
+
+def parse_history(
+    history_path: Path,
+) -> List[str]:
+    """Split history.txt into per-frame text strings.
+
+    Each frame is delimited by ``===== FRAME N =====``
+    headers. Returns a list where index *i* holds the
+    text body of frame *i*.
+    """
+    assert history_path.is_file(), (
+        f"history.txt not found: {history_path}"
+    )
+
+    raw = history_path.read_text(encoding="utf-8")
+    frames: List[str] = []
+    current_lines: List[str] = []
+    inside_frame = False
+
+    for line in raw.splitlines():
+        if FRAME_HEADER_RE.match(line.strip()):
+            if inside_frame:
+                frames.append(
+                    "\n".join(current_lines)
+                )
+            current_lines = []
+            inside_frame = True
+        elif inside_frame:
+            current_lines.append(line)
+
+    if inside_frame and current_lines:
+        frames.append("\n".join(current_lines))
+
+    assert len(frames) > 0, (
+        f"No frames parsed from {history_path}"
+    )
+    return frames
+
+
+def compute_convergence(
+    frames: List[str],
+) -> List[Dict[str, Any]]:
+    """Compute mask-count convergence across frames.
+
+    Returns one dict per frame with keys:
+      frame        — 0-based frame index
+      mask_count   — number of mask characters
+      total_chars  — total non-whitespace characters
+      resolved_ratio — fraction of tokens resolved
+    """
+    assert len(frames) > 0
+
+    results: List[Dict[str, Any]] = []
+    for i, text in enumerate(frames):
+        stripped = text.replace("\n", "").replace(
+            "\r", ""
+        )
+        total = len(stripped)
+        if total == 0:
+            results.append({
+                "frame": i,
+                "mask_count": 0,
+                "total_chars": 0,
+                "resolved_ratio": 1.0,
+            })
+            continue
+
+        mask_count = stripped.count(MASK_CHAR)
+        resolved = total - mask_count
+        results.append({
+            "frame": i,
+            "mask_count": mask_count,
+            "total_chars": total,
+            "resolved_ratio": round(
+                resolved / total, 6
+            ),
+        })
+
+    return results
+
+
+def compute_churn(
+    frames: List[str],
+) -> List[Dict[str, Any]]:
+    """Compute token churn between consecutive frames.
+
+    Churn counts positions where a non-mask character
+    changed to a *different* non-mask character between
+    frame N-1 and frame N. High churn indicates the
+    diffusion process is unstable at that step.
+
+    Returns one dict per transition (length = len-1)
+    with keys:
+      frame          — target frame index (1-based)
+      changed_count  — positions that flipped
+    """
+    assert len(frames) > 0
+
+    results: List[Dict[str, Any]] = []
+    for i in range(1, len(frames)):
+        prev = frames[i - 1].replace(
+            "\n", ""
+        ).replace("\r", "")
+        curr = frames[i].replace(
+            "\n", ""
+        ).replace("\r", "")
+
+        min_len = min(len(prev), len(curr))
+        changed = 0
+        for j in range(min_len):
+            prev_ch = prev[j]
+            curr_ch = curr[j]
+            prev_resolved = prev_ch != MASK_CHAR
+            curr_resolved = curr_ch != MASK_CHAR
+            if (
+                prev_resolved
+                and curr_resolved
+                and prev_ch != curr_ch
+            ):
+                changed += 1
+
+        results.append({
+            "frame": i,
+            "changed_count": changed,
+        })
+
+    return results
+
+
+def load_run_metadata(
+    run_dir: Path,
+) -> Dict[str, Any]:
+    """Read and return metadata.json from a run dir.
+
+    Adds the directory name as ``run_id`` for API use.
+    """
+    meta_path = run_dir / "metadata.json"
+    assert meta_path.is_file(), (
+        f"metadata.json not found in {run_dir}"
+    )
+
+    data: Dict[str, Any] = json.loads(
+        meta_path.read_text(encoding="utf-8")
+    )
+    data["run_id"] = run_dir.name
+    return data
+
+
+def list_runs(
+    results_dir: Path,
+) -> List[Dict[str, Any]]:
+    """Scan Results/ for all saved runs.
+
+    Returns a list of metadata dicts sorted by
+    created_at (newest first), falling back to
+    directory name sort when created_at is absent.
+    """
+    if not results_dir.is_dir():
+        return []
+
+    runs: List[Dict[str, Any]] = []
+    for child in sorted(
+        results_dir.iterdir(), reverse=True
+    ):
+        if not child.is_dir():
+            continue
+        meta_path = child / "metadata.json"
+        if not meta_path.is_file():
+            continue
+        try:
+            meta = load_run_metadata(child)
+            runs.append(meta)
+        except (json.JSONDecodeError, AssertionError):
+            continue
+
+    runs.sort(
+        key=lambda r: r.get(
+            "created_at", r.get("run_id", "")
+        ),
+        reverse=True,
+    )
+    return runs

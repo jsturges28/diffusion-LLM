@@ -30,6 +30,13 @@ from transformers.models.auto.tokenization_auto import (
     AutoTokenizer,
 )
 
+from src.analytics.metrics import (
+    compute_churn,
+    compute_convergence,
+    list_runs,
+    load_run_metadata,
+    parse_history,
+)
 from src.inference.render_gif import history_to_gif
 from src.inference.streaming_sampler import (
     streaming_generate,
@@ -83,6 +90,8 @@ class SaveRunRequest(BaseModel):
     params: SaveRunParams
     frames: List[str] = Field(min_length=1)
     final_text: str
+    elapsed_seconds: Optional[float] = None
+    per_frame_elapsed: Optional[List[float]] = None
     remask_edits: Optional[List[RemaskEdit]] = None
 
 
@@ -607,10 +616,21 @@ def _save_run_blocking(body: SaveRunRequest) -> str:
     metadata: Dict[str, Any] = {
         "backend": "llada",
         "model": MODEL_NAME,
+        "created_at": datetime.now().isoformat(
+            timespec="seconds"
+        ),
         "prompt": body.prompt,
         "final_text": body.final_text,
         "params": body.params.model_dump(),
     }
+    if body.elapsed_seconds is not None:
+        metadata["elapsed_seconds"] = (
+            body.elapsed_seconds
+        )
+    if body.per_frame_elapsed is not None:
+        metadata["per_frame_elapsed"] = (
+            body.per_frame_elapsed
+        )
     if body.remask_edits:
         metadata["remask_edits"] = [
             edit.model_dump()
@@ -672,6 +692,114 @@ async def save_run(
     return JSONResponse(
         content={"success": True, "path": run_path}
     )
+
+
+# -- Analytics endpoints --
+
+
+@app.get("/api/analytics/runs")
+async def analytics_list_runs() -> JSONResponse:
+    """Return metadata for every saved run."""
+    runs = await asyncio.to_thread(
+        list_runs, RESULTS_DIR
+    )
+    return JSONResponse(content=runs)
+
+
+def _compute_run_metrics(
+    run_id: str,
+) -> Dict[str, Any]:
+    """Blocking helper: parse history and compute
+    convergence + churn for a single run."""
+    run_dir = RESULTS_DIR / run_id
+    if not run_dir.is_dir():
+        raise FileNotFoundError(
+            f"Run not found: {run_id}"
+        )
+
+    history_path = run_dir / "history.txt"
+    if not history_path.is_file():
+        raise FileNotFoundError(
+            f"history.txt missing for run {run_id}"
+        )
+
+    meta = load_run_metadata(run_dir)
+    frames = parse_history(history_path)
+    convergence = compute_convergence(frames)
+    churn = compute_churn(frames)
+
+    result: Dict[str, Any] = {
+        "run_id": run_id,
+        "convergence": convergence,
+        "churn": churn,
+        "total_frames": len(frames),
+    }
+
+    if "per_frame_elapsed" in meta:
+        result["per_frame_elapsed"] = (
+            meta["per_frame_elapsed"]
+        )
+    if "elapsed_seconds" in meta:
+        result["elapsed_seconds"] = (
+            meta["elapsed_seconds"]
+        )
+
+    return result
+
+
+@app.get("/api/analytics/runs/{run_id}/metrics")
+async def analytics_run_metrics(
+    run_id: str,
+) -> JSONResponse:
+    """Compute and return metrics for a single run."""
+    try:
+        result = await asyncio.to_thread(
+            _compute_run_metrics, run_id
+        )
+    except FileNotFoundError as exc:
+        return JSONResponse(
+            status_code=404,
+            content={"error": str(exc)},
+        )
+    return JSONResponse(content=result)
+
+
+@app.get("/api/analytics/compare")
+async def analytics_compare(
+    ids: str = "",
+) -> JSONResponse:
+    """Return metrics for multiple runs (overlay).
+
+    Query param ``ids`` is a comma-separated list of
+    run directory names.
+    """
+    run_ids = [
+        rid.strip()
+        for rid in ids.split(",")
+        if rid.strip()
+    ]
+    if len(run_ids) == 0:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "ids parameter is required"
+            },
+        )
+
+    results: List[Dict[str, Any]] = []
+    for run_id in run_ids:
+        try:
+            metrics = await asyncio.to_thread(
+                _compute_run_metrics, run_id
+            )
+            results.append(metrics)
+        except FileNotFoundError:
+            results.append({
+                "run_id": run_id,
+                "error": f"Run not found: {run_id}",
+            })
+
+    return JSONResponse(content=results)
 
 
 app.mount(
