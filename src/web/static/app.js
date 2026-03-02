@@ -912,7 +912,9 @@ function navigateToFrame(index) {
 
   restoreFrameSelections(index);
 
-  if (index < frameHistory.length) {
+  if (remaskMode === "select_target") {
+    renderTargetPlaceholder(index);
+  } else if (index < frameHistory.length) {
     renderFrameWithTokens(index);
   } else {
     renderTargetPlaceholder(index);
@@ -1552,7 +1554,9 @@ scrubberSlider.addEventListener(
     currentScrubFrame = val;
     updateScrubberLabel();
     restoreFrameSelections(val);
-    if (val < frameHistory.length) {
+    if (remaskMode === "select_target") {
+      renderTargetPlaceholder(val);
+    } else if (val < frameHistory.length) {
       renderFrameWithTokens(val);
     } else {
       renderTargetPlaceholder(val);
