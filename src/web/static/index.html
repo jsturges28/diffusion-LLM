@@ -224,14 +224,37 @@
         </dl>
         <h3>Interactive remasking</h3>
         <p>After a generation completes, a <strong>frame scrubber</strong> appears below the output area. Use the slider or <strong>&lsaquo; &rsaquo;</strong> buttons to explore frames. Press <strong>Left / Right arrow keys</strong> or <strong>Home / End</strong> to navigate.</p>
-        <p>To edit tokens, click <strong>Edit Frames</strong> to enter the guided editing flow:</p>
+
+        <h4>Guided multi-frame editing</h4>
+        <p>Click the <strong>Edit Frames</strong> button to enter the guided editing flow:</p>
         <ol>
-          <li><strong>Select a frame:</strong> Navigate to the frame you want to edit and click <strong>Select Frame</strong>.</li>
-          <li><strong>Remask tokens:</strong> Click resolved tokens to remask them (they turn orange). Click again to deselect. When ready, click <strong>Lock In</strong>.</li>
-          <li><strong>Choose next action:</strong> Click <strong>Edit Another Frame</strong> to resume from this point, then pick a later frame for further edits. Or click <strong>Resume to End</strong> to finish.</li>
+          <li><strong>Select a frame:</strong> Navigate to the frame you want to edit and click <strong>Select Frame</strong>. The scrubber starts at frame 0 and only allows forward navigation.</li>
+          <li><strong>Remask tokens:</strong> Click resolved tokens to remask them (they turn orange). Click again to deselect. When ready, click <strong>🔒 Lock In</strong>.</li>
+          <li><strong>Choose next action:</strong>
+            <ul>
+              <li><strong>Edit Another Frame</strong> &mdash; enters target selection mode. Navigate to a later frame you want to edit next; a faded preview of the original run is shown at each frame as a reference, with a note that the output will diverge based on your edits. Click <strong>Run to Here</strong> to resume the model up to that frame. You are then placed directly into edit mode on the target frame.</li>
+              <li><strong>Resume to End</strong> &mdash; resumes the model from your last edit through all remaining steps to produce the final output.</li>
+            </ul>
+          </li>
         </ol>
-        <p>Each &ldquo;Edit Another Frame&rdquo; resumes the diffusion from your edits, then lets you pick a <em>later</em> frame in the new trajectory for additional changes. This allows chained multi-frame edits that build on each other.</p>
-        <p>Your remask edits (frame number and token positions) are recorded automatically and included in saved results.</p>
+        <p>You can chain as many frame edits as you like. Each partial resume generates only the frames between your last edit and your next target, so earlier edits propagate forward through every subsequent segment. The scrubber enforces forward-only navigation &mdash; later edits cannot precede earlier ones.</p>
+        <p>Click <strong>Exit</strong> at any time to leave guided editing and return to the normal scrubber.</p>
+
+        <h4>Quick single-frame remasking</h4>
+        <p>You can also remask tokens without the guided flow. Navigate to any frame, click resolved tokens to remask them, then click <strong>Resume</strong>. This resumes from that frame through all remaining steps. Multiple sequential resumes are supported &mdash; each extends the frame history.</p>
+        <p>All remask edits (frame indices and token positions) are recorded automatically and included in saved results.</p>
+
+        <h3>Analytics Suite</h3>
+        <p>Click <strong>Analytics</strong> in the header to open the Analytics Suite. It reads saved runs from the <code>Results/</code> directory and provides interactive charts for comparing generation behavior across configurations.</p>
+        <h4>Run browser</h4>
+        <p>Runs are grouped by prompt, step count, or generation length using the <strong>Group by</strong> dropdown. Select a group, then select a specific run to view its details. Each run card shows the prompt, parameters, timestamp, and final output text.</p>
+        <h4>Convergence chart</h4>
+        <p>Plots the percentage of resolved (unmasked) tokens at each frame. The curve shows how quickly the model commits to its output. If the run includes user remask edits, the transition segments leading into edited frames are highlighted in <strong style="color:#4fc3f7;">blue</strong>, and hovering reveals which token positions were remasked.</p>
+        <h4>Timing chart</h4>
+        <p>Plots cumulative elapsed time per frame. Time accumulates across resume operations so the chart shows total wall-clock cost. Transition segments into remasked frames are highlighted in <strong style="color:#00ff41;">green</strong>. The detected GPU is displayed in the chart header.</p>
+        <h4>Chart controls</h4>
+        <p>Both charts support <strong>scroll-wheel zoom</strong> and <strong>+</strong> / <strong>&minus;</strong> / <strong>Reset</strong> buttons for zooming and resetting the view. Tooltips are anchored to the top-left corner to avoid obstructing data lines.</p>
+
         <h3>Saving results</h3>
         <p>After a generation completes, a <strong>Save</strong> button appears next to the controls. Clicking it saves the run to a timestamped folder under <code>Results/</code> containing:</p>
         <ul>

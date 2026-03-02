@@ -795,11 +795,38 @@ function renderFrameWithTokens(frameIndex) {
 function renderTargetPlaceholder(frameIndex) {
   outputArea.textContent = "";
 
-  var lastEditFrame = (remaskModeEdits.length > 0)
-    ? remaskModeEdits[
-        remaskModeEdits.length - 1
-      ].frame_index
-    : scrubberMinFrame;
+  var editedFrames = [];
+  for (
+    var ei = 0; ei < remaskModeEdits.length; ei++
+  ) {
+    editedFrames.push(
+      remaskModeEdits[ei].frame_index
+    );
+  }
+  if (editedFrames.length === 0) {
+    editedFrames.push(scrubberMinFrame);
+  }
+
+  var frameList = "";
+  if (editedFrames.length === 1) {
+    frameList = "Frame " + editedFrames[0];
+  } else if (editedFrames.length === 2) {
+    frameList =
+      "Frames " + editedFrames[1]
+      + " and " + editedFrames[0];
+  } else {
+    frameList = "Frames ";
+    for (
+      var fi = editedFrames.length - 1;
+      fi >= 0; fi--
+    ) {
+      if (fi === 0) {
+        frameList += "and " + editedFrames[fi];
+      } else {
+        frameList += editedFrames[fi] + ", ";
+      }
+    }
+  }
 
   var notice = document.createElement("span");
   notice.className = "preview-notice";
@@ -814,7 +841,7 @@ function renderTargetPlaceholder(frameIndex) {
       " \u2014 will be generated. "
       + "Output will diverge from this "
       + "preview based on edits to "
-      + "Frame " + lastEditFrame + "."
+      + frameList + "."
     )
   );
   outputArea.appendChild(notice);

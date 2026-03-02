@@ -55,9 +55,12 @@ The training loss is cross-entropy on masked positions only, weighted by 1/*t*, 
 │   └── web/
 │       ├── server.py                 # FastAPI + WebSocket server
 │       └── static/
-│           ├── index.html            # Single-page app
-│           ├── style.css             # Dark terminal aesthetic
-│           └── app.js                # WebSocket client + frame rendering
+│           ├── index.html            # Generator page
+│           ├── style.css             # Dark terminal aesthetic (shared)
+│           ├── app.js                # WebSocket client + frame rendering
+│           ├── analytics.html        # Analytics Suite page
+│           ├── analytics.css         # Analytics-specific styles
+│           └── analytics.js          # Analytics charts + run browser
 ├── artifacts/                        # Auto-generated run outputs (--sample)
 │   └── <timestamp>_llada/
 │       ├── metadata.json             # Run config + final text
@@ -104,9 +107,30 @@ After a run completes, a **Save** button appears and a **frame scrubber** slides
 
 #### Interactive remasking
 
-The scrubber lets you step through every intermediate frame of the diffusion process. Navigate with the slider, the arrow buttons, or the keyboard (Left / Right arrow keys, Home / End). At any frame you can click individual resolved tokens to **remask** them (they turn orange), then press **Resume** to re-run the remaining diffusion steps from that point with your edits applied. The model treats the entire generation region as a single block during resume, so remasked tokens in any position can be resolved.
+The scrubber lets you step through every intermediate frame of the diffusion process. Navigate with the slider, the arrow buttons, or the keyboard (Left / Right arrow keys, Home / End).
 
-You can resume multiple times — each resume extends the frame history and the scrubber updates accordingly. Remask edits (frame index and token positions) are recorded automatically and included in saved metadata.
+**Guided multi-frame editing.** Click **Edit Frames** to enter a guided flow for chaining edits across multiple frames:
+
+1. **Select a frame** — the scrubber starts at frame 0 and only allows forward navigation. Navigate to the frame you want to edit and click **Select Frame**.
+2. **Remask tokens** — click resolved tokens to remask them (they turn orange). Click again to deselect. When satisfied, click **Lock In**.
+3. **Choose next action:**
+   - **Edit Another Frame** — enters target selection mode. A faded preview of the original run is shown at each frame as a reference, with a note that output will diverge based on your edits. Navigate to the target frame and click **Run to Here**. The model resumes only up to that frame, then places you directly into edit mode on it.
+   - **Resume to End** — resumes the model through all remaining steps to produce the final output.
+
+You can chain as many frame edits as you like. Each partial resume generates only the frames between your last edit and the next target, so earlier edits propagate forward through every subsequent segment. The scrubber enforces forward-only navigation — later edits cannot precede earlier ones.
+
+**Quick single-frame remasking.** You can also remask without the guided flow: navigate to any frame, click tokens to remask them, then click **Resume**. Multiple sequential resumes are supported — each extends the frame history.
+
+All remask edits (frame indices and token positions) are recorded automatically and included in saved metadata.
+
+#### Analytics Suite
+
+Click **Analytics** in the header (or navigate to `/analytics.html`) to open the Analytics Suite. It reads saved runs from `Results/` and provides interactive charts for comparing generation behavior across configurations.
+
+- **Run browser** — runs are grouped by prompt, step count, or generation length. Select a group and then a specific run to view its details, including prompt, parameters, timestamp, and final output.
+- **Convergence chart** — plots the percentage of resolved (unmasked) tokens at each frame. User remask edits are highlighted as blue segments, and hovering reveals which tokens were remasked.
+- **Timing chart** — plots cumulative elapsed time per frame (accumulates across resumes). Transition segments into remasked frames are highlighted in green. The user's detected GPU is shown in the chart header.
+- **Zoom controls** — both charts support scroll-wheel zoom and +/−/Reset buttons. Tooltips are anchored to the top-left corner to avoid obstructing data lines.
 
 #### Saving
 
@@ -152,7 +176,13 @@ Each run creates a timestamped directory under `artifacts/` containing the metad
 - [x] Real-time client-side validation (bounds, divisibility, negative values)
 - [x] Save run results from the web UI (metadata, history, final text, GIF)
 - [x] Interactive remasking: frame scrubber, click-to-remask tokens, resume diffusion from any frame
+- [x] Guided multi-frame editing: chained edits across multiple frames with partial generation
+- [x] Faded original-run previews during target frame selection
 - [x] Remask edit metadata saved with run results
+- [x] Analytics Suite: run browser, convergence chart, timing chart with GPU detection
+- [x] Convergence chart highlights user remask edits in blue with hover details
+- [x] Timing chart with cumulative elapsed time across resumes, green remask highlights
+- [x] Chart zoom (scroll-wheel + buttons) with non-obstructing tooltip positioning
 
 ### Possible Extensions
 
