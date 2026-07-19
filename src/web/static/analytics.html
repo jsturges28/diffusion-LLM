@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport"
     content="width=device-width, initial-scale=1.0" />
-  <title>Analytics — LLaDA Diffusion Visualizer</title>
+  <title>Analytics — Diffusion LLM Visualizer</title>
   <link rel="preconnect"
     href="https://fonts.googleapis.com" />
   <link rel="preconnect"
@@ -22,8 +22,8 @@
     <!-- Header -->
     <header id="header">
       <h1>
-        <span class="title-accent">LLaDA</span>
-        Analytics
+        <span class="title-accent">Diffusion</span>
+        LLM Analytics
       </h1>
       <nav id="header-nav">
         <a href="/" class="header-link">Generator</a>
@@ -37,21 +37,8 @@
     <!-- Toolbar -->
     <section id="toolbar">
       <div id="toolbar-left">
-        <label for="group-by-select">Group by</label>
-        <select id="group-by-select">
-          <option value="none" selected>None</option>
-          <option value="prompt">Prompt</option>
-          <option value="steps">Steps</option>
-          <option value="gen_length">Gen Length</option>
-          <option value="block_length">
-            Block Length
-          </option>
-          <option value="temperature">
-            Temperature
-          </option>
-          <option value="cfg_scale">CFG Scale</option>
-          <option value="remasking">Remasking</option>
-        </select>
+        <label>Group by</label>
+        <span id="group-by-mount"></span>
       </div>
       <div id="toolbar-right">
         <button id="btn-compare" disabled>
@@ -76,21 +63,12 @@
                 <th class="col-prompt sortable"
                   data-key="prompt">Prompt</th>
                 <th class="sortable"
-                  data-key="steps">Steps</th>
-                <th class="sortable"
-                  data-key="gen_length">Gen Len</th>
-                <th class="sortable"
-                  data-key="block_length">Blk Len</th>
-                <th class="sortable"
-                  data-key="temperature">Temp</th>
-                <th class="sortable"
-                  data-key="cfg_scale">CFG</th>
-                <th class="sortable"
-                  data-key="remasking">Remask</th>
+                  data-key="model">Model</th>
                 <th class="sortable"
                   data-key="elapsed_seconds">Time</th>
                 <th class="sortable"
                   data-key="created_at">Date</th>
+                <th class="col-actions"></th>
               </tr>
             </thead>
             <tbody id="runs-tbody"></tbody>
@@ -118,6 +96,10 @@
           <div class="chart-header-row">
             <h3>Convergence</h3>
             <div class="zoom-controls">
+              <button class="zoom-btn tooltip-toggle-btn" data-chart="convergence"
+                title="Toggle tooltip box" aria-label="Toggle tooltip box">
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" /><circle cx="12" cy="12" r="3" /><line class="eye-slash" x1="3" y1="3" x2="21" y2="21" /></svg>
+              </button>
               <button class="zoom-btn" data-chart="convergence"
                 data-action="in" title="Zoom in">+</button>
               <button class="zoom-btn" data-chart="convergence"
@@ -139,6 +121,10 @@
               <span id="gpu-label" class="gpu-label"></span>
             </h3>
             <div class="zoom-controls">
+              <button class="zoom-btn tooltip-toggle-btn" data-chart="timing"
+                title="Toggle tooltip box" aria-label="Toggle tooltip box">
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" /><circle cx="12" cy="12" r="3" /><line class="eye-slash" x1="3" y1="3" x2="21" y2="21" /></svg>
+              </button>
               <button class="zoom-btn" data-chart="timing"
                 data-action="in" title="Zoom in">+</button>
               <button class="zoom-btn" data-chart="timing"
@@ -149,6 +135,29 @@
           </div>
           <div class="chart-wrap">
             <canvas id="chart-timing"></canvas>
+          </div>
+        </div>
+
+        <div class="chart-section" id="confidence-section"
+          hidden>
+          <div class="chart-header-row">
+            <h3>Confidence</h3>
+            <div class="zoom-controls">
+              <button class="zoom-btn tooltip-toggle-btn" data-chart="confidence"
+                title="Toggle tooltip box" aria-label="Toggle tooltip box">
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" /><circle cx="12" cy="12" r="3" /><line class="eye-slash" x1="3" y1="3" x2="21" y2="21" /></svg>
+              </button>
+              <button class="zoom-btn" data-chart="confidence"
+                data-action="in" title="Zoom in">+</button>
+              <button class="zoom-btn" data-chart="confidence"
+                data-action="out" title="Zoom out">&minus;</button>
+              <button class="zoom-btn" data-chart="confidence"
+                data-action="reset"
+                title="Reset zoom">&#8634;</button>
+            </div>
+          </div>
+          <div class="chart-wrap">
+            <canvas id="chart-confidence"></canvas>
           </div>
         </div>
       </section>
@@ -180,9 +189,33 @@
     </footer>
   </div>
 
+  <!-- Bottom-right toast for transient confirmations. -->
+  <div id="toast" class="toast"></div>
+
+  <!-- Delete confirmation modal -->
+  <div id="modal-delete" class="modal-overlay hidden">
+    <div class="modal-box modal-box-confirm">
+      <button class="modal-close" id="btn-delete-close"
+        aria-label="Close">&times;</button>
+      <h2>Delete this run?</h2>
+      <div class="modal-body">
+        <p id="delete-run-label"></p>
+        <p>This permanently removes the saved run from
+          <code>Results/</code>. This cannot be undone.</p>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-delete-cancel"
+          class="btn-secondary">Cancel</button>
+        <button id="btn-delete-confirm"
+          class="btn-danger">Delete</button>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js"></script>
+  <script src="/custom_select.js"></script>
   <script src="/analytics.js"></script>
 </body>
 </html>

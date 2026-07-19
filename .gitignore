@@ -1,7 +1,9 @@
 .cursor
 .venv
+.venv-dgemma
 data/
 archive/
 Results/
+transcripts/
 *__pycache__/
 *.pyc

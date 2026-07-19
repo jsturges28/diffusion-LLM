@@ -337,6 +337,30 @@ html, body {
   max-width: 180px;
 }
 
+/* Per-row delete action. */
+.col-actions {
+  width: 34px;
+  text-align: center;
+}
+
+.row-delete-btn {
+  background: none;
+  border: none;
+  padding: 4px;
+  color: var(--text-dim);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.row-delete-btn:hover {
+  color: var(--danger);
+  background: rgba(255, 68, 68, 0.12);
+}
+
 /* ---- Group headers ---- */
 
 .group-header-row td {
@@ -398,6 +422,24 @@ html, body {
   border-color: var(--border-focus);
   background: var(--bg-surface-hover);
 }
+
+/* Tooltip-box visibility toggle (eye). When the box is hidden, a
+   diagonal slash crosses the eye (a "hide" icon); it is removed when
+   the box is shown again. */
+.tooltip-toggle-btn .eye-slash {
+  display: none;
+}
+
+.tooltip-toggle-btn.is-off {
+  color: var(--text-secondary);
+}
+
+.tooltip-toggle-btn.is-off .eye-slash {
+  display: inline;
+}
+
+/* The confirmation toast is styled inline from analytics.js
+   (showToast) so it is immune to stale-stylesheet caching. */
 
 /* ---- GPU label in Timing header ---- */
 

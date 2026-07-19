@@ -4,8 +4,9 @@
 
 // ---- DOM refs ----
 
-var groupBySelect =
-  document.getElementById("group-by-select");
+var groupByMount =
+  document.getElementById("group-by-mount");
+var groupBySelect = null;
 var btnCompare =
   document.getElementById("btn-compare");
 var btnRefresh =
@@ -35,6 +36,18 @@ var comparePanel =
 var btnCloseCompare =
   document.getElementById("btn-close-compare");
 
+var modalDelete =
+  document.getElementById("modal-delete");
+var deleteRunLabel =
+  document.getElementById("delete-run-label");
+var btnDeleteConfirm =
+  document.getElementById("btn-delete-confirm");
+var btnDeleteCancel =
+  document.getElementById("btn-delete-cancel");
+var btnDeleteClose =
+  document.getElementById("btn-delete-close");
+var pendingDeleteId = null;
+
 // ---- Chart.js defaults ----
 
 Chart.defaults.color = "#888888";
@@ -54,6 +67,124 @@ Chart.Tooltip.positioners.topLeft =
     };
   };
 
+// Smart positioner: places the tooltip in the chart-area corner
+// diagonally opposite the hovered point, so the box steers clear of
+// the data as the cursor moves along the curve.
+// Places the tooltip in the chart-area corner diagonally opposite
+// the hovered point, and returns the box's intended top-left corner
+// (paired with forced xAlign:"left"/yAlign:"top"). The point is
+// clamped so the box stays fully inside the plotting area on all
+// four sides, so it never spills onto the x-axis.
+Chart.Tooltip.positioners.smart =
+  function (elements, eventPosition) {
+    var chart = this.chart;
+    var area = chart.chartArea;
+    var pad = 10;
+    // Box size from the previous frame (0 on the very first hover,
+    // corrected on the next frame as it fades in).
+    var w = this.width || 120;
+    var h = this.height || 44;
+    if (!elements || elements.length === 0) {
+      return { x: area.left + pad, y: area.top + pad };
+    }
+    var el = elements[0].element;
+    var midX = (area.left + area.right) / 2;
+    var midY = (area.top + area.bottom) / 2;
+    var x = (el.x > midX)
+      ? area.left + pad
+      : area.right - pad - w;
+    var y = (el.y > midY)
+      ? area.top + pad
+      : area.bottom - pad - h;
+    x = Math.max(
+      area.left + pad, Math.min(x, area.right - pad - w)
+    );
+    y = Math.max(
+      area.top + pad, Math.min(y, area.bottom - pad - h)
+    );
+    return { x: x, y: y };
+  };
+
+// Inline plugin: once the tooltip box is drawn, "burn" the data
+// through it. Any trendline segment the box covers is redrawn,
+// clipped to the box rect, with a glow (so a box trapped over the
+// line stays legible), and the active point(s) are re-drawn glowing
+// on top.
+var burnThroughPlugin = {
+  id: "burnThrough",
+  afterDraw: function (chart) {
+    var tt = chart.tooltip;
+    if (!tt || tt.opacity === 0) { return; }
+    var ctx = chart.ctx;
+    var bx = tt.x;
+    var by = tt.y;
+    var bw = tt.width;
+    var bh = tt.height;
+
+    if (bw > 0 && bh > 0) {
+      for (var di = 0; di < chart.data.datasets.length; di++) {
+        var meta = chart.getDatasetMeta(di);
+        if (
+          meta.hidden || !meta.data || meta.data.length === 0
+        ) {
+          continue;
+        }
+        var ds = chart.data.datasets[di];
+        var color = (typeof ds.borderColor === "string")
+          ? ds.borderColor : "#ffffff";
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(bx, by, bw, bh);
+        ctx.clip();
+        ctx.beginPath();
+        var started = false;
+        for (var pi = 0; pi < meta.data.length; pi++) {
+          var p = meta.data[pi];
+          if (!p || p.skip) { continue; }
+          if (!started) {
+            ctx.moveTo(p.x, p.y);
+            started = true;
+          } else {
+            ctx.lineTo(p.x, p.y);
+          }
+        }
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.5;
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 10;
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    var active = chart.getActiveElements();
+    if (active && active.length) {
+      for (var i = 0; i < active.length; i++) {
+        var ael = active[i].element;
+        if (!ael) { continue; }
+        var ads = chart.data.datasets[active[i].datasetIndex];
+        var acolor = (ads && typeof ads.borderColor === "string")
+          ? ads.borderColor : "#ffffff";
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(ael.x, ael.y, 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = acolor;
+        ctx.shadowColor = acolor;
+        ctx.shadowBlur = 10;
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+  },
+};
+
+// Per-chart tooltip-box visibility (the eye toggle in each header).
+var tooltipEnabled = {
+  convergence: true,
+  timing: true,
+  confidence: true,
+};
+
 // ---- State ----
 
 var allRuns = [];
@@ -65,6 +196,7 @@ var gpuName = null;
 
 var chartConvergence = null;
 var chartTiming = null;
+var chartConfidence = null;
 var chartCompareConv = null;
 
 // Map of chart name to Chart instance for zoom.
@@ -111,6 +243,9 @@ function fetchSystemInfo() {
 function paramVal(run, key) {
   if (key === "prompt") {
     return run.prompt || "";
+  }
+  if (key === "model") {
+    return run.backend || run.model || "";
   }
   if (key === "elapsed_seconds") {
     return run.elapsed_seconds;
@@ -294,10 +429,11 @@ function groupRuns(runs, key) {
 
 // ---- Render table ----
 
+// LLaDA-only hyperparameter columns were dropped because
+// DiffusionGemma rows leave them blank; those values still appear in
+// the per-run detail panel.
 var TABLE_KEYS = [
-  "prompt", "steps", "gen_length",
-  "block_length", "temperature", "cfg_scale",
-  "remasking", "elapsed_seconds", "created_at",
+  "prompt", "model", "elapsed_seconds", "created_at",
 ];
 
 function renderTable() {
@@ -320,7 +456,7 @@ function renderTable() {
       var gtr = document.createElement("tr");
       gtr.className = "group-header-row";
       var gtd = document.createElement("td");
-      gtd.colSpan = TABLE_KEYS.length + 1;
+      gtd.colSpan = TABLE_KEYS.length + 2;
       gtd.textContent = groupKey.toUpperCase()
         .replace("_", " ") + ": " + group.label;
       gtr.appendChild(gtd);
@@ -359,6 +495,26 @@ function renderTable() {
         tr.appendChild(td);
       }
 
+      var tdActions = document.createElement("td");
+      tdActions.className = "col-actions";
+      var delBtn = document.createElement("button");
+      delBtn.className = "row-delete-btn";
+      delBtn.setAttribute("data-run-id", run.run_id);
+      delBtn.title = "Delete run";
+      delBtn.setAttribute("aria-label", "Delete run");
+      delBtn.innerHTML =
+        '<svg viewBox="0 0 24 24" width="14" height="14"'
+        + ' fill="none" stroke="currentColor" stroke-width="2"'
+        + ' stroke-linecap="round" stroke-linejoin="round"'
+        + ' aria-hidden="true"><path d="M3 6h18"/>'
+        + '<path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/>'
+        + '<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0'
+        + ' 1-2-2L5 6"/><line x1="10" y1="11" x2="10"'
+        + ' y2="17"/><line x1="14" y1="11" x2="14"'
+        + ' y2="17"/></svg>';
+      tdActions.appendChild(delBtn);
+      tr.appendChild(tdActions);
+
       runsTbody.appendChild(tr);
     }
   }
@@ -392,17 +548,26 @@ function showDetail(runId) {
   html += '<div class="meta-prompt">'
     + escHtml(run.prompt || "N/A") + '</div>';
 
-  var paramKeys = [
-    "steps", "gen_length", "block_length",
-    "temperature", "cfg_scale", "remasking",
-  ];
+  var modelName = run.backend || run.model;
+  if (modelName) {
+    html += '<div class="meta-row">'
+      + '<span class="meta-label">Model:</span> '
+      + '<span class="meta-value">'
+      + escHtml(String(modelName))
+      + '</span></div>';
+  }
+
+  // Render whatever params this run recorded (model-agnostic).
+  var params = run.params || {};
+  var paramKeys = Object.keys(params);
   for (var j = 0; j < paramKeys.length; j++) {
+    var pk = paramKeys[j];
     html += '<div class="meta-row">'
       + '<span class="meta-label">'
-      + paramKeys[j].replace("_", " ")
+      + pk.replace(/_/g, " ")
       + ':</span> '
       + '<span class="meta-value">'
-      + escHtml(displayVal(run, paramKeys[j]))
+      + escHtml(String(params[pk]))
       + '</span></div>';
   }
 
@@ -442,14 +607,68 @@ function destroyChart(chart) {
   return null;
 }
 
+// Inline Chart.js plugin: dashed vertical markers at the frame
+// indices where a new canvas (block) begins. Empty list is a
+// no-op, so single-canvas (LLaDA) runs draw nothing.
+function canvasBoundaryPlugin(boundaries) {
+  return {
+    id: "canvasBoundaries",
+    afterDatasetsDraw: function (chart) {
+      if (!boundaries || boundaries.length === 0) { return; }
+      var xScale = chart.scales.x;
+      var yScale = chart.scales.y;
+      var ctx = chart.ctx;
+      ctx.save();
+      ctx.strokeStyle = "rgba(255,180,0,0.45)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      for (var i = 0; i < boundaries.length; i++) {
+        var x = xScale.getPixelForValue(boundaries[i]);
+        ctx.beginPath();
+        ctx.moveTo(x, yScale.top);
+        ctx.lineTo(x, yScale.bottom);
+        ctx.stroke();
+      }
+      ctx.restore();
+    },
+  };
+}
+
+// Show/hide the eye's diagonal slash. Driven via inline style (not
+// only CSS) so it is robust to any stale-stylesheet caching.
+function setEyeSlash(btn, show) {
+  var slash = btn.querySelector(".eye-slash");
+  if (slash) {
+    slash.style.display = show ? "inline" : "none";
+  }
+}
+
+// Each newly-opened run starts with all tooltip boxes visible (eye
+// open, no slash).
+function resetTooltipToggles() {
+  tooltipEnabled.convergence = true;
+  tooltipEnabled.timing = true;
+  tooltipEnabled.confidence = true;
+  var btns = document.querySelectorAll(
+    ".tooltip-toggle-btn"
+  );
+  for (var i = 0; i < btns.length; i++) {
+    btns[i].classList.remove("is-off");
+    setEyeSlash(btns[i], false);
+  }
+}
+
 function loadRunCharts(runId, run) {
   fetchMetrics(runId).then(function (data) {
     if (data.error) { return; }
+
+    resetTooltipToggles();
 
     chartConvergence = destroyChart(
       chartConvergence
     );
     chartTiming = destroyChart(chartTiming);
+    chartConfidence = destroyChart(chartConfidence);
 
     var remaskEdits = data.remask_edits || [];
     var remaskSet = buildRemaskFrameSet(
@@ -458,6 +677,7 @@ function loadRunCharts(runId, run) {
 
     renderConvergenceChart(data, remaskSet);
     renderTimingChart(data, remaskSet);
+    renderConfidenceChart(data);
   });
 }
 
@@ -512,6 +732,10 @@ function renderConvergenceChart(data, remaskSet) {
         }],
       },
       options: convergenceOptions(remaskSet),
+      plugins: [
+        canvasBoundaryPlugin(data.canvas_boundaries || []),
+        burnThroughPlugin,
+      ],
     }
   );
   chartInstances.convergence = chartConvergence;
@@ -528,8 +752,10 @@ function convergenceOptions(remaskSet) {
     plugins: {
       legend: { display: false },
       tooltip: {
-        position: "topLeft",
+        position: "smart",
         caretSize: 0,
+        xAlign: "left",
+        yAlign: "top",
         callbacks: {
           title: tooltipTitle,
           label: function (ctx) {
@@ -636,6 +862,10 @@ function renderTimingChart(data, remaskSet) {
         }],
       },
       options: timingOptions(remaskSet),
+      plugins: [
+        canvasBoundaryPlugin(data.canvas_boundaries || []),
+        burnThroughPlugin,
+      ],
     }
   );
   chartInstances.timing = chartTiming;
@@ -665,8 +895,10 @@ function timingOptions(remaskSet) {
     plugins: {
       legend: { display: false },
       tooltip: {
-        position: "topLeft",
+        position: "smart",
         caretSize: 0,
+        xAlign: "left",
+        yAlign: "top",
         callbacks: {
           title: tooltipTitle,
           label: function (ctx) {
@@ -698,6 +930,109 @@ function timingOptions(remaskSet) {
           text: "Seconds",
         },
         beginAtZero: true,
+      },
+    },
+  };
+}
+
+// Mean per-frame confidence. Rises toward 100% as the canvas
+// converges; canvas boundaries mark each adaptive stop. Hidden
+// for legacy runs saved before confidence was recorded.
+function renderConfidenceChart(data) {
+  var section = document.getElementById(
+    "confidence-section"
+  );
+  var meanConf = data.mean_conf;
+  if (!meanConf || meanConf.length === 0) {
+    if (section) { section.hidden = true; }
+    return;
+  }
+  if (section) { section.hidden = false; }
+
+  var canvas = document.getElementById(
+    "chart-confidence"
+  );
+
+  var labels = [];
+  var values = [];
+  for (var i = 0; i < meanConf.length; i++) {
+    labels.push(i);
+    var v = meanConf[i];
+    values.push(
+      v === null || v === undefined
+        ? null
+        : +(v * 100).toFixed(2)
+    );
+  }
+
+  chartConfidence = new Chart(
+    canvas.getContext("2d"),
+    {
+      type: "line",
+      data: {
+        labels: labels,
+        datasets: [{
+          label: "Mean confidence",
+          data: values,
+          borderColor: "#ffb400",
+          backgroundColor: "rgba(255,180,0,0.08)",
+          fill: true,
+          tension: 0.2,
+          pointRadius: 0,
+          borderWidth: 1.5,
+          spanGaps: true,
+        }],
+      },
+      options: confidenceOptions(),
+      plugins: [
+        canvasBoundaryPlugin(data.canvas_boundaries || []),
+        burnThroughPlugin,
+      ],
+    }
+  );
+  chartInstances.confidence = chartConfidence;
+}
+
+function confidenceOptions() {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: {
+      mode: "index",
+      intersect: false,
+    },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        position: "smart",
+        caretSize: 0,
+        xAlign: "left",
+        yAlign: "top",
+        callbacks: {
+          title: tooltipTitle,
+          label: function (ctx) {
+            return ctx.dataset.label + ": "
+              + ctx.formattedValue + "%";
+          },
+        },
+      },
+      zoom: zoomPluginOptions(),
+    },
+    scales: {
+      x: {
+        title: {
+          display: true,
+          text: "Frame",
+        },
+        ticks: { maxTicksLimit: 12 },
+      },
+      y: {
+        title: {
+          display: true,
+          text: "Mean confidence (%)",
+        },
+        beginAtZero: true,
+        max: 100,
       },
     },
   };
@@ -814,8 +1149,10 @@ function compareChartOptions(xLabel, yLabel) {
         labels: { boxWidth: 12, padding: 8 },
       },
       tooltip: {
-        position: "topLeft",
+        position: "smart",
         caretSize: 0,
+        xAlign: "left",
+        yAlign: "top",
         callbacks: {
           title: tooltipTitle,
         },
@@ -885,6 +1222,12 @@ function onSortClick(e) {
 }
 
 function onRowClick(e) {
+  var delBtn = e.target.closest(".row-delete-btn");
+  if (delBtn) {
+    openDeleteModal(delBtn.getAttribute("data-run-id"));
+    return;
+  }
+
   var cb = e.target.closest(
     'input[type="checkbox"]'
   );
@@ -927,6 +1270,118 @@ function loadAndRender() {
   });
 }
 
+// ---- Delete a run ----
+
+function runPath(runId) {
+  return "Results/" + runId;
+}
+
+function openDeleteModal(runId) {
+  pendingDeleteId = runId;
+  deleteRunLabel.textContent = runPath(runId);
+  btnDeleteConfirm.disabled = false;
+  modalDelete.classList.remove("hidden");
+}
+
+// Transient bottom-right confirmation toast. Styled inline (rather
+// than relying only on the stylesheet) so it renders correctly even
+// if a stale CSS copy is cached: fixed bottom-right, app surface
+// background, accent-green text, fading out after 3s.
+var toastEl = document.getElementById("toast");
+var toastTimer = null;
+
+function showToast(message) {
+  if (!toastEl) { return; }
+  toastEl.textContent = message;
+  var s = toastEl.style;
+  s.position = "fixed";
+  s.bottom = "20px";
+  s.right = "24px";
+  s.zIndex = "200";
+  s.maxWidth = "min(60vw, 520px)";
+  s.padding = "10px 16px";
+  s.background = "var(--bg-surface)";
+  s.border = "1px solid var(--border)";
+  s.borderRadius = "var(--radius)";
+  s.color = "var(--accent)";
+  s.fontFamily = "var(--font-mono)";
+  s.fontSize = "12px";
+  s.letterSpacing = "0.03em";
+  s.boxShadow = "0 4px 20px rgba(0, 0, 0, 0.5)";
+  s.pointerEvents = "none";
+  s.transition = "opacity 0.25s ease, transform 0.25s ease";
+  s.opacity = "0";
+  s.transform = "translateY(8px)";
+  // Force a reflow so the fade-in transition actually runs.
+  void toastEl.offsetWidth;
+  s.opacity = "1";
+  s.transform = "translateY(0)";
+  if (toastTimer !== null) {
+    clearTimeout(toastTimer);
+  }
+  toastTimer = setTimeout(function () {
+    s.opacity = "0";
+    s.transform = "translateY(8px)";
+    toastTimer = null;
+  }, 3000);
+}
+
+function closeDeleteModal() {
+  pendingDeleteId = null;
+  modalDelete.classList.add("hidden");
+}
+
+function confirmDelete() {
+  if (!pendingDeleteId) { return; }
+  var runId = pendingDeleteId;
+  btnDeleteConfirm.disabled = true;
+  fetch(
+    "/api/analytics/runs/" + encodeURIComponent(runId),
+    { method: "DELETE" }
+  )
+    .then(function (r) { return r.json(); })
+    .then(function (result) {
+      if (result && result.success) {
+        allRuns = allRuns.filter(function (run) {
+          return run.run_id !== runId;
+        });
+        delete checkedIds[runId];
+        if (activeRunId === runId) {
+          hideDetail();
+        }
+        updateCompareButton();
+        renderTable();
+        showToast(
+          "Successfully deleted run \u201c"
+          + runPath(runId) + "\u201d"
+        );
+      }
+      closeDeleteModal();
+    })
+    .catch(function () {
+      btnDeleteConfirm.disabled = false;
+      closeDeleteModal();
+    });
+}
+
+// ---- Per-chart tooltip toggle ----
+
+function handleTooltipToggle(e) {
+  var btn = e.target.closest(".tooltip-toggle-btn");
+  if (!btn) { return; }
+  var name = btn.getAttribute("data-chart");
+  var enabled = !tooltipEnabled[name];
+  tooltipEnabled[name] = enabled;
+  btn.classList.toggle("is-off", !enabled);
+  // Slash on when the box is hidden; off when it's shown.
+  setEyeSlash(btn, !enabled);
+  var chart = chartInstances[name];
+  if (chart) {
+    chart.options.plugins.tooltip.enabled = enabled;
+    chart.update();
+  }
+}
+
 // ---- Wire up events ----
 
 document.querySelector("#runs-table thead")
@@ -938,9 +1393,25 @@ selectAllCb.addEventListener(
   "change", onSelectAll
 );
 
-groupBySelect.addEventListener(
-  "change", onGroupChange
-);
+if (groupByMount) {
+  groupBySelect = createCustomSelect(
+    [
+      { value: "none", label: "Date" },
+      { value: "model", label: "Model" },
+      { value: "prompt", label: "Prompt" },
+      { value: "steps", label: "Steps" },
+      { value: "gen_length", label: "Gen Length" },
+      { value: "block_length", label: "Block Length" },
+      { value: "temperature", label: "Temperature" },
+      { value: "cfg_scale", label: "CFG Scale" },
+      { value: "remasking", label: "Remasking" },
+    ],
+    "none"
+  );
+  groupByMount.appendChild(groupBySelect);
+  sizeCustomSelect(groupBySelect);
+  groupBySelect.addEventListener("change", onGroupChange);
+}
 
 btnRefresh.addEventListener(
   "click", loadAndRender
@@ -960,7 +1431,26 @@ btnCompare.addEventListener("click", function () {
   showComparison(ids);
 });
 
+document.addEventListener("click", handleTooltipToggle);
+
+btnDeleteConfirm.addEventListener("click", confirmDelete);
+btnDeleteCancel.addEventListener("click", closeDeleteModal);
+btnDeleteClose.addEventListener("click", closeDeleteModal);
+modalDelete.addEventListener("click", function (e) {
+  if (e.target === modalDelete) {
+    closeDeleteModal();
+  }
+});
+
 // ---- Boot ----
+
+// Eye toggles start "open" (no slash) before any run is opened.
+(function () {
+  var btns = document.querySelectorAll(".tooltip-toggle-btn");
+  for (var i = 0; i < btns.length; i++) {
+    setEyeSlash(btns[i], false);
+  }
+})();
 
 fetchSystemInfo().then(function (info) {
   if (info.gpu_name) {

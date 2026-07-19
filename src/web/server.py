@@ -1,7 +1,13 @@
-"""FastAPI server for live LLaDA diffusion visualization.
+"""Supervisor server for the multi-model diffusion visualizer.
 
-Loads the model once at startup (in a background thread) and exposes
-a WebSocket endpoint that streams diffusion frames to the browser.
+Responsibilities:
+  - Serve the shared frontend and the analytics API.
+  - Manage model worker subprocesses (one active at a time),
+    each running in its own venv so incompatible dependency
+    stacks (e.g. Transformers 4.38.2 vs v5) never collide.
+  - Proxy the browser WebSocket to the active worker's /ws.
+
+The supervisor itself never imports torch or transformers.
 """
 
 from __future__ import annotations
@@ -9,12 +15,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import shutil
+import socket
+import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import torch
+import httpx
+import websockets
 from fastapi import (
     FastAPI,
     WebSocket,
@@ -23,70 +34,428 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from transformers.models.auto.modeling_auto import (
-    AutoModel,
-)
-from transformers.models.auto.tokenization_auto import (
-    AutoTokenizer,
-)
 
 from src.analytics.metrics import (
+    canvas_boundaries,
     compute_convergence,
     list_runs,
     load_run_metadata,
     parse_history,
 )
+from src.backends.protocol import ModelInfo
+from src.backends.registry import DEFAULT_MODEL, REGISTRY
 from src.inference.render_gif import history_to_gif
-from src.inference.streaming_sampler import (
-    streaming_generate,
-    streaming_resume,
-)
 
-logger = logging.getLogger("llada_web")
+logger = logging.getLogger("diffusion_supervisor")
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-MODEL_NAME = "GSAI-ML/LLaDA-8B-Instruct"
-
-PARAM_LIMITS_RECOMMENDED: Dict[str, tuple[float, float]] = {
-    "steps": (8, 150),
-    "gen_length": (16, 160),
-    "block_length": (8, 160),
-    "temperature": (0.0, 1.0),
-    "cfg_scale": (0.0, 2.0),
-}
-
-PARAM_LIMITS_EXPERIMENTAL: Dict[str, tuple[float, float]] = {
-    "steps": (1, 1024),
-    "gen_length": (1, 1024),
-    "block_length": (1, 1024),
-    "temperature": (0.0, 10.0),
-    "cfg_scale": (0.0, 20.0),
-}
-
-VALID_REMASKING = {"low_confidence", "random"}
-
+REPO_ROOT = Path(__file__).resolve().parents[2]
 RESULTS_DIR = Path("Results")
 
+WORKER_START_TIMEOUT_S = 180.0
+WORKER_STOP_TIMEOUT_S = 30.0
+# Grace period for a stopped worker's VRAM to be reclaimed
+# before the pre-flight check refuses the next activation.
+VRAM_SETTLE_TIMEOUT_S = 8.0
 
-# -- Pydantic models for save endpoint --
+
+# -- Model worker manager --
+
+
+def _gpu_name() -> Optional[str]:
+    """Best-effort GPU name via nvidia-smi."""
+    try:
+        out = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=name",
+                "--format=csv,noheader",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if out.returncode == 0:
+            lines = out.stdout.strip().splitlines()
+            if lines:
+                return lines[0].strip()
+    except Exception:
+        return None
+    return None
+
+
+def _free_vram_gib() -> Optional[float]:
+    """Free GPU memory in GiB via nvidia-smi (None if unknown)."""
+    try:
+        out = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=memory.free",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if out.returncode == 0:
+            lines = out.stdout.strip().splitlines()
+            if lines:
+                return float(lines[0].strip()) / 1024.0
+    except Exception:
+        return None
+    return None
+
+
+def _git_commit() -> Optional[str]:
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if out.returncode == 0:
+            return out.stdout.strip()
+    except Exception:
+        return None
+    return None
+
+
+def _venv_cuda_lib_dirs(python_path: Path) -> List[str]:
+    """Bundled CUDA lib dirs for a venv (for bitsandbytes etc.).
+
+    ``<venv>/lib/pythonX.Y/site-packages/nvidia/*/lib`` — native
+    extensions like bitsandbytes need these on LD_LIBRARY_PATH,
+    since the dynamic linker resolves them at process start.
+    """
+    venv_root = python_path.parent.parent
+    lib_root = venv_root / "lib"
+    if not lib_root.is_dir():
+        return []
+    dirs: List[str] = []
+    for site in lib_root.glob("python*/site-packages/nvidia"):
+        for lib in sorted(site.glob("*/lib")):
+            if lib.is_dir():
+                dirs.append(str(lib))
+    return dirs
+
+
+class ModelManager:
+    """Spawns/stops one model worker subprocess at a time.
+
+    Only one worker is ever alive, since a single ~15-16 GB model
+    already saturates the 24 GB GPU.
+    """
+
+    def __init__(self) -> None:
+        self.active_id: Optional[str] = None
+        self.active_versions: Dict[str, str] = {}
+        self._proc: Optional[subprocess.Popen] = None
+        self._port: Optional[int] = None
+        self._lock = asyncio.Lock()
+
+    @staticmethod
+    def _free_port() -> int:
+        sock = socket.socket()
+        try:
+            sock.bind(("127.0.0.1", 0))
+            return int(sock.getsockname()[1])
+        finally:
+            sock.close()
+
+    def _alive(self) -> bool:
+        return (
+            self._proc is not None
+            and self._proc.poll() is None
+        )
+
+    def status(self, model_id: str) -> str:
+        if self.active_id == model_id and self._alive():
+            return "active"
+        return "inactive"
+
+    def ws_url(self) -> str:
+        assert self._port is not None
+        return f"ws://127.0.0.1:{self._port}/ws"
+
+    async def activate(self, model_id: str) -> None:
+        if model_id not in REGISTRY:
+            raise KeyError(model_id)
+        async with self._lock:
+            if self.active_id == model_id and self._alive():
+                return
+            await self._stop_locked()
+            info = REGISTRY[model_id]
+            python = REPO_ROOT / info.venv_python
+            if not python.exists():
+                raise RuntimeError(
+                    f"venv python not found: {python}"
+                )
+            await self._preflight_vram(info)
+            port = self._free_port()
+            env = dict(os.environ)
+            env["PYTHONPATH"] = str(REPO_ROOT)
+            lib_dirs = _venv_cuda_lib_dirs(python)
+            if lib_dirs:
+                existing = env.get("LD_LIBRARY_PATH", "")
+                parts = lib_dirs + (
+                    [existing] if existing else []
+                )
+                env["LD_LIBRARY_PATH"] = ":".join(parts)
+            logger.info(
+                "spawning worker %s on port %d",
+                model_id,
+                port,
+            )
+            proc = subprocess.Popen(
+                [
+                    str(python),
+                    "-m",
+                    "src.backends.run_worker",
+                    "--model",
+                    model_id,
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(port),
+                ],
+                cwd=str(REPO_ROOT),
+                env=env,
+            )
+            self._proc = proc
+            self._port = port
+            self.active_id = model_id
+            try:
+                await self._await_health(port, proc)
+            except Exception:
+                await self._stop_locked()
+                raise
+
+    async def _preflight_vram(self, info: ModelInfo) -> None:
+        """Refuse activation if the model cannot fit in VRAM.
+
+        Runs after the previous worker is stopped, so it briefly
+        waits for that VRAM to be reclaimed before deciding.
+        """
+        required = info.min_vram_gib
+        if required <= 0:
+            return
+        deadline = time.monotonic() + VRAM_SETTLE_TIMEOUT_S
+        free = _free_vram_gib()
+        while (
+            free is not None
+            and free < required
+            and time.monotonic() < deadline
+        ):
+            await asyncio.sleep(0.5)
+            free = _free_vram_gib()
+        if free is None:
+            logger.warning(
+                "free VRAM unreadable; skipping pre-flight"
+                " check for %s",
+                info.id,
+            )
+            return
+        if free < required:
+            raise RuntimeError(
+                f"Not enough free GPU memory to load"
+                f" {info.display_name}: needs about"
+                f" {required:.0f} GiB but only {free:.1f} GiB"
+                f" is free. Close other GPU processes and"
+                f" try again."
+            )
+
+    async def _await_health(
+        self, port: int, proc: subprocess.Popen
+    ) -> None:
+        url = f"http://127.0.0.1:{port}/health"
+        deadline = time.monotonic() + WORKER_START_TIMEOUT_S
+        async with httpx.AsyncClient() as client:
+            while time.monotonic() < deadline:
+                if proc.poll() is not None:
+                    raise RuntimeError(
+                        "worker exited during startup"
+                        f" (code {proc.returncode})"
+                    )
+                try:
+                    resp = await client.get(url, timeout=2.0)
+                    if resp.status_code == 200:
+                        body = resp.json()
+                        status = body.get("status")
+                        if status == "error":
+                            raise RuntimeError(
+                                body.get(
+                                    "message",
+                                    "model failed to load",
+                                )
+                            )
+                        if status == "ready":
+                            self.active_versions = body.get(
+                                "versions", {}
+                            )
+                            return
+                except RuntimeError:
+                    raise
+                except Exception:
+                    pass
+                await asyncio.sleep(0.5)
+        raise RuntimeError("worker health check timed out")
+
+    async def ensure_default(self) -> None:
+        if not self._alive():
+            await self.activate(DEFAULT_MODEL)
+
+    async def stop(self) -> None:
+        async with self._lock:
+            await self._stop_locked()
+
+    async def _stop_locked(self) -> None:
+        if self._proc is not None and self._alive():
+            logger.info("stopping worker %s", self.active_id)
+            self._proc.terminate()
+            try:
+                await asyncio.to_thread(
+                    self._proc.wait, WORKER_STOP_TIMEOUT_S
+                )
+            except Exception:
+                self._proc.kill()
+        self._proc = None
+        self._port = None
+        self.active_id = None
+        self.active_versions = {}
+
+
+manager = ModelManager()
+app = FastAPI(title="Diffusion LLM Visualizer")
+
+
+@app.on_event("shutdown")
+async def _shutdown() -> None:
+    await manager.stop()
+
+
+# -- Model API --
+
+
+@app.get("/api/models")
+async def list_models() -> JSONResponse:
+    models: List[Dict[str, Any]] = []
+    for model_id, info in REGISTRY.items():
+        data = info.model_dump()
+        data.pop("worker_module", None)
+        data.pop("venv_python", None)
+        data["status"] = manager.status(model_id)
+        models.append(data)
+    return JSONResponse(
+        {
+            "models": models,
+            "active": manager.active_id,
+            "default": DEFAULT_MODEL,
+        }
+    )
+
+
+@app.post("/api/models/{model_id}/activate")
+async def activate_model(model_id: str) -> JSONResponse:
+    try:
+        await manager.activate(model_id)
+    except KeyError:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "ok": False,
+                "message": f"unknown model: {model_id}",
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("activation failed")
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "message": str(exc)},
+        )
+    return JSONResponse(
+        {"ok": True, "active": manager.active_id}
+    )
+
+
+# -- WebSocket proxy to the active worker --
+
+
+async def _pipe(browser: WebSocket, worker: Any) -> None:
+    """Bidirectionally forward text frames browser <-> worker."""
+
+    async def browser_to_worker() -> None:
+        try:
+            while True:
+                message = await browser.receive_text()
+                await worker.send(message)
+        except Exception:
+            return
+
+    async def worker_to_browser() -> None:
+        try:
+            async for message in worker:
+                await browser.send_text(message)
+        except Exception:
+            return
+
+    task_b2w = asyncio.create_task(browser_to_worker())
+    task_w2b = asyncio.create_task(worker_to_browser())
+    _done, pending = await asyncio.wait(
+        {task_b2w, task_w2b},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    for task in pending:
+        task.cancel()
+
+
+@app.websocket("/ws")
+async def websocket_proxy(browser: WebSocket) -> None:
+    await browser.accept()
+    try:
+        await manager.ensure_default()
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("could not start default worker")
+        await browser.send_json(
+            {
+                "type": "error",
+                "message": f"model start failed: {exc}",
+            }
+        )
+        await browser.close()
+        return
+
+    url = manager.ws_url()
+    try:
+        async with websockets.connect(
+            url, max_size=None
+        ) as worker:
+            await _pipe(browser, worker)
+    except WebSocketDisconnect:
+        return
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("proxy error")
+        try:
+            await browser.send_json(
+                {"type": "error", "message": str(exc)}
+            )
+        except Exception:
+            pass
+
+
+# -- Save endpoint (model-agnostic) --
+
 
 class RemaskEdit(BaseModel):
     frame_index: int
     token_positions: List[int]
 
 
-class SaveRunParams(BaseModel):
-    steps: int
-    gen_length: int
-    block_length: int
-    temperature: float
-    cfg_scale: float
-    remasking: str
-
-
 class SaveRunRequest(BaseModel):
+    model: str = DEFAULT_MODEL
     prompt: str
-    params: SaveRunParams
+    params: Dict[str, Any] = Field(default_factory=dict)
     frames: List[str] = Field(min_length=1)
     final_text: str
     elapsed_seconds: Optional[float] = None
@@ -94,656 +463,99 @@ class SaveRunRequest(BaseModel):
     frame_token_ids: Optional[
         List[Optional[List[int]]]
     ] = None
+    canvas_index: Optional[List[int]] = None
+    mean_conf: Optional[List[Optional[float]]] = None
     remask_edits: Optional[List[RemaskEdit]] = None
 
 
-# -- App and shared state --
-
-app = FastAPI(title="LLaDA Diffusion Visualizer")
-
-model: Any = None
-tokenizer: Any = None
-model_ready = asyncio.Event()
-generation_lock = asyncio.Lock()
-
-# Stores tensor history and metadata from the most recent
-# completed generation so the client can resume from any frame.
-last_run_state: Dict[str, Any] | None = None
-
-
-def _load_model() -> tuple[Any, Any]:
-    """Blocking model + tokenizer load (runs in a thread)."""
-    device = torch.device(
-        "cuda" if torch.cuda.is_available() else "cpu"
-    )
-    logger.info(
-        "Loading tokenizer from %s ...", MODEL_NAME
-    )
-    tok = AutoTokenizer.from_pretrained(
-        MODEL_NAME, trust_remote_code=True
-    )
-    if tok.padding_side != "left":
-        tok.padding_side = "left"
-
-    logger.info("Loading model from %s ...", MODEL_NAME)
-    mdl = AutoModel.from_pretrained(
-        MODEL_NAME,
-        trust_remote_code=True,
-        torch_dtype=(
-            torch.bfloat16
-            if device.type == "cuda"
-            else None
-        ),
-        device_map=(
-            "auto" if device.type == "cuda" else None
-        ),
-    ).eval()
-
-    logger.info(
-        "Model loaded successfully on %s.", device
-    )
-    return mdl, tok
-
-
-@app.on_event("startup")
-async def startup_load_model() -> None:
-    """Kick off model loading in a background thread."""
-
-    async def _load() -> None:
-        global model, tokenizer  # noqa: PLW0603
-        mdl, tok = await asyncio.to_thread(_load_model)
-        model = mdl
-        tokenizer = tok
-        model_ready.set()
-
-    asyncio.create_task(_load())
-
-
-def _clamp(
-    value: float, low: float, high: float
-) -> float:
-    return max(low, min(high, value))
-
-
-def _validate_params(
-    data: dict[str, Any],
-) -> dict[str, Any]:
-    """Extract and clamp generation parameters."""
-    experimental = bool(
-        data.get("experimental", False)
-    )
-    limits = (
-        PARAM_LIMITS_EXPERIMENTAL
-        if experimental
-        else PARAM_LIMITS_RECOMMENDED
-    )
-
-    prompt = str(data.get("prompt", "")).strip()
-    if not prompt:
-        raise ValueError("prompt must not be empty")
-
-    remasking = str(
-        data.get("remasking", "low_confidence")
-    )
-    if remasking not in VALID_REMASKING:
-        raise ValueError(
-            f"remasking must be one of"
-            f" {VALID_REMASKING},"
-            f" got '{remasking}'"
-        )
-
-    steps = int(
-        _clamp(
-            float(data.get("steps", 128)),
-            *limits["steps"],
-        )
-    )
-    gen_length = int(
-        _clamp(
-            float(data.get("gen_length", 128)),
-            *limits["gen_length"],
-        )
-    )
-    block_length = int(
-        _clamp(
-            float(data.get("block_length", 32)),
-            *limits["block_length"],
-        )
-    )
-    temperature = float(
-        _clamp(
-            float(data.get("temperature", 0.0)),
-            *limits["temperature"],
-        )
-    )
-    cfg_scale = float(
-        _clamp(
-            float(data.get("cfg_scale", 0.0)),
-            *limits["cfg_scale"],
-        )
-    )
-
-    if gen_length % block_length != 0:
-        raise ValueError(
-            f"gen_length ({gen_length}) must be"
-            f" divisible by block_length"
-            f" ({block_length})"
-        )
-    num_blocks = gen_length // block_length
-    if steps % num_blocks != 0:
-        raise ValueError(
-            f"steps ({steps}) must be divisible by"
-            f" num_blocks ({num_blocks})"
-        )
-
-    return {
-        "prompt": prompt,
-        "steps": steps,
-        "gen_length": gen_length,
-        "block_length": block_length,
-        "temperature": temperature,
-        "cfg_scale": cfg_scale,
-        "remasking": remasking,
-    }
-
-
-def _validate_resume(
-    data: dict[str, Any],
-) -> dict[str, Any]:
-    """Validate a resume request against last_run_state."""
-    if last_run_state is None:
-        raise ValueError(
-            "No previous generation to resume from."
-        )
-
-    frame_index = int(data.get("frame_index", -1))
-    tensor_history: List[torch.Tensor] = (
-        last_run_state["tensor_history"]
-    )
-    if frame_index < 0 or frame_index >= len(
-        tensor_history
-    ):
-        raise ValueError(
-            f"frame_index {frame_index} is out of"
-            f" range [0, {len(tensor_history) - 1}]."
-        )
-
-    raw_positions = data.get("remask_positions", [])
-    if not isinstance(raw_positions, list):
-        raise ValueError(
-            "remask_positions must be a list."
-        )
-    if len(raw_positions) == 0:
-        raise ValueError(
-            "remask_positions must not be empty."
-        )
-
-    gen_length: int = last_run_state["gen_length"]
-    remask_positions: List[int] = []
-    for pos in raw_positions:
-        pos = int(pos)
-        if pos < 0 or pos >= gen_length:
-            raise ValueError(
-                f"remask position {pos} is out of"
-                f" range [0, {gen_length})."
-            )
-        remask_positions.append(pos)
-
-    total_steps: int = last_run_state["total_steps"]
-    remaining_steps = total_steps - frame_index
-    if remaining_steps <= 0:
-        raise ValueError(
-            "Cannot resume from the final frame."
-        )
-
-    return {
-        "frame_index": frame_index,
-        "remask_positions": remask_positions,
-        "remaining_steps": remaining_steps,
-    }
-
-
-async def _stream_frames(
-    generator: Any,
-    ws: WebSocket,
-    start_time: float,
-    *,
-    max_frames: int | None = None,
-) -> bool:
-    """Iterate an async frame generator and send each
-    frame over the WebSocket with elapsed time.
-
-    Returns True if the generator yielded a ``done``
-    message naturally.  Returns False when stopped
-    early because *max_frames* was reached or the
-    generator was cancelled before finishing.
-    """
-    frame_count = 0
-    done_sent = False
-    async for frame in generator:
-        elapsed = time.monotonic() - start_time
-        frame["elapsed"] = round(elapsed, 2)
-        await ws.send_json(frame)
-        if frame.get("type") == "done":
-            done_sent = True
-        elif frame.get("type") == "frame":
-            frame_count += 1
-            if (
-                max_frames is not None
-                and frame_count >= max_frames
-            ):
-                break
-    return done_sent
-
-
-@app.websocket("/ws")
-async def websocket_endpoint(
-    ws: WebSocket,
-) -> None:
-    global last_run_state  # noqa: PLW0603
-
-    await ws.accept()
-
-    if not model_ready.is_set():
-        await ws.send_json(
-            {
-                "type": "model_status",
-                "status": "loading",
-            }
-        )
-        await model_ready.wait()
-    await ws.send_json(
-        {"type": "model_status", "status": "ready"}
-    )
-
-    cancel_event = asyncio.Event()
-
-    try:
-        while True:
-            data = await ws.receive_json()
-            msg_type = data.get("type")
-
-            if msg_type == "cancel":
-                cancel_event.set()
-                continue
-
-            if msg_type == "generate":
-                await _handle_generate(
-                    ws, data, cancel_event
-                )
-                continue
-
-            if msg_type == "resume":
-                await _handle_resume(
-                    ws, data, cancel_event
-                )
-                continue
-
-            await ws.send_json(
-                {
-                    "type": "error",
-                    "message": (
-                        f"Unknown message type:"
-                        f" {msg_type}"
-                    ),
-                }
-            )
-
-    except WebSocketDisconnect:
-        cancel_event.set()
-        logger.info("Client disconnected.")
-
-
-async def _handle_generate(
-    ws: WebSocket,
-    data: dict[str, Any],
-    cancel_event: asyncio.Event,
-) -> None:
-    """Handle a 'generate' WebSocket message."""
-    global last_run_state  # noqa: PLW0603
-
-    try:
-        params = _validate_params(data)
-    except (ValueError, TypeError) as exc:
-        await ws.send_json(
-            {"type": "error", "message": str(exc)}
-        )
-        return
-
-    if generation_lock.locked():
-        await ws.send_json(
-            {
-                "type": "error",
-                "message": (
-                    "A generation is already running."
-                    " Please wait."
-                ),
-            }
-        )
-        return
-
-    cancel_event.clear()
-    start_time = time.monotonic()
-
-    async with generation_lock:
-        try:
-            tensor_history: List[torch.Tensor] = []
-
-            generator = streaming_generate(
-                model,
-                tokenizer,
-                params["prompt"],
-                steps=params["steps"],
-                gen_length=params["gen_length"],
-                block_length=params["block_length"],
-                temperature=params["temperature"],
-                cfg_scale=params["cfg_scale"],
-                remasking=params["remasking"],
-                cancel_event=cancel_event,
-                tensor_history=tensor_history,
-            )
-            await _stream_frames(
-                generator, ws, start_time
-            )
-
-            # Build prompt_ids and attention_mask from
-            # the tokenizer so resume can reconstruct x.
-            message = {
-                "role": "user",
-                "content": params["prompt"],
-            }
-            chat_text = tokenizer.apply_chat_template(
-                [message],
-                add_generation_prompt=True,
-                tokenize=False,
-            )
-            encoded = tokenizer(
-                [chat_text],
-                add_special_tokens=False,
-                padding=True,
-                return_tensors="pt",
-            )
-            prompt_ids = encoded["input_ids"].cpu()
-            prompt_len = prompt_ids.shape[1]
-            gen_length = params["gen_length"]
-
-            full_attention = torch.cat(
-                [
-                    encoded["attention_mask"],
-                    torch.ones(
-                        (1, gen_length),
-                        dtype=encoded[
-                            "attention_mask"
-                        ].dtype,
-                    ),
-                ],
-                dim=-1,
-            ).cpu()
-
-            num_blocks = (
-                gen_length // params["block_length"]
-            )
-            total_steps = params["steps"]
-
-            last_run_state = {
-                "tensor_history": tensor_history,
-                "prompt_ids": prompt_ids,
-                "attention_mask": full_attention,
-                "gen_length": gen_length,
-                "total_steps": total_steps,
-                "temperature": params["temperature"],
-                "cfg_scale": params["cfg_scale"],
-                "remasking": params["remasking"],
-            }
-
-        except Exception as exc:
-            logger.exception(
-                "Generation failed: %s", exc
-            )
-            await ws.send_json(
-                {
-                    "type": "error",
-                    "message": str(exc),
-                }
-            )
-
-
-async def _handle_resume(
-    ws: WebSocket,
-    data: dict[str, Any],
-    cancel_event: asyncio.Event,
-) -> None:
-    """Handle a 'resume' WebSocket message."""
-    global last_run_state  # noqa: PLW0603
-
-    try:
-        resume_params = _validate_resume(data)
-    except (ValueError, TypeError) as exc:
-        await ws.send_json(
-            {"type": "error", "message": str(exc)}
-        )
-        return
-
-    if generation_lock.locked():
-        await ws.send_json(
-            {
-                "type": "error",
-                "message": (
-                    "A generation is already running."
-                    " Please wait."
-                ),
-            }
-        )
-        return
-
-    assert last_run_state is not None
-    cancel_event.clear()
-    start_time = time.monotonic()
-
-    frame_index = resume_params["frame_index"]
-    max_frames: int | None = data.get("max_frames")
-    base_tensor = last_run_state["tensor_history"][
-        frame_index
-    ]
-
-    # Truncate tensor_history to just before the
-    # branch point. Resume tensors (including the
-    # remasked initial state) will be appended so
-    # indices stay in sync with the client.
-    last_run_state["tensor_history"] = (
-        last_run_state["tensor_history"][
-            :frame_index
-        ]
-    )
-
-    resume_tensor_history: List[torch.Tensor] = []
-
-    async with generation_lock:
-        try:
-            generator = streaming_resume(
-                model,
-                tokenizer,
-                base_tokens=base_tensor,
-                prompt_ids=last_run_state[
-                    "prompt_ids"
-                ],
-                attention_mask=last_run_state[
-                    "attention_mask"
-                ],
-                remask_positions=resume_params[
-                    "remask_positions"
-                ],
-                remaining_steps=resume_params[
-                    "remaining_steps"
-                ],
-                gen_length=last_run_state[
-                    "gen_length"
-                ],
-                temperature=last_run_state[
-                    "temperature"
-                ],
-                cfg_scale=last_run_state[
-                    "cfg_scale"
-                ],
-                remasking=last_run_state[
-                    "remasking"
-                ],
-                cancel_event=cancel_event,
-                tensor_history=(
-                    resume_tensor_history
-                ),
-            )
-            done_sent = await _stream_frames(
-                generator,
-                ws,
-                start_time,
-                max_frames=max_frames,
-            )
-
-            last_run_state[
-                "tensor_history"
-            ].extend(resume_tensor_history)
-
-            if done_sent:
-                last_run_state["total_steps"] = len(
-                    last_run_state["tensor_history"]
-                ) - 1
-            else:
-                final_text = ""
-                if resume_tensor_history:
-                    final_text = (
-                        tokenizer.batch_decode(
-                            resume_tensor_history[
-                                -1
-                            ],
-                            skip_special_tokens=True,
-                        )[0]
-                    )
-                await ws.send_json(
-                    {
-                        "type": "done",
-                        "final_text": final_text,
-                    }
-                )
-
-        except Exception as exc:
-            logger.exception(
-                "Resume failed: %s", exc
-            )
-            await ws.send_json(
-                {
-                    "type": "error",
-                    "message": str(exc),
-                }
-            )
-
-
-# -- Save endpoint --
-
-
-def _make_run_dir(base: Path) -> Path:
-    """Create a timestamped subdirectory."""
-    timestamp = datetime.now().strftime(
-        "%Y-%m-%d_%H-%M-%S"
-    )
-    run_dir = base / f"{timestamp}_llada"
+def _make_run_dir(base: Path, model_id: str) -> Path:
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    safe_model = model_id.replace("/", "_")
+    run_dir = base / f"{timestamp}_{safe_model}"
     run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir
 
 
 def _save_run_blocking(body: SaveRunRequest) -> str:
-    """Write all result files to disk (blocking I/O).
-
-    Returns the run directory path as a string.
-    """
-    run_dir = _make_run_dir(RESULTS_DIR)
+    model_id = body.model or DEFAULT_MODEL
+    checkpoint = ""
+    if model_id in REGISTRY:
+        checkpoint = REGISTRY[model_id].checkpoint
+    run_dir = _make_run_dir(RESULTS_DIR, model_id)
 
     metadata: Dict[str, Any] = {
-        "backend": "llada",
-        "model": MODEL_NAME,
+        "backend": model_id,
+        "model": checkpoint or model_id,
         "created_at": datetime.now().isoformat(
             timespec="seconds"
         ),
         "prompt": body.prompt,
         "final_text": body.final_text,
-        "params": body.params.model_dump(),
+        "params": body.params,
     }
     if body.elapsed_seconds is not None:
-        metadata["elapsed_seconds"] = (
-            body.elapsed_seconds
-        )
+        metadata["elapsed_seconds"] = body.elapsed_seconds
     if body.per_frame_elapsed is not None:
-        metadata["per_frame_elapsed"] = (
-            body.per_frame_elapsed
-        )
+        metadata["per_frame_elapsed"] = body.per_frame_elapsed
+    if body.canvas_index is not None:
+        metadata["canvas_index"] = body.canvas_index
+    if body.mean_conf is not None:
+        metadata["mean_conf"] = body.mean_conf
     if body.remask_edits:
         metadata["remask_edits"] = [
-            edit.model_dump()
-            for edit in body.remask_edits
+            edit.model_dump() for edit in body.remask_edits
         ]
+    metadata["reproducibility"] = {
+        "seed": body.params.get("seed"),
+        "gpu": _gpu_name(),
+        "git_commit": _git_commit(),
+        "versions": dict(manager.active_versions),
+    }
 
-    meta_path = run_dir / "metadata.json"
-    meta_path.write_text(
-        json.dumps(
-            metadata, indent=2, ensure_ascii=False
-        ),
+    (run_dir / "metadata.json").write_text(
+        json.dumps(metadata, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
-
-    final_path = run_dir / "final.txt"
-    final_path.write_text(
+    (run_dir / "final.txt").write_text(
         body.final_text, encoding="utf-8"
     )
-
-    hist_path = run_dir / "history.txt"
-    with hist_path.open("w", encoding="utf-8") as fh:
-        for i, frame_text in enumerate(body.frames):
-            fh.write(f"\n===== FRAME {i} =====\n")
-            fh.write(frame_text)
-            fh.write("\n")
+    with (run_dir / "history.txt").open(
+        "w", encoding="utf-8"
+    ) as handle:
+        for index, frame_text in enumerate(body.frames):
+            handle.write(f"\n===== FRAME {index} =====\n")
+            handle.write(frame_text)
+            handle.write("\n")
 
     if body.frame_token_ids is not None:
-        tokens_path = run_dir / "tokens.json"
-        tokens_path.write_text(
+        (run_dir / "tokens.json").write_text(
             json.dumps(
-                body.frame_token_ids,
-                ensure_ascii=False,
+                body.frame_token_ids, ensure_ascii=False
             ),
             encoding="utf-8",
         )
 
-    gif_path = run_dir / "diffusion.gif"
     history_to_gif(
         body.frames,
-        gif_path,
+        run_dir / "diffusion.gif",
         header_text=body.prompt,
     )
-
     return str(run_dir)
 
 
 @app.post("/api/save")
-async def save_run(
-    body: SaveRunRequest,
-) -> JSONResponse:
-    """Persist a completed generation run to Results/."""
+async def save_run(body: SaveRunRequest) -> JSONResponse:
     try:
         run_path = await asyncio.to_thread(
             _save_run_blocking, body
         )
-    except Exception as exc:
-        logger.exception(
-            "Failed to save run: %s", exc
-        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("failed to save run")
         return JSONResponse(
             status_code=500,
-            content={
-                "success": False,
-                "message": str(exc),
-            },
+            content={"success": False, "message": str(exc)},
         )
-
-    logger.info("Saved run to %s", run_path)
+    logger.info("saved run to %s", run_path)
     return JSONResponse(
         content={"success": True, "path": run_path}
     )
@@ -754,24 +566,14 @@ async def save_run(
 
 @app.get("/api/analytics/runs")
 async def analytics_list_runs() -> JSONResponse:
-    """Return metadata for every saved run."""
-    runs = await asyncio.to_thread(
-        list_runs, RESULTS_DIR
-    )
+    runs = await asyncio.to_thread(list_runs, RESULTS_DIR)
     return JSONResponse(content=runs)
 
 
-def _compute_run_metrics(
-    run_id: str,
-) -> Dict[str, Any]:
-    """Blocking helper: parse history and compute
-    convergence metrics for a single run."""
+def _compute_run_metrics(run_id: str) -> Dict[str, Any]:
     run_dir = RESULTS_DIR / run_id
     if not run_dir.is_dir():
-        raise FileNotFoundError(
-            f"Run not found: {run_id}"
-        )
-
+        raise FileNotFoundError(f"Run not found: {run_id}")
     history_path = run_dir / "history.txt"
     if not history_path.is_file():
         raise FileNotFoundError(
@@ -787,62 +589,45 @@ def _compute_run_metrics(
         "convergence": convergence,
         "total_frames": len(frames),
     }
-
-    if "per_frame_elapsed" in meta:
-        result["per_frame_elapsed"] = (
-            meta["per_frame_elapsed"]
+    for key in (
+        "per_frame_elapsed",
+        "elapsed_seconds",
+        "remask_edits",
+        "mean_conf",
+    ):
+        if key in meta:
+            result[key] = meta[key]
+    canvas_index = meta.get("canvas_index")
+    if canvas_index:
+        result["canvas_boundaries"] = canvas_boundaries(
+            canvas_index
         )
-    if "elapsed_seconds" in meta:
-        result["elapsed_seconds"] = (
-            meta["elapsed_seconds"]
-        )
-    if "remask_edits" in meta:
-        result["remask_edits"] = (
-            meta["remask_edits"]
-        )
-
     return result
 
 
 @app.get("/api/analytics/runs/{run_id}/metrics")
-async def analytics_run_metrics(
-    run_id: str,
-) -> JSONResponse:
-    """Compute and return metrics for a single run."""
+async def analytics_run_metrics(run_id: str) -> JSONResponse:
     try:
         result = await asyncio.to_thread(
             _compute_run_metrics, run_id
         )
     except FileNotFoundError as exc:
         return JSONResponse(
-            status_code=404,
-            content={"error": str(exc)},
+            status_code=404, content={"error": str(exc)}
         )
     return JSONResponse(content=result)
 
 
 @app.get("/api/analytics/compare")
-async def analytics_compare(
-    ids: str = "",
-) -> JSONResponse:
-    """Return metrics for multiple runs (overlay).
-
-    Query param ``ids`` is a comma-separated list of
-    run directory names.
-    """
+async def analytics_compare(ids: str = "") -> JSONResponse:
     run_ids = [
-        rid.strip()
-        for rid in ids.split(",")
-        if rid.strip()
+        rid.strip() for rid in ids.split(",") if rid.strip()
     ]
     if len(run_ids) == 0:
         return JSONResponse(
             status_code=400,
-            content={
-                "error": "ids parameter is required"
-            },
+            content={"error": "ids parameter is required"},
         )
-
     results: List[Dict[str, Any]] = []
     for run_id in run_ids:
         try:
@@ -851,28 +636,74 @@ async def analytics_compare(
             )
             results.append(metrics)
         except FileNotFoundError:
-            results.append({
-                "run_id": run_id,
-                "error": f"Run not found: {run_id}",
-            })
-
+            results.append(
+                {
+                    "run_id": run_id,
+                    "error": f"Run not found: {run_id}",
+                }
+            )
     return JSONResponse(content=results)
 
 
 @app.get("/api/analytics/system")
 async def analytics_system_info() -> JSONResponse:
-    """Return hardware info for the analytics UI."""
-    gpu_name: str | None = None
-    if torch.cuda.is_available():
-        gpu_name = torch.cuda.get_device_name(0)
+    """GPU name for the analytics UI (no torch in supervisor)."""
+    return JSONResponse(content={"gpu_name": _gpu_name()})
 
-    return JSONResponse(
-        content={"gpu_name": gpu_name}
-    )
+
+def _delete_run_blocking(run_id: str) -> None:
+    """Delete one saved run directory under Results/.
+
+    Guards against path traversal: the resolved directory must be a
+    direct child of RESULTS_DIR.
+    """
+    results_root = RESULTS_DIR.resolve()
+    run_dir = (results_root / run_id).resolve()
+    if run_dir.parent != results_root:
+        raise ValueError(f"invalid run id: {run_id}")
+    if not run_dir.is_dir():
+        raise FileNotFoundError(f"Run not found: {run_id}")
+    shutil.rmtree(run_dir)
+
+
+@app.delete("/api/analytics/runs/{run_id}")
+async def analytics_delete_run(run_id: str) -> JSONResponse:
+    try:
+        await asyncio.to_thread(_delete_run_blocking, run_id)
+    except FileNotFoundError as exc:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "message": str(exc)},
+        )
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "message": str(exc)},
+        )
+    except OSError as exc:
+        logger.exception("failed to delete run %s", run_id)
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "message": str(exc)},
+        )
+    logger.info("deleted run %s", run_id)
+    return JSONResponse(content={"success": True})
+
+
+class _NoCacheStaticFiles(StaticFiles):
+    """Serve static assets with no-store so the browser never holds a
+    stale CSS/JS copy between edits (this is a local dev tool)."""
+
+    async def get_response(self, path: str, scope: Any) -> Any:
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = (
+            "no-store, no-cache, must-revalidate"
+        )
+        return response
 
 
 app.mount(
     "/",
-    StaticFiles(directory=str(STATIC_DIR), html=True),
+    _NoCacheStaticFiles(directory=str(STATIC_DIR), html=True),
     name="static",
 )

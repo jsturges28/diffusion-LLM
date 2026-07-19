@@ -98,6 +98,21 @@ def compute_convergence(
     return results
 
 
+def canvas_boundaries(
+    canvas_index: List[int],
+) -> List[int]:
+    """Frame indices where a new canvas (block) begins.
+
+    Empty for single-canvas runs (e.g. LLaDA, where every frame
+    shares canvas index 0).
+    """
+    return [
+        i
+        for i in range(1, len(canvas_index))
+        if canvas_index[i] != canvas_index[i - 1]
+    ]
+
+
 def load_run_metadata(
     run_dir: Path,
 ) -> Dict[str, Any]:

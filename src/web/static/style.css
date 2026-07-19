@@ -30,6 +30,16 @@
   padding: 0;
 }
 
+/* Make the `hidden` attribute authoritative everywhere. Without
+   this, an ID rule such as `#guided-edit-controls { display: flex }`
+   (specificity 100) silently defeats the UA `[hidden]` rule
+   (specificity 10), so `element.hidden = true` fails to hide it.
+   This single rule prevents that whole class of show/hide bugs.
+   (Modals fade via a `.hidden` class, which is unaffected.) */
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   height: 100%;
@@ -226,6 +236,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 3px;
+  width: var(--param-width, 120px);
 }
 
 .param-group label {
@@ -233,10 +244,17 @@ body {
   color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.param-group input[type="number"],
+.param-group .custom-select {
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .param-group input[type="number"] {
-  width: 96px;
+  background: var(--bg-surface);
   background: var(--bg-surface);
   color: var(--text-primary);
   border: 1px solid var(--border);
@@ -294,16 +312,27 @@ body {
 }
 
 .param-range {
+  display: block;
   font-weight: 300;
   color: var(--text-dim);
-  margin-left: 2px;
+  margin-left: 0;
+}
+
+/* Boolean params render a themed toggle; align it with the
+   bottom of the sibling number/select inputs in the row. */
+.param-group-bool {
+  justify-content: flex-end;
+}
+
+.param-group-bool .toggle-switch {
+  margin-bottom: 8px;
 }
 
 .param-group-btn {
   margin-left: auto;
   flex-direction: row;
   align-items: flex-end;
-  gap: 6px;
+  gap: 8px;
 }
 
 /* ---- Mode toggle row ---- */
@@ -408,6 +437,11 @@ body {
   display: block;
 }
 
+/* Blank line between the "Range:" line and the description. */
+.tooltip-desc {
+  margin-top: 8px;
+}
+
 /* ---- Validation hint ---- */
 
 #validation-hint {
@@ -427,31 +461,57 @@ button {
   transition: background 0.15s, opacity 0.15s;
 }
 
+/* Generate is the app's primary action: give it extra height,
+   weight, and a soft pulsing glow so it reads as the focal point. */
 #btn-generate {
+  height: 34px;
   background: var(--accent);
   color: #000;
-  font-weight: 500;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  box-shadow: 0 0 12px var(--accent-glow);
+  transition:
+    background 0.15s,
+    box-shadow 0.2s,
+    transform 0.12s;
+  animation: generate-pulse 2.6s ease-in-out infinite;
 }
 
 #btn-generate:hover:not(:disabled) {
   background: #33ff66;
+  box-shadow: 0 0 22px var(--accent-glow), 0 0 8px var(--accent-glow);
+  transform: translateY(-1px);
+  animation: none;
 }
 
 #btn-generate:disabled {
   opacity: 0.35;
+  box-shadow: none;
   cursor: not-allowed;
+  animation: none;
 }
 
-.btn-cancel {
-  background: rgba(255, 68, 68, 0.2);
-  color: var(--danger);
+@keyframes generate-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 9px var(--accent-glow);
+  }
+  50% {
+    box-shadow:
+      0 0 20px var(--accent-glow),
+      0 0 6px var(--accent-glow);
+  }
 }
 
-.btn-cancel:hover {
-  background: rgba(255, 68, 68, 0.35);
-}
-
+/* Save is a compact square (matching Generate's height) with a
+   download glyph; greyed out when there is nothing to save. */
 .btn-save {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: rgba(0, 170, 255, 0.2);
   color: #00aaff;
 }
@@ -461,13 +521,64 @@ button {
 }
 
 .btn-save:disabled {
-  opacity: 0.4;
+  opacity: 0.35;
   cursor: not-allowed;
+}
+
+/* The icon must not capture pointer events, otherwise hovering the
+   glyph shows the SVG's cursor instead of the button's not-allowed
+   cursor while disabled. */
+.btn-save svg {
+  pointer-events: none;
+}
+
+/* Icon state machine: arrow (idle) -> spinner (saving) -> check
+   (just saved) -> arrow. Only one icon shows at a time. */
+.btn-save .save-icon-spinner,
+.btn-save .save-icon-check {
+  display: none;
+}
+
+.btn-save.is-saving .save-icon-arrow,
+.btn-save.is-saved .save-icon-arrow {
+  display: none;
+}
+
+.btn-save.is-saving .save-icon-spinner {
+  display: block;
+  transform-origin: 50% 50%;
+  animation: save-spin 0.8s linear infinite;
+  filter: drop-shadow(0 0 3px currentColor);
+}
+
+.btn-save.is-saved .save-icon-check {
+  display: block;
+  color: #38bdf8;
+  filter: drop-shadow(0 0 5px #38bdf8);
+  animation: save-check-pop 0.25s ease-out;
+}
+
+/* Keep the spinner/check at full brightness even though the button
+   is disabled during and just after a save. */
+.btn-save.is-saving:disabled,
+.btn-save.is-saved:disabled {
+  opacity: 1;
+}
+
+@keyframes save-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes save-check-pop {
+  0% { transform: scale(0.4); opacity: 0.2; }
+  60% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
 }
 
 /* ---- Output area ---- */
 
 #output-section {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow: hidden;
@@ -551,7 +662,14 @@ button {
 /* ---- Settings modal ---- */
 
 .modal-box-sm {
-  max-width: 360px;
+  max-width: 480px;
+  min-height: 340px;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-box-sm .modal-body {
+  flex: 1;
 }
 
 .settings-row {
@@ -559,6 +677,87 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+/* Breathing room + separators between the settings preferences. */
+.modal-body .settings-row {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-body .settings-row:first-child {
+  padding-top: 4px;
+}
+
+.modal-body .settings-row:last-child {
+  border-bottom: none;
+}
+
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+/* Bottom-left save feedback ("Saving..." / "Changes saved!"). */
+#settings-status {
+  margin-right: auto;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  transition: opacity 0.3s;
+}
+
+#settings-status.is-saved {
+  color: var(--accent);
+}
+
+.btn-settings-save {
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 7px 20px;
+  border: 1px solid rgba(0, 255, 65, 0.3);
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.btn-settings-save:hover:not(:disabled) {
+  background: rgba(0, 255, 65, 0.22);
+  border-color: rgba(0, 255, 65, 0.4);
+}
+
+.btn-settings-save:disabled,
+.btn-secondary:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* Compact confirmation dialog (e.g. delete a run). */
+.modal-box-confirm {
+  max-width: 400px;
+}
+
+.btn-danger {
+  background: rgba(255, 68, 68, 0.2);
+  color: var(--danger);
+  border: 1px solid rgba(255, 68, 68, 0.35);
+  font-size: 13px;
+  padding: 7px 20px;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: rgba(255, 68, 68, 0.35);
+  border-color: rgba(255, 68, 68, 0.55);
+}
+
+.btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .settings-row label {
@@ -932,24 +1131,11 @@ button {
 
 /* ---- Remask controls ---- */
 
-#remask-controls {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 8px;
-}
-
-#remask-count {
-  font-size: 11px;
-  color: var(--remask-color, #ff9f1c);
-  letter-spacing: 0.04em;
-}
-
 .btn-secondary {
   background: rgba(255, 255, 255, 0.06);
   color: var(--text-secondary);
-  font-size: 11px;
-  padding: 4px 12px;
+  font-size: 13px;
+  padding: 7px 20px;
   border: 1px solid var(--border);
 }
 
@@ -962,9 +1148,9 @@ button {
 .btn-resume {
   background: rgba(255, 159, 28, 0.2);
   color: #ff9f1c;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
-  padding: 5px 16px;
+  padding: 7px 20px;
   border: 1px solid rgba(255, 159, 28, 0.3);
   transition:
     background 0.15s,
@@ -989,9 +1175,9 @@ button {
   overflow: hidden;
   background: var(--accent-dim);
   color: var(--accent);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 500;
-  padding: 4px 12px;
+  padding: 7px 20px;
   border: 1px solid rgba(0, 255, 65, 0.2);
   margin-left: 6px;
   transition:
@@ -1030,26 +1216,30 @@ button {
 #guided-edit-controls {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   margin-top: 8px;
-  flex-wrap: wrap;
 }
 
 #guided-edit-status {
+  flex: 1;
+  min-width: 0;
   font-size: 11px;
   color: var(--text-secondary);
   letter-spacing: 0.04em;
 }
 
-#guided-edit-count {
-  font-size: 11px;
-  color: #ff9f1c;
-  letter-spacing: 0.04em;
+/* Right-anchored action cluster so the status text never shifts as
+   the available buttons change between edit phases. */
+#guided-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .btn-guided {
-  font-size: 11px;
-  padding: 4px 12px;
+  font-size: 13px;
+  padding: 7px 20px;
   border: 1px solid rgba(0, 255, 65, 0.2);
   background: var(--accent-dim);
   color: var(--accent);
@@ -1070,8 +1260,8 @@ button {
 }
 
 .btn-lock-in {
-  font-size: 11px;
-  padding: 4px 12px;
+  font-size: 13px;
+  padding: 7px 20px;
   background: rgba(160, 175, 190, 0.12);
   color: #a0afbe;
   border: 1px solid rgba(160, 175, 190, 0.22);
@@ -1189,4 +1379,367 @@ button {
   #scrubber-slider {
     min-width: 120px;
   }
+}
+
+/* ---- Thinking / reasoning panel ---- */
+
+#thinking-panel {
+  margin-bottom: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.25);
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+#thinking-panel summary {
+  cursor: pointer;
+  opacity: 0.7;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 11px;
+}
+
+#thinking-content {
+  margin-top: 8px;
+  white-space: pre-wrap;
+  opacity: 0.75;
+  font-style: italic;
+}
+
+/* ---- Model selector + dynamic param panel ---- */
+
+/* param-fields is a passthrough container so its param-group
+   children flow in the existing #param-row flex layout. */
+#param-fields {
+  display: contents;
+}
+
+.model-select-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.7;
+  margin-right: 4px;
+}
+
+/* Custom in-app dropdowns (native <select> lists render at the
+   OS level, ignoring the app theme). Shared by the header model
+   picker and the hyperparameter selects. */
+.model-select,
+.custom-select {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  user-select: none;
+}
+
+.model-select {
+  padding: 4px 8px;
+  margin-right: 10px;
+  font-size: 12px;
+}
+
+.custom-select {
+  padding: 6px 8px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.model-select:focus,
+.model-select.open,
+.custom-select:focus,
+.custom-select.open {
+  outline: none;
+  border-color: var(--border-focus, var(--accent, #00ff41));
+}
+
+.model-select.disabled,
+.custom-select.disabled {
+  opacity: 0.5;
+  cursor: default;
+  pointer-events: none;
+}
+
+.model-select-value,
+.custom-select-value {
+  flex: 1;
+  white-space: nowrap;
+}
+
+.model-select-caret,
+.custom-select-caret {
+  font-size: 9px;
+  opacity: 0.7;
+}
+
+.model-select-list,
+.custom-select-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  z-index: 50;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+}
+
+.model-select-option,
+.custom-select-option {
+  padding: 6px 8px;
+  border-radius: 3px;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.model-select-option:hover,
+.custom-select-option:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.model-select-option.is-active,
+.custom-select-option.is-active {
+  color: var(--accent, #00ff41);
+}
+
+.custom-select-option.is-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  color: var(--text-secondary);
+}
+
+.custom-select-option.is-disabled:hover {
+  background: transparent;
+}
+
+/* Extra mode toggles (e.g. Thinking) shown next to Experimental
+   for models that support them. */
+#mode-extra {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 16px;
+}
+
+.mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Small "?" info icon (used by Experimental and each
+   hyperparameter). */
+.info-icon-sm {
+  width: 12px;
+  height: 12px;
+  font-size: 8px;
+  margin-left: 5px;
+  vertical-align: middle;
+}
+
+/* Global per-token hover highlight (a persistent user preference). */
+.token-hover-highlight .token-span:hover {
+  background: rgba(255, 159, 28, 0.14);
+  border-radius: 2px;
+}
+
+/* Visual-overlay picker: a glassy drawer tucked against the output
+   window's top-right edge. Collapsed, only its handle pokes in;
+   clicking the handle slides the full picker out, keeping the right
+   edge flush with the window edge (like a drawer). */
+#overlay-select-group {
+  position: absolute;
+  top: 16px;
+  right: 0;
+  z-index: 6;
+  display: flex;
+  align-items: stretch;
+  background: rgba(10, 12, 16, 0.82);
+  border: 1px solid var(--border);
+  border-right: none;
+  border-radius: var(--radius) 0 0 var(--radius);
+  backdrop-filter: blur(4px);
+  transform: translateX(calc(100% - 26px));
+  transition: transform 0.25s ease;
+}
+
+#overlay-select-group.open {
+  transform: translateX(0);
+}
+
+#overlay-select-group[hidden] {
+  display: none;
+}
+
+#overlay-drawer-handle {
+  flex-shrink: 0;
+  width: 26px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+#overlay-drawer-handle:hover {
+  color: var(--accent);
+}
+
+#overlay-drawer-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 6px 2px;
+  white-space: nowrap;
+}
+
+.overlay-select-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+/* Diff-overlay opacity sliders + blend toggle. Shown as a slim row in
+   the scrubber area (below the output) when the Diff overlay is
+   selected, so it never covers generated text. */
+#diff-overlay-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 20px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.diff-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.diff-slider-label {
+  text-transform: uppercase;
+}
+
+.diff-orig-label {
+  color: #2dd4ff;
+}
+
+.diff-slider-row input[type="range"] {
+  width: 140px;
+  height: 3px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+#diff-original-opacity {
+  accent-color: #2dd4ff;
+}
+
+.diff-blend-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.diff-blend-row input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* Two-layer diff overlay: both layers stacked in one grid cell so
+   the container sizes to the taller and scrolls naturally. */
+#output-area.diff-overlay-mode {
+  display: grid;
+}
+
+#output-area.diff-overlay-mode > .diff-layer {
+  grid-area: 1 / 1;
+  min-width: 0;
+  white-space: pre-wrap;
+}
+
+/* "Diverged N/total" readout, shown beside the picker in diff mode. */
+#diff-summary {
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  color: #ff9ae0;
+}
+
+#diff-summary[hidden] {
+  display: none;
+}
+
+/* Commit-order status text + its early->late legend in the footer. */
+#status-commit {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+#commit-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+#commit-legend[hidden] {
+  display: none;
+}
+
+.commit-legend-bar {
+  width: 64px;
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    hsl(130, 62%, 60%),
+    hsl(72, 68%, 55%),
+    hsl(15, 82%, 54%)
+  );
+}
+
+/* Settings rows that pair a label + description with a toggle. */
+.settings-label-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 300px;
+}
+
+.settings-desc {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: normal;
 }

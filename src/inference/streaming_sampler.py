@@ -40,15 +40,19 @@ def _build_token_list(
     x: torch.Tensor,
     prompt_len: int,
     tokenizer: Any,
+    reveal_conf: torch.Tensor | None = None,
 ) -> List[Dict[str, Any]]:
     """Build per-token metadata for the generation region.
 
-    Returns a list of dicts, one per token in x[0, prompt_len:].
-    Each dict has keys: t (display text), m (is mask), id (token id).
+    Each dict has keys: t (display text), m (is mask), id (token
+    id), and c (reveal-time confidence 0..1) on resolved tokens.
     """
     gen_ids = x[0, prompt_len:].tolist()
+    conf = (
+        reveal_conf.tolist() if reveal_conf is not None else None
+    )
     tokens: List[Dict[str, Any]] = []
-    for token_id in gen_ids:
+    for i, token_id in enumerate(gen_ids):
         is_mask = token_id == MASK_ID
         if is_mask:
             display = "░"
@@ -58,10 +62,27 @@ def _build_token_list(
                 skip_special_tokens=False,
             )
             display = sanitize_frame(raw)
-        tokens.append(
-            {"t": display, "m": is_mask, "id": token_id}
-        )
+        token: Dict[str, Any] = {
+            "t": display, "m": is_mask, "id": token_id
+        }
+        if not is_mask and conf is not None:
+            token["c"] = round(float(conf[i]), 4)
+        tokens.append(token)
     return tokens
+
+
+def _mean_conf(
+    x: torch.Tensor,
+    prompt_len: int,
+    reveal_conf: torch.Tensor | None,
+) -> float:
+    """Mean reveal-time confidence over resolved positions."""
+    if reveal_conf is None:
+        return 0.0
+    resolved = x[0, prompt_len:] != MASK_ID
+    if not bool(resolved.any()):
+        return 0.0
+    return round(float(reveal_conf[resolved].mean().item()), 4)
 
 
 def _forward_pass(
@@ -110,11 +131,12 @@ def _diffusion_step(
     block_end: int,
     num_transfer_tokens: torch.Tensor,
     step_in_block: int,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Execute one synchronous diffusion step, mutating x.
 
-    Separated so both generate and resume can share logic
-    without duplicating the core loop body.
+    Returns (x, true_conf, transfer_index): the mutated sequence,
+    the per-position softmax confidence of the argmax prediction,
+    and the boolean mask of positions revealed this step.
     """
     mask_index = x == MASK_ID
 
@@ -127,16 +149,20 @@ def _diffusion_step(
     )
     x0 = torch.argmax(logits_with_noise, dim=-1)
 
+    # True per-token confidence: softmax prob of the argmax
+    # prediction. Used for the heatmap regardless of the
+    # remasking strategy.
+    p = F.softmax(logits, dim=-1)
+    true_conf = torch.squeeze(
+        torch.gather(
+            p,
+            dim=-1,
+            index=torch.unsqueeze(x0, -1),
+        ),
+        -1,
+    ).float()
     if remasking == "low_confidence":
-        p = F.softmax(logits, dim=-1)
-        x0_p = torch.squeeze(
-            torch.gather(
-                p,
-                dim=-1,
-                index=torch.unsqueeze(x0, -1),
-            ),
-            -1,
-        )
+        x0_p = true_conf.clone()
     elif remasking == "random":
         x0_p = torch.rand(
             (x0.shape[0], x0.shape[1]),
@@ -168,7 +194,7 @@ def _diffusion_step(
         transfer_index[j, select_index] = True
 
     x[transfer_index] = x0[transfer_index]
-    return x
+    return x, true_conf, transfer_index
 
 
 async def streaming_generate(
@@ -254,6 +280,8 @@ async def streaming_generate(
             x[:, prompt_len:].clone().cpu()
         )
 
+    reveal_conf = torch.zeros(gen_length, device=x.device)
+
     initial_text = tokenizer.batch_decode(
         x[:, prompt_len:], skip_special_tokens=False
     )[0]
@@ -261,9 +289,11 @@ async def streaming_generate(
         "type": "frame",
         "index": 0,
         "total_steps": total_steps,
+        "canvas_index": 0,
+        "mean_conf": 0.0,
         "text": sanitize_frame(initial_text),
         "tokens": _build_token_list(
-            x, prompt_len, tokenizer
+            x, prompt_len, tokenizer, reveal_conf
         ),
     }
 
@@ -290,18 +320,24 @@ async def streaming_generate(
             ):
                 return
 
-            x = await asyncio.to_thread(
-                _diffusion_step,
-                x,
-                model,
-                attention_mask,
-                prompt_index,
-                cfg_scale,
-                temperature,
-                remasking,
-                block_end,
-                num_transfer_tokens,
-                i,
+            x, step_conf, step_transfer = (
+                await asyncio.to_thread(
+                    _diffusion_step,
+                    x,
+                    model,
+                    attention_mask,
+                    prompt_index,
+                    cfg_scale,
+                    temperature,
+                    remasking,
+                    block_end,
+                    num_transfer_tokens,
+                    i,
+                )
+            )
+            gen_transfer = step_transfer[0, prompt_len:]
+            reveal_conf[gen_transfer] = (
+                step_conf[0, prompt_len:][gen_transfer]
             )
 
             if tensor_history is not None:
@@ -317,9 +353,13 @@ async def streaming_generate(
                 "type": "frame",
                 "index": frame_index,
                 "total_steps": total_steps,
+                "canvas_index": 0,
+                "mean_conf": _mean_conf(
+                    x, prompt_len, reveal_conf
+                ),
                 "text": sanitize_frame(step_text),
                 "tokens": _build_token_list(
-                    x, prompt_len, tokenizer
+                    x, prompt_len, tokenizer, reveal_conf
                 ),
             }
             frame_index += 1
@@ -397,6 +437,11 @@ async def streaming_resume(
         block_mask_index, remaining_steps
     )
 
+    # Pre-resolved positions from the prior run are treated as
+    # committed (confidence 1.0); revealed positions update below.
+    reveal_conf = torch.zeros(gen_length, device=x.device)
+    reveal_conf[x[0, prompt_len:] != MASK_ID] = 1.0
+
     if tensor_history is not None:
         tensor_history.append(
             x[:, prompt_len:].clone().cpu()
@@ -409,9 +454,11 @@ async def streaming_resume(
         "type": "frame",
         "index": 0,
         "total_steps": remaining_steps,
+        "canvas_index": 0,
+        "mean_conf": _mean_conf(x, prompt_len, reveal_conf),
         "text": sanitize_frame(initial_text),
         "tokens": _build_token_list(
-            x, prompt_len, tokenizer
+            x, prompt_len, tokenizer, reveal_conf
         ),
     }
 
@@ -422,18 +469,24 @@ async def streaming_resume(
         ):
             return
 
-        x = await asyncio.to_thread(
-            _diffusion_step,
-            x,
-            model,
-            attention_mask,
-            prompt_index,
-            cfg_scale,
-            temperature,
-            remasking,
-            block_end,
-            num_transfer_tokens,
-            i,
+        x, step_conf, step_transfer = (
+            await asyncio.to_thread(
+                _diffusion_step,
+                x,
+                model,
+                attention_mask,
+                prompt_index,
+                cfg_scale,
+                temperature,
+                remasking,
+                block_end,
+                num_transfer_tokens,
+                i,
+            )
+        )
+        gen_transfer = step_transfer[0, prompt_len:]
+        reveal_conf[gen_transfer] = (
+            step_conf[0, prompt_len:][gen_transfer]
         )
 
         if tensor_history is not None:
@@ -449,9 +502,13 @@ async def streaming_resume(
             "type": "frame",
             "index": i + 1,
             "total_steps": remaining_steps,
+            "canvas_index": 0,
+            "mean_conf": _mean_conf(
+                x, prompt_len, reveal_conf
+            ),
             "text": sanitize_frame(step_text),
             "tokens": _build_token_list(
-                x, prompt_len, tokenizer
+                x, prompt_len, tokenizer, reveal_conf
             ),
         }
 

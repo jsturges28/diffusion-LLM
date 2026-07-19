@@ -1,69 +1,159 @@
-# Discrete Diffusion LLM 
+# Discrete Diffusion LLM Visualizer
 
 ## Project Summary
 
-This repository demonstrates **diffusion-style text generation**: instead of generating tokens left-to-right (autoregressive decoding), we generate by **iteratively denoising a fully masked sequence** using a masked diffusion model (MDM).
+This repository is a local **visual playground and analytics suite** for **discrete diffusion language models**: models that generate text not left-to-right (autoregressive decoding) but by **iteratively denoising a corrupted sequence** over many steps. A web UI (FastAPI + WebSocket) streams every intermediate frame to the browser so you can watch the sequence resolve, scrub back through the history, remask tokens and resume, color tokens by model confidence or the order in which they resolved, diff an edited run against the original, and compare runs in an analytics suite. The goal is an enjoyable, hands-on tool for building intuition about how diffusion LLMs behave, with a strong lean toward explainability (xAI).
 
-We use [LLaDA 8B Instruct](https://huggingface.co/GSAI-ML/LLaDA-8B-Instruct) — the first competitive large-scale discrete diffusion language model — as our backbone. The model was pre-trained from scratch on 2.3T tokens and fine-tuned on 4.5M instruction pairs, achieving performance comparable to LLaMA 3 8B on standard benchmarks ([paper](https://arxiv.org/abs/2502.09992)).
+The suite now hosts **two** diffusion models, both running locally on a single 24 GB GPU (one resident at a time):
 
-A local **web UI** (FastAPI + WebSocket) lets you watch the diffusion process unfold live in the browser, streaming intermediate frames as the model iteratively unmasks tokens over N steps.
+- **[LLaDA-8B-Instruct](https://huggingface.co/GSAI-ML/LLaDA-8B-Instruct):** the first competitive large-scale discrete diffusion language model, pre-trained on 2.3T tokens and instruction-tuned to roughly LLaMA 3 8B quality ([paper](https://arxiv.org/abs/2502.09992)). Masked diffusion over a single canvas, run in bfloat16 (~17 GB VRAM). Supports interactive remasking and resume.
+- **DiffusionGemma-26B-A4B:** Google's block-autoregressive text-diffusion model, a 26B-parameter Mixture-of-Experts (\~4B active) built on Gemma. Run here as a self-quantized 4-bit NF4 checkpoint (\~18 GB VRAM). Denoises 256-token canvases with adaptive stopping and an optional reasoning (thinking) channel. Single-canvas runs now also support interactive remasking and resume (via seed-canvas re-entry); multi-canvas resume is still on the roadmap.
+
+Because the two models depend on incompatible `transformers` versions and neither pair fits in 24 GB together, the app uses a **supervisor plus per-model worker** architecture: a lightweight server spawns exactly one model worker at a time, each in its own virtual environment, and proxies the browser WebSocket to it.
 
 
 ## How It Works
 
-### Autoregressive vs Diffusion
+### Autoregressive vs diffusion
 
 Autoregressive LLMs generate one token at a time, left to right:
 
 $p(x_1, \ldots, x_T) = \prod_{t=1}^T p(x_t \mid x_{<t})$
 
-LLaDA instead uses a **masked diffusion** process:
+Diffusion LLMs instead start from a corrupted sequence and refine the whole thing in parallel over *N* steps, using **bidirectional** attention (no causal mask), re-corrupting the least certain positions between steps until the sequence converges.
 
-- **Forward process (corruption):** independently replace each token with `[MASK]` with probability *t* ∈ [0, 1]. At *t* = 0 the text is clean; at *t* = 1 everything is masked.
-- **Reverse process (generation):** starting from a fully masked sequence, a Transformer (with **bidirectional** attention — no causal mask) predicts all masked tokens simultaneously, then **re-masks** the least confident predictions. Repeat for *N* steps until the sequence is fully unmasked.
+### LLaDA: masked discrete diffusion
 
-The training loss is cross-entropy on masked positions only, weighted by 1/*t*, which provides a variational upper bound on negative log-likelihood — making LLaDA a principled generative model, not just a fill-in-the-blank system like BERT.
+- **Forward process (corruption):** independently replace each token with `[MASK]` with probability *t* in [0, 1]. At *t* = 0 the text is clean; at *t* = 1 everything is masked.
+- **Reverse process (generation):** starting from a fully masked canvas, the Transformer predicts all masked positions at once, then **re-masks** the least confident predictions. Repeat for *N* steps until nothing is masked.
 
-### Sampling Parameters
+The training loss is cross-entropy on masked positions only, weighted by 1/*t*, which provides a variational upper bound on negative log-likelihood. This makes LLaDA a principled generative model, not a fill-in-the-blank system like BERT. In the UI, unresolved positions render as `░`.
+
+### DiffusionGemma: block-autoregressive text diffusion
+
+DiffusionGemma denoises a fixed **256-token canvas** on an encoder-decoder MoE backbone. Rather than a `[MASK]` placeholder, unresolved positions carry noisy tokens that the sampler renoises between steps under an entropy bound. Two properties make it distinct from LLaDA:
+
+- **Adaptive stopping:** a canvas can finish in fewer than the configured maximum steps once its predictions stabilize, so simpler prompts run faster.
+- **Block-autoregressive chaining:** for outputs longer than one canvas, it commits a canvas and then seeds the next, chaining multiple canvases. The status readout therefore reads `Step X, Canvas Y` rather than a fixed step total.
+
+An optional **thinking** channel exposes a step-by-step reasoning pass, which the UI separates into a collapsible panel above the answer.
+
+### Confidence and the heatmap
+
+Every resolved token carries a **confidence** value in [0, 1], and every frame carries the mean confidence of its resolved tokens. The source differs per model, cheap by default:
+
+- **LLaDA:** the softmax probability of the token at the moment it was unmasked (fixed thereafter, since resolved tokens are never revisited).
+- **DiffusionGemma:** a lightweight **stability proxy** by default (how many consecutive steps a position has held the same prediction). Enabling the **Entropy signal** toggle switches to the true max-softmax probability from the model's logits (more faithful, but slower and heavier per step).
+
+After a run, hovering any token shows its position and confidence for that frame, and the **Heatmap** overlay recolors resolved tokens by confidence. Per-frame mean confidence and canvas indices are also persisted for the analytics charts.
+
+### Commit order and counterfactual diff
+
+The frame history also drives two explainability overlays:
+
+- **Commit order** colors each resolved token by *when* it settled into its final value, on a gradient from light green (early) to red-orange (late). This is derived entirely client-side from the recorded frames and exposes the model's resolution trajectory across a run.
+- **Diff vs Original** becomes available after you edit and resume a run. It compares the edited output against a snapshot of the original run, stacking the two with independent opacity sliders and an optional *difference blend* (matching tokens cancel to black, divergences glow), so you can see exactly how an intervention propagated.
+
+### Sampling parameters
+
+**LLaDA**
 
 | Parameter | Description |
 |---|---|
-| Steps | Number of denoising steps. More steps = higher quality, slower generation. |
-| Generation length | Length of the masked canvas (output token count). |
-| Block length | Block size for semi-autoregressive sampling. When < generation length, blocks are generated left-to-right, with diffusion within each block. Set equal to generation length for pure diffusion. |
-| Temperature | Gumbel noise temperature for categorical sampling. 0 = greedy (argmax). |
-| CFG scale | Classifier-free guidance strength. 0 = disabled. Higher values increase prompt adherence. |
+| Steps | Number of denoising steps. More steps generally mean higher quality and slower generation. |
+| Gen Length | Length of the masked canvas (output token count). Must be divisible by Block Length. |
+| Block Length | Block size for semi-autoregressive sampling. When smaller than Gen Length, blocks resolve left-to-right with diffusion inside each block; set equal to Gen Length for pure diffusion. |
+| Temperature | Gumbel noise temperature for categorical sampling. 0 is greedy (argmax). |
+| CFG Scale | Classifier-free guidance strength. 0 disables it; higher values increase prompt adherence. |
+| Seed | Random seed for reproducibility; -1 is nondeterministic. |
 | Remasking | Strategy: `low_confidence` (default, re-mask least confident tokens) or `random`. |
 
+**DiffusionGemma**
+
+| Parameter | Description |
+|---|---|
+| Max Tokens | Output budget. Generation happens in 256-token canvases; larger budgets chain multiple canvases. |
+| Denoising Steps | Upper bound on steps per canvas. Adaptive stopping may use fewer. |
+| Temp Start / Temp End | Endpoints of a linear temperature schedule across the denoising steps (hotter early, cooler late). |
+| Seed | Random seed for reproducibility; -1 is nondeterministic. |
+| Thinking | Enables the step-by-step reasoning channel, shown in a separate panel. |
+| Entropy signal | Computes true per-token confidence from logits for the heatmap (slower, off by default). |
+
 All parameters are configurable in the web UI with recommended bounds enforced by default. An **Experimental** toggle lifts the bounds for exploratory use.
+
+
+## Architecture
+
+The single-model, single-process design has been replaced by a model-agnostic **supervisor plus workers** layout driven by a shared contract.
+
+```
+Browser (shared frontend)
+  |  /ws + /api
+  v
+Supervisor  (.venv, no torch/transformers)
+  - static assets + Analytics API + Save endpoint
+  - Model Manager: spawns/stops one worker, VRAM-exclusive, pre-flight VRAM check
+  - /ws bidirectional proxy to the active worker
+  |
+  |  spawn: <model venv> python -m src.backends.run_worker --model <id>
+  v
+Model Worker  (exactly one alive)
+  - LLaDA worker          .venv          transformers 4.38.2
+  - DiffusionGemma worker .venv-dgemma   transformers 5.13
+```
+
+Why process isolation: LLaDA loads through custom remote modeling that pins `transformers==4.38.2`, while DiffusionGemma requires `transformers` v5. They coexist only in separate virtual environments, and since a single model already saturates the 24 GB GPU, only one worker is ever alive. Switching models stops the current worker (freeing VRAM), runs a pre-flight VRAM check against the target model's requirement, then spawns the next worker and waits for it to report ready (or surfaces a clear error).
+
+The contract lives in `src/backends/`:
+
+- `protocol.py`: typed WebSocket and parameter schema. Per-token shape is `{t, m, id, c?}` where `m` marks an unresolved position and `c` is confidence; each frame also carries optional `canvas_index` and a `mean_conf`, with `total_steps` allowed to be null for adaptive runs.
+- `registry.py`: data-only model registry (id, display name, venv Python, worker module, checkpoint, `min_vram_gib`, capabilities, and the parameter schema). Drives the frontend selector and the dynamic parameter panel.
+- `worker_base.py`: shared worker FastAPI scaffolding (the `/ws` loop, cancel handling, elapsed timing, load-error reporting).
+- `run_worker.py`: generic launcher that imports and serves the selected model's worker module.
 
 
 ## Project Structure
 
 ```
 .
-├── main.py                           # Web server entry point
+├── main.py                           # Supervisor entry point (uvicorn)
+├── requirements.txt                  # .venv: supervisor + LLaDA worker (transformers 4.38.2)
+├── requirements-dgemma.txt           # .venv-dgemma: DiffusionGemma worker (transformers 5.13)
 ├── README.md
-├── requirements.txt
 ├── LICENSE
 ├── src/
+│   ├── backends/
+│   │   ├── protocol.py               # Shared WS/param/model contract
+│   │   ├── registry.py               # Model registry (models, params, capabilities, VRAM)
+│   │   ├── worker_base.py            # Shared worker FastAPI scaffolding
+│   │   ├── run_worker.py             # Generic per-model worker launcher
+│   │   ├── llada_worker.py           # LLaDA backend
+│   │   └── dgemma_worker.py          # DiffusionGemma backend
 │   ├── inference/
 │   │   ├── llada_sampler.py          # Core LLaDA sampling loop + history recording
-│   │   ├── streaming_sampler.py      # Async generator wrapper for live streaming
+│   │   ├── streaming_sampler.py      # LLaDA live streaming + per-token confidence
+│   │   ├── dgemma_sampler.py         # DiffusionGemma live streaming + confidence
+│   │   ├── dgemma_nf4.py             # NF4 (4-bit) MoE-expert quantization
 │   │   └── render_gif.py             # Render diffusion history frames to GIF
 │   ├── analytics/
-│   │   └── metrics.py                # Run parsing and convergence metrics
+│   │   └── metrics.py                # Run parsing, convergence + canvas boundaries
 │   └── web/
-│       ├── server.py                 # FastAPI + WebSocket server
+│       ├── server.py                 # Supervisor: model manager, /ws proxy, analytics, save
 │       └── static/
 │           ├── index.html            # Generator page
 │           ├── style.css             # Dark terminal aesthetic (shared)
-│           ├── app.js                # WebSocket client + frame rendering
+│           ├── app.js                # WebSocket client + frame rendering + heatmap
 │           ├── analytics.html        # Analytics Suite page
 │           ├── analytics.css         # Analytics-specific styles
-│           └── analytics.js          # Analytics charts + run browser
+│           ├── analytics.js          # Analytics charts + run browser
+│           ├── custom_select.js      # Shared in-app dropdown widget
+│           └── ascii_scene.js        # Idle animation
+├── scripts/
+│   ├── quantize_diffusiongemma_nf4.py # Produce the NF4 checkpoint from the bf16 base
+│   ├── spike_diffusiongemma.py       # Standalone load + generate probe
+│   └── ws_smoke_test.py              # End-to-end supervisor/worker smoke test
 ├── Results/                          # Saved runs from the web UI (Save button)
-│   └── <timestamp>_llada/
+│   └── <timestamp>_<model>/
 │       ├── metadata.json
 │       ├── final.txt
 │       ├── history.txt
@@ -74,7 +164,9 @@ All parameters are configurable in the web UI with recommended bounds enforced b
 
 ## Setup
 
-Requires Python 3.10+ and a CUDA GPU (LLaDA-8B in bfloat16 needs ~17 GB VRAM).
+Requires Python 3.10+ and a CUDA GPU. The two models live in separate virtual environments because of their conflicting `transformers` versions.
+
+**Supervisor and LLaDA (`.venv`, transformers 4.38.2):**
 
 ```bash
 python3 -m venv .venv
@@ -82,85 +174,120 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-The model weights (~16 GB) are downloaded automatically from Hugging Face on first run.
+LLaDA weights (~16 GB) download automatically from Hugging Face on first use. The supervisor itself runs in this environment and never imports torch or transformers.
+
+**DiffusionGemma (`.venv-dgemma`, transformers 5.13), optional:**
+
+```bash
+python3 -m venv .venv-dgemma
+.venv-dgemma/bin/pip install -r requirements-dgemma.txt
+```
+
+DiffusionGemma is gated on Hugging Face. Accept its license, download the bf16 base, then produce the local 4-bit checkpoint (only the MoE experts are quantized to NF4, which is what makes it fit in 24 GB):
+
+```bash
+.venv-dgemma/bin/python scripts/quantize_diffusiongemma_nf4.py
+```
+
+This writes the NF4 checkpoint to the path referenced by the registry (`~/models/diffusiongemma-26B-A4B-it-nf4`). If you only want LLaDA, you can skip this environment entirely; the model selector will still list DiffusionGemma but activation will fail gracefully with a clear message.
 
 
 ## Quickstart
 
 ```bash
-python3 main.py
+python3 main.py            # or: python3 main.py --host 0.0.0.0 --port 8000
 ```
 
-Open [http://localhost:8000](http://localhost:8000) in a browser. The model loads in the background (~30 seconds on first run) — a loading overlay shows progress. Once ready, type a prompt, adjust parameters, and click **Generate** to watch the diffusion process stream live.
+Open [http://localhost:8000](http://localhost:8000). Pick a model with the **Model** selector in the header (only one is resident in GPU memory at a time). The worker loads in the background (roughly 30 to 60 seconds on first activation) behind a loading overlay. Once ready, type a prompt, adjust parameters, and click **Generate** to watch the diffusion process stream live.
 
 After a run completes, a **Save** button appears and a **frame scrubber** slides into view below the output area.
 
-#### Interactive remasking
+#### Interactive remasking and resume
 
-The scrubber lets you step through every intermediate frame of the diffusion process. Navigate with the slider, the arrow buttons, or the keyboard (Left / Right arrow keys, Home / End).
+The scrubber steps through every intermediate frame. Navigate with the slider, the arrow buttons, or the keyboard (Left / Right arrows, Home / End). The remasking and resume tools work for LLaDA and for single-canvas DiffusionGemma runs; on multi-canvas DiffusionGemma runs the **Edit Frames** button is disabled (multi-canvas resume is on the roadmap).
 
-**Guided multi-frame editing.** Click **Edit Frames** to enter a guided flow for chaining edits across multiple frames:
+**Guided multi-frame editing.** Click **Edit Frames** to chain edits across one or more frames:
 
-1. **Select a frame** — the scrubber starts at frame 0 and only allows forward navigation. Navigate to the frame you want to edit and click **Select Frame**.
-2. **Remask tokens** — click resolved tokens to remask them (they turn orange). Click again to deselect. When satisfied, click **Lock In**.
+1. **Select a frame:** the scrubber starts at frame 0 and only allows forward navigation. Navigate to the frame you want to edit and click **Select Frame**.
+2. **Remask tokens:** click resolved tokens to remask them (they turn orange). Click again to deselect. When satisfied, click **Lock In**. For LLaDA the tokens are set back to `[MASK]`; for DiffusionGemma they are *renoised*, so committed neighbours may also shift on resume.
 3. **Choose next action:**
-   - **Edit Another Frame** — enters target selection mode. A faded preview of the original run is shown at each frame as a reference, with a note that output will diverge based on your edits. Navigate to the target frame and click **Run to Here**. The model resumes only up to that frame, then places you directly into edit mode on it.
-   - **Resume to End** — resumes the model through all remaining steps to produce the final output.
+   - **Edit Another Frame:** enters target selection mode. A faded preview of the original run is shown at each frame as a reference, noting that output will diverge from your edits. Navigate to the target frame and click **Run to Here**; the model resumes up to that frame and places you into edit mode on it.
+   - **Resume to End:** resumes the model through all remaining steps to produce the final output.
 
-You can chain as many frame edits as you like. Each partial resume generates only the frames between your last edit and the next target, so earlier edits propagate forward through every subsequent segment. The scrubber enforces forward-only navigation — later edits cannot precede earlier ones.
+A single edit followed by **Resume to End** is the simple case; you can also chain as many edits as you like. Each partial resume generates only the frames between your last edit and the next target, so earlier edits propagate forward. The scrubber enforces forward-only navigation; later edits cannot precede earlier ones. Clicking **Exit** discards the in-progress edits and restores the original run. All remask edits (frame indices and token positions) are recorded and saved with the run.
 
-**Quick single-frame remasking.** You can also remask without the guided flow: navigate to any frame, click tokens to remask them, then click **Resume**. Multiple sequential resumes are supported — each extends the frame history.
+#### Visual overlays and settings
 
-All remask edits (frame indices and token positions) are recorded automatically and included in saved metadata.
+A collapsible **Overlay** drawer in the top-right of the output area recolors the frame you are viewing. It defaults to **None** and offers:
+
+- **Heatmap:** recolor resolved tokens by confidence (dim, desaturated tones for low, bright green for high).
+- **Diff vs Original:** compare an edited run against the original. It is listed but disabled until you have edited and resumed a run. When active, a slim control row below the scrubber provides independent **Original** / **Edited** opacity sliders and a **Difference blend** toggle, alongside a `Diverged N/total` readout.
+
+Two persistent preferences live in **Settings** (in the header) and are saved per-browser; the modal stages changes behind **Save** / **Reset** with inline status feedback:
+
+- **Show Commit Order:** tint resolved tokens by the step at which they settled, from light green (early) to red-orange (late), with a matching gradient legend in the status bar.
+- **Highlight tokens:** add a light hover highlight so the full span of the hovered token is easy to see.
+
+The status bar reflects both (`Highlighted Tokens: On/Off`, `Show Commit Order: On/Off`). An explicit overlay selection (Heatmap or Diff) takes precedence; otherwise Commit Order, when enabled, is the ambient tint. Hovering any token still shows its position (`Token X/total` for LLaDA, `Token: X` for DiffusionGemma) and confidence for that frame (masked tokens report 0).
 
 #### Analytics Suite
 
-Click **Analytics** in the header (or navigate to `/analytics.html`) to open the Analytics Suite. It reads saved runs from `Results/` and provides interactive charts for comparing generation behavior across configurations.
+Click **Analytics** in the header (or navigate to `/analytics.html`) to open the Analytics Suite. It reads saved runs from `Results/` and provides interactive charts for comparing behavior across configurations and models.
 
-- **Run browser** — runs are grouped by prompt, step count, or generation length. Select a group and then a specific run to view its details, including prompt, parameters, timestamp, and final output.
-- **Convergence chart** — plots the percentage of resolved (unmasked) tokens at each frame. User remask edits are highlighted as blue segments, and hovering reveals which tokens were remasked.
-- **Timing chart** — plots cumulative elapsed time per frame (accumulates across resumes). Transition segments into remasked frames are highlighted in green. The user's detected GPU is shown in the chart header.
-- **Zoom controls** — both charts support scroll-wheel zoom and +/−/Reset buttons. Tooltips are anchored to the top-left corner to avoid obstructing data lines.
+- **Run browser:** group runs by model, prompt, or any hyperparameter. Select a run to view its model, prompt, hyperparameters, timestamp, and final output. The table shows columns shared across models; model-specific hyperparameters remain in each run's detail panel.
+- **Manage runs:** delete a saved run with the row's trashcan action. A confirmation modal shows the run's folder path (`Results/<timestamp>_<model>`), and a toast confirms the deletion.
+- **Convergence chart:** percentage of resolved tokens per frame. User remask edits are highlighted as blue segments with hover details.
+- **Timing chart:** cumulative elapsed time per frame (accumulates across resumes). Remask transitions are highlighted in green; the detected GPU is shown in the header.
+- **Confidence chart:** mean per-token confidence per frame, which climbs as a canvas converges. Shown for runs saved with confidence data.
+- **Canvas boundaries:** for multi-canvas DiffusionGemma runs, dashed amber markers on the charts mark where one canvas commits and the next begins. Single-canvas runs show none.
+- **Chart controls:** scroll-wheel zoom and +/-/Reset on every chart. Tooltips are kept fully inside the plot area (never spilling onto the axes) and each chart has a toggle to hide/show its tooltip box; when the box would cover a line, the covered segment and the hovered point glow through it.
 
-#### Saving
+#### Saving and reproducibility
 
-Clicking **Save** writes the run results to a timestamped folder under `Results/` containing `metadata.json` (including any remask edits), `final.txt`, `history.txt` (frame-by-frame diffusion snapshots), and `diffusion.gif` (animated visualization).
-
-Optional flags:
-
-```bash
-python3 main.py --host 0.0.0.0 --port 8000
-```
+Clicking **Save** writes a timestamped folder under `Results/` containing `metadata.json`, `final.txt`, `history.txt` (frame-by-frame snapshots), and `diffusion.gif`. The metadata captures the model, prompt, hyperparameters, any remask edits, per-frame timing, canvas indices, mean confidence, and reproducibility info: seed, GPU name, git commit, and the worker's torch/transformers versions.
 
 
 ## Implementation Status
 
-- [x] LLaDA-8B-Instruct model loading (bfloat16, `device_map="auto"`)
-- [x] Iterative masked diffusion sampler with low-confidence remasking
-- [x] Configurable steps, generation length, block length, temperature, CFG, remasking
-- [x] Intermediate frame history recording
-- [x] GIF rendering of the diffusion process
-- [x] Interactive web UI with live diffusion visualization (FastAPI + WebSocket)
-- [x] Recommended parameter bounds with Experimental mode toggle
+- [x] Supervisor plus per-model worker architecture with process isolation (separate venvs)
+- [x] Shared backend contract: protocol, model registry, worker scaffolding, generic launcher
+- [x] Model selector with schema-driven dynamic parameter panel and per-model capabilities
+- [x] LLaDA-8B-Instruct: masked diffusion, low-confidence remasking, CFG, semi-autoregressive blocks
+- [x] DiffusionGemma-26B-A4B: self-quantized NF4 experts, 256-token canvases, adaptive stopping
+- [x] DiffusionGemma thinking (reasoning) channel with split-panel view
+- [x] Live diffusion visualization (FastAPI + WebSocket) with recommended bounds and Experimental mode
 - [x] Real-time client-side validation (bounds, divisibility, negative values)
-- [x] Save run results from the web UI (metadata, history, final text, GIF)
-- [x] Interactive remasking: frame scrubber, click-to-remask tokens, resume diffusion from any frame
-- [x] Guided multi-frame editing: chained edits across multiple frames with partial generation
-- [x] Faded original-run previews during target frame selection
-- [x] Remask edit metadata saved with run results
-- [x] Analytics Suite: run browser, convergence chart, timing chart with GPU detection
-- [x] Convergence chart highlights user remask edits in blue with hover details
-- [x] Timing chart with cumulative elapsed time across resumes, green remask highlights
-- [x] Chart zoom (scroll-wheel + buttons) with non-obstructing tooltip positioning
+- [x] Interactive remasking and resume: frame scrubber, click-to-remask, resume from any frame (LLaDA and single-canvas DiffusionGemma via seed-canvas re-entry)
+- [x] Guided multi-frame editing with faded original-run previews and partial resumes
+- [x] Per-token confidence: softmax at reveal (LLaDA), stability proxy or true entropy (DiffusionGemma)
+- [x] Grouped overlay picker (None / Heatmap / Diff vs Original), per-token hover tooltips, and token-hover highlight option
+- [x] Commit-order (resolution-step) token coloring; counterfactual "Diff vs Original" overlay with opacity sliders and difference blend
+- [x] Persistent per-browser Settings (highlight tokens, commit order) with staged Save/Reset and status-bar readouts
+- [x] Analytics Suite: model-aware run browser, convergence, timing, confidence, canvas-boundary markers
+- [x] Analytics run deletion (confirmation modal + toast) and contained, toggleable chart tooltips with line burn-through
+- [x] Reproducibility metadata (seed, GPU, git commit, library versions) and deterministic seeding
+- [x] Graceful VRAM handling: pre-flight free-memory check and worker load-error reporting
+- [x] Save runs (metadata, history, final text, GIF) with per-frame timing and confidence
 
-### Possible Extensions
 
-- [ ] Alignment with reinforcement learning (RLHF / DPO)
-- [ ] MDM fine-tuning on custom instruction data
+## Roadmap
+
+Detailed, living notes for each item (technical hooks, files to touch, open questions) live in [ROADMAP.md](ROADMAP.md).
+
+**Phase 2 (shipped for single-canvas): DiffusionGemma interactive remask and resume.** Single-canvas runs can now be re-entered via `decoder_input_ids` as a seed canvas: remasked positions are renoised and denoising continues under a reduced step budget. The remaining work is multi-canvas resume, which must target the correct canvas while preserving already-committed prior canvases (encoder-decoder KV-cache and adaptive stopping make this the hard part).
+
+**Phase 3: Multimodal image input.** Requires `AutoProcessor` plus torchvision and additional vision-tower VRAM, so it is deferred until the text foundations are solid.
+
+**Experimental and xAI ideas (open for deliberation).** The suite is shaping up as an explainability playground. Two candidate directions shipped this cycle as overlays: commit-order (resolution-step) coloring and the counterfactual "Diff vs Original" comparison. Future sessions can explore further analysis features, for example top-k alternatives on hover, per-position uncertainty trajectories, cross-model comparisons on identical prompts, or an autoregressive baseline for contrast. These are intentionally open and to be scoped together.
+
+### Possible extensions
+
 - [ ] Side-by-side comparison with autoregressive generation
+- [ ] Alignment experiments (RLHF / DPO) or fine-tuning on custom instruction data
 
 
 ## References
 
 - **LLaDA paper:** Nie et al., "Large Language Diffusion Models," NeurIPS 2025. [arXiv:2502.09992](https://arxiv.org/abs/2502.09992)
 - **LLaDA model:** [GSAI-ML/LLaDA-8B-Instruct](https://huggingface.co/GSAI-ML/LLaDA-8B-Instruct) on Hugging Face
+- **DiffusionGemma model:** [google/diffusiongemma-26B-A4B-it](https://huggingface.co/google/diffusiongemma-26B-A4B-it) on Hugging Face

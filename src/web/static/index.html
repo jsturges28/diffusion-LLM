@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>LLaDA Diffusion Visualizer</title>
+  <title>Diffusion LLM Visualizer</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
@@ -21,9 +21,17 @@
     <!-- Header -->
     <header id="header">
       <h1>
-        <span class="title-accent">LLaDA</span> Diffusion Visualizer
+        <span class="title-accent">Diffusion</span> LLM Visualizer
       </h1>
       <nav id="header-nav">
+        <span class="model-select-label">Model</span>
+        <div id="model-select" class="model-select" tabindex="0"
+          role="button" aria-haspopup="listbox">
+          <span id="model-select-value" class="model-select-value"></span>
+          <span class="model-select-caret" aria-hidden="true">&#9662;</span>
+          <ul id="model-select-list" class="model-select-list"
+            role="listbox" hidden></ul>
+        </div>
         <a href="/analytics.html" class="header-link">Analytics</a>
         <a href="#" id="link-about" class="header-link">About</a>
         <a href="#" id="link-help" class="header-link">Help</a>
@@ -52,74 +60,31 @@
           <span class="toggle-slider"></span>
         </label>
         <span class="toggle-label">Experimental</span>
-        <span class="info-icon" aria-label="Experimental mode info">?
+        <span class="info-icon info-icon-sm" aria-label="Experimental mode info">?
           <span class="tooltip">Removes recommended parameter bounds. Values outside the default range may produce erratic or unstable results.</span>
         </span>
+        <span id="mode-extra"></span>
       </div>
 
       <div id="param-row">
-        <div class="param-group">
-          <label for="param-steps">Steps
-            <span class="param-range" id="range-steps"></span>
-          </label>
-          <input
-            id="param-steps"
-            type="number"
-            step="1" value="128"
-          />
-        </div>
-        <div class="param-group">
-          <label for="param-gen-length">Gen Length
-            <span class="param-range" id="range-gen-length"></span>
-          </label>
-          <input
-            id="param-gen-length"
-            type="number"
-            step="1" value="160"
-          />
-        </div>
-        <div class="param-group">
-          <label for="param-block-length">Block Length
-            <span class="param-range" id="range-block-length"></span>
-          </label>
-          <input
-            id="param-block-length"
-            type="number"
-            step="1" value="160"
-          />
-        </div>
-        <div class="param-group">
-          <label for="param-temperature">Temperature
-            <span class="param-range" id="range-temperature"></span>
-          </label>
-          <input
-            id="param-temperature"
-            type="number"
-            step="0.05" value="0.0"
-          />
-        </div>
-        <div class="param-group">
-          <label for="param-cfg-scale">CFG Scale
-            <span class="param-range" id="range-cfg-scale"></span>
-          </label>
-          <input
-            id="param-cfg-scale"
-            type="number"
-            step="0.1" value="0.0"
-          />
-        </div>
-        <div class="param-group">
-          <label for="param-remasking">Remasking</label>
-          <select id="param-remasking">
-            <option value="low_confidence" selected>Low Confidence</option>
-            <option value="random">Random</option>
-          </select>
-        </div>
+        <div id="param-fields" class="param-fields"></div>
 
         <div class="param-group param-group-btn">
+          <button id="btn-save" class="btn-save" disabled title="Save run" aria-label="Save run">
+            <svg class="save-icon save-icon-arrow" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 3v12" />
+              <path d="M7 10l5 5 5-5" />
+              <path d="M5 20h14" />
+            </svg>
+            <svg class="save-icon save-icon-spinner" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="8" opacity="0.25" />
+              <path d="M12 4 a 8 8 0 0 1 8 8" />
+            </svg>
+            <svg class="save-icon save-icon-check" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M5 13l4 4L19 7" />
+            </svg>
+          </button>
           <button id="btn-generate" disabled>Generate</button>
-          <button id="btn-cancel" class="btn-cancel" hidden>Cancel</button>
-          <button id="btn-save" class="btn-save" hidden disabled>Save</button>
         </div>
       </div>
 
@@ -128,6 +93,22 @@
 
     <!-- Diffusion output area -->
     <section id="output-section">
+      <!-- Visual overlay picker: a drawer that tucks against the
+           top-right edge and slides out when its handle is clicked. -->
+      <div id="overlay-select-group" hidden>
+        <button id="overlay-drawer-handle" type="button"
+          title="Overlay options"
+          aria-label="Toggle overlay options">&lsaquo;</button>
+        <div id="overlay-drawer-content">
+          <span class="overlay-select-label">Overlay</span>
+          <span id="overlay-select-mount"></span>
+          <span id="diff-summary" hidden></span>
+        </div>
+      </div>
+      <details id="thinking-panel" hidden>
+        <summary>Reasoning</summary>
+        <div id="thinking-content"></div>
+      </details>
       <div id="output-area">
         <span id="output-placeholder">
           Diffusion output will appear here...
@@ -146,21 +127,31 @@
         <span id="scrubber-label">Frame 0 / 0</span>
         <button id="btn-edit-frames" class="btn-edit-frames" hidden>Edit Frames</button>
       </div>
-      <div id="remask-controls" hidden>
-        <span id="remask-count">0 tokens selected</span>
-        <button id="btn-clear-remask" class="btn-secondary">Clear</button>
-        <button id="btn-resume" class="btn-resume" disabled>Resume</button>
+      <div id="diff-overlay-controls" hidden>
+        <label class="diff-slider-row">
+          <span class="diff-slider-label diff-orig-label">Original</span>
+          <input type="range" id="diff-original-opacity" min="0" max="100" value="50" />
+        </label>
+        <label class="diff-slider-row">
+          <span class="diff-slider-label diff-edit-label">Edited</span>
+          <input type="range" id="diff-edited-opacity" min="0" max="100" value="100" />
+        </label>
+        <label class="diff-blend-row">
+          <input type="checkbox" id="diff-blend-toggle" />
+          <span>Difference blend</span>
+        </label>
       </div>
       <div id="guided-edit-controls" hidden>
         <span id="guided-edit-status"></span>
-        <span id="guided-edit-count" hidden></span>
-        <button id="btn-select-frame" class="btn-guided" hidden>Select Frame</button>
-        <button id="btn-lock-in" class="btn-lock-in" hidden disabled>&#x1F512; Lock In</button>
-        <button id="btn-clear-guided" class="btn-secondary" hidden>Clear</button>
-        <button id="btn-edit-another" class="btn-guided" hidden>Edit Another Frame</button>
-        <button id="btn-run-to-here" class="btn-guided" hidden>Run to Here</button>
-        <button id="btn-resume-end" class="btn-guided btn-resume-end" hidden>Resume to End</button>
-        <button id="btn-exit-edit" class="btn-secondary">Exit</button>
+        <div id="guided-edit-actions">
+          <button id="btn-select-frame" class="btn-guided" hidden>Select Frame</button>
+          <button id="btn-lock-in" class="btn-lock-in" hidden disabled>&#x1F512; Lock In</button>
+          <button id="btn-clear-guided" class="btn-secondary" hidden>Clear</button>
+          <button id="btn-edit-another" class="btn-guided" hidden>Edit Another Frame</button>
+          <button id="btn-run-to-here" class="btn-guided" hidden>Run to Here</button>
+          <button id="btn-resume-end" class="btn-guided btn-resume-end" hidden>Resume to End</button>
+          <button id="btn-exit-edit" class="btn-secondary">Exit</button>
+        </div>
       </div>
     </section>
 
@@ -168,6 +159,15 @@
     <footer id="status-bar">
       <span id="status-step">Step —/—</span>
       <span id="status-elapsed">Elapsed: —</span>
+      <span id="status-highlight">Highlighted Tokens: Off</span>
+      <span id="status-commit">
+        <span id="status-commit-text">Show Commit Order: Off</span>
+        <span id="commit-legend" hidden>
+          <span class="commit-legend-label">early</span>
+          <span class="commit-legend-bar"></span>
+          <span class="commit-legend-label">late</span>
+        </span>
+      </span>
       <span id="status-message"></span>
     </footer>
   </div>
@@ -176,18 +176,21 @@
   <div id="modal-about" class="modal-overlay hidden">
     <div class="modal-box">
       <button class="modal-close" aria-label="Close">&times;</button>
-      <h2><span class="title-accent">LLaDA</span> Diffusion Visualizer</h2>
+      <h2><span class="title-accent">Diffusion</span> LLM Visualizer</h2>
       <div class="modal-body">
-        <p>This tool visualizes <strong>discrete diffusion language modeling</strong> in real time. Instead of generating text one token at a time (left to right), a diffusion LLM starts with a fully masked sequence and iteratively reveals tokens over many denoising steps.</p>
+        <p>This tool visualizes <strong>discrete diffusion language modeling</strong> in real time. Instead of generating text one token at a time (left to right), a diffusion LLM starts from noise or masked tokens and iteratively refines an entire block over many denoising steps. Use the <strong>Model</strong> selector in the header to switch between the available models (only one is resident in GPU memory at a time).</p>
         <h3>How diffusion LLMs work</h3>
-        <p>The <strong>forward process</strong> corrupts text by independently replacing each token with [MASK] at a rate controlled by a noise schedule. The <strong>reverse process</strong> starts from a fully masked canvas and uses a Transformer with bidirectional attention to predict all masked tokens simultaneously, then re-masks the least confident predictions. This is repeated for <em>N</em> steps until the sequence is fully resolved.</p>
-        <p>The training objective is cross-entropy on masked positions, weighted by 1/<em>t</em>, providing a variational upper bound on negative log-likelihood.</p>
-        <h3>About the model</h3>
-        <p><strong>LLaDA-8B-Instruct</strong> is the first competitive large-scale discrete diffusion language model. It was pre-trained from scratch on 2.3 trillion tokens and fine-tuned on 4.5 million instruction pairs, achieving performance comparable to LLaMA 3 8B on standard benchmarks.</p>
+        <p>The <strong>forward process</strong> corrupts text by independently replacing each token with a placeholder at a rate controlled by a noise schedule. The <strong>reverse process</strong> starts from a corrupted canvas and uses a Transformer with bidirectional attention to predict all positions simultaneously, then re-noises (re-masks) the least confident predictions. This repeats for <em>N</em> steps until the sequence converges. Unresolved positions are shown as <code>░</code> until they stabilize.</p>
+        <h3>Models</h3>
+        <p><strong>LLaDA-8B-Instruct:</strong> the first competitive large-scale discrete diffusion language model, pre-trained on 2.3T tokens and instruction-tuned, comparable to LLaMA 3 8B. It performs masked diffusion over a single canvas with optional semi-autoregressive blocks, runs in bf16 (~17 GB VRAM), and supports interactive remasking / resume.</p>
+        <p><strong>DiffusionGemma-26B-A4B:</strong> Google's block-autoregressive text-diffusion model, a 26B-parameter Mixture-of-Experts (~4B active) built on Gemma 4, run here as a self-quantized 4-bit <strong>NF4</strong> checkpoint (~18 GB VRAM). It denoises 256-token canvases with an entropy-bounded sampler and <em>adaptive stopping</em> (variable step count), chains canvases for longer outputs, and exposes an optional step-by-step <em>reasoning</em> (thinking) channel.</p>
         <p class="modal-links">
-          <a href="https://arxiv.org/abs/2502.09992" target="_blank" rel="noopener">Paper (arXiv)</a>
+          LLaDA:
+          <a href="https://arxiv.org/abs/2502.09992" target="_blank" rel="noopener">Paper</a>
           &middot;
-          <a href="https://huggingface.co/GSAI-ML/LLaDA-8B-Instruct" target="_blank" rel="noopener">Model (Hugging Face)</a>
+          <a href="https://huggingface.co/GSAI-ML/LLaDA-8B-Instruct" target="_blank" rel="noopener">Model</a>
+          &nbsp;|&nbsp; DiffusionGemma:
+          <a href="https://huggingface.co/google/diffusiongemma-26B-A4B-it" target="_blank" rel="noopener">Model</a>
         </p>
       </div>
     </div>
@@ -201,69 +204,121 @@
       <div class="modal-body">
         <h3>Quick start</h3>
         <ol>
+          <li>Pick a model from the <strong>Model</strong> selector in the header. Switching loads that model and unloads the other (only one fits in GPU memory at a time).</li>
           <li>Wait for the model to load (the overlay dismisses automatically).</li>
           <li>Type a prompt in the text area.</li>
-          <li>Adjust parameters if desired, then click <strong>Generate</strong>.</li>
-          <li>Watch the masked canvas (░) resolve into text in real time.</li>
-          <li>Click <strong>Cancel</strong> at any time to halt the program.</li>
+          <li>Adjust hyperparameters if desired, then click <strong>Generate</strong>.</li>
+          <li>Watch the canvas resolve into text in real time; unresolved positions appear as <code>░</code>.</li>
+          <li>While the model runs, <strong>Generate</strong> is disabled and the status bar shows an animated <em>Running&hellip;</em> until the run completes.</li>
         </ol>
-        <h3>Parameters</h3>
+
+        <h3>Models</h3>
+        <dl>
+          <dt>LLaDA-8B-Instruct</dt>
+          <dd>Masked diffusion over a single canvas with optional semi-autoregressive blocks. Supports interactive remasking / resume.</dd>
+          <dt>DiffusionGemma-26B-A4B (NF4)</dt>
+          <dd>Block-autoregressive diffusion over 256-token canvases with adaptive stopping and an optional reasoning channel. Because it denoises canvas-by-canvas with a variable step count, its status readout reads <em>Step X, Canvas Y</em> (the current step and which canvas it belongs to) rather than a fixed step total. Single-canvas runs support interactive remasking / resume (via seed-canvas re-entry); multi-canvas runs do not yet, so <strong>Edit Frames</strong> is disabled for them.</dd>
+        </dl>
+
+        <h3>Hyperparameters</h3>
+        <h4>LLaDA</h4>
         <dl>
           <dt>Steps</dt>
-          <dd>Number of denoising iterations. More steps produce higher quality output but take longer.</dd>
+          <dd>How many denoising iterations run to turn a fully masked canvas into finished text. Each step unmasks a batch of the most confident tokens, so more steps let the model commit more gradually; this usually raises quality but is proportionally slower.</dd>
           <dt>Gen Length</dt>
-          <dd>Number of tokens in the generated output. Must be divisible by Block Length.</dd>
+          <dd>The size of the canvas: how many tokens the output can hold. The whole canvas exists from step 0 (as mask tokens) and is filled in place. Must be divisible by Block Length.</dd>
           <dt>Block Length</dt>
-          <dd>Block size for semi-autoregressive sampling. When smaller than Gen Length, blocks are generated left-to-right with diffusion within each block. Equal to Gen Length for pure diffusion.</dd>
+          <dd>Splits the canvas into left-to-right blocks that are diffused one after another (semi-autoregressive). Smaller blocks trade some parallelism for more left-to-right coherence; setting it equal to Gen Length gives pure, fully-parallel diffusion over the whole canvas.</dd>
           <dt>Temperature</dt>
-          <dd>Gumbel noise temperature for categorical sampling. 0 = greedy (argmax). Higher values increase randomness.</dd>
+          <dd>Controls randomness when sampling each token (via Gumbel noise). 0 is greedy/deterministic (always the argmax); higher values add diversity at the cost of stability.</dd>
           <dt>CFG Scale</dt>
-          <dd>Classifier-free guidance strength. 0 = disabled. Higher values increase adherence to the prompt.</dd>
+          <dd>Classifier-free guidance strength. 0 disables it; higher values push the output to follow the prompt more closely by amplifying the gap between prompt-conditioned and unconditioned predictions.</dd>
+          <dt>Seed</dt>
+          <dd>Fixes the random number generator so a run is reproducible. Use &minus;1 for a fresh, nondeterministic run each time.</dd>
           <dt>Remasking</dt>
-          <dd>Strategy for choosing which tokens to re-mask between steps. <em>Low Confidence</em> re-masks the least confident predictions. <em>Random</em> selects randomly.</dd>
+          <dd>Which tokens get re-masked between steps. <em>Low Confidence</em> keeps the most confident predictions and re-masks the rest (the principled default); <em>Random</em> re-masks arbitrarily, mostly useful for experimentation.</dd>
         </dl>
-        <h3>Interactive remasking</h3>
-        <p>After a generation completes, a <strong>frame scrubber</strong> appears below the output area. Use the slider or <strong>&lsaquo; &rsaquo;</strong> buttons to explore frames. Press <strong>Left / Right arrow keys</strong> or <strong>Home / End</strong> to navigate.</p>
+        <h4>DiffusionGemma</h4>
+        <dl>
+          <dt>Max Tokens</dt>
+          <dd>The output budget. DiffusionGemma generates in fixed 256-token canvases; when this exceeds 256 it chains multiple canvases block-autoregressively, committing one before starting the next.</dd>
+          <dt>Denoising Steps</dt>
+          <dd>The upper bound on denoising iterations per canvas. Thanks to adaptive stopping, a canvas often finishes early, once its predictions stop changing and the model is confident, so simpler prompts run faster than complex ones.</dd>
+          <dt>Temp Start / Temp End</dt>
+          <dd>Endpoints of a linear temperature schedule across the denoising steps. Starting hotter and cooling down lets the model explore broadly early, then sharpen toward a confident answer as the canvas converges.</dd>
+          <dt>Seed</dt>
+          <dd>Fixes the random number generator so a run is reproducible. Use &minus;1 for a fresh, nondeterministic run each time.</dd>
+          <dt>Thinking</dt>
+          <dd>Enables a step-by-step reasoning pass before the answer. When on, the model's private reasoning is separated into a collapsible <em>Reasoning</em> panel above the output, keeping the final answer clean.</dd>
+          <dt>Entropy signal</dt>
+          <dd>Changes how per-token confidence is measured. Off (default), confidence is a fast <em>stability proxy</em>. On, it is the model's true certainty computed from the full output distribution (the max-softmax probability) at each step: more faithful, but slower and heavier, so enable it only when you specifically want to study confidence.</dd>
+        </dl>
+
+        <h3>Confidence &amp; the heatmap</h3>
+        <p>Every resolved token carries a <strong>confidence</strong> value in [0,&nbsp;1], and each frame carries the mean confidence of its resolved tokens. What confidence means depends on the model:</p>
+        <dl>
+          <dt>LLaDA</dt>
+          <dd>The softmax probability of the token at the moment it was unmasked. It is recorded once and stays fixed for the rest of the run, since resolved tokens are never revisited.</dd>
+          <dt>DiffusionGemma</dt>
+          <dd>By default a lightweight <em>stability proxy</em>: how many consecutive steps a position has held the same prediction (so a freshly settled token starts low and climbs as it stays put). Enable <strong>Entropy signal</strong> to instead use the true max-softmax probability from the model's logits.</dd>
+        </dl>
+        <p>After a run, <strong>hover any token</strong> in the output to read its confidence for the current frame; masked / unresolved tokens report&nbsp;0. Select <strong>Heatmap</strong> in the <strong>Overlay</strong> drawer (top-right of the output area) to recolor resolved tokens by confidence: dim, desaturated tones mark low-confidence tokens and bright green marks high-confidence ones. The heatmap is a live view over the frame you are viewing and is not saved. See <em>Visual overlays &amp; settings</em> below for the other overlays.</p>
+
+        <h3>Interactive remasking &amp; resume</h3>
+        <p>After a generation completes, a <strong>frame scrubber</strong> appears below the output area for any model. Use the slider or <strong>&lsaquo; &rsaquo;</strong> buttons to explore frames. Press <strong>Left / Right arrow keys</strong> or <strong>Home / End</strong> to navigate. The remasking / resume tools below work for <strong>LLaDA</strong> and for single-canvas <strong>DiffusionGemma</strong> runs; on multi-canvas DiffusionGemma runs <strong>Edit Frames</strong> is disabled.</p>
 
         <h4>Guided multi-frame editing</h4>
         <p>Click the <strong>Edit Frames</strong> button to enter the guided editing flow:</p>
         <ol>
           <li><strong>Select a frame:</strong> Navigate to the frame you want to edit and click <strong>Select Frame</strong>. The scrubber starts at frame 0 and only allows forward navigation.</li>
-          <li><strong>Remask tokens:</strong> Click resolved tokens to remask them (they turn orange). Click again to deselect. When ready, click <strong>🔒 Lock In</strong>.</li>
+          <li><strong>Remask tokens:</strong> Click resolved tokens to remask them (they turn orange). Click again to deselect. When ready, click <strong>🔒 Lock In</strong>. For LLaDA the tokens are set back to <code>[MASK]</code>; for DiffusionGemma they are <em>renoised</em>, so committed neighbours may also shift on resume.</li>
           <li><strong>Choose next action:</strong>
             <ul>
-              <li><strong>Edit Another Frame</strong> &mdash; enters target selection mode. Navigate to a later frame you want to edit next; a faded preview of the original run is shown at each frame as a reference, with a note that the output will diverge based on your edits. Click <strong>Run to Here</strong> to resume the model up to that frame. You are then placed directly into edit mode on the target frame.</li>
-              <li><strong>Resume to End</strong> &mdash; resumes the model from your last edit through all remaining steps to produce the final output.</li>
+              <li><strong>Edit Another Frame</strong>: enters target selection mode. Navigate to a later frame you want to edit next; a faded preview of the original run is shown at each frame as a reference, with a note that the output will diverge based on your edits. Click <strong>Run to Here</strong> to resume the model up to that frame. You are then placed directly into edit mode on the target frame.</li>
+              <li><strong>Resume to End</strong>: resumes the model from your last edit through all remaining steps to produce the final output.</li>
             </ul>
           </li>
         </ol>
-        <p>You can chain as many frame edits as you like. Each partial resume generates only the frames between your last edit and your next target, so earlier edits propagate forward through every subsequent segment. The scrubber enforces forward-only navigation &mdash; later edits cannot precede earlier ones.</p>
-        <p>Click <strong>Exit</strong> at any time to leave guided editing and return to the normal scrubber.</p>
+        <p>A single edit followed by <strong>Resume to End</strong> is the simplest case; you can also chain as many frame edits as you like. Each partial resume generates only the frames between your last edit and your next target, so earlier edits propagate forward through every subsequent segment. The scrubber enforces forward-only navigation; later edits cannot precede earlier ones.</p>
+        <p>Click <strong>Exit</strong> at any time to leave guided editing; this discards any in-progress edits and restores the original run. All remask edits (frame indices and token positions) are recorded automatically and included in saved results.</p>
 
-        <h4>Quick single-frame remasking</h4>
-        <p>You can also remask tokens without the guided flow. Navigate to any frame, click resolved tokens to remask them, then click <strong>Resume</strong>. This resumes from that frame through all remaining steps. Multiple sequential resumes are supported &mdash; each extends the frame history.</p>
-        <p>All remask edits (frame indices and token positions) are recorded automatically and included in saved results.</p>
+        <h3>Visual overlays &amp; settings</h3>
+        <p>A collapsible <strong>Overlay</strong> drawer in the top-right of the output area recolors the frame you are viewing. It defaults to <strong>None</strong>:</p>
+        <ul>
+          <li><strong>Heatmap</strong>: recolor resolved tokens by confidence (see <em>Confidence &amp; the heatmap</em> above).</li>
+          <li><strong>Diff vs Original</strong>: compare an edited run against the original. It stays listed but disabled until you have edited and resumed a run. When active, a slim row below the scrubber adds independent <strong>Original</strong> / <strong>Edited</strong> opacity sliders and a <strong>Difference blend</strong> toggle (matching tokens cancel to black, divergences glow), plus a <em>Diverged N/total</em> readout.</li>
+        </ul>
+        <p>Two preferences live in <strong>Settings</strong> (in the header) and persist per-browser; the modal stages changes behind <strong>Save</strong> / <strong>Reset</strong> with inline status feedback:</p>
+        <ul>
+          <li><strong>Show Commit Order</strong>: tint resolved tokens by the step at which they settled, from light green (early) to red-orange (late), with a matching gradient legend in the status bar.</li>
+          <li><strong>Highlight tokens</strong>: add a light hover highlight so the full span of the hovered token is easy to see.</li>
+        </ul>
+        <p>The status bar shows both (<em>Highlighted Tokens: On/Off</em>, <em>Show Commit Order: On/Off</em>). An explicit overlay selection (Heatmap or Diff) takes precedence; otherwise Commit Order, when enabled, is the ambient tint.</p>
 
         <h3>Analytics Suite</h3>
         <p>Click <strong>Analytics</strong> in the header to open the Analytics Suite. It reads saved runs from the <code>Results/</code> directory and provides interactive charts for comparing generation behavior across configurations.</p>
         <h4>Run browser</h4>
-        <p>Runs are grouped by prompt, step count, or generation length using the <strong>Group by</strong> dropdown. Select a group, then select a specific run to view its details. Each run card shows the prompt, parameters, timestamp, and final output text.</p>
+        <p>Runs can be grouped by <strong>model</strong>, prompt, or any hyperparameter using the <strong>Group by</strong> dropdown (default: <em>Date</em>, i.e. ungrouped and sorted newest-first). Select a run to view its details, including the model, prompt, hyperparameters, timestamp, and final output. The table shows columns shared across models; model-specific hyperparameters stay in the detail panel. To remove a run, click its <strong>trashcan</strong> action: a confirmation modal shows the run's folder path (<code>Results/&lt;timestamp&gt;_&lt;model&gt;</code>) and a toast confirms the deletion.</p>
         <h4>Convergence chart</h4>
         <p>Plots the percentage of resolved (unmasked) tokens at each frame. The curve shows how quickly the model commits to its output. If the run includes user remask edits, the transition segments leading into edited frames are highlighted in <strong style="color:#4fc3f7;">blue</strong>, and hovering reveals which token positions were remasked.</p>
         <h4>Timing chart</h4>
         <p>Plots cumulative elapsed time per frame. Time accumulates across resume operations so the chart shows total wall-clock cost. Transition segments into remasked frames are highlighted in <strong style="color:#00ff41;">green</strong>. The detected GPU is displayed in the chart header.</p>
+        <h4>Confidence chart</h4>
+        <p>Plots the mean per-token confidence at each frame, which typically climbs toward 100% as a canvas converges. This makes DiffusionGemma's <em>adaptive stopping</em> visible: confidence rises and then a canvas commits. Shown only for runs saved with confidence data.</p>
+        <h4>Canvas boundaries</h4>
+        <p>For multi-canvas DiffusionGemma runs, dashed <strong style="color:#ffb400;">amber</strong> markers on the convergence, timing, and confidence charts mark the frames where one canvas commits and the next begins. Single-canvas runs (including all LLaDA runs) show no markers.</p>
         <h4>Chart controls</h4>
-        <p>Both charts support <strong>scroll-wheel zoom</strong> and <strong>+</strong> / <strong>&minus;</strong> / <strong>Reset</strong> buttons for zooming and resetting the view. Tooltips are anchored to the top-left corner to avoid obstructing data lines.</p>
+        <p>Every chart supports <strong>scroll-wheel zoom</strong> and <strong>+</strong> / <strong>&minus;</strong> / <strong>Reset</strong> buttons for zooming and resetting the view. Tooltips are kept fully inside the plot area (never spilling onto the axes), and each chart has an <strong>eye</strong> toggle to hide/show its tooltip box; when the box would cover a line, the covered segment and the hovered point glow through it.</p>
 
         <h3>Saving results</h3>
-        <p>After a generation completes, a <strong>Save</strong> button appears next to the controls. Clicking it saves the run to a timestamped folder under <code>Results/</code> containing:</p>
+        <p>The <strong>Save</strong> button (the down-arrow icon to the left of <strong>Generate</strong>) becomes enabled once a run completes. Clicking it saves the run to a timestamped folder under <code>Results/</code> containing:</p>
         <ul>
-          <li><strong>metadata.json</strong> — prompt, parameters, final output text, and any remask edits.</li>
-          <li><strong>final.txt</strong> — the decoded final text.</li>
-          <li><strong>history.txt</strong> — frame-by-frame snapshots of the diffusion process.</li>
-          <li><strong>diffusion.gif</strong> — an animated GIF visualizing the denoising progression.</li>
+          <li><strong>metadata.json:</strong> prompt, hyperparameters, final output text, reproducibility info, and any remask edits.</li>
+          <li><strong>final.txt:</strong> the decoded final text.</li>
+          <li><strong>history.txt:</strong> frame-by-frame snapshots of the diffusion process.</li>
+          <li><strong>diffusion.gif:</strong> an animated GIF visualizing the denoising progression.</li>
         </ul>
-        <p>The button is disabled during generation and after a successful save to prevent duplicates. Starting a new generation resets it.</p>
+        <p>It is disabled during generation and after a successful save (to prevent duplicates); while saving it shows a spinner, then a brief checkmark. Starting a new generation resets it.</p>
         <h3>Experimental mode</h3>
         <p>The toggle above the parameter controls removes the recommended bounds, allowing extreme values for exploratory purposes. The default bounds represent the range that produces more consistent, stable results.</p>
       </div>
@@ -277,12 +332,34 @@
       <h2>Settings</h2>
       <div class="modal-body">
         <div class="settings-row">
-          <label for="select-idle-display">Idle Display</label>
-          <select id="select-idle-display">
-            <option value="default" selected>Default (ASCII Scene)</option>
-            <option value="donut">donut.c (Spinning Torus)</option>
-          </select>
+          <label>Idle Display</label>
+          <span id="idle-display-mount"></span>
         </div>
+        <div class="settings-row">
+          <div class="settings-label-group">
+            <label>Highlight tokens</label>
+            <span class="settings-desc">Softly highlights the full span of the token under your cursor while scrubbing frames. Applies to any view.</span>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="setting-highlight-tokens" />
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="settings-row">
+          <div class="settings-label-group">
+            <label>Show Commit Order</label>
+            <span class="settings-desc">Tints resolved tokens by the denoising step they settled on (light green = early, red-orange = late), when no other overlay is selected.</span>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="setting-commit-order" />
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <span id="settings-status" hidden></span>
+        <button id="btn-settings-reset" class="btn-secondary" disabled>Reset</button>
+        <button id="btn-settings-save" class="btn-settings-save" disabled>Save</button>
       </div>
     </div>
   </div>
@@ -291,7 +368,7 @@
   <div id="loading-overlay">
     <div id="loading-content">
       <div class="spinner"></div>
-      <p>Loading LLaDA-8B-Instruct model...</p>
+      <p id="loading-text">Loading model…</p>
       <p class="loading-sub">
         This may take ~30 seconds on first run.
       </p>
@@ -299,6 +376,7 @@
   </div>
 
   <script src="/ascii_scene.js"></script>
+  <script src="/custom_select.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
