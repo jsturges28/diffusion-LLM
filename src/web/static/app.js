@@ -179,6 +179,10 @@ var btnRunToHere =
   document.getElementById("btn-run-to-here");
 var btnResumeEnd =
   document.getElementById("btn-resume-end");
+var btnConfirmEdit =
+  document.getElementById("btn-confirm-edit");
+var btnRetryEdit =
+  document.getElementById("btn-retry-edit");
 var btnExitEdit =
   document.getElementById("btn-exit-edit");
 
@@ -214,9 +218,17 @@ var remaskEdits = [];
 
 // Guided multi-frame edit mode state.
 // null | "select" | "edit" | "choice"
-//      | "select_target" | "generating"
+//      | "select_target" | "generating" | "review"
 var remaskMode = null;
 var remaskModeEdits = [];
+// True once an edited run has been saved. Locks Edit Frames for the
+// current run (until the next Generate) so a run cannot accrue a
+// second, conflicting saved edit.
+var editedRunSaved = false;
+// True once the current run has been saved at least once (manually or
+// via the Edit Frames auto-save). Prevents entering an edit session
+// from duplicating the original run's saved entry.
+var runSaved = false;
 // Snapshot of the complete run taken when Edit Frames is entered.
 // Partial resumes ("Run to Here") truncate the live run mid-way, so
 // exiting restores this to avoid stranding the user on an
@@ -1200,13 +1212,7 @@ function renderFinalText(text) {
   outputArea.appendChild(span);
 }
 
-// Map confidence in [0,1] to a green intensity for the heatmap.
-function heatColor(c) {
-  var clamped = Math.max(0, Math.min(1, c));
-  var sat = Math.round(35 + 55 * clamped);
-  var light = Math.round(32 + 30 * clamped);
-  return "hsl(135, " + sat + "%, " + light + "%)";
-}
+// heatColor now lives in overlays.js (shared with Analytics).
 
 // Per-position commit step for the current run: the step after
 // which a position last changed to its final value. Derived
@@ -1216,110 +1222,26 @@ function heatColor(c) {
 // at the last frame get -1 (left uncolored). Result is memoized
 // in commitSteps and invalidated whenever frameTokens changes.
 function computeCommitSteps() {
-  var frameCount = frameTokens.length;
-  if (frameCount === 0) {
-    return [];
-  }
-  var finalTokens = frameTokens[frameCount - 1];
-  if (!finalTokens) {
-    return [];
-  }
-  var width = finalTokens.length;
-  var steps = new Array(width);
-  for (var i = 0; i < width; i++) {
-    var finalTok = finalTokens[i];
-    if (!finalTok || finalTok.m) {
-      steps[i] = -1;
-      continue;
-    }
-    var finalId = finalTok.id;
-    var settle = 0;
-    for (var f = 0; f < frameCount; f++) {
-      var ft = frameTokens[f];
-      if (!ft || i >= ft.length) {
-        continue;
-      }
-      var tk = ft[i];
-      if (!tk || tk.id !== finalId) {
-        settle = f + 1;
-      }
-    }
-    steps[i] = settle;
-  }
-  return steps;
+  return overlaysComputeCommitSteps(frameTokens);
 }
 
-// Map a commit step to an early->late hue: early settles read
-// light green, late settles read red-orange. maxStep normalizes to
-// the run length so the scale means "early vs late in the run".
-function commitColor(step, maxStep) {
-  var frac = maxStep > 0 ? step / maxStep : 0;
-  frac = Math.max(0, Math.min(1, frac));
-  var hue = Math.round(130 - 115 * frac);
-  var sat = Math.round(60 + 22 * frac);
-  var light = Math.round(62 - 10 * frac);
-  return "hsl(" + hue + ", " + sat + "%, " + light + "%)";
-}
+// commitColor now lives in overlays.js (shared with Analytics).
 
 // Compare the branch's final frame against the retained original
 // run's final frame, position-aligned on the shared canvas. Returns
 // per-position change flags, the original display text (for
 // tooltips), the remask-origin positions, and a divergence summary.
 function computeDiff() {
-  var result = {
-    changed: [],
-    origText: [],
-    origins: {},
-    changedCount: 0,
-    totalCount: 0,
-  };
   var cur = frameTokens.length
     ? frameTokens[frameTokens.length - 1]
     : null;
   var orig = originalFrameTokens.length
     ? originalFrameTokens[originalFrameTokens.length - 1]
     : null;
-  if (!cur || !orig) {
-    return result;
-  }
-  for (var e = 0; e < remaskEdits.length; e++) {
-    var positions = remaskEdits[e].token_positions || [];
-    for (var p = 0; p < positions.length; p++) {
-      result.origins[positions[p]] = true;
-    }
-  }
-  var width = Math.min(cur.length, orig.length);
-  for (var i = 0; i < width; i++) {
-    var c = cur[i];
-    var o = orig[i];
-    var cResolved = !!c && !c.m;
-    var oResolved = !!o && !o.m;
-    var changed = false;
-    if (cResolved && oResolved) {
-      result.totalCount++;
-      changed = c.id !== o.id;
-    } else if (cResolved !== oResolved) {
-      result.totalCount++;
-      changed = true;
-    }
-    if (changed) {
-      result.changedCount++;
-    }
-    result.changed[i] = changed;
-    result.origText[i] = o ? (o.m ? MASK_CHAR : o.t) : "";
-  }
-  return result;
+  return overlaysComputeDiff(cur, orig, remaskEdits);
 }
 
-// Divergence coloring: changed tokens glow magenta, unchanged
-// tokens fade to a dim neutral so the intervention's footprint
-// stands out.
-function diffColor(changed) {
-  if (changed) {
-    return "hsl(320, 80%, 66%)";
-  }
-  return "hsl(0, 0%, 45%)";
-}
+// diffColor now lives in overlays.js (shared with Analytics).
 
 // Palette for the diff-overlay layers. The original layer is cyan in
 // ghost mode (blend off); with "Difference blend" on it adopts the
@@ -1888,6 +1810,21 @@ function runIsMultiCanvas() {
   return false;
 }
 
+// Reflect the "already saved an edit" lock on the Edit Frames button:
+// greyed out and non-interactive with an explanatory tooltip, until
+// the next Generate clears the lock.
+function updateEditFramesLock() {
+  if (editedRunSaved) {
+    btnEditFrames.classList.add("is-locked");
+    btnEditFrames.title =
+      "This run already has a saved edit."
+      + " Generate again to edit a new run.";
+  } else {
+    btnEditFrames.classList.remove("is-locked");
+    btnEditFrames.removeAttribute("title");
+  }
+}
+
 function activateScrubber() {
   if (frameHistory.length < 2) {
     return;
@@ -1910,6 +1847,7 @@ function activateScrubber() {
     && activeModel.capabilities.supports_resume
     && !runIsMultiCanvas()
   );
+  updateEditFramesLock();
   overlayMode = "none";
   resetDiffOverlay();
   buildOverlaySelect();
@@ -2089,7 +2027,41 @@ function lockScrubberNav() {
   scrubberSlider.disabled = true;
 }
 
+// Freeze scrubber navigation + Select Frame while a save is in flight
+// (e.g. the Edit Frames auto-save), so nothing races the snapshot.
+// Exit is intentionally left interactive.
+function setSavingControls(saving) {
+  var disabled = !!saving;
+  scrubberSlider.disabled = disabled;
+  btnScrubStart.disabled = disabled;
+  btnScrubPrev.disabled = disabled;
+  btnScrubNext.disabled = disabled;
+  btnScrubEnd.disabled = disabled;
+  btnSelectFrame.disabled = disabled;
+}
+
+// Edit Frames entry point. The current run is the "original": if it
+// has not been saved yet, save it now so an unsaved original is never
+// lost once the edited run is saved. Editing an original implies you
+// want to keep it, so this makes the save implicit.
 function enterRemaskMode() {
+  // Gated once an edited run has been saved for this generation.
+  if (btnEditFrames.classList.contains("is-locked")) {
+    return;
+  }
+  // Enter edit mode first, then auto-save the original: saving last
+  // means its control-freeze (setSavingControls) is not immediately
+  // undone by the edit-session UI setup.
+  beginEditSession();
+  if (!runSaved) {
+    saveRun();
+  }
+}
+
+// Start a fresh edit session on the current run (no save). Shared by
+// Edit Frames (after its auto-save) and Retry (which reuses the
+// already-saved original), keeping the save decoupled from re-entry.
+function beginEditSession() {
   captureEditSnapshot();
   remaskMode = "select";
   scrubberMinFrame = 0;
@@ -2098,6 +2070,7 @@ function enterRemaskMode() {
   clearRemaskedPositions();
 
   scrubberSlider.min = "0";
+  scrubberSlider.max = String(frameHistory.length - 1);
   btnEditFrames.hidden = true;
   guidedEditControls.hidden = false;
   if (overlaySelectGroup) {
@@ -2142,11 +2115,14 @@ function updateGuidedUI() {
   // status text sits on the left (flex:1) and the action cluster is
   // right-anchored, so the text never shifts as buttons change.
   btnSelectFrame.hidden = true;
+  btnSelectFrame.disabled = false;
   btnLockIn.hidden = true;
   btnClearGuided.hidden = true;
   btnEditAnother.hidden = true;
   btnRunToHere.hidden = true;
   btnResumeEnd.hidden = true;
+  btnConfirmEdit.hidden = true;
+  btnRetryEdit.hidden = true;
 
   if (remaskMode === null) {
     guidedEditControls.hidden = true;
@@ -2214,6 +2190,32 @@ function updateGuidedUI() {
         "Generating\u2026";
       lockScrubberNav();
       break;
+
+    case "review":
+      scrubberSlider.disabled = false;
+      scrubberSlider.min = "0";
+      scrubberSlider.max =
+        String(frameHistory.length - 1);
+      unlockScrubberNav();
+      if (currentScrubFrame === frameHistory.length - 1) {
+        guidedEditStatus.textContent =
+          "Edit complete \u2014 confirm to save, or"
+          + " retry from the start.";
+        btnConfirmEdit.hidden = false;
+        btnRetryEdit.hidden = false;
+      } else {
+        guidedEditStatus.textContent =
+          "Reviewing edited run \u2014 return to the last"
+          + " frame to confirm or retry.";
+      }
+      break;
+  }
+
+  // A save in flight (e.g. the Edit Frames auto-save) overrides the
+  // per-mode state: freeze navigation until it completes.
+  if (isSaving) {
+    lockScrubberNav();
+    btnSelectFrame.disabled = true;
   }
 }
 
@@ -2323,9 +2325,55 @@ function handleGuidedDone() {
     renderFrameWithTokens(target);
     updateGuidedUI();
   } else {
-    resetGuidedMode();
-    activateScrubber();
+    enterReviewMode();
   }
+}
+
+// Resume-to-End finished: rather than dropping straight back to the
+// plain scrubber, stay in guided editing at the final frame so the
+// user must explicitly Confirm (save) or Retry (redo). Navigation
+// stays enabled so the result can be inspected; only the final frame
+// exposes the Confirm/Retry actions.
+function enterReviewMode() {
+  guidedResumeAction = null;
+  guidedTargetFrame = null;
+  remaskedPositions = {};
+  perFrameRemasked = {};
+  remaskMode = "review";
+  scrubberActive = true;
+  scrubberSection.hidden = false;
+  guidedEditControls.hidden = false;
+  btnEditFrames.hidden = true;
+  if (overlaySelectGroup) {
+    overlaySelectGroup.hidden = true;
+  }
+  currentScrubFrame = frameHistory.length - 1;
+  scrubberSlider.min = "0";
+  scrubberSlider.max = String(frameHistory.length - 1);
+  scrubberSlider.value = String(currentScrubFrame);
+  scrubberSlider.disabled = false;
+  unlockScrubberNav();
+  updateScrubberLabel();
+  renderFrameWithTokens(currentScrubFrame);
+  updateGuidedUI();
+}
+
+// Confirm the reviewed edit: trigger a save (as the Save button
+// would), then leave guided editing. The save-success handler locks
+// Edit Frames so the run cannot accrue a second, conflicting edit.
+function confirmGuidedEdit() {
+  saveRun();
+  resetGuidedMode();
+  activateScrubber();
+}
+
+// Retry: discard this session's edits and restart editing from frame
+// 0. Reuses the already-saved original, so (unlike Edit Frames) it
+// does not trigger another save.
+function retryGuidedEdit() {
+  restoreEditSnapshot();
+  resetGuidedMode();
+  beginEditSession();
 }
 
 // ---- UI state helpers ----
@@ -2447,6 +2495,9 @@ function startGeneration() {
   originalFrameTokens = [];
   remaskEdits = [];
   perFrameRemasked = {};
+  editedRunSaved = false;
+  runSaved = false;
+  updateEditFramesLock();
   resetGuidedMode();
   isResuming = false;
   resumeFrameOffset = 0;
@@ -2468,6 +2519,32 @@ function startGeneration() {
   ws.send(JSON.stringify(payload));
 }
 
+// Project in-memory frame token objects into the persisted record
+// shape {t, m, id, c?}. Confidence is included only when present
+// (masked positions carry none), mirroring the live protocol so a
+// saved run can drive the durable analytics overlays.
+function tokenRecordsFrom(frames) {
+  var out = [];
+  for (var fi = 0; fi < frames.length; fi++) {
+    var ft = frames[fi];
+    if (!ft) {
+      out.push(null);
+      continue;
+    }
+    var records = [];
+    for (var ti = 0; ti < ft.length; ti++) {
+      var tok = ft[ti];
+      var record = { t: tok.t, m: !!tok.m, id: tok.id };
+      if (typeof tok.c === "number") {
+        record.c = tok.c;
+      }
+      records.push(record);
+    }
+    out.push(records);
+  }
+  return out;
+}
+
 function saveRun() {
   if (isSaving) {
     return;
@@ -2481,6 +2558,7 @@ function saveRun() {
 
   isSaving = true;
   btnSave.disabled = true;
+  setSavingControls(true);
   if (saveCheckTimer !== null) {
     clearTimeout(saveCheckTimer);
     saveCheckTimer = null;
@@ -2494,19 +2572,9 @@ function saveRun() {
     ? perFrameElapsed[perFrameElapsed.length - 1]
     : null;
 
-  var tokenIds = [];
-  for (var fi = 0; fi < frameTokens.length; fi++) {
-    var ft = frameTokens[fi];
-    if (ft) {
-      var ids = [];
-      for (var ti = 0; ti < ft.length; ti++) {
-        ids.push(ft[ti].id);
-      }
-      tokenIds.push(ids);
-    } else {
-      tokenIds.push(null);
-    }
-  }
+  // Captured now so the async success handler locks Edit Frames only
+  // when the saved run actually carried edits.
+  var wasEdited = remaskEdits.length > 0;
 
   var payload = {
     model: activeModelId,
@@ -2516,13 +2584,19 @@ function saveRun() {
     final_text: lastFinalText,
     elapsed_seconds: totalElapsed,
     per_frame_elapsed: perFrameElapsed.slice(),
-    frame_token_ids: tokenIds,
+    frame_tokens: tokenRecordsFrom(frameTokens),
     canvas_index: frameCanvasIndex.slice(),
     mean_conf: frameMeanConf.slice(),
   };
 
   if (remaskEdits.length > 0) {
     payload.remask_edits = remaskEdits;
+    // Persist the pre-edit snapshot so the counterfactual diff is
+    // reviewable post-hoc (only meaningful for edited runs).
+    if (originalFrameTokens.length > 0) {
+      payload.original_frame_tokens =
+        tokenRecordsFrom(originalFrameTokens);
+    }
   }
 
   fetch("/api/save", {
@@ -2538,6 +2612,8 @@ function saveRun() {
     .then(function (result) {
       isSaving = false;
       btnSave.classList.remove("is-saving");
+      setSavingControls(false);
+      updateGuidedUI();
       if (result.success) {
         // Flash a glowing check for half a second, then revert to
         // the (disabled) arrow. It stays disabled to prevent a
@@ -2547,6 +2623,15 @@ function saveRun() {
           btnSave.classList.remove("is-saved");
           saveCheckTimer = null;
         }, 500);
+        runSaved = true;
+        if (wasEdited) {
+          editedRunSaved = true;
+        }
+        updateEditFramesLock();
+        // Persist the saved state (incl. the saved/edited flags) so a
+        // round-trip to Analytics and back keeps Edit Frames and Save
+        // correctly locked.
+        saveSessionState();
         statusMessage.textContent =
           "Saved to " + result.path;
         statusMessage.style.color =
@@ -2563,6 +2648,8 @@ function saveRun() {
     .catch(function (error) {
       isSaving = false;
       btnSave.classList.remove("is-saving", "is-saved");
+      setSavingControls(false);
+      updateGuidedUI();
       btnSave.disabled = false;
       statusMessage.textContent =
         "Save failed: " + error.message;
@@ -2841,6 +2928,14 @@ btnResumeEnd.addEventListener(
   }
 );
 
+btnConfirmEdit.addEventListener(
+  "click", confirmGuidedEdit
+);
+
+btnRetryEdit.addEventListener(
+  "click", retryGuidedEdit
+);
+
 btnExitEdit.addEventListener(
   "click", exitRemaskMode
 );
@@ -2874,7 +2969,7 @@ outputArea.addEventListener(
 document.addEventListener(
   "keydown",
   function (e) {
-    if (!scrubberActive || isGenerating) {
+    if (!scrubberActive || isGenerating || isSaving) {
       return;
     }
     if (
@@ -3061,6 +3156,8 @@ function saveSessionState() {
         : "",
     remaskEdits: remaskEdits,
     originalTotalFrames: originalTotalFrames,
+    editedRunSaved: editedRunSaved,
+    runSaved: runSaved,
     statusStep: statusStep.textContent,
     statusElapsed: statusElapsed.textContent,
     statusMessage: statusMessage.textContent,
@@ -3135,6 +3232,8 @@ function restoreSessionState() {
     s.originalTotalFrames || frameHistory.length;
   originalFrameHistory = s.originalFrameHistory || [];
   originalFrameTokens = s.originalFrameTokens || [];
+  editedRunSaved = !!s.editedRunSaved;
+  runSaved = !!s.runSaved;
   if (s.prompt) {
     promptInput.value = s.prompt;
   }
@@ -3148,7 +3247,10 @@ function restoreSessionState() {
       thinkingPanel.hidden = true;
     }
   }
-  setSaveAvailable(true);
+  // A run already saved (or saved+edited) has nothing left to save,
+  // so keep Save disabled; activateScrubber re-applies the Edit
+  // Frames lock from the restored editedRunSaved flag.
+  setSaveAvailable(!runSaved);
   activateScrubber();
 
   // Restore the footer readouts (Step / Elapsed / message) so the

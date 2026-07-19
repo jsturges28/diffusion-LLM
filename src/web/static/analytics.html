@@ -12,8 +12,8 @@
   <link
     href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&display=swap"
     rel="stylesheet" />
-  <link rel="stylesheet" href="/style.css" />
-  <link rel="stylesheet" href="/analytics.css" />
+  <link rel="stylesheet" href="/style.css?v=3" />
+  <link rel="stylesheet" href="/analytics.css?v=3" />
 </head>
 <body>
   <div id="bg-grid"></div>
@@ -26,7 +26,18 @@
         LLM Analytics
       </h1>
       <nav id="header-nav">
-        <a href="/" class="header-link">Generator</a>
+        <a href="/" class="header-link header-back-link"
+          title="Go back to Generation"
+          aria-label="Go back to Generation">
+          <svg viewBox="0 0 24 24" width="16" height="16"
+            fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round"
+            aria-hidden="true">
+            <path d="M14 21h5a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-5" />
+            <polyline points="9 8 4 12 9 16" />
+            <line x1="4" y1="12" x2="15" y2="12" />
+          </svg>
+        </a>
         <span class="header-link-sep">|</span>
         <span class="header-link header-link-active">
           Analytics
@@ -68,6 +79,10 @@
                   data-key="elapsed_seconds">Time</th>
                 <th class="sortable"
                   data-key="created_at">Date</th>
+                <th class="sortable col-hasdiff"
+                  data-key="has_diff"
+                  title="Has a saved original run for a Diff vs Original comparison">
+                  Diff vs Original?</th>
                 <th class="col-actions"></th>
               </tr>
             </thead>
@@ -81,86 +96,126 @@
         </p>
       </section>
 
-      <!-- Detail / charts panel -->
-      <section id="detail-panel" hidden>
-        <div id="detail-header">
+      <!-- Detail / charts modal (opens on row click, like About/Help) -->
+      <div id="detail-modal" class="modal-overlay hidden">
+        <div class="modal-box modal-box-lg">
+          <button class="modal-close" id="btn-close-detail"
+            aria-label="Close">&times;</button>
           <h2 id="detail-title">Run Details</h2>
-          <button id="btn-close-detail"
-            class="btn-icon" title="Close">&times;
-          </button>
-        </div>
+          <div class="detail-modal-body">
 
-        <div id="detail-meta"></div>
-
-        <div class="chart-section">
-          <div class="chart-header-row">
-            <h3>Convergence</h3>
-            <div class="zoom-controls">
-              <button class="zoom-btn tooltip-toggle-btn" data-chart="convergence"
-                title="Toggle tooltip box" aria-label="Toggle tooltip box">
-                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" /><circle cx="12" cy="12" r="3" /><line class="eye-slash" x1="3" y1="3" x2="21" y2="21" /></svg>
-              </button>
-              <button class="zoom-btn" data-chart="convergence"
-                data-action="in" title="Zoom in">+</button>
-              <button class="zoom-btn" data-chart="convergence"
-                data-action="out" title="Zoom out">&minus;</button>
-              <button class="zoom-btn" data-chart="convergence"
-                data-action="reset" title="Reset zoom">&#8634;</button>
+            <!-- Token overlay: the centerpiece canvas (left). -->
+            <div class="detail-main">
+              <section id="overlay-viewer" hidden>
+                <div id="overlay-viewer-header">
+                  <h3>Token overlay</h3>
+                  <div id="overlay-legend"
+                    class="overlay-legend" hidden>
+                    <span>early</span>
+                    <span class="overlay-legend-bar"></span>
+                    <span>late</span>
+                  </div>
+                </div>
+                <!-- Bordered canvas; the overlay drawer tucks into
+                     its top-right corner, like the generator's. -->
+                <div id="overlay-output-wrap">
+                  <div id="overlay-select-group" hidden>
+                    <button id="overlay-drawer-handle" type="button"
+                      title="Overlay options"
+                      aria-label="Toggle overlay options">&lsaquo;</button>
+                    <div id="overlay-drawer-content">
+                      <span class="overlay-select-label">Overlay</span>
+                      <span id="overlay-select-mount"></span>
+                      <span id="overlay-readout" hidden></span>
+                    </div>
+                  </div>
+                  <div id="overlay-empty" class="overlay-empty" hidden>
+                    Token overlays are not available for this run
+                    (saved before durable overlays were added, or no
+                    token data).
+                  </div>
+                  <div id="overlay-output"></div>
+                </div>
+              </section>
             </div>
-          </div>
-          <div class="chart-wrap">
-            <canvas id="chart-convergence"></canvas>
-          </div>
-        </div>
 
-        <div class="chart-section" id="timing-section"
-          hidden>
-          <div class="chart-header-row">
-            <h3>
-              Timing
-              <span id="gpu-label" class="gpu-label"></span>
-            </h3>
-            <div class="zoom-controls">
-              <button class="zoom-btn tooltip-toggle-btn" data-chart="timing"
-                title="Toggle tooltip box" aria-label="Toggle tooltip box">
-                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" /><circle cx="12" cy="12" r="3" /><line class="eye-slash" x1="3" y1="3" x2="21" y2="21" /></svg>
-              </button>
-              <button class="zoom-btn" data-chart="timing"
-                data-action="in" title="Zoom in">+</button>
-              <button class="zoom-btn" data-chart="timing"
-                data-action="out" title="Zoom out">&minus;</button>
-              <button class="zoom-btn" data-chart="timing"
-                data-action="reset" title="Reset zoom">&#8634;</button>
-            </div>
-          </div>
-          <div class="chart-wrap">
-            <canvas id="chart-timing"></canvas>
-          </div>
-        </div>
+            <!-- Run info + charts (right column). -->
+            <div class="detail-side">
+              <div id="detail-meta"></div>
 
-        <div class="chart-section" id="confidence-section"
-          hidden>
-          <div class="chart-header-row">
-            <h3>Confidence</h3>
-            <div class="zoom-controls">
-              <button class="zoom-btn tooltip-toggle-btn" data-chart="confidence"
-                title="Toggle tooltip box" aria-label="Toggle tooltip box">
-                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" /><circle cx="12" cy="12" r="3" /><line class="eye-slash" x1="3" y1="3" x2="21" y2="21" /></svg>
-              </button>
-              <button class="zoom-btn" data-chart="confidence"
-                data-action="in" title="Zoom in">+</button>
-              <button class="zoom-btn" data-chart="confidence"
-                data-action="out" title="Zoom out">&minus;</button>
-              <button class="zoom-btn" data-chart="confidence"
-                data-action="reset"
-                title="Reset zoom">&#8634;</button>
+              <div class="chart-section">
+                <div class="chart-header-row">
+                  <h3>Convergence</h3>
+                  <div class="zoom-controls">
+                    <button class="zoom-btn tooltip-toggle-btn" data-chart="convergence"
+                      title="Toggle tooltip box" aria-label="Toggle tooltip box">
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" /><circle cx="12" cy="12" r="3" /><line class="eye-slash" x1="3" y1="3" x2="21" y2="21" /></svg>
+                    </button>
+                    <button class="zoom-btn" data-chart="convergence"
+                      data-action="in" title="Zoom in">+</button>
+                    <button class="zoom-btn" data-chart="convergence"
+                      data-action="out" title="Zoom out">&minus;</button>
+                    <button class="zoom-btn" data-chart="convergence"
+                      data-action="reset" title="Reset zoom">&#8634;</button>
+                  </div>
+                </div>
+                <div class="chart-wrap">
+                  <canvas id="chart-convergence"></canvas>
+                </div>
+              </div>
+
+              <div class="chart-section" id="timing-section"
+                hidden>
+                <div class="chart-header-row">
+                  <h3>
+                    Timing
+                    <span id="gpu-label" class="gpu-label"></span>
+                  </h3>
+                  <div class="zoom-controls">
+                    <button class="zoom-btn tooltip-toggle-btn" data-chart="timing"
+                      title="Toggle tooltip box" aria-label="Toggle tooltip box">
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" /><circle cx="12" cy="12" r="3" /><line class="eye-slash" x1="3" y1="3" x2="21" y2="21" /></svg>
+                    </button>
+                    <button class="zoom-btn" data-chart="timing"
+                      data-action="in" title="Zoom in">+</button>
+                    <button class="zoom-btn" data-chart="timing"
+                      data-action="out" title="Zoom out">&minus;</button>
+                    <button class="zoom-btn" data-chart="timing"
+                      data-action="reset" title="Reset zoom">&#8634;</button>
+                  </div>
+                </div>
+                <div class="chart-wrap">
+                  <canvas id="chart-timing"></canvas>
+                </div>
+              </div>
+
+              <div class="chart-section" id="confidence-section"
+                hidden>
+                <div class="chart-header-row">
+                  <h3>Confidence</h3>
+                  <div class="zoom-controls">
+                    <button class="zoom-btn tooltip-toggle-btn" data-chart="confidence"
+                      title="Toggle tooltip box" aria-label="Toggle tooltip box">
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" /><circle cx="12" cy="12" r="3" /><line class="eye-slash" x1="3" y1="3" x2="21" y2="21" /></svg>
+                    </button>
+                    <button class="zoom-btn" data-chart="confidence"
+                      data-action="in" title="Zoom in">+</button>
+                    <button class="zoom-btn" data-chart="confidence"
+                      data-action="out" title="Zoom out">&minus;</button>
+                    <button class="zoom-btn" data-chart="confidence"
+                      data-action="reset"
+                      title="Reset zoom">&#8634;</button>
+                  </div>
+                </div>
+                <div class="chart-wrap">
+                  <canvas id="chart-confidence"></canvas>
+                </div>
+              </div>
             </div>
-          </div>
-          <div class="chart-wrap">
-            <canvas id="chart-confidence"></canvas>
+
           </div>
         </div>
-      </section>
+      </div>
 
       <!-- Comparison panel (replaces detail) -->
       <section id="compare-panel" hidden>
@@ -215,7 +270,8 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js"></script>
-  <script src="/custom_select.js"></script>
-  <script src="/analytics.js"></script>
+  <script src="/custom_select.js?v=3"></script>
+  <script src="/overlays.js?v=3"></script>
+  <script src="/analytics.js?v=3"></script>
 </body>
 </html>

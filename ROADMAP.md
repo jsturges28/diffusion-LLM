@@ -34,6 +34,20 @@ analytics suite.
   (None / Heatmap / Diff) with persistent per-browser settings (highlight tokens,
   commit order) behind staged Save/Reset; and analytics run deletion (confirm
   modal + toast) with contained, toggleable chart tooltips (line burn-through).
+- Shipped (this session): durable xAI overlays. Per-token records (display
+  text, mask flag, vocab id, confidence) and the pre-edit snapshot are now
+  persisted per run (`tokens.json` / `original_tokens.json`), the overlay math
+  is shared between pages (`src/web/static/overlays.js`), and the Analytics
+  Suite gained a static commit-order / Diff-vs-Original token viewer gated on
+  data availability. Persisting confidence also makes a future durable Heatmap
+  render a data-free follow-up.
+- Shipped (analytics + edit-flow refinements): the run detail is now a wide
+  fade-in modal (X or click-outside to close) with a corner overlay drawer
+  (None / Commit Order / Diff vs Original) mirroring the generator; a sortable
+  `Diff vs Original?` column marks runs that carry a pre-edit snapshot; the
+  Group By options were pruned to the shared columns; and the guided editor now
+  ends on a Confirm/Retry review step, locking Edit Frames once an edited run is
+  saved (until the next Generate).
 - For the feature overview and architecture, see `README.md`. For the build
   history, see `.cursor/plans/`.
 
@@ -136,10 +150,19 @@ signal toggle).
 
 Shipped from this backlog (see `README.md`):
 - Token commit-order coloring: tokens are tinted by the step at which they
-  resolved (light green early to red-orange late), as a persistent overlay.
+  resolved (light green early to red-orange late), as a persistent overlay. Now
+  durable: reviewable post-hoc in the Analytics Suite from saved per-token data.
 - Counterfactual / intervention diff: the "Diff vs Original" overlay compares an
   edited run against the original, with opacity sliders and a difference blend.
-  A propagation heatmap remains a possible extension.
+  Now durable: the pre-edit snapshot is saved, so the diff is reviewable in the
+  Analytics Suite. A propagation heatmap remains a possible extension.
+
+Follow-ups unlocked by the durable-overlay data model:
+- Analytics scrubber: the saved per-token stream carries every frame, so the
+  static analytics viewer can grow a frame scrubber (and layered diff with
+  opacity/blend) matching the live view, with no re-save.
+- Durable Heatmap render: per-token confidence is now persisted, so a
+  confidence heatmap in the analytics viewer is a render-only addition.
 
 Still candidate directions:
 

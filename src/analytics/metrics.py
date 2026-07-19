@@ -113,6 +113,67 @@ def canvas_boundaries(
     ]
 
 
+def _frames_have_records(frames: List[Any]) -> bool:
+    """True if a token stream stores rich records, not legacy ids.
+
+    Legacy runs saved only integer ids per token, which cannot drive
+    the token overlays (no display text / mask flag). Rich runs store
+    ``{t, m, id, c?}`` dicts. Scans until the first populated frame.
+    """
+    for frame in frames:
+        if not frame:
+            continue
+        return isinstance(frame[0], dict)
+    return False
+
+
+def load_run_frames(
+    run_dir: Path,
+) -> Dict[str, Any]:
+    """Load persisted per-token frame streams for a run.
+
+    Reads ``tokens.json`` (primary / possibly edited run) and the
+    optional ``original_tokens.json`` (pre-edit snapshot). Tolerates
+    legacy files that stored only integer ids: those cannot drive the
+    token overlays, so ``records_available`` is False.
+
+    Returns a dict with ``frames``, ``original_frames`` (or None), and
+    ``records_available``. Raises ``ValueError`` on malformed files.
+    """
+    assert run_dir.is_dir(), f"run dir not found: {run_dir}"
+
+    result: Dict[str, Any] = {
+        "frames": None,
+        "original_frames": None,
+        "records_available": False,
+    }
+
+    tokens_path = run_dir / "tokens.json"
+    if not tokens_path.is_file():
+        return result
+    frames = json.loads(tokens_path.read_text(encoding="utf-8"))
+    if not isinstance(frames, list):
+        raise ValueError(
+            f"tokens.json is malformed in {run_dir}"
+        )
+    result["frames"] = frames
+    result["records_available"] = _frames_have_records(frames)
+
+    original_path = run_dir / "original_tokens.json"
+    if original_path.is_file():
+        original = json.loads(
+            original_path.read_text(encoding="utf-8")
+        )
+        if not isinstance(original, list):
+            raise ValueError(
+                "original_tokens.json is malformed in"
+                f" {run_dir}"
+            )
+        result["original_frames"] = original
+
+    return result
+
+
 def load_run_metadata(
     run_dir: Path,
 ) -> Dict[str, Any]:
@@ -155,6 +216,11 @@ def list_runs(
             continue
         try:
             meta = load_run_metadata(child)
+            # A durable counterfactual diff is available only when the
+            # pre-edit snapshot was saved alongside the run.
+            meta["has_diff"] = (
+                child / "original_tokens.json"
+            ).is_file()
             runs.append(meta)
         except (json.JSONDecodeError, AssertionError):
             continue

@@ -19,7 +19,7 @@ var selectAllCb =
   document.getElementById("select-all");
 
 var detailPanel =
-  document.getElementById("detail-panel");
+  document.getElementById("detail-modal");
 var detailTitle =
   document.getElementById("detail-title");
 var detailMeta =
@@ -30,6 +30,27 @@ var timingSection =
   document.getElementById("timing-section");
 var gpuLabel =
   document.getElementById("gpu-label");
+
+var overlayViewer =
+  document.getElementById("overlay-viewer");
+var overlaySelectGroup =
+  document.getElementById("overlay-select-group");
+var overlayDrawerHandle =
+  document.getElementById("overlay-drawer-handle");
+var overlaySelectMount =
+  document.getElementById("overlay-select-mount");
+var overlayOutput =
+  document.getElementById("overlay-output");
+var overlayReadout =
+  document.getElementById("overlay-readout");
+var overlayLegend =
+  document.getElementById("overlay-legend");
+var overlayEmpty =
+  document.getElementById("overlay-empty");
+var overlaySelect = null;
+// Cached frames payload and current overlay mode for the open run.
+var overlayData = null;
+var overlayMode = "none";
 
 var comparePanel =
   document.getElementById("compare-panel");
@@ -233,6 +254,13 @@ function fetchCompare(ids) {
     .then(function (r) { return r.json(); });
 }
 
+function fetchFrames(runId) {
+  var url = "/api/analytics/runs/"
+    + encodeURIComponent(runId) + "/frames";
+  return fetch(url)
+    .then(function (r) { return r.json(); });
+}
+
 function fetchSystemInfo() {
   return fetch("/api/analytics/system")
     .then(function (r) { return r.json(); });
@@ -252,6 +280,9 @@ function paramVal(run, key) {
   }
   if (key === "created_at") {
     return run.created_at || run.run_id || "";
+  }
+  if (key === "has_diff") {
+    return run.has_diff ? "Yes" : "No";
   }
   if (run.params && run.params[key] !== undefined) {
     return run.params[key];
@@ -456,7 +487,8 @@ function renderTable() {
       var gtr = document.createElement("tr");
       gtr.className = "group-header-row";
       var gtd = document.createElement("td");
-      gtd.colSpan = TABLE_KEYS.length + 2;
+      // check column + TABLE_KEYS + has-diff column + actions column.
+      gtd.colSpan = TABLE_KEYS.length + 3;
       gtd.textContent = groupKey.toUpperCase()
         .replace("_", " ") + ": " + group.label;
       gtr.appendChild(gtd);
@@ -495,6 +527,19 @@ function renderTable() {
         tr.appendChild(td);
       }
 
+      var tdDiff = document.createElement("td");
+      tdDiff.className = "col-hasdiff";
+      if (run.has_diff) {
+        tdDiff.innerHTML =
+          '<span class="hasdiff-yes" title="Diff vs'
+          + ' Original available">\u2713</span>';
+      } else {
+        tdDiff.innerHTML =
+          '<span class="hasdiff-no" title="No original'
+          + ' snapshot for this run">\u2717</span>';
+      }
+      tr.appendChild(tdDiff);
+
       var tdActions = document.createElement("td");
       tdActions.className = "col-actions";
       var delBtn = document.createElement("button");
@@ -503,7 +548,7 @@ function renderTable() {
       delBtn.title = "Delete run";
       delBtn.setAttribute("aria-label", "Delete run");
       delBtn.innerHTML =
-        '<svg viewBox="0 0 24 24" width="14" height="14"'
+        '<svg viewBox="0 0 24 24" width="11" height="11"'
         + ' fill="none" stroke="currentColor" stroke-width="2"'
         + ' stroke-linecap="round" stroke-linejoin="round"'
         + ' aria-hidden="true"><path d="M3 6h18"/>'
@@ -527,7 +572,7 @@ function renderTable() {
 function showDetail(runId) {
   activeRunId = runId;
   comparePanel.hidden = true;
-  detailPanel.hidden = false;
+  detailPanel.classList.remove("hidden");
 
   var run = null;
   for (var i = 0; i < allRuns.length; i++) {
@@ -584,11 +629,13 @@ function showDetail(runId) {
 
   renderTable();
   loadRunCharts(runId, run);
+  loadRunOverlays(runId);
 }
 
 function hideDetail() {
   activeRunId = null;
-  detailPanel.hidden = true;
+  detailPanel.classList.add("hidden");
+  clearOverlay();
   renderTable();
 }
 
@@ -679,6 +726,250 @@ function loadRunCharts(runId, run) {
     renderTimingChart(data, remaskSet);
     renderConfidenceChart(data);
   });
+}
+
+// ---- Token overlay viewer (durable commit-order / diff) ----
+
+// Diff needs the pre-edit snapshot and at least one remask edit.
+function overlayDiffAvailable(data) {
+  return !!(
+    data.records_available
+    && data.original_frames
+    && data.remask_edits
+    && data.remask_edits.length > 0
+  );
+}
+
+// Last frame that actually carries token records.
+function overlayFinalFrame(frames) {
+  if (!frames) {
+    return null;
+  }
+  for (var i = frames.length - 1; i >= 0; i--) {
+    if (frames[i] && frames[i].length > 0) {
+      return frames[i];
+    }
+  }
+  return null;
+}
+
+function overlayConfText(c) {
+  if (typeof c !== "number") {
+    return "0";
+  }
+  return String(+c.toFixed(3));
+}
+
+function loadRunOverlays(runId) {
+  overlayData = null;
+  fetchFrames(runId).then(function (data) {
+    if (!data || data.error) {
+      showOverlayUnavailable();
+      return;
+    }
+    var hasCommit = !!data.records_available;
+    var hasDiff = overlayDiffAvailable(data);
+    if (!hasCommit && !hasDiff) {
+      showOverlayUnavailable();
+      return;
+    }
+    overlayData = data;
+    overlayViewer.hidden = false;
+    overlayEmpty.hidden = true;
+    overlayOutput.hidden = false;
+    overlaySelectGroup.hidden = false;
+    setOverlayDrawerOpen(false);
+    // Mirror the generator: default to None; the drawer offers the
+    // durable overlays (Commit Order for record runs, Diff vs
+    // Original when a pre-edit snapshot was saved).
+    buildOverlaySelect(data);
+    setOverlayMode("none");
+  });
+}
+
+function showOverlayUnavailable() {
+  overlayViewer.hidden = false;
+  overlaySelectGroup.hidden = true;
+  overlayOutput.textContent = "";
+  overlayOutput.hidden = true;
+  overlayReadout.textContent = "";
+  overlayReadout.hidden = true;
+  overlayLegend.hidden = true;
+  overlayEmpty.hidden = false;
+}
+
+function clearOverlay() {
+  overlayData = null;
+  overlayViewer.hidden = true;
+  overlaySelectGroup.hidden = true;
+  overlayOutput.textContent = "";
+  overlayOutput.hidden = false;
+  overlayReadout.textContent = "";
+  overlayReadout.hidden = true;
+  overlayLegend.hidden = true;
+  overlayEmpty.hidden = true;
+}
+
+// Slide the corner drawer open/closed and flip its handle glyph
+// (matches the generator's overlay drawer behavior).
+function setOverlayDrawerOpen(open) {
+  if (!overlaySelectGroup) {
+    return;
+  }
+  overlaySelectGroup.classList.toggle("open", open);
+  if (overlayDrawerHandle) {
+    overlayDrawerHandle.innerHTML =
+      open ? "\u203A" : "\u2039";
+  }
+}
+
+// Build the overlay custom-select mirroring the generator: None /
+// Commit Order / Diff vs Original, each gated on data availability.
+function buildOverlaySelect(data) {
+  var canDiff = overlayDiffAvailable(data);
+  var options = [
+    { value: "none", label: "None" },
+    {
+      value: "commit",
+      label: "Commit Order",
+      disabled: !data.records_available,
+    },
+    {
+      value: "diff",
+      label: "Diff vs Original",
+      disabled: !canDiff,
+      title: canDiff
+        ? undefined
+        : "Only available for an edited run saved with"
+          + " its original snapshot.",
+    },
+  ];
+  overlaySelectMount.innerHTML = "";
+  overlaySelect = createCustomSelect(options, "none");
+  overlaySelectMount.appendChild(overlaySelect);
+  sizeCustomSelect(overlaySelect);
+  overlaySelect.addEventListener("change", function () {
+    setOverlayMode(overlaySelect.value);
+  });
+}
+
+function setOverlayMode(mode) {
+  overlayMode = mode;
+  if (overlaySelect && overlaySelect.value !== mode) {
+    overlaySelect.value = mode;
+  }
+  overlayLegend.hidden = mode !== "commit";
+  if (mode === "diff") {
+    renderDiffOverlay();
+  } else if (mode === "commit") {
+    renderCommitOverlay();
+  } else {
+    renderNoneOverlay();
+  }
+}
+
+// Plain final-frame tokens with no coloring (drawer set to None).
+function renderNoneOverlay() {
+  overlayReadout.hidden = true;
+  overlayReadout.textContent = "";
+  renderOverlayTokens(
+    overlayFinalFrame(overlayData.frames),
+    function () { return null; },
+    function () { return ""; }
+  );
+}
+
+// Render the final frame as token spans, coloring each resolved
+// token via colorFn(index) and appending titleFn(index) to its
+// hover tooltip. Masked positions render as the mask glyph.
+function renderOverlayTokens(frame, colorFn, titleFn) {
+  overlayOutput.textContent = "";
+  if (!frame) {
+    return;
+  }
+  var fragment = document.createDocumentFragment();
+  for (var i = 0; i < frame.length; i++) {
+    var tok = frame[i];
+    var span = document.createElement("span");
+    span.setAttribute("data-pos", String(i));
+    if (!tok || tok.m) {
+      span.className = "token-span token-mask";
+      span.textContent = OVERLAYS_MASK_CHAR;
+      span.title =
+        "Token: " + (i + 1) + "\nConfidence: 0";
+      fragment.appendChild(span);
+      continue;
+    }
+    span.className = "token-span token-resolved";
+    span.textContent = tok.t;
+    var color = colorFn(i);
+    if (color) {
+      span.style.color = color;
+    }
+    span.title = "Token: " + (i + 1)
+      + "\nConfidence: " + overlayConfText(tok.c)
+      + titleFn(i);
+    fragment.appendChild(span);
+  }
+  overlayOutput.appendChild(fragment);
+}
+
+function renderCommitOverlay() {
+  overlayReadout.hidden = true;
+  overlayReadout.textContent = "";
+  var frames = overlayData.frames;
+  var frame = overlayFinalFrame(frames);
+  var steps = overlaysComputeCommitSteps(frames);
+  var maxStep = frames.length - 1;
+  renderOverlayTokens(
+    frame,
+    function (i) {
+      var step = steps[i];
+      if (typeof step === "number" && step >= 0) {
+        return commitColor(step, maxStep);
+      }
+      return null;
+    },
+    function (i) {
+      var step = steps[i];
+      if (typeof step === "number" && step >= 0) {
+        return "\nResolved at step: " + step;
+      }
+      return "";
+    }
+  );
+}
+
+function renderDiffOverlay() {
+  var curFinal = overlayFinalFrame(overlayData.frames);
+  var origFinal = overlayFinalFrame(
+    overlayData.original_frames
+  );
+  var diff = overlaysComputeDiff(
+    curFinal, origFinal, overlayData.remask_edits
+  );
+  overlayReadout.hidden = false;
+  overlayReadout.textContent =
+    "Diverged " + diff.changedCount
+    + "/" + diff.totalCount;
+  renderOverlayTokens(
+    curFinal,
+    function (i) {
+      if (diff.origins[i]) {
+        return "#ff8a3d";
+      }
+      return diffColor(!!diff.changed[i]);
+    },
+    function (i) {
+      if (diff.origins[i]) {
+        return "\n(remasked here)";
+      }
+      if (diff.changed[i]) {
+        return "\nwas: " + diff.origText[i];
+      }
+      return "";
+    }
+  );
 }
 
 function renderConvergenceChart(data, remaskSet) {
@@ -1041,7 +1332,7 @@ function confidenceOptions() {
 // ---- Comparison mode ----
 
 function showComparison(ids) {
-  detailPanel.hidden = true;
+  detailPanel.classList.add("hidden");
   comparePanel.hidden = false;
   activeRunId = null;
   renderTable();
@@ -1399,12 +1690,7 @@ if (groupByMount) {
       { value: "none", label: "Date" },
       { value: "model", label: "Model" },
       { value: "prompt", label: "Prompt" },
-      { value: "steps", label: "Steps" },
-      { value: "gen_length", label: "Gen Length" },
-      { value: "block_length", label: "Block Length" },
-      { value: "temperature", label: "Temperature" },
-      { value: "cfg_scale", label: "CFG Scale" },
-      { value: "remasking", label: "Remasking" },
+      { value: "has_diff", label: "Diff vs Original?" },
     ],
     "none"
   );
@@ -1420,6 +1706,31 @@ btnRefresh.addEventListener(
 btnCloseDetail.addEventListener(
   "click", hideDetail
 );
+
+if (overlayDrawerHandle) {
+  overlayDrawerHandle.addEventListener("click", function () {
+    setOverlayDrawerOpen(
+      !overlaySelectGroup.classList.contains("open")
+    );
+  });
+}
+
+// Close the detail modal when clicking the backdrop (outside the box).
+detailPanel.addEventListener("click", function (e) {
+  if (e.target === detailPanel) {
+    hideDetail();
+  }
+});
+
+// Escape closes the detail modal (matches the generator's modals).
+document.addEventListener("keydown", function (e) {
+  if (
+    e.key === "Escape"
+    && !detailPanel.classList.contains("hidden")
+  ) {
+    hideDetail();
+  }
+});
 
 btnCloseCompare.addEventListener(
   "click", hideComparison

@@ -1292,6 +1292,55 @@ button {
   border-color: rgba(255, 159, 28, 0.5);
 }
 
+/* Confirm (green check) / Retry (blue counter-clockwise) shown at the
+   final frame after Resume to End. */
+.btn-guided-icon {
+  font-size: 15px;
+  line-height: 1;
+  padding: 6px 13px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.btn-confirm-edit {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid rgba(0, 255, 65, 0.35);
+}
+
+.btn-confirm-edit:hover {
+  background: rgba(0, 255, 65, 0.28);
+  border-color: rgba(0, 255, 65, 0.55);
+}
+
+.btn-retry-edit {
+  background: rgba(79, 195, 247, 0.16);
+  color: #4fc3f7;
+  border: 1px solid rgba(79, 195, 247, 0.35);
+}
+
+.btn-retry-edit:hover {
+  background: rgba(79, 195, 247, 0.28);
+  border-color: rgba(79, 195, 247, 0.55);
+}
+
+/* Edit Frames locked after an edited run is saved (until next run). */
+.btn-edit-frames.is-locked,
+.btn-edit-frames.is-locked:hover {
+  opacity: 0.4;
+  cursor: not-allowed;
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--border);
+}
+
+.btn-edit-frames.is-locked::after {
+  display: none;
+}
+
 /* ---- Token-level rendering ---- */
 
 .token-span {
@@ -1409,10 +1458,16 @@ button {
 
 /* ---- Model selector + dynamic param panel ---- */
 
-/* param-fields is a passthrough container so its param-group
-   children flow in the existing #param-row flex layout. */
+/* param-fields holds the dynamic hyperparameters. It is capped at
+   five per row (via max-width) so many-param models wrap onto extra
+   rows instead of crowding the Save / Generate buttons, which sit to
+   its right in #param-row. */
 #param-fields {
-  display: contents;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+  max-width: calc(5 * var(--param-width, 120px) + 4 * 10px);
 }
 
 .model-select-label {

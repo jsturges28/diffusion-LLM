@@ -10,7 +10,7 @@
     href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&display=swap"
     rel="stylesheet"
   />
-  <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/style.css?v=3" />
 </head>
 <body>
   <!-- Animated background grid + floating characters -->
@@ -150,6 +150,8 @@
           <button id="btn-edit-another" class="btn-guided" hidden>Edit Another Frame</button>
           <button id="btn-run-to-here" class="btn-guided" hidden>Run to Here</button>
           <button id="btn-resume-end" class="btn-guided btn-resume-end" hidden>Resume to End</button>
+          <button id="btn-confirm-edit" class="btn-guided-icon btn-confirm-edit" hidden title="Confirm &amp; save this edited run" aria-label="Confirm and save">&#x2713;</button>
+          <button id="btn-retry-edit" class="btn-guided-icon btn-retry-edit" hidden title="Discard edits and retry from the start" aria-label="Retry edits">&#x21BA;</button>
           <button id="btn-exit-edit" class="btn-secondary">Exit</button>
         </div>
       </div>
@@ -375,8 +377,9 @@
     </div>
   </div>
 
-  <script src="/ascii_scene.js"></script>
-  <script src="/custom_select.js"></script>
-  <script src="/app.js"></script>
+  <script src="/ascii_scene.js?v=3"></script>
+  <script src="/custom_select.js?v=3"></script>
+  <script src="/overlays.js?v=3"></script>
+  <script src="/app.js?v=3"></script>
 </body>
 </html>

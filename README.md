@@ -51,8 +51,10 @@ After a run, hovering any token shows its position and confidence for that frame
 
 The frame history also drives two explainability overlays:
 
-- **Commit order** colors each resolved token by *when* it settled into its final value, on a gradient from light green (early) to red-orange (late). This is derived entirely client-side from the recorded frames and exposes the model's resolution trajectory across a run.
+- **Commit order** colors each resolved token by *when* it settled into its final value, on a gradient from light green (early) to red-orange (late). This exposes the model's resolution trajectory across a run.
 - **Diff vs Original** becomes available after you edit and resume a run. It compares the edited output against a snapshot of the original run, stacking the two with independent opacity sliders and an optional *difference blend* (matching tokens cancel to black, divergences glow), so you can see exactly how an intervention propagated.
+
+Both overlays are derived from the recorded per-token frames. In the live generator they render across every frame; the underlying per-token data (display text, mask flag, vocab id, and confidence) is also persisted with each saved run, so both overlays are reviewable after the fact in the Analytics Suite (see below) rather than being lost on reload.
 
 ### Sampling parameters
 
@@ -216,6 +218,8 @@ The scrubber steps through every intermediate frame. Navigate with the slider, t
 
 A single edit followed by **Resume to End** is the simple case; you can also chain as many edits as you like. Each partial resume generates only the frames between your last edit and the next target, so earlier edits propagate forward. The scrubber enforces forward-only navigation; later edits cannot precede earlier ones. Clicking **Exit** discards the in-progress edits and restores the original run. All remask edits (frame indices and token positions) are recorded and saved with the run.
 
+**Confirming an edit.** Clicking **Edit Frames** first auto-saves the current (original) run if you have not saved it yet, so the pre-edit run is always preserved as its own entry. After **Resume to End** completes, the editor stays open on the final frame and offers two choices in place of **Select Frame**: a green **Confirm** (checkmark), which saves the edited run, and a blue **Retry** (counter-clockwise arrow), which discards the edits and restarts editing from frame 0 (reusing the already-saved original, so it does not re-save). Once an edited run has been saved, **Edit Frames** is disabled for that run (with a "this run already has a saved edit" tooltip) until you **Generate** again, so a single run cannot accrue two conflicting saved edits.
+
 #### Visual overlays and settings
 
 A collapsible **Overlay** drawer in the top-right of the output area recolors the frame you are viewing. It defaults to **None** and offers:
@@ -234,17 +238,18 @@ The status bar reflects both (`Highlighted Tokens: On/Off`, `Show Commit Order: 
 
 Click **Analytics** in the header (or navigate to `/analytics.html`) to open the Analytics Suite. It reads saved runs from `Results/` and provides interactive charts for comparing behavior across configurations and models.
 
-- **Run browser:** group runs by model, prompt, or any hyperparameter. Select a run to view its model, prompt, hyperparameters, timestamp, and final output. The table shows columns shared across models; model-specific hyperparameters remain in each run's detail panel.
-- **Manage runs:** delete a saved run with the row's trashcan action. A confirmation modal shows the run's folder path (`Results/<timestamp>_<model>`), and a toast confirms the deletion.
+- **Run browser:** group runs by date, model, prompt, or whether they have a durable Diff vs Original. Columns are shared across models (prompt, model, time, date, and a sortable **Diff vs Original?** column showing a green check when a pre-edit snapshot was saved, a red cross otherwise). Clicking a row opens a wide **detail modal** (fades in like About/Help; close with the X or by clicking outside) laid out with the token overlay canvas as the centerpiece on the left and the run's info plus the convergence, timing, and confidence charts stacked on the right.
+- **Manage runs:** delete a saved run with the row's red trashcan action. A confirmation modal shows the run's folder path (`Results/<timestamp>_<model>`), and a toast confirms the deletion.
 - **Convergence chart:** percentage of resolved tokens per frame. User remask edits are highlighted as blue segments with hover details.
 - **Timing chart:** cumulative elapsed time per frame (accumulates across resumes). Remask transitions are highlighted in green; the detected GPU is shown in the header.
 - **Confidence chart:** mean per-token confidence per frame, which climbs as a canvas converges. Shown for runs saved with confidence data.
 - **Canvas boundaries:** for multi-canvas DiffusionGemma runs, dashed amber markers on the charts mark where one canvas commits and the next begins. Single-canvas runs show none.
+- **Token overlay:** a static, final-frame view of the run's tokens inside the detail modal, with a corner **Overlay** drawer mirroring the generator's (**None** / **Commit Order** / **Diff vs Original**). Commit Order tints each token by when it settled (early-to-late gradient legend); Diff vs Original (available only for edited runs with a saved snapshot) shows a `Diverged N/total` readout with remask origins in orange and divergences in magenta. Hovering a token shows its position and persisted confidence. This makes the generator's explainability overlays durable and reviewable post-hoc; runs saved before this feature (or without token data) show a short unavailable note.
 - **Chart controls:** scroll-wheel zoom and +/-/Reset on every chart. Tooltips are kept fully inside the plot area (never spilling onto the axes) and each chart has a toggle to hide/show its tooltip box; when the box would cover a line, the covered segment and the hovered point glow through it.
 
 #### Saving and reproducibility
 
-Clicking **Save** writes a timestamped folder under `Results/` containing `metadata.json`, `final.txt`, `history.txt` (frame-by-frame snapshots), and `diffusion.gif`. The metadata captures the model, prompt, hyperparameters, any remask edits, per-frame timing, canvas indices, mean confidence, and reproducibility info: seed, GPU name, git commit, and the worker's torch/transformers versions.
+Clicking **Save** writes a timestamped folder under `Results/` containing `metadata.json`, `final.txt`, `history.txt` (frame-by-frame snapshots), `tokens.json` (per-frame, per-token records: display text, mask flag, vocab id, and confidence), and `diffusion.gif`. Edited runs also write `original_tokens.json`, the pre-edit snapshot that powers the durable Diff vs Original overlay. The metadata captures the model, prompt, hyperparameters, any remask edits, per-frame timing, canvas indices, mean confidence, and reproducibility info: seed, GPU name, git commit, and the worker's torch/transformers versions.
 
 
 ## Implementation Status
@@ -262,6 +267,9 @@ Clicking **Save** writes a timestamped folder under `Results/` containing `metad
 - [x] Per-token confidence: softmax at reveal (LLaDA), stability proxy or true entropy (DiffusionGemma)
 - [x] Grouped overlay picker (None / Heatmap / Diff vs Original), per-token hover tooltips, and token-hover highlight option
 - [x] Commit-order (resolution-step) token coloring; counterfactual "Diff vs Original" overlay with opacity sliders and difference blend
+- [x] Durable overlays: per-token records (text, mask, id, confidence) plus the pre-edit snapshot persisted per run, and a static commit-order / Diff-vs-Original viewer in the Analytics Suite
+- [x] Analytics run detail as a wide fade-in modal with a corner overlay drawer, a sortable Diff-vs-Original column, and streamlined grouping
+- [x] Guided-edit confirm/retry review step and Edit-Frames lock after an edited run is saved
 - [x] Persistent per-browser Settings (highlight tokens, commit order) with staged Save/Reset and status-bar readouts
 - [x] Analytics Suite: model-aware run browser, convergence, timing, confidence, canvas-boundary markers
 - [x] Analytics run deletion (confirmation modal + toast) and contained, toggleable chart tooltips with line burn-through

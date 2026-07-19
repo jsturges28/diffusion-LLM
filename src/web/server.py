@@ -39,6 +39,7 @@ from src.analytics.metrics import (
     canvas_boundaries,
     compute_convergence,
     list_runs,
+    load_run_frames,
     load_run_metadata,
     parse_history,
 )
@@ -452,6 +453,26 @@ class RemaskEdit(BaseModel):
     token_positions: List[int]
 
 
+class TokenRecord(BaseModel):
+    """One persisted per-token record for durable overlays.
+
+    Mirrors the live protocol shape ``{t, m, id, c?}``: ``t`` is the
+    display text, ``m`` marks an unresolved position, ``id`` is the
+    vocab id, and ``c`` is the reveal confidence (absent for masked
+    positions).
+    """
+
+    t: str
+    m: bool
+    id: int
+    c: Optional[float] = None
+
+
+# Per-frame, per-token stream. A frame may be ``None`` when a model
+# emitted no token detail for it.
+FrameTokens = List[Optional[List[TokenRecord]]]
+
+
 class SaveRunRequest(BaseModel):
     model: str = DEFAULT_MODEL
     prompt: str
@@ -460,9 +481,12 @@ class SaveRunRequest(BaseModel):
     final_text: str
     elapsed_seconds: Optional[float] = None
     per_frame_elapsed: Optional[List[float]] = None
-    frame_token_ids: Optional[
-        List[Optional[List[int]]]
-    ] = None
+    # Durable per-token records for the commit-order / diff /
+    # confidence overlays. ``frame_tokens`` is the primary (possibly
+    # edited) run; ``original_frame_tokens`` is the pre-edit snapshot,
+    # sent only for edited runs so the counterfactual diff survives.
+    frame_tokens: Optional[FrameTokens] = None
+    original_frame_tokens: Optional[FrameTokens] = None
     canvas_index: Optional[List[int]] = None
     mean_conf: Optional[List[Optional[float]]] = None
     remask_edits: Optional[List[RemaskEdit]] = None
@@ -474,6 +498,28 @@ def _make_run_dir(base: Path, model_id: str) -> Path:
     run_dir = base / f"{timestamp}_{safe_model}"
     run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir
+
+
+def _dump_frame_tokens(
+    frames: FrameTokens,
+) -> List[Optional[List[Dict[str, Any]]]]:
+    """Serialize frame token records, dropping absent confidence.
+
+    ``exclude_none`` keeps masked tokens compact (no ``c`` key),
+    matching the live protocol payload.
+    """
+    dumped: List[Optional[List[Dict[str, Any]]]] = []
+    for frame in frames:
+        if frame is None:
+            dumped.append(None)
+            continue
+        dumped.append(
+            [
+                record.model_dump(exclude_none=True)
+                for record in frame
+            ]
+        )
+    return dumped
 
 
 def _save_run_blocking(body: SaveRunRequest) -> str:
@@ -527,10 +573,21 @@ def _save_run_blocking(body: SaveRunRequest) -> str:
             handle.write(frame_text)
             handle.write("\n")
 
-    if body.frame_token_ids is not None:
+    if body.frame_tokens is not None:
         (run_dir / "tokens.json").write_text(
             json.dumps(
-                body.frame_token_ids, ensure_ascii=False
+                _dump_frame_tokens(body.frame_tokens),
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+    if body.original_frame_tokens is not None:
+        (run_dir / "original_tokens.json").write_text(
+            json.dumps(
+                _dump_frame_tokens(
+                    body.original_frame_tokens
+                ),
+                ensure_ascii=False,
             ),
             encoding="utf-8",
         )
@@ -618,6 +675,49 @@ async def analytics_run_metrics(run_id: str) -> JSONResponse:
     return JSONResponse(content=result)
 
 
+def _compute_run_frames(run_id: str) -> Dict[str, Any]:
+    """Load durable token streams for the overlay viewer.
+
+    Kept separate from ``_compute_run_metrics`` because token streams
+    are large; the analytics UI fetches this only when a run's overlay
+    viewer opens. Guards against path traversal like the delete path.
+    """
+    results_root = RESULTS_DIR.resolve()
+    run_dir = (results_root / run_id).resolve()
+    if run_dir.parent != results_root:
+        raise ValueError(f"invalid run id: {run_id}")
+    if not run_dir.is_dir():
+        raise FileNotFoundError(f"Run not found: {run_id}")
+
+    meta = load_run_metadata(run_dir)
+    data = load_run_frames(run_dir)
+    return {
+        "run_id": run_id,
+        "frames": data["frames"],
+        "original_frames": data["original_frames"],
+        "records_available": data["records_available"],
+        "remask_edits": meta.get("remask_edits", []),
+        "canvas_index": meta.get("canvas_index"),
+    }
+
+
+@app.get("/api/analytics/runs/{run_id}/frames")
+async def analytics_run_frames(run_id: str) -> JSONResponse:
+    try:
+        result = await asyncio.to_thread(
+            _compute_run_frames, run_id
+        )
+    except FileNotFoundError as exc:
+        return JSONResponse(
+            status_code=404, content={"error": str(exc)}
+        )
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=400, content={"error": str(exc)}
+        )
+    return JSONResponse(content=result)
+
+
 @app.get("/api/analytics/compare")
 async def analytics_compare(ids: str = "") -> JSONResponse:
     run_ids = [
@@ -692,13 +792,24 @@ async def analytics_delete_run(run_id: str) -> JSONResponse:
 
 class _NoCacheStaticFiles(StaticFiles):
     """Serve static assets with no-store so the browser never holds a
-    stale CSS/JS copy between edits (this is a local dev tool)."""
+    stale CSS/JS copy between edits (this is a local dev tool).
+
+    Beyond the ``Cache-Control`` header, the validator headers
+    (``ETag`` / ``Last-Modified``) are stripped so the browser cannot
+    issue a conditional request and be handed a ``304 Not Modified``
+    for a stale asset (observed with cached CSS in Firefox).
+    """
 
     async def get_response(self, path: str, scope: Any) -> Any:
         response = await super().get_response(path, scope)
         response.headers["Cache-Control"] = (
-            "no-store, no-cache, must-revalidate"
+            "no-store, no-cache, must-revalidate, max-age=0"
         )
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        for validator in ("etag", "last-modified"):
+            if validator in response.headers:
+                del response.headers[validator]
         return response
 
 
