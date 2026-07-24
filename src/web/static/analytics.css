@@ -711,3 +711,34 @@ html, body {
   background: var(--border);
   border-radius: 3px;
 }
+
+/* Layered "Diff vs Original" overlay: both layers share one grid cell
+   so the container sizes to the taller and scrolls naturally (mirrors
+   the generator's #output-area.diff-overlay-mode). */
+#overlay-output.diff-overlay-mode {
+  display: grid;
+}
+
+#overlay-output.diff-overlay-mode > .diff-layer {
+  grid-area: 1 / 1;
+  min-width: 0;
+  white-space: pre-wrap;
+}
+
+/* Opacity sliders + difference-blend toggle below the overlay canvas.
+   Row layout mirrors the generator's #diff-overlay-controls; the
+   .diff-slider-row / .diff-blend-row internals come from style.css. */
+#overlay-diff-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 20px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+#overlay-diff-controls[hidden] {
+  display: none;
+}

@@ -84,6 +84,94 @@ function overlaysComputeCommitSteps(frames) {
   return steps;
 }
 
+// Per-token color for one layer of the counterfactual diff overlay.
+// The original layer reads cyan in ghost mode (blend off); with the
+// difference blend on it adopts the edited layer's diff colors so
+// matching tokens cancel to black. Remask origins glow orange and
+// divergences magenta. ``diff`` is an overlaysComputeDiff() result.
+function overlaysDiffLayerColor(diff, index, isOriginal, blend) {
+  if (isOriginal && !blend) {
+    return "#2dd4ff";
+  }
+  if (diff && diff.origins[index]) {
+    return "#ff8a3d";
+  }
+  if (diff && diff.changed[index]) {
+    return "hsl(320, 80%, 66%)";
+  }
+  return "#e6e6e6";
+}
+
+function overlaysBuildDiffLayerSpans(
+  tokens, diff, isOriginal, blend, maskChar
+) {
+  var mask = maskChar || OVERLAYS_MASK_CHAR;
+  var frag = document.createDocumentFragment();
+  for (var i = 0; i < tokens.length; i++) {
+    var tok = tokens[i];
+    if (!tok) {
+      continue;
+    }
+    var span = document.createElement("span");
+    if (tok.m) {
+      span.textContent = mask;
+      span.style.color = "var(--mask-color)";
+    } else {
+      span.textContent = tok.t;
+      span.style.color =
+        overlaysDiffLayerColor(diff, i, isOriginal, blend);
+    }
+    frag.appendChild(span);
+  }
+  return frag;
+}
+
+// Build the two stacked layers for the "Diff vs Original" overlay:
+// the original and edited runs drawn on top of each other with
+// independent opacity and an optional difference blend. Pure: returns
+// a DocumentFragment of two ``.diff-layer`` nodes; the caller owns the
+// container (and must give it the stacking mode). ``diff`` is an
+// overlaysComputeDiff() result; ``opts`` carries opacities in [0,100]
+// (originalOpacity / editedOpacity) plus a ``blend`` flag.
+function overlaysBuildDiffLayers(
+  origTokens, editedTokens, diff, opts, maskChar
+) {
+  var options = opts || {};
+  var origOpacity =
+    typeof options.originalOpacity === "number"
+      ? options.originalOpacity : 50;
+  var editedOpacity =
+    typeof options.editedOpacity === "number"
+      ? options.editedOpacity : 100;
+  var blend = !!options.blend;
+
+  var origLayer = document.createElement("div");
+  origLayer.className = "diff-layer diff-layer-original";
+  origLayer.style.opacity = String(origOpacity / 100);
+  origLayer.appendChild(
+    overlaysBuildDiffLayerSpans(
+      origTokens || [], diff, true, blend, maskChar
+    )
+  );
+
+  var editLayer = document.createElement("div");
+  editLayer.className = "diff-layer diff-layer-edited";
+  editLayer.style.opacity = String(editedOpacity / 100);
+  if (blend) {
+    editLayer.style.mixBlendMode = "difference";
+  }
+  editLayer.appendChild(
+    overlaysBuildDiffLayerSpans(
+      editedTokens || [], diff, false, blend, maskChar
+    )
+  );
+
+  var frag = document.createDocumentFragment();
+  frag.appendChild(origLayer);
+  frag.appendChild(editLayer);
+  return frag;
+}
+
 // Compare a run's final frame against a retained original run's final
 // frame, position-aligned on the shared canvas. Returns per-position
 // change flags, the original display text (for tooltips), the

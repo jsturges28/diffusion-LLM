@@ -2,8 +2,8 @@
 //
 // Native <select> option lists are drawn by the OS and ignore the
 // app theme, so every dropdown in the app (model picker, param
-// selects, analytics Group By, settings Idle Display) is built
-// with createCustomSelect for a consistent, in-app look.
+// selects, analytics Group By, overlay picker) is built with
+// createCustomSelect for a consistent, in-app look.
 //
 // Loaded before app.js and analytics.js on their respective pages.
 

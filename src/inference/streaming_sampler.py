@@ -41,15 +41,24 @@ def _build_token_list(
     prompt_len: int,
     tokenizer: Any,
     reveal_conf: torch.Tensor | None = None,
+    mask_conf: torch.Tensor | None = None,
 ) -> List[Dict[str, Any]]:
     """Build per-token metadata for the generation region.
 
     Each dict has keys: t (display text), m (is mask), id (token
-    id), and c (reveal-time confidence 0..1) on resolved tokens.
+    id), and c (confidence 0..1). For a resolved token c is the
+    frozen reveal-time confidence; for a still-masked token c is the
+    model's current predicted confidence (top-prob) at this step,
+    which the UI maps to mask opacity. c is omitted on masked tokens
+    when no prediction exists yet (the initial all-masked frame),
+    which the UI treats as fully solid.
     """
     gen_ids = x[0, prompt_len:].tolist()
     conf = (
         reveal_conf.tolist() if reveal_conf is not None else None
+    )
+    pred = (
+        mask_conf.tolist() if mask_conf is not None else None
     )
     tokens: List[Dict[str, Any]] = []
     for i, token_id in enumerate(gen_ids):
@@ -65,7 +74,10 @@ def _build_token_list(
         token: Dict[str, Any] = {
             "t": display, "m": is_mask, "id": token_id
         }
-        if not is_mask and conf is not None:
+        if is_mask:
+            if pred is not None:
+                token["c"] = round(float(pred[i]), 4)
+        elif conf is not None:
             token["c"] = round(float(conf[i]), 4)
         tokens.append(token)
     return tokens
@@ -336,8 +348,9 @@ async def streaming_generate(
                 )
             )
             gen_transfer = step_transfer[0, prompt_len:]
+            gen_step_conf = step_conf[0, prompt_len:]
             reveal_conf[gen_transfer] = (
-                step_conf[0, prompt_len:][gen_transfer]
+                gen_step_conf[gen_transfer]
             )
 
             if tensor_history is not None:
@@ -359,7 +372,8 @@ async def streaming_generate(
                 ),
                 "text": sanitize_frame(step_text),
                 "tokens": _build_token_list(
-                    x, prompt_len, tokenizer, reveal_conf
+                    x, prompt_len, tokenizer, reveal_conf,
+                    gen_step_conf,
                 ),
             }
             frame_index += 1
@@ -485,8 +499,9 @@ async def streaming_resume(
             )
         )
         gen_transfer = step_transfer[0, prompt_len:]
+        gen_step_conf = step_conf[0, prompt_len:]
         reveal_conf[gen_transfer] = (
-            step_conf[0, prompt_len:][gen_transfer]
+            gen_step_conf[gen_transfer]
         )
 
         if tensor_history is not None:
@@ -508,7 +523,8 @@ async def streaming_resume(
             ),
             "text": sanitize_frame(step_text),
             "tokens": _build_token_list(
-                x, prompt_len, tokenizer, reveal_conf
+                x, prompt_len, tokenizer, reveal_conf,
+                gen_step_conf,
             ),
         }
 

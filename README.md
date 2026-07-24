@@ -104,6 +104,8 @@ Model Worker  (exactly one alive)
   - DiffusionGemma worker .venv-dgemma   transformers 5.13
 ```
 
+Pages and entry point: the app opens on a **Main Menu** at `/` (a looping title-screen video over a GPU/VRAM-aware model picker). Selecting a model activates its worker and enters the generator at `/generate`; the generator is gated behind model selection, so hitting it without an active model redirects back to the menu. The Analytics Suite at `/analytics.html` is model-agnostic and always available. The desktop app opens on the same menu.
+
 Why process isolation: LLaDA loads through custom remote modeling that pins `transformers==4.38.2`, while DiffusionGemma requires `transformers` v5. They coexist only in separate virtual environments, and since a single model already saturates the 24 GB GPU, only one worker is ever alive. Switching models stops the current worker (freeing VRAM), runs a pre-flight VRAM check against the target model's requirement, then spawns the next worker and waits for it to report ready (or surfaces a clear error).
 
 The contract lives in `src/backends/`:
@@ -144,15 +146,17 @@ The contract lives in `src/backends/`:
 │   └── web/
 │       ├── server.py                 # Supervisor: model manager, /ws proxy, analytics, save
 │       └── static/
-│           ├── index.html            # Generator page
+│           ├── menu.html             # Main Menu (landing page, model selection)
+│           ├── menu.js               # Menu: model/VRAM fetch + activate + navigate
+│           ├── index.html            # Generator page (gated behind model selection)
 │           ├── style.css             # Dark terminal aesthetic (shared)
 │           ├── app.js                # WebSocket client + frame rendering + heatmap
-│           ├── overlays.js           # Shared overlay math (commit-order / diff)
+│           ├── overlays.js           # Shared overlay math + layered diff builder
 │           ├── analytics.html        # Analytics Suite page
 │           ├── analytics.css         # Analytics-specific styles
 │           ├── analytics.js          # Analytics charts + run browser
 │           ├── custom_select.js      # Shared in-app dropdown widget
-│           └── ascii_scene.js        # Idle animation
+│           └── assets/               # Title-screen video (title-screen.webm/.mp4)
 ├── assets/
 │   └── icon.svg                      # App icon (desktop window + launcher)
 ├── scripts/
@@ -216,7 +220,7 @@ This writes the NF4 checkpoint to the path referenced by the registry (`~/models
 python3 main.py            # or: python3 main.py --host 0.0.0.0 --port 8000
 ```
 
-Open [http://localhost:8000](http://localhost:8000). Pick a model with the **Model** selector in the header (only one is resident in GPU memory at a time). The worker loads in the background (roughly 30 to 60 seconds on first activation) behind a loading overlay. Once ready, type a prompt, adjust parameters, and click **Generate** to watch the diffusion process stream live.
+Open [http://localhost:8000](http://localhost:8000). You land on the **Main Menu**: a looping title screen over a model picker that shows the detected GPU and free VRAM, greying out any model that will not fit. Selecting a model loads it in the background (roughly 30 to 60 seconds on first activation) and opens the generator (which is reachable only after a model is chosen). Type a prompt, adjust parameters, and click **Generate** to watch the diffusion process stream live. To switch models later, use the **Model** selector in the generator header (only one is resident in GPU memory at a time).
 
 After a run completes, a **Save** button appears and a **frame scrubber** slides into view below the output area. While a save is in progress the status bar shows "Saving run…" and the scrubber is dimmed and frozen until it finishes.
 
@@ -272,7 +276,7 @@ Click **Analytics** in the header (or navigate to `/analytics.html`) to open the
 - **Timing chart:** cumulative elapsed time per frame (accumulates across resumes). Remask transitions are highlighted in green; the detected GPU is shown in the header.
 - **Confidence chart:** mean per-token confidence per frame, which climbs as a canvas converges. Shown for runs saved with confidence data.
 - **Canvas boundaries:** for multi-canvas DiffusionGemma runs, dashed amber markers on the charts mark where one canvas commits and the next begins. Single-canvas runs show none.
-- **Token overlay:** a static, final-frame view of the run's tokens inside the detail modal, with a corner **Overlay** drawer mirroring the generator's (**None** / **Commit Order** / **Diff vs Original**). Commit Order tints each token by when it settled (early-to-late gradient legend); Diff vs Original (available only for edited runs with a saved snapshot) shows a `Diverged N/total` readout with remask origins in orange and divergences in magenta. Hovering a token shows its position and persisted confidence. This makes the generator's explainability overlays durable and reviewable post-hoc; runs saved before this feature (or without token data) show a short unavailable note.
+- **Token overlay:** a static, final-frame view of the run's tokens inside the detail modal, with a corner **Overlay** drawer mirroring the generator's (**None** / **Commit Order** / **Diff vs Original**). Commit Order tints each token by when it settled (early-to-late gradient legend); Diff vs Original (available only for edited runs with a saved snapshot) stacks the original and edited runs with independent **Original** / **Edited** opacity sliders and a **Difference blend** toggle, plus a `Diverged N/total` readout, matching the generator's layered diff. Hovering a token shows its position and persisted confidence. This makes the generator's explainability overlays durable and reviewable post-hoc; runs saved before this feature (or without token data) show a short unavailable note.
 - **Chart controls:** scroll-wheel zoom and +/-/Reset on every chart. Tooltips are kept fully inside the plot area (never spilling onto the axes) and each chart has a toggle to hide/show its tooltip box; when the box would cover a line, the covered segment and the hovered point glow through it.
 
 #### Saving and reproducibility
@@ -306,6 +310,8 @@ Clicking **Save** writes a timestamped folder under `Results/` containing `metad
 - [x] Save runs (metadata, history, final text, GIF) with per-frame timing and confidence
 - [x] Optional desktop app: pywebview native window that owns the server lifecycle (graceful shutdown frees VRAM) plus a Linux app-menu launcher
 - [x] Prompt history (persisted per-browser) with a browse control, and a New Run flow that clears the canvas after a finalized run
+- [x] Main Menu landing page: looping title-screen video (WebM/MP4) over a GPU/VRAM-aware model picker that greys out models that will not fit; generation gated behind model selection
+- [x] Analytics layered "Diff vs Original" overlay (Original/Edited opacity sliders + difference blend) mirroring the generator
 
 
 ## Roadmap

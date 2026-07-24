@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Diffusion LLM Visualizer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body class="menu-body">
+  <!-- Animated background grid + floating characters (also the
+       backdrop fallback if the title video cannot play). -->
+  <div id="bg-grid"></div>
+  <div id="bg-floaters" aria-hidden="true"></div>
+
+  <!-- Looping, muted title-screen video backdrop. muted + playsinline
+       are required for autoplay to start in browsers and WebKitGTK. -->
+  <video id="menu-video" class="menu-video" autoplay loop muted playsinline
+    aria-hidden="true" tabindex="-1">
+    <!-- WebM (VP9) first: it decodes in webviews that lack the
+         proprietary H.264 codec (e.g. QtWebEngine / WebKitGTK builds).
+         The MP4 is the fallback for engines without WebM. -->
+    <source src="/assets/title-screen.webm" type="video/webm" />
+    <source src="/assets/title-screen.mp4" type="video/mp4" />
+  </video>
+  <div id="menu-scrim" class="menu-scrim" aria-hidden="true"></div>
+
+  <main id="menu">
+    <section id="menu-panel" class="menu-panel">
+      <h1 class="menu-title">
+        <span class="title-accent">Diffusion</span> LLM Visualizer
+      </h1>
+      <p class="menu-subtitle">Select a model to begin</p>
+
+      <div id="menu-system" class="menu-system menu-system-checking">
+        <span class="menu-system-spinner" aria-hidden="true"></span>
+        <span id="menu-system-text">
+          Checking for GPU and availability&hellip;
+        </span>
+      </div>
+
+      <ul id="menu-model-list" class="menu-model-list"
+        role="listbox" aria-label="Available models"></ul>
+
+      <p id="menu-error" class="menu-error" hidden></p>
+
+      <nav class="menu-links">
+        <a href="/analytics.html" class="header-link">Analytics</a>
+      </nav>
+    </section>
+  </main>
+
+  <script src="/menu.js"></script>
+</body>
+</html>

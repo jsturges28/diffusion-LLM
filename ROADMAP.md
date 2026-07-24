@@ -56,6 +56,17 @@ analytics suite.
   there is no dual maintenance. Cross-platform packaging (AppImage / Windows /
   macOS) remains deferred and is gated more by the CUDA/torch stack than by the
   webview layer.
+- Shipped (menu + shell): a **Main Menu** landing page at `/` (a looping
+  title-screen video, WebM with an MP4 fallback, over a GPU/VRAM-aware model
+  picker that greys out models that will not fit). Generation moved to
+  `/generate` and is now **gated behind model selection**: a direct hit with no
+  active model redirects to the menu, and the `/ws` proxy no longer auto-boots a
+  default worker. Consistent header nav across pages (Menu / Generation /
+  Analytics; the Generation link surfaces only when a model is resident), the
+  analytics layered **Diff vs Original** overlay (Original/Edited opacity sliders
+  + difference blend, from the #1 backlog item), and removal of the old
+  idle-animation feature (ASCII scene + donut + the Idle Display setting) in
+  favor of a plain output placeholder.
 - For the feature overview and architecture, see `README.md`. For the build
   history, see `.cursor/plans/`.
 
@@ -166,9 +177,11 @@ Shipped from this backlog (see `README.md`):
   Analytics Suite. A propagation heatmap remains a possible extension.
 
 Follow-ups unlocked by the durable-overlay data model:
-- Analytics scrubber: the saved per-token stream carries every frame, so the
-  static analytics viewer can grow a frame scrubber (and layered diff with
-  opacity/blend) matching the live view, with no re-save.
+- Analytics scrubber: the layered Diff vs Original (Original/Edited opacity
+  sliders + difference blend) now ships in the analytics viewer on the final
+  frame. Since the saved per-token stream carries every frame, a per-frame
+  scrubber for the analytics overlays (commit-order / diff across frames)
+  remains an additive follow-up, with no re-save.
 - Durable Heatmap render: per-token confidence is now persisted, so a
   confidence heatmap in the analytics viewer is a render-only addition.
 

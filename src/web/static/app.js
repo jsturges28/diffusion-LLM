@@ -40,6 +40,8 @@ var btnHistCancel =
   document.getElementById("btn-hist-cancel");
 var btnGenerate =
   document.getElementById("btn-generate");
+var btnGenerateLabel =
+  document.getElementById("btn-generate-label");
 var btnSave =
   document.getElementById("btn-save");
 var outputArea =
@@ -82,13 +84,17 @@ var linkSettings =
   document.getElementById("link-settings");
 var modalSettings =
   document.getElementById("modal-settings");
-var idleDisplayMount =
-  document.getElementById("idle-display-mount");
-var selectIdleDisplay = null;
 var settingHighlightCb =
   document.getElementById("setting-highlight-tokens");
 var settingCommitCb =
   document.getElementById("setting-commit-order");
+var settingDiffusionCb =
+  document.getElementById("setting-diffusion-text");
+var diffusionModeRow =
+  document.getElementById("diffusion-mode-row");
+var diffusionModeMount =
+  document.getElementById("diffusion-mode-mount");
+var selectDiffusionMode = null;
 var btnSettingsSave =
   document.getElementById("btn-settings-save");
 var btnSettingsReset =
@@ -100,23 +106,31 @@ var statusHighlight =
   document.getElementById("status-highlight");
 var statusCommitText =
   document.getElementById("status-commit-text");
+// Header "new run saved" cue on the Analytics link.
+var linkAnalytics =
+  document.getElementById("link-analytics");
+var analyticsNewDot =
+  document.getElementById("analytics-new-dot");
 // Persistent UI preferences (localStorage-backed). appSettings is
 // the applied/saved state; stagedSettings is the modal's working
 // copy, committed to appSettings only via the Save button.
 var DEFAULT_SETTINGS = {
-  idleDisplay: "default",
   highlightTokens: false,
   commitOrder: false,
+  diffusionText: false,
+  diffusionTextMode: "default",
 };
 var appSettings = {
-  idleDisplay: "default",
   highlightTokens: false,
   commitOrder: false,
+  diffusionText: false,
+  diffusionTextMode: "default",
 };
 var stagedSettings = {
-  idleDisplay: "default",
   highlightTokens: false,
   commitOrder: false,
+  diffusionText: false,
+  diffusionTextMode: "default",
 };
 
 // Scrubber DOM refs.
@@ -203,6 +217,18 @@ var btnRetryEdit =
   document.getElementById("btn-retry-edit");
 var btnExitEdit =
   document.getElementById("btn-exit-edit");
+var remaskRandomizeRow =
+  document.getElementById("remask-randomize-row");
+var remaskRandomSlider =
+  document.getElementById("remask-random-slider");
+var remaskRandomCount =
+  document.getElementById("remask-random-count");
+var remaskRandomTotal =
+  document.getElementById("remask-random-total");
+var btnRemaskShuffle =
+  document.getElementById("btn-remask-shuffle");
+var shuffleLabel =
+  document.getElementById("btn-remask-shuffle-label");
 
 // ---- State ----
 
@@ -270,154 +296,18 @@ var guidedTargetFrame = null;
 var isResuming = false;
 var resumeFrameOffset = 0;
 
-// Idle animation state.
-var idleDisplayMode = "default";
-var donutTimer = null;
-var donutA = 1;
-var donutB = 1;
-var hasEverGenerated = false;
+// ---- Output placeholder ----
 
-// ---- Idle ASCII donut (donut.c) ----
-
-var DONUT_COLS = 80;
-var DONUT_ROWS = 22;
-var DONUT_LUMINANCE = ".,-~:;=!*#$@";
-
-function renderDonutFrame() {
-  var size = DONUT_COLS * DONUT_ROWS;
-  var buffer = new Array(size);
-  var zbuffer = new Array(size);
-
-  donutA += 0.07;
-  donutB += 0.03;
-
-  var cosA = Math.cos(donutA);
-  var sinA = Math.sin(donutA);
-  var cosB = Math.cos(donutB);
-  var sinB = Math.sin(donutB);
-
-  for (var k = 0; k < size; k++) {
-    buffer[k] = " ";
-    zbuffer[k] = 0;
-  }
-
-  for (
-    var theta = 0;
-    theta < 6.28;
-    theta += 0.07
-  ) {
-    var cosTheta = Math.cos(theta);
-    var sinTheta = Math.sin(theta);
-
-    for (
-      var phi = 0;
-      phi < 6.28;
-      phi += 0.02
-    ) {
-      var sinPhi = Math.sin(phi);
-      var cosPhi = Math.cos(phi);
-      var circleX = cosTheta + 2;
-      var oneOverZ = 1 / (
-        sinPhi * circleX * sinA
-        + sinTheta * cosA + 5
-      );
-      var t = (
-        sinPhi * circleX * cosA
-        - sinTheta * sinA
-      );
-
-      var xp = 0 | (
-        40 + 30 * oneOverZ
-        * (cosPhi * circleX * cosB - t * sinB)
-      );
-      var yp = 0 | (
-        11 + 15 * oneOverZ
-        * (cosPhi * circleX * sinB + t * cosB)
-      );
-      var idx = xp + DONUT_COLS * yp;
-      var luminance = 0 | (8 * (
-        (
-          sinTheta * sinA
-          - sinPhi * cosTheta * cosA
-        ) * cosB
-        - sinPhi * cosTheta * sinA
-        - sinTheta * cosA
-        - cosPhi * cosTheta * sinB
-      ));
-
-      if (
-        yp >= 0 && yp < DONUT_ROWS
-        && xp >= 0 && xp < DONUT_COLS
-        && oneOverZ > zbuffer[idx]
-      ) {
-        zbuffer[idx] = oneOverZ;
-        buffer[idx] = DONUT_LUMINANCE[
-          luminance > 0 ? luminance : 0
-        ];
-      }
-    }
-  }
-
-  var lines = [];
-  for (var row = 0; row < DONUT_ROWS; row++) {
-    var start = row * DONUT_COLS;
-    lines.push(
-      buffer
-        .slice(start, start + DONUT_COLS)
-        .join("")
-    );
-  }
-  return lines.join("\n");
-}
-
-function startDonut() {
-  if (donutTimer !== null || hasEverGenerated) {
-    return;
-  }
-
-  var pre = document.createElement("pre");
-  pre.id = "donut-pre";
+// The resting state of the output area before any generation and
+// after a New Run: the same hint index.html ships with. (The former
+// idle ASCII scene / donut animations were removed.)
+function showOutputPlaceholder() {
   outputArea.textContent = "";
-  outputArea.appendChild(pre);
-  outputArea.classList.add("donut-active");
-
-  pre.textContent = renderDonutFrame();
-
-  donutTimer = setInterval(function () {
-    pre.textContent = renderDonutFrame();
-  }, 50);
-}
-
-function stopDonut() {
-  if (donutTimer === null) {
-    return;
-  }
-  clearInterval(donutTimer);
-  donutTimer = null;
-  outputArea.classList.remove("donut-active");
-  var pre = document.getElementById("donut-pre");
-  if (pre) {
-    pre.remove();
-  }
-}
-
-// ---- Idle animation dispatchers ----
-
-function startIdleAnimation() {
-  if (hasEverGenerated) {
-    return;
-  }
-  outputArea.textContent = "";
-  if (idleDisplayMode === "donut") {
-    startDonut();
-  } else {
-    window.startAsciiScene(outputArea);
-  }
-}
-
-function stopIdleAnimation() {
-  stopDonut();
-  window.stopAsciiScene();
+  var placeholder = document.createElement("span");
+  placeholder.id = "output-placeholder";
+  placeholder.textContent =
+    "Diffusion output will appear here...";
+  outputArea.appendChild(placeholder);
 }
 
 // ---- Background floating characters ----
@@ -1261,45 +1151,14 @@ function computeDiff() {
   return overlaysComputeDiff(cur, orig, remaskEdits);
 }
 
-// diffColor now lives in overlays.js (shared with Analytics).
-
-// Palette for the diff-overlay layers. The original layer is cyan in
-// ghost mode (blend off); with "Difference blend" on it adopts the
-// edited layer's diff colors so matching tokens cancel to black.
-function diffLayerColor(index, isOriginal) {
-  if (isOriginal && !diffBlend) {
-    return "#2dd4ff";
-  }
-  if (diffData && diffData.origins[index]) {
-    return "#ff8a3d";
-  }
-  if (diffData && diffData.changed[index]) {
-    return "hsl(320, 80%, 66%)";
-  }
-  return "#e6e6e6";
-}
-
-function buildDiffLayerSpans(tokens, isOriginal) {
-  var frag = document.createDocumentFragment();
-  for (var i = 0; i < tokens.length; i++) {
-    var tok = tokens[i];
-    if (!tok) { continue; }
-    var span = document.createElement("span");
-    if (tok.m) {
-      span.textContent = MASK_CHAR;
-      span.style.color = "var(--mask-color)";
-    } else {
-      span.textContent = tok.t;
-      span.style.color = diffLayerColor(i, isOriginal);
-    }
-    frag.appendChild(span);
-  }
-  return frag;
-}
+// diffColor and the layered-diff builder now live in overlays.js
+// (shared with Analytics).
 
 // Draw the original and edited runs at the current frame as two
 // stacked layers (independent opacity + optional difference blend)
-// so overlaps and divergences can be compared directly.
+// so overlaps and divergences can be compared directly. The layer
+// construction is shared via overlaysBuildDiffLayers; this wrapper
+// resolves the per-frame tokens and owns the output container.
 function renderDiffOverlay(frameIndex) {
   if (diffData === null) {
     diffData = computeDiff();
@@ -1311,27 +1170,21 @@ function renderDiffOverlay(frameIndex) {
   var origTokens =
     (oIdx >= 0 ? originalFrameTokens[oIdx] : null) || [];
 
-  var origLayer = document.createElement("div");
-  origLayer.className = "diff-layer diff-layer-original";
-  origLayer.style.opacity = String(diffOriginalOpacity / 100);
-  origLayer.appendChild(
-    buildDiffLayerSpans(origTokens, true)
-  );
-
-  var editLayer = document.createElement("div");
-  editLayer.className = "diff-layer diff-layer-edited";
-  editLayer.style.opacity = String(diffEditedOpacity / 100);
-  if (diffBlend) {
-    editLayer.style.mixBlendMode = "difference";
-  }
-  editLayer.appendChild(
-    buildDiffLayerSpans(editedTokens, false)
-  );
-
   outputArea.textContent = "";
   outputArea.classList.add("diff-overlay-mode");
-  outputArea.appendChild(origLayer);
-  outputArea.appendChild(editLayer);
+  outputArea.appendChild(
+    overlaysBuildDiffLayers(
+      origTokens,
+      editedTokens,
+      diffData,
+      {
+        originalOpacity: diffOriginalOpacity,
+        editedOpacity: diffEditedOpacity,
+        blend: diffBlend,
+      },
+      MASK_CHAR
+    )
+  );
 }
 
 // Which coloring actually paints tokens: an explicit overlay
@@ -1674,13 +1527,6 @@ function cancelPromptHistory() {
 
 var SETTINGS_KEY = "diffusion_settings";
 
-// Read one string setting from a parsed object, falling back to the
-// default when absent or of the wrong type.
-function _readStr(parsed, key, fallback) {
-  var value = parsed[key];
-  return typeof value === "string" ? value : fallback;
-}
-
 function loadSettings() {
   try {
     var raw = localStorage.getItem(SETTINGS_KEY);
@@ -1689,11 +1535,12 @@ function loadSettings() {
     }
     var parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object") {
-      appSettings.idleDisplay = _readStr(
-        parsed, "idleDisplay", DEFAULT_SETTINGS.idleDisplay
-      );
       appSettings.highlightTokens = !!parsed.highlightTokens;
       appSettings.commitOrder = !!parsed.commitOrder;
+      appSettings.diffusionText = !!parsed.diffusionText;
+      appSettings.diffusionTextMode =
+        parsed.diffusionTextMode === "cycle"
+          ? "cycle" : "default";
     }
   } catch (_e) {
     // Unavailable or corrupt storage: keep defaults. Note that
@@ -1714,9 +1561,10 @@ function saveSettings() {
 
 function settingsEqual(a, b) {
   return (
-    a.idleDisplay === b.idleDisplay
-    && a.highlightTokens === b.highlightTokens
+    a.highlightTokens === b.highlightTokens
     && a.commitOrder === b.commitOrder
+    && a.diffusionText === b.diffusionText
+    && a.diffusionTextMode === b.diffusionTextMode
   );
 }
 
@@ -1738,15 +1586,12 @@ function updateStatusPrefs() {
 }
 
 // Apply the (saved) settings to the live app: status bar, hover
-// highlight, idle animation choice, and any active token coloring.
+// highlight, and any active token coloring.
 function applySettings() {
   updateStatusPrefs();
   updateHoverHighlight();
-  if (idleDisplayMode !== appSettings.idleDisplay) {
-    stopIdleAnimation();
-    idleDisplayMode = appSettings.idleDisplay;
-    startIdleAnimation();
-  }
+  // Toggling the effect starts/stops the Generate idle cycle live.
+  updateGenerateIdleEffect();
   if (scrubberActive) {
     renderFrameWithTokens(currentScrubFrame);
   }
@@ -1760,8 +1605,15 @@ function syncSettingsControls() {
   if (settingCommitCb) {
     settingCommitCb.checked = stagedSettings.commitOrder;
   }
-  if (selectIdleDisplay) {
-    selectIdleDisplay.value = stagedSettings.idleDisplay;
+  if (settingDiffusionCb) {
+    settingDiffusionCb.checked = stagedSettings.diffusionText;
+  }
+  if (selectDiffusionMode) {
+    selectDiffusionMode.value = stagedSettings.diffusionTextMode;
+  }
+  // The Mode sub-setting only applies when the effect is on.
+  if (diffusionModeRow) {
+    diffusionModeRow.hidden = !stagedSettings.diffusionText;
   }
 }
 
@@ -1803,6 +1655,21 @@ function setSettingsStatus(text, saved) {
 // Token-level rendering for scrubber mode.
 // Each token is a clickable span; resolved tokens
 // can be clicked to toggle remasking.
+// Map a still-masked position's predicted confidence to opacity:
+// unresolved/0-confidence masks sit at a solid floor and grow more
+// opaque (energized) as the model's confidence rises toward the reveal
+// range (~0.3+ for low_confidence), then the token resolves into text.
+var MASK_OPACITY_FLOOR = 0.35;
+var MASK_OPACITY_CAP = 0.4;
+
+function maskOpacity(c) {
+  if (typeof c !== "number" || c <= 0) {
+    return MASK_OPACITY_FLOOR;
+  }
+  var frac = Math.min(c / MASK_OPACITY_CAP, 1);
+  return MASK_OPACITY_FLOOR + (1 - MASK_OPACITY_FLOOR) * frac;
+}
+
 function renderFrameWithTokens(frameIndex) {
   var tokens = frameTokens[frameIndex];
   if (!tokens) {
@@ -1835,14 +1702,19 @@ function renderFrameWithTokens(frameIndex) {
       remaskedPositions[i] === true;
 
     if (isUserRemasked) {
+      // Orange edit-selection highlight: kept fully opaque so the
+      // selection reads clearly (distinct from output masks).
       span.className =
         "token-span token-remasked";
       span.textContent = MASK_CHAR;
       span.title = tline + "Confidence: 0";
     } else if (tok.m) {
+      // Output mask opacity tracks the model's live predicted
+      // confidence for the position (0/absent -> solid floor).
       span.className = "token-span token-mask";
       span.textContent = MASK_CHAR;
-      span.title = tline + "Confidence: 0";
+      span.style.opacity = String(maskOpacity(tok.c));
+      span.title = tline + "Confidence: " + confLabel(tok.c);
     } else {
       span.className =
         "token-span token-resolved"
@@ -1973,19 +1845,112 @@ function updateEditFramesLock() {
 // Once a run is finalized (an edited run has been saved), the primary
 // button becomes "New Run" (clears the canvas for a fresh prompt);
 // otherwise it is "Generate". Keeps the same slot/size.
+function currentGenerateLabel() {
+  return editedRunSaved ? "New Run" : "Generate";
+}
+
 function updateGenerateButton() {
   if (editedRunSaved) {
-    btnGenerate.textContent = "New Run";
     btnGenerate.classList.add("is-new-run");
     // New Run is client-side; only a completing save should hold it.
     btnGenerate.disabled = isSaving;
   } else {
-    btnGenerate.textContent = "Generate";
     btnGenerate.classList.remove("is-new-run");
     btnGenerate.disabled =
       isGenerating
       || isSaving
       || !(modelReady && paramsValid);
+  }
+  // The label text is owned by the idle-effect controller (it either
+  // sets the static label or drives the looping diffusion reveal).
+  updateGenerateIdleEffect();
+}
+
+// ---- Generate button idle diffusion cycle ----
+
+// One-time discovery nudge: the Generate button always idles with the
+// diffusion cycle before the user's first-ever fresh run, then follows
+// the "Render diffusion-style text" setting. Persisted per browser.
+var GENERATE_TEASED_KEY = "diffusion_generate_teased";
+var generateCycleTimer = null;
+var generateCycleActive = false;
+var generateCycleLabel = "";
+
+function generateTeaserActive() {
+  try {
+    return localStorage.getItem(GENERATE_TEASED_KEY) !== "1";
+  } catch (_e) {
+    return false;
+  }
+}
+
+function markGenerateTeased() {
+  try {
+    localStorage.setItem(GENERATE_TEASED_KEY, "1");
+  } catch (_e) {
+    // Non-fatal: the teaser may simply repeat next session.
+  }
+}
+
+// The button idles with the diffusion cycle while it is clickable:
+// always before the first fresh run, and thereafter only when the
+// effect setting is on. Reduced motion disables it entirely.
+function generateIdleActive() {
+  if (!btnGenerateLabel || prefersReducedMotion()) {
+    return false;
+  }
+  if (btnGenerate.disabled || isGenerating) {
+    return false;
+  }
+  return generateTeaserActive() || !!appSettings.diffusionText;
+}
+
+function startGenerateCycle() {
+  if (generateCycleActive) {
+    return;
+  }
+  generateCycleActive = true;
+  var runOnce = function () {
+    generateCycleLabel = currentGenerateLabel();
+    denoiseReveal(
+      btnGenerateLabel,
+      generateCycleLabel,
+      function () {
+        generateCycleTimer = setTimeout(
+          runOnce, STATUS_CYCLE_HOLD_MS
+        );
+      },
+      true
+    );
+  };
+  runOnce();
+}
+
+function stopGenerateCycle() {
+  generateCycleActive = false;
+  cancelDenoise(btnGenerateLabel);
+  if (generateCycleTimer !== null) {
+    clearTimeout(generateCycleTimer);
+    generateCycleTimer = null;
+  }
+  if (btnGenerateLabel) {
+    btnGenerateLabel.textContent = currentGenerateLabel();
+  }
+}
+
+function updateGenerateIdleEffect() {
+  if (generateIdleActive()) {
+    // Restart if the label changed (e.g. Generate -> New Run) so the
+    // cycle animates the correct word without a lag.
+    if (
+      generateCycleActive
+      && generateCycleLabel !== currentGenerateLabel()
+    ) {
+      stopGenerateCycle();
+    }
+    startGenerateCycle();
+  } else {
+    stopGenerateCycle();
   }
 }
 
@@ -2128,6 +2093,111 @@ function toggleRemaskPosition(pos) {
   updateGuidedUI();
 }
 
+// ---- Randomize remasks (Edit Frames) ----
+
+// Frame the randomize row was last seeded for, so the target count is
+// re-initialized from the selection only when the frame changes (not
+// on every re-render, which would fight the user's slider input).
+var randomizeInitFrame = null;
+
+function clampInt(value, low, high) {
+  if (value < low) {
+    return low;
+  }
+  if (value > high) {
+    return high;
+  }
+  return value;
+}
+
+// Frame-array indices of resolved (non-mask) tokens: the candidates
+// that can be remasked. Masked positions are never remaskable.
+function resolvedPositions(frameIndex) {
+  var tokens = frameTokens[frameIndex];
+  var out = [];
+  if (!tokens) {
+    return out;
+  }
+  for (var i = 0; i < tokens.length; i++) {
+    if (tokens[i] && !tokens[i].m) {
+      out.push(i);
+    }
+  }
+  return out;
+}
+
+// Sync the randomize row to the current edit frame: total resolved
+// count, slider/input bounds, and (on a frame change) seed the target
+// N from the frame's existing selection.
+function updateRandomizeRow() {
+  if (!remaskRandomizeRow) {
+    return;
+  }
+  var total = resolvedPositions(currentScrubFrame).length;
+  if (randomizeInitFrame !== currentScrubFrame) {
+    randomizeInitFrame = currentScrubFrame;
+    var selected = Object.keys(remaskedPositions).length;
+    remaskRandomSlider.value = String(Math.min(selected, total));
+  }
+  var target = clampInt(
+    parseInt(remaskRandomSlider.value, 10) || 0, 0, total
+  );
+  remaskRandomTotal.textContent = String(total);
+  remaskRandomSlider.max = String(total);
+  remaskRandomSlider.value = String(target);
+  remaskRandomCount.max = String(total);
+  remaskRandomCount.value = String(target);
+  var disabled = total === 0;
+  remaskRandomSlider.disabled = disabled;
+  remaskRandomCount.disabled = disabled;
+  btnRemaskShuffle.disabled = disabled;
+}
+
+// Replace the current selection with N random resolved positions on
+// the current frame (partial Fisher-Yates), then re-render so they
+// show as remasked and Lock In can proceed as usual.
+function shuffleRemasks() {
+  var candidates = resolvedPositions(currentScrubFrame);
+  var total = candidates.length;
+  if (total === 0) {
+    return;
+  }
+  var n = clampInt(
+    parseInt(remaskRandomSlider.value, 10) || 0, 0, total
+  );
+  for (var i = 0; i < n; i++) {
+    var j = i + Math.floor(
+      Math.random() * (total - i)
+    );
+    var swap = candidates[i];
+    candidates[i] = candidates[j];
+    candidates[j] = swap;
+  }
+  remaskedPositions = {};
+  for (var k = 0; k < n; k++) {
+    remaskedPositions[candidates[k]] = true;
+  }
+  saveFrameSelections(currentScrubFrame);
+  renderFrameWithTokens(currentScrubFrame);
+  updateGuidedUI();
+}
+
+// Cosmetic press feedback: run the diffusion reveal on the Shuffle
+// label with a glow that lingers on the way out (the CSS transition
+// handles the lag). Gated on the same effect setting as the status bar.
+function playShuffleDiffusion() {
+  if (!btnRemaskShuffle || !shuffleLabel) {
+    return;
+  }
+  if (!diffusionEffectActive()) {
+    return;
+  }
+  btnRemaskShuffle.classList.add("is-diffusing");
+  denoiseReveal(shuffleLabel, "Shuffle", function () {
+    btnRemaskShuffle.classList.remove("is-diffusing");
+  });
+}
+
 // ---- Guided multi-frame edit mode ----
 
 function resetGuidedMode() {
@@ -2136,6 +2206,7 @@ function resetGuidedMode() {
   guidedTargetFrame = null;
   remaskModeEdits = [];
   preEditSnapshot = null;
+  randomizeInitFrame = null;
   guidedEditControls.hidden = true;
   scrubberSlider.disabled = false;
   scrubberSlider.min = "0";
@@ -2302,6 +2373,9 @@ function updateGuidedUI() {
   btnResumeEnd.hidden = true;
   btnConfirmEdit.hidden = true;
   btnRetryEdit.hidden = true;
+  if (remaskRandomizeRow) {
+    remaskRandomizeRow.hidden = true;
+  }
 
   if (remaskMode === null) {
     guidedEditControls.hidden = true;
@@ -2335,6 +2409,10 @@ function updateGuidedUI() {
       btnLockIn.disabled = count === 0;
       btnClearGuided.hidden = false;
       btnClearGuided.disabled = count === 0;
+      if (remaskRandomizeRow) {
+        remaskRandomizeRow.hidden = false;
+        updateRandomizeRow();
+      }
       lockScrubberNav();
       break;
 
@@ -2587,25 +2665,176 @@ function setGenerating(active) {
 // the base word stays put in the right-aligned status slot.
 var statusDotsTimer = null;
 var statusDotsCount = 3;
+var statusCycleTimer = null;
+
+// Block glyphs for the optional "diffusion-style text" reveal.
+var DENOISE_GLYPHS = "\u2591\u2592\u2593";
+
+function prefersReducedMotion() {
+  try {
+    return window.matchMedia(
+      "(prefers-reduced-motion: reduce)"
+    ).matches;
+  } catch (_e) {
+    return false;
+  }
+}
+
+// True when the diffusion-text effect should actually animate.
+function diffusionEffectActive() {
+  return !!appSettings.diffusionText && !prefersReducedMotion();
+}
+
+// Per-element reveal timer, stored on the element so independent
+// targets (status bar, Shuffle label) can animate simultaneously
+// without one cancelling the other.
+function cancelDenoise(el) {
+  if (el && el._denoiseTimer) {
+    clearInterval(el._denoiseTimer);
+    el._denoiseTimer = null;
+  }
+}
+
+// Reveal `text` in `el` with a brief scramble-to-resolve ("denoising")
+// pass: characters lock in left-to-right while the rest keep flickering
+// through block glyphs, then `onDone` runs. Instant when the effect is
+// off or the OS prefers reduced motion (an accessibility escape hatch).
+// `force` animates regardless of the setting (still honoring reduced
+// motion) for the one-time Generate teaser.
+function denoiseReveal(el, text, onDone, force) {
+  cancelDenoise(el);
+  var active = force
+    ? !prefersReducedMotion()
+    : diffusionEffectActive();
+  if (!active || text.length === 0) {
+    el.textContent = text;
+    if (onDone) {
+      onDone();
+    }
+    return;
+  }
+  var steps_total = 8;
+  var step = 0;
+  var render = function () {
+    var revealed = Math.floor(
+      (step / steps_total) * text.length
+    );
+    var out = "";
+    for (var i = 0; i < text.length; i++) {
+      if (i < revealed || text[i] === " ") {
+        out += text[i];
+      } else {
+        out += DENOISE_GLYPHS[
+          Math.floor(Math.random() * DENOISE_GLYPHS.length)
+        ];
+      }
+    }
+    el.textContent = out;
+    step += 1;
+    if (step > steps_total) {
+      cancelDenoise(el);
+      el.textContent = text;
+      if (onDone) {
+        onDone();
+      }
+    }
+  };
+  render();
+  el._denoiseTimer = setInterval(render, 45);
+}
+
+// Reverse of denoiseReveal: dissolve `el`'s current text into solid
+// mask glyphs (0-confidence "░") left-to-right, then run `onDone`.
+// Code-point safe so the lock emoji collapses as one glyph. Instant
+// when the effect is off or reduced motion is preferred.
+function denoiseDissolve(el, onDone) {
+  var chars = Array.from(el.textContent);
+  cancelDenoise(el);
+  if (!diffusionEffectActive() || chars.length === 0) {
+    if (onDone) {
+      onDone();
+    }
+    return;
+  }
+  var steps_total = 8;
+  var step = 1;
+  var render = function () {
+    var masked = Math.ceil(
+      (step / steps_total) * chars.length
+    );
+    var out = "";
+    for (var i = 0; i < chars.length; i++) {
+      if (chars[i] === " ") {
+        out += " ";
+      } else if (i < masked) {
+        out += MASK_CHAR;
+      } else {
+        out += chars[i];
+      }
+    }
+    el.textContent = out;
+    step += 1;
+    if (step > steps_total) {
+      cancelDenoise(el);
+      if (onDone) {
+        onDone();
+      }
+    }
+  };
+  render();
+  el._denoiseTimer = setInterval(render, 40);
+}
+
+// Cycle mode: re-diffuse the base word, hold the resolved text briefly,
+// then diffuse again, looping until stopStatusDots. The re-diffusion is
+// the activity indicator, so the trailing dots are omitted here.
+var STATUS_CYCLE_HOLD_MS = 700;
+
+function startStatusCycle(base) {
+  var runOnce = function () {
+    denoiseReveal(statusMessage, base, function () {
+      statusCycleTimer = setTimeout(runOnce, STATUS_CYCLE_HOLD_MS);
+    });
+  };
+  runOnce();
+}
 
 function startStatusDots(base) {
   stopStatusDots();
   statusDotsCount = 3;
   statusMessage.style.color = "";
-  var render = function () {
-    var dots = ".".repeat(statusDotsCount);
-    var pad = "\u00A0".repeat(3 - statusDotsCount);
-    statusMessage.textContent = base + dots + pad;
-    statusDotsCount = (statusDotsCount + 1) % 4;
-  };
-  render();
-  statusDotsTimer = setInterval(render, 400);
+
+  if (
+    diffusionEffectActive()
+    && appSettings.diffusionTextMode === "cycle"
+  ) {
+    startStatusCycle(base);
+    return;
+  }
+
+  // Default: reveal the base word once (denoise effect when enabled),
+  // then cycle the trailing dots on the resolved text.
+  denoiseReveal(statusMessage, base, function () {
+    var render = function () {
+      var dots = ".".repeat(statusDotsCount);
+      var pad = "\u00A0".repeat(3 - statusDotsCount);
+      statusMessage.textContent = base + dots + pad;
+      statusDotsCount = (statusDotsCount + 1) % 4;
+    };
+    render();
+    statusDotsTimer = setInterval(render, 400);
+  });
 }
 
 function stopStatusDots() {
+  cancelDenoise(statusMessage);
   if (statusDotsTimer !== null) {
     clearInterval(statusDotsTimer);
     statusDotsTimer = null;
+  }
+  if (statusCycleTimer !== null) {
+    clearTimeout(statusCycleTimer);
+    statusCycleTimer = null;
   }
 }
 
@@ -2671,9 +2900,8 @@ function startNewRun() {
   clearSessionState();
   resetStatus();
   setGenerating(false);
-  // Return to the pre-generation idle canvas.
-  hasEverGenerated = false;
-  startIdleAnimation();
+  // Return to the pre-generation resting state.
+  showOutputPlaceholder();
   promptInput.focus();
 }
 
@@ -2698,10 +2926,9 @@ function startGeneration() {
     return;
   }
 
-  if (!hasEverGenerated) {
-    hasEverGenerated = true;
-    stopIdleAnimation();
-  }
+  // The first fresh run retires the Generate teaser: from now on the
+  // idle diffusion cycle follows the setting.
+  markGenerateTeased();
 
   // A fresh run abandons any in-progress edit session and clears the
   // previous run's state. Record the prompt in history first.
@@ -2749,6 +2976,61 @@ function tokenRecordsFrom(frames) {
     out.push(records);
   }
   return out;
+}
+
+// ---- "New run saved" Analytics cue ----
+
+// Session-scoped so the dot survives an Analytics-and-back round trip
+// until the runs are actually viewed (analytics.js clears it on load).
+var ANALYTICS_CUE_KEY = "diffusion_analytics_new";
+
+function analyticsCueActive() {
+  try {
+    return sessionStorage.getItem(ANALYTICS_CUE_KEY) === "1";
+  } catch (_e) {
+    return false;
+  }
+}
+
+// Reflect the persisted cue flag on the header dot (called at boot).
+function refreshAnalyticsCue() {
+  if (analyticsNewDot) {
+    analyticsNewDot.hidden = !analyticsCueActive();
+  }
+}
+
+// One-shot "+1" that rises and fades above the Analytics link.
+function flashAnalyticsPlusOne() {
+  if (!linkAnalytics || prefersReducedMotion()) {
+    return;
+  }
+  var plus = document.createElement("span");
+  plus.className = "analytics-plus-one";
+  plus.textContent = "+1";
+  plus.setAttribute("aria-hidden", "true");
+  linkAnalytics.appendChild(plus);
+  plus.addEventListener("animationend", function () {
+    plus.remove();
+  });
+  // Fallback removal if animationend never fires.
+  setTimeout(function () {
+    if (plus.parentNode) {
+      plus.remove();
+    }
+  }, 1500);
+}
+
+// Light up the Analytics link after a successful save.
+function showAnalyticsCue() {
+  try {
+    sessionStorage.setItem(ANALYTICS_CUE_KEY, "1");
+  } catch (_e) {
+    // Non-fatal: the dot just will not persist across navigation.
+  }
+  if (analyticsNewDot) {
+    analyticsNewDot.hidden = false;
+  }
+  flashAnalyticsPlusOne();
 }
 
 function saveRun() {
@@ -2839,6 +3121,8 @@ function saveRun() {
         // round-trip to Analytics and back keeps Edit Frames and Save
         // correctly locked.
         saveSessionState();
+        // Point the user to where the saved run now lives.
+        showAnalyticsCue();
         statusMessage.textContent =
           "Saved to " + result.path;
         statusMessage.style.color =
@@ -3081,15 +3365,43 @@ if (settingCommitCb) {
   });
 }
 
+if (settingDiffusionCb) {
+  settingDiffusionCb.addEventListener("change", function () {
+    stagedSettings.diffusionText = settingDiffusionCb.checked;
+    if (diffusionModeRow) {
+      diffusionModeRow.hidden = !settingDiffusionCb.checked;
+    }
+    updateSettingsButtons();
+  });
+}
+
+if (diffusionModeMount) {
+  selectDiffusionMode = createCustomSelect(
+    [
+      { value: "default", label: "Default" },
+      { value: "cycle", label: "Cycle" },
+    ],
+    appSettings.diffusionTextMode
+  );
+  diffusionModeMount.appendChild(selectDiffusionMode);
+  sizeCustomSelect(selectDiffusionMode);
+  selectDiffusionMode.addEventListener("change", function () {
+    // Stage only; applied on Save like the other preferences.
+    stagedSettings.diffusionTextMode = selectDiffusionMode.value;
+    updateSettingsButtons();
+  });
+}
+
 if (btnSettingsSave) {
   btnSettingsSave.addEventListener("click", function () {
     if (settingsEqual(stagedSettings, appSettings)) {
       return;
     }
     setSettingsStatus("Saving\u2026", false);
-    appSettings.idleDisplay = stagedSettings.idleDisplay;
     appSettings.highlightTokens = stagedSettings.highlightTokens;
     appSettings.commitOrder = stagedSettings.commitOrder;
+    appSettings.diffusionText = stagedSettings.diffusionText;
+    appSettings.diffusionTextMode = stagedSettings.diffusionTextMode;
     saveSettings();
     applySettings();
     // Disable + blur the button so it visibly de-presses.
@@ -3106,10 +3418,12 @@ if (btnSettingsSave) {
 
 if (btnSettingsReset) {
   btnSettingsReset.addEventListener("click", function () {
-    stagedSettings.idleDisplay = DEFAULT_SETTINGS.idleDisplay;
     stagedSettings.highlightTokens =
       DEFAULT_SETTINGS.highlightTokens;
     stagedSettings.commitOrder = DEFAULT_SETTINGS.commitOrder;
+    stagedSettings.diffusionText = DEFAULT_SETTINGS.diffusionText;
+    stagedSettings.diffusionTextMode =
+      DEFAULT_SETTINGS.diffusionTextMode;
     syncSettingsControls();
     updateSettingsButtons();
     setSettingsStatus("", false);
@@ -3125,9 +3439,20 @@ btnSelectFrame.addEventListener(
   "click", selectCurrentFrame
 );
 
-btnLockIn.addEventListener(
-  "click", lockInEdits
-);
+btnLockIn.addEventListener("click", function () {
+  if (!diffusionEffectActive()) {
+    lockInEdits();
+    return;
+  }
+  // Dissolve the label (letters + lock emoji) into 0-confidence mask
+  // glyphs, then commit (which hides the button). Restore the label
+  // afterward so it reads correctly the next time it appears.
+  var label = btnLockIn.textContent;
+  denoiseDissolve(btnLockIn, function () {
+    lockInEdits();
+    btnLockIn.textContent = label;
+  });
+});
 
 btnClearGuided.addEventListener(
   "click",
@@ -3138,6 +3463,31 @@ btnClearGuided.addEventListener(
     updateGuidedUI();
   }
 );
+
+// Randomize-remask controls: the slider and number input mirror one
+// target count; Shuffle applies it. They only set the target, so they
+// never render until Shuffle is pressed.
+if (remaskRandomSlider) {
+  remaskRandomSlider.addEventListener("input", function () {
+    remaskRandomCount.value = remaskRandomSlider.value;
+  });
+}
+if (remaskRandomCount) {
+  remaskRandomCount.addEventListener("input", function () {
+    var total = resolvedPositions(currentScrubFrame).length;
+    var n = clampInt(
+      parseInt(remaskRandomCount.value, 10) || 0, 0, total
+    );
+    remaskRandomCount.value = String(n);
+    remaskRandomSlider.value = String(n);
+  });
+}
+if (btnRemaskShuffle) {
+  btnRemaskShuffle.addEventListener("click", function () {
+    shuffleRemasks();
+    playShuffleDiffusion();
+  });
+}
 
 btnEditAnother.addEventListener(
   "click",
@@ -3304,9 +3654,10 @@ linkSettings.addEventListener(
   function (e) {
     e.preventDefault();
     // Start editing from a fresh copy of the applied settings.
-    stagedSettings.idleDisplay = appSettings.idleDisplay;
     stagedSettings.highlightTokens = appSettings.highlightTokens;
     stagedSettings.commitOrder = appSettings.commitOrder;
+    stagedSettings.diffusionText = appSettings.diffusionText;
+    stagedSettings.diffusionTextMode = appSettings.diffusionTextMode;
     syncSettingsControls();
     updateSettingsButtons();
     setSettingsStatus("", false);
@@ -3359,28 +3710,6 @@ document.addEventListener(
     }
   }
 );
-
-// ---- Settings: idle display toggle ----
-
-if (idleDisplayMount) {
-  selectIdleDisplay = createCustomSelect(
-    [
-      { value: "default", label: "Default (ASCII Scene)" },
-      { value: "donut", label: "donut.c (Spinning Torus)" },
-    ],
-    appSettings.idleDisplay
-  );
-  idleDisplayMount.appendChild(selectIdleDisplay);
-  sizeCustomSelect(selectIdleDisplay);
-  selectIdleDisplay.addEventListener(
-    "change",
-    function () {
-      // Stage only; applied on Save like the other preferences.
-      stagedSettings.idleDisplay = selectIdleDisplay.value;
-      updateSettingsButtons();
-    }
-  );
-}
 
 // ---- Session persistence (survives Analytics navigation) ----
 
@@ -3490,7 +3819,6 @@ function restoreSessionState() {
     promptInput.value = s.prompt;
   }
 
-  hasEverGenerated = true;
   if (thinkingPanel && thinkingContent) {
     if (s.thinking) {
       thinkingContent.textContent = s.thinking;
@@ -3525,12 +3853,9 @@ function boot() {
   loadSettings();
   loadPromptHistory();
   updatePromptHistoryUI();
-  // Seed the idle-animation choice and reflect prefs without
-  // starting the animation here (boot decides that below based on
-  // whether a prior session is restored).
-  idleDisplayMode = appSettings.idleDisplay;
   updateStatusPrefs();
   updateHoverHighlight();
+  refreshAnalyticsCue();
   fetchModels()
     .then(function (info) {
       var list = info.models || [];
@@ -3556,12 +3881,12 @@ function boot() {
         restored = false;
       }
       if (!restored) {
-        startIdleAnimation();
+        showOutputPlaceholder();
       }
       connect();
     })
     .catch(function () {
-      startIdleAnimation();
+      showOutputPlaceholder();
       connect();
     });
 }

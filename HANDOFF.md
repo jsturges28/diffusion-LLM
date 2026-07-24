@@ -25,17 +25,23 @@ analytics suite.
 
 ## Architecture (process isolation; incompatible transformers versions)
 
-- **Supervisor**: `src/web/server.py` (runs in `.venv`). Model Manager spawns ONE
-  worker at a time with a pre-flight VRAM check; proxies `/ws`; serves analytics +
-  save + run-delete; auto-stamps HTML asset URLs.
+- **Supervisor**: `src/web/server.py` (runs in `.venv`). Serves the **Main Menu**
+  at `/` and the generator at `/generate` (gated: redirects to `/` when no model
+  is active; `/index.html` 307s to `/generate`). Model Manager spawns ONE worker
+  at a time with a pre-flight VRAM check; proxies `/ws` (no auto-boot: it errors
+  and closes if no worker is active); serves analytics + save + run-delete;
+  auto-stamps HTML asset URLs. `/api/models` also returns `gpu_name` +
+  `free_vram_gib` + per-model `fits` for the menu.
 - **Workers**: `src/backends/{llada_worker,dgemma_worker}.py` via `run_worker.py`;
   contract in `protocol.py` / `registry.py` / `worker_base.py`. LLaDA → `.venv`
   (transformers 4.38.2); DiffusionGemma → `.venv-dgemma` (transformers 5.13).
 - **Samplers**: `src/inference/{streaming_sampler,dgemma_sampler}.py`; NF4 in
   `dgemma_nf4.py`. Analytics metrics: `src/analytics/metrics.py`.
-- **Frontend** (shared, schema-driven): `src/web/static/{index.html, app.js,
-  overlays.js, analytics.html, analytics.js, analytics.css, style.css,
-  custom_select.js, ascii_scene.js}`.
+- **Frontend** (shared, schema-driven): `src/web/static/{menu.html, menu.js,
+  index.html, app.js, overlays.js, analytics.html, analytics.js, analytics.css,
+  style.css, custom_select.js}` + `assets/title-screen.{webm,mp4}`. `overlays.js`
+  holds the shared layered-diff builder (`overlaysBuildDiffLayers`); the old
+  `ascii_scene.js` idle animation was removed.
 - **Desktop**: `desktop.py` (pywebview; owns the server lifecycle — uvicorn on an
   ephemeral localhost port on a daemon thread, graceful shutdown frees worker VRAM
   on close; prefers Qt/QtWebEngine via `_select_gui`, falls back to GTK;
@@ -43,26 +49,33 @@ analytics suite.
   `scripts/install_desktop_entry.sh` generates a Linux `.desktop`; `assets/icon.svg`
   is the app icon.
 
-## Recently shipped
+## Recently shipped (this session)
 
-- **Durable overlays**: per-token records `{t,m,id,c}` + the pre-edit snapshot
-  persisted per run (`tokens.json` / `original_tokens.json`); overlay math shared
-  in `overlays.js`; a static commit-order / Diff-vs-Original viewer in the
-  Analytics run modal.
-- **Analytics run detail** is now a wide fade-in modal (X / click-outside) with
-  the token-overlay canvas as the centerpiece + a corner overlay drawer (None /
-  Commit Order / Diff vs Original), a sortable "Diff vs Original?" column, pruned
-  Group By, red trashcans, charts on the right.
-- **Guided editing**: Confirm(✓)/Retry(↺) review step after Resume to End; Edit
-  Frames auto-saves the original run on entry; Edit Frames locks after an edited
-  run is saved (until next Generate); Generate / New Run / Edit Frames all freeze
-  during a save; "Saving run…" status + dimmed scrubber during save.
-- **Prompt history** (localStorage) with a browse control (‹/› + `i/N` + ✓/✗) at
-  the prompt box top-right; **New Run** flow (Generate becomes "New Run" once a run
-  is finalized, clearing the canvas/prompt for a fresh start).
-- **Optional desktop app** (pywebview), named "LLM XAI Visualizer".
-- **Automatic asset cache-busting**: server stamps `?v=<mtime>` on local CSS/JS at
-  serve time. No manual `?v` bumps — edit and reload.
+- **Main Menu** at `/` (`menu.html` / `menu.js`): a looping title-screen video
+  (`assets/title-screen.webm` with an `.mp4` fallback; WebM decodes in webviews
+  that lack H.264) over a model picker showing the detected GPU + free VRAM and
+  greying out models that will not fit. Selecting a model activates its worker and
+  navigates to `/generate`. Fallback to the animated grid if the video can't play.
+- **Generation gated behind model selection**: generator moved to `/generate`
+  (`/index.html` 307s there); `serve_generate` redirects to `/` when no model is
+  active; the `/ws` proxy no longer auto-boots a default worker. `/api/models`
+  gained `gpu_name` + `free_vram_gib` + per-model `fits` (effective-VRAM: a
+  resident model's VRAM counts as reclaimable).
+- **Consistent header nav**: Menu / Generation / Analytics across pages. On
+  Analytics the **Generation** link (`#link-generation`) appears only when a model
+  is resident (checked via `/api/models` `active`); stale back-icon and
+  empty-state links fixed.
+- **Analytics layered Diff vs Original** (#1 shipped): the run modal's Diff
+  overlay now uses the shared `overlaysBuildDiffLayers` with Original/Edited
+  opacity sliders + a Difference-blend toggle (final frame), matching the
+  generator; `app.js` refactored onto the same helper.
+- **Removed the idle-animation feature**: deleted `ascii_scene.js`, the donut,
+  and the Idle Display setting; the output area's resting state is now a plain
+  `showOutputPlaceholder()`.
+- Prior sessions (context): durable overlays + analytics token viewer, the wide
+  analytics detail modal, guided-edit Confirm/Retry, prompt history + New Run,
+  the optional desktop app, and automatic asset cache-busting. See git log /
+  `README.md` for detail.
 
 ## Conventions
 
@@ -74,51 +87,12 @@ analytics suite.
   a manual-verification checklist.
 - See `AGENTS.md` for the full workflow, commit discipline, and this handoff habit.
 
-## Where to pick up (six items; decisions settled — confirm, then deliberate scope)
+## Where to pick up (items 4-6; items 1-3 shipped this session)
 
-**1. Analytics "Diff vs Original" sliders.** Bring the layered diff (Original /
-Edited opacity sliders + Difference blend) from the generator into the Analytics
-run modal — analytics currently shows only the STATIC final-frame diff. The
-`/frames` endpoint already serves both edited + original token streams, so this is
-porting the layered render (`app.js` `renderDiffOverlay` / `buildDiffLayerSpans` /
-`diffLayerColor` / `#diff-overlay-controls`) — ideally EXTRACTED into shared
-`overlays.js` — plus the control row into analytics. Default: sliders on the final
-frame; a per-frame scrubber in the modal is an optional stretch (saved data
-supports it).
-
-**2. Dedicated Main Menu page (DECIDED: separate page/route, Option B).** A landing
-screen at `/` with the running title screen + a centered model-selection modal
-(green lettering). Each row shows selectability from GPU/VRAM (`free_vram >=`
-registry `min_vram_gib`), a "Checking for GPU and availability…" state while
-checking, and the current GPU + free space. Selecting a model enters the
-Generation page (blank canvas / light "Output will appear here." text). Move
-generation off `/` to its own route; update the server's auto-stamped HTML routes
-(`serve_index` etc.) and `desktop.py` (window opens at `/`, now the menu). Extend
-`/api/models` (or add `/api/system`) with `gpu_name` + `free_vram_gib` + per-model
-`fits` — the supervisor already has `_free_vram_gib()` and `_gpu_name()`. This is
-the architectural core; tackle first.
-
-**2b. Per-model silos + agnostic analytics (design principle for #2).** Let the
-GENERATION UI specialize per model (already schema-driven via registry
-capabilities/param_specs) rather than forcing one model's tooling on another; keep
-ANALYTICS model-agnostic for comparison. Clarified: static analytics comparison
-reads saved token streams and needs NO model loading, so it always works across
-all models' past runs regardless of what's resident; only LIVE cross-model runs
-(future) are VRAM-gated (grey out + tooltip). A dedicated global-comparison page is
-a plausible later home for the static side.
-
-**3. Title screen video.** The maintainer provided an **MP4** (converted from a
-~50MB GIF) at **`src/web/static/assets/title-screen.mp4`** (served at
-`/assets/title-screen.mp4`; the `static/` dir is mounted at `/` in
-`src/web/server.py`). Wire it via `<video autoplay loop muted playsinline>` so it
-**plays on a continuous loop** (`muted` + `playsinline` are required for autoplay to
-start in browsers and WebKitGTK), with a graceful fallback (keep/offer the current
-`ascii_scene.js` / donut idle animation), and use it as the Main Menu backdrop (#2).
-It is committed to the repo (Git LFS if it can't get under ~10MB). **Open decision
-(maintainer):** overlay app title text on the video or leave it as-is; lean on
-whether the MP4 already carries its own title/branding (if it does, skip the overlay
-to avoid clashing; if it is an ambient backdrop, add the app title in the green
-terminal palette). Confirm the asset before finishing #2.
+Items 1 (analytics diff sliders), 2/2b (Main Menu route + per-model silos), and 3
+(title video) shipped this session. The remaining three are independent polish and
+can be tackled in any order. Decisions were settled in earlier deliberation;
+confirm scope, then deliberate → Plan → Agent.
 
 **4. "Render diffusion-style text" Settings toggle.** Persist per-browser like the
 other settings (`appSettings` / localStorage). A scramble→resolve ("denoising")
@@ -138,15 +112,17 @@ the header "Analytics" link with a transient rising "+1" and a glowing green "ne
 dot badge, to point users to where saved runs live. Clear the dot when Analytics is
 opened (session-scoped is fine).
 
-**Suggested sequencing:** settle #2 structure + #3 asset first (they shape the
-shell), then #2/#2b, then #1, then #4/#5/#6 (independent polish) in any order.
+**Suggested sequencing:** #4/#5/#6 are independent; do them in any order. #5
+(randomize remasks) seeds the meta-explainability direction; #4 and #6 are small
+UI polish that can land quickly.
 
 ## North star & backlog
 
 Generalize the backend contract to host open-source **autoregressive LLMs** and
 latent-space probes, reusing the diff/overlay tooling as a cross-model comparison
-lens. Standing backlog (`ROADMAP.md`): multi-canvas DiffusionGemma resume; top-k
-alternatives on hover; per-position entropy sparkline; autoregressive baseline /
-random-prompt generator (preferably a tiny CPU-side AR model in the supervisor —
-model-agnostic, no GPU contention); in-app camera/screenshot-to-Downloads button;
-aggregate analytics across saved runs.
+lens. Standing backlog (`ROADMAP.md`): multi-canvas DiffusionGemma resume; a
+per-frame scrubber for the analytics overlays (the saved token stream already
+carries every frame); top-k alternatives on hover; per-position entropy sparkline;
+autoregressive baseline / random-prompt generator (preferably a tiny CPU-side AR
+model in the supervisor — model-agnostic, no GPU contention); in-app
+camera/screenshot-to-Downloads button; aggregate analytics across saved runs.

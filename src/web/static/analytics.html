@@ -26,19 +26,9 @@
         LLM Analytics
       </h1>
       <nav id="header-nav">
-        <a href="/" class="header-link header-back-link"
-          title="Go back to Generation"
-          aria-label="Go back to Generation">
-          <svg viewBox="0 0 24 24" width="16" height="16"
-            fill="none" stroke="currentColor" stroke-width="2"
-            stroke-linecap="round" stroke-linejoin="round"
-            aria-hidden="true">
-            <path d="M14 21h5a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-5" />
-            <polyline points="9 8 4 12 9 16" />
-            <line x1="4" y1="12" x2="15" y2="12" />
-          </svg>
-        </a>
-        <span class="header-link-sep">|</span>
+        <a href="/" class="header-link">Menu</a>
+        <a href="/generate" id="link-generation"
+          class="header-link" hidden>Generation</a>
         <span class="header-link header-link-active">
           Analytics
         </span>
@@ -90,9 +80,8 @@
           </table>
         </div>
         <p id="runs-empty" class="empty-msg" hidden>
-          No saved runs found. Generate and save a run
-          from the
-          <a href="/">Generator</a> first.
+          No saved runs found. Pick a model from the
+          <a href="/">menu</a> and save a run first.
         </p>
       </section>
 
@@ -135,6 +124,25 @@
                     token data).
                   </div>
                   <div id="overlay-output"></div>
+                </div>
+                <!-- Layered Diff vs Original controls (shown only when
+                     the Diff overlay is selected). -->
+                <div id="overlay-diff-controls" hidden>
+                  <label class="diff-slider-row">
+                    <span class="diff-slider-label diff-orig-label">Original</span>
+                    <input type="range" id="overlay-diff-original-opacity"
+                      min="0" max="100" value="50" />
+                  </label>
+                  <label class="diff-slider-row">
+                    <span class="diff-slider-label diff-edit-label">Edited</span>
+                    <input type="range" id="overlay-diff-edited-opacity"
+                      min="0" max="100" value="100" />
+                  </label>
+                  <label class="diff-blend-row">
+                    <input type="checkbox" id="overlay-diff-blend"
+                      class="app-checkbox" />
+                    <span>Difference blend</span>
+                  </label>
                 </div>
               </section>
             </div>

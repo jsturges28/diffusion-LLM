@@ -32,7 +32,12 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -304,10 +309,6 @@ class ModelManager:
                 await asyncio.sleep(0.5)
         raise RuntimeError("worker health check timed out")
 
-    async def ensure_default(self) -> None:
-        if not self._alive():
-            await self.activate(DEFAULT_MODEL)
-
     async def stop(self) -> None:
         async with self._lock:
             await self._stop_locked()
@@ -340,22 +341,76 @@ async def _shutdown() -> None:
 # -- Model API --
 
 
-@app.get("/api/models")
-async def list_models() -> JSONResponse:
+def _model_fits(
+    info: ModelInfo,
+    *,
+    status: str,
+    free_vram_gib: Optional[float],
+    resident_reclaimable_gib: float,
+) -> bool:
+    """Whether ``info`` can be activated given current VRAM.
+
+    A resident model's VRAM is counted as reclaimable, since the
+    supervisor stops the current worker before spawning the next
+    (see ``_preflight_vram``). Unreadable free VRAM is treated as
+    "fits" to mirror the pre-flight's skip-on-unreadable behavior.
+    """
+    if status == "active":
+        return True
+    if info.min_vram_gib <= 0:
+        return True
+    if free_vram_gib is None:
+        return True
+    return (
+        free_vram_gib + resident_reclaimable_gib
+    ) >= info.min_vram_gib
+
+
+def _models_snapshot() -> Dict[str, Any]:
+    """Registry plus live GPU/VRAM info for the Main Menu.
+
+    Runs the blocking ``nvidia-smi`` probes here so the endpoint can
+    offload it to a thread and keep the event loop responsive.
+    """
+    free_vram_gib = _free_vram_gib()
+    active_id = manager.active_id
+    resident_reclaimable_gib = 0.0
+    if (
+        active_id is not None
+        and manager.status(active_id) == "active"
+        and active_id in REGISTRY
+    ):
+        resident_reclaimable_gib = REGISTRY[
+            active_id
+        ].min_vram_gib
+
     models: List[Dict[str, Any]] = []
     for model_id, info in REGISTRY.items():
         data = info.model_dump()
         data.pop("worker_module", None)
         data.pop("venv_python", None)
-        data["status"] = manager.status(model_id)
+        status = manager.status(model_id)
+        data["status"] = status
+        data["fits"] = _model_fits(
+            info,
+            status=status,
+            free_vram_gib=free_vram_gib,
+            resident_reclaimable_gib=resident_reclaimable_gib,
+        )
         models.append(data)
-    return JSONResponse(
-        {
-            "models": models,
-            "active": manager.active_id,
-            "default": DEFAULT_MODEL,
-        }
-    )
+    return {
+        "models": models,
+        "active": active_id,
+        "default": DEFAULT_MODEL,
+        "gpu_name": _gpu_name(),
+        "free_vram_gib": free_vram_gib,
+    }
+
+
+@app.get("/api/models")
+async def list_models() -> JSONResponse:
+    snapshot = await asyncio.to_thread(_models_snapshot)
+    return JSONResponse(snapshot)
 
 
 @app.post("/api/models/{model_id}/activate")
@@ -415,14 +470,17 @@ async def _pipe(browser: WebSocket, worker: Any) -> None:
 @app.websocket("/ws")
 async def websocket_proxy(browser: WebSocket) -> None:
     await browser.accept()
-    try:
-        await manager.ensure_default()
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("could not start default worker")
+    active_id = manager.active_id
+    if active_id is None or manager.status(active_id) != "active":
+        # Model selection happens on the Main Menu; the generator
+        # never auto-boots a worker. Tell the client to go back.
         await browser.send_json(
             {
                 "type": "error",
-                "message": f"model start failed: {exc}",
+                "message": (
+                    "No model is active. Return to the menu"
+                    " to select one."
+                ),
             }
         )
         await browser.close()
@@ -836,13 +894,29 @@ def _serve_stamped_page(filename: str) -> HTMLResponse:
 
 
 @app.get("/")
-async def serve_index() -> HTMLResponse:
+async def serve_menu() -> HTMLResponse:
+    """Landing page: the model-selection Main Menu."""
+    return _serve_stamped_page("menu.html")
+
+
+@app.get("/generate")
+async def serve_generate() -> Response:
+    """Generator page, gated behind model selection.
+
+    The Main Menu is the single entry point: reaching the generator
+    without an active model (e.g. a direct URL hit) redirects back to
+    the menu to choose one, rather than silently booting a default.
+    """
+    active_id = manager.active_id
+    if active_id is None or manager.status(active_id) != "active":
+        return RedirectResponse(url="/", status_code=307)
     return _serve_stamped_page("index.html")
 
 
 @app.get("/index.html")
-async def serve_index_html() -> HTMLResponse:
-    return _serve_stamped_page("index.html")
+async def serve_index_html() -> RedirectResponse:
+    """Back-compat: the generator now lives at ``/generate``."""
+    return RedirectResponse(url="/generate", status_code=307)
 
 
 @app.get("/analytics.html")

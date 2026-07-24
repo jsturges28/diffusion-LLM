@@ -3,9 +3,11 @@
 Wraps the existing FastAPI supervisor in a native window (pywebview)
 instead of a browser tab, and owns the server lifecycle: it starts
 uvicorn on a background thread bound to localhost on an ephemeral
-port, opens the window against it, and on window close signals a
-graceful shutdown so the model-worker subprocesses (and their VRAM)
-are released through the supervisor's existing shutdown hook.
+port, opens the window against it (at ``/``, the Main Menu, from which
+a model is selected before the generator page), and on window close
+signals a graceful shutdown so the model-worker subprocesses (and
+their VRAM) are released through the supervisor's existing shutdown
+hook.
 
 Run ``.venv/bin/python desktop.py``. The browser path
 (``python main.py``) is unchanged and wraps the same server, so there

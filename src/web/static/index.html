@@ -24,6 +24,8 @@
         <span class="title-accent">Diffusion</span> LLM Visualizer
       </h1>
       <nav id="header-nav">
+        <a href="/" class="header-link"
+          title="Return to the model menu">Menu</a>
         <span class="model-select-label">Model</span>
         <div id="model-select" class="model-select" tabindex="0"
           role="button" aria-haspopup="listbox">
@@ -32,7 +34,7 @@
           <ul id="model-select-list" class="model-select-list"
             role="listbox" hidden></ul>
         </div>
-        <a href="/analytics.html" class="header-link">Analytics</a>
+        <a href="/analytics.html" id="link-analytics" class="header-link">Analytics<span id="analytics-new-dot" class="analytics-new-dot" hidden aria-hidden="true"></span></a>
         <a href="#" id="link-about" class="header-link">About</a>
         <a href="#" id="link-help" class="header-link">Help</a>
         <a href="#" id="link-settings" class="header-link">Settings</a>
@@ -109,7 +111,7 @@
               <path d="M5 13l4 4L19 7" />
             </svg>
           </button>
-          <button id="btn-generate" disabled>Generate</button>
+          <button id="btn-generate" disabled><span id="btn-generate-label">Generate</span></button>
         </div>
       </div>
 
@@ -180,6 +182,17 @@
           <button id="btn-exit-edit" class="btn-secondary">Exit</button>
         </div>
       </div>
+      <div id="remask-randomize-row" hidden>
+        <span class="remask-random-label">Randomize</span>
+        <input type="range" id="remask-random-slider" min="0" max="0" value="0"
+          aria-label="Number of tokens to randomly remask" />
+        <input type="number" id="remask-random-count" min="0" max="0" value="0"
+          class="remask-random-count" aria-label="Count of tokens to remask" />
+        <span class="remask-random-of">of <span id="remask-random-total">0</span></span>
+        <button id="btn-remask-shuffle" class="btn-shuffle" type="button"
+          title="Randomly select this many resolved tokens to remask"><span
+            id="btn-remask-shuffle-label" class="btn-shuffle-label">Shuffle</span></button>
+      </div>
     </section>
 
     <!-- Status bar -->
@@ -231,13 +244,14 @@
       <div class="modal-body">
         <h3>Quick start</h3>
         <ol>
-          <li>Pick a model from the <strong>Model</strong> selector in the header. Switching loads that model and unloads the other (only one fits in GPU memory at a time).</li>
-          <li>Wait for the model to load (the overlay dismisses automatically).</li>
+          <li>On the <strong>Main Menu</strong>, pick a model. Rows that will not fit in the available GPU memory are greyed out. Selecting one loads it and opens this generator (the generator is reachable only after a model is chosen).</li>
+          <li>Wait for the model to load (the overlay dismisses automatically). To switch models later, use the <strong>Model</strong> selector in the header; it unloads the current model and loads the other, since only one fits in GPU memory at a time.</li>
           <li>Type a prompt in the text area.</li>
           <li>Adjust hyperparameters if desired, then click <strong>Generate</strong>.</li>
           <li>Watch the canvas resolve into text in real time; unresolved positions appear as <code>░</code>.</li>
           <li>While the model runs, <strong>Generate</strong> is disabled and the status bar shows an animated <em>Running&hellip;</em> until the run completes.</li>
         </ol>
+        <p>Header links move between pages: <strong>Menu</strong> returns to model selection, and <strong>Analytics</strong> opens the analytics suite. From Analytics, a <strong>Generation</strong> link appears whenever a model is loaded.</p>
 
         <h3>Models</h3>
         <dl>
@@ -326,6 +340,8 @@
         <p>Click <strong>Analytics</strong> in the header to open the Analytics Suite. It reads saved runs from the <code>Results/</code> directory and provides interactive charts for comparing generation behavior across configurations.</p>
         <h4>Run browser</h4>
         <p>Runs can be grouped by <strong>model</strong>, prompt, or any hyperparameter using the <strong>Group by</strong> dropdown (default: <em>Date</em>, i.e. ungrouped and sorted newest-first). Select a run to view its details, including the model, prompt, hyperparameters, timestamp, and final output. The table shows columns shared across models; model-specific hyperparameters stay in the detail panel. To remove a run, click its <strong>trashcan</strong> action: a confirmation modal shows the run's folder path (<code>Results/&lt;timestamp&gt;_&lt;model&gt;</code>) and a toast confirms the deletion.</p>
+        <h4>Token overlay</h4>
+        <p>The detail modal centers a static token view of the run's final frame with its own <strong>Overlay</strong> drawer (top-right), mirroring the generator. <strong>Commit Order</strong> tints tokens by the step they settled on, and <strong>Diff vs Original</strong> (available for edited runs saved with their pre-edit snapshot) stacks the original and edited runs with independent <strong>Original</strong> / <strong>Edited</strong> opacity sliders and a <strong>Difference blend</strong> toggle, plus a <em>Diverged N/total</em> readout. Runs saved before durable overlays (or without token data) show a short unavailable note.</p>
         <h4>Convergence chart</h4>
         <p>Plots the percentage of resolved (unmasked) tokens at each frame. The curve shows how quickly the model commits to its output. If the run includes user remask edits, the transition segments leading into edited frames are highlighted in <strong style="color:#4fc3f7;">blue</strong>, and hovering reveals which token positions were remasked.</p>
         <h4>Timing chart</h4>
@@ -359,10 +375,6 @@
       <h2>Settings</h2>
       <div class="modal-body">
         <div class="settings-row">
-          <label>Idle Display</label>
-          <span id="idle-display-mount"></span>
-        </div>
-        <div class="settings-row">
           <div class="settings-label-group">
             <label>Highlight tokens</label>
             <span class="settings-desc">Softly highlights the full span of the token under your cursor while scrubbing frames. Applies to any view.</span>
@@ -381,6 +393,23 @@
             <input type="checkbox" id="setting-commit-order" />
             <span class="toggle-slider"></span>
           </label>
+        </div>
+        <div class="settings-row">
+          <div class="settings-label-group">
+            <label>Render diffusion-style text</label>
+            <span class="settings-desc">Status messages resolve from scrambled noise, like a denoising pass. Skipped automatically if your system prefers reduced motion.</span>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="setting-diffusion-text" />
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="settings-row" id="diffusion-mode-row" hidden>
+          <div class="settings-label-group">
+            <label>Mode</label>
+            <span class="settings-desc">Default resolves the text once. Cycle keeps re-diffusing it while the status is active (Running, Saving, and so on).</span>
+          </div>
+          <span id="diffusion-mode-mount"></span>
         </div>
       </div>
       <div class="modal-footer">
@@ -402,7 +431,6 @@
     </div>
   </div>
 
-  <script src="/ascii_scene.js"></script>
   <script src="/custom_select.js"></script>
   <script src="/overlays.js"></script>
   <script src="/app.js"></script>

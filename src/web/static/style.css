@@ -18,7 +18,7 @@
   --accent: #00ff41;
   --accent-dim: rgba(0, 255, 65, 0.15);
   --accent-glow: rgba(0, 255, 65, 0.35);
-  --mask-color: #2a6e3a;
+  --mask-color: #00ff41;
   --mask-glow: rgba(0, 255, 65, 0.08);
   --danger: #ff4444;
   --font-mono: "JetBrains Mono", "Fira Code",
@@ -165,6 +165,48 @@ body {
 
 .header-link:hover {
   color: var(--accent);
+}
+
+/* "New run saved" cue on the Analytics link. */
+#link-analytics {
+  position: relative;
+}
+
+.analytics-new-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
+  box-shadow: 0 0 6px var(--accent-glow);
+  animation: analytics-dot-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes analytics-dot-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 6px var(--accent-glow); }
+  50% { opacity: 0.5; box-shadow: 0 0 12px var(--accent-glow); }
+}
+
+/* Transient "+1" that rises and fades above the Analytics link. */
+.analytics-plus-one {
+  position: absolute;
+  left: 50%;
+  top: -2px;
+  transform: translateX(-50%);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--accent);
+  pointer-events: none;
+  white-space: nowrap;
+  animation: analytics-plus-rise 1.2s ease-out forwards;
+}
+
+@keyframes analytics-plus-rise {
+  0% { opacity: 0; transform: translate(-50%, 4px); }
+  20% { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -16px); }
 }
 
 .badge {
@@ -556,60 +598,51 @@ button {
 
 /* Generate is the app's primary action: give it extra height,
    weight, and a soft pulsing glow so it reads as the focal point. */
+/* Translucent so the diffusion glyphs (accent-green) read clearly over
+   a dark tint, matching the Shuffle treatment. The idle diffusion cycle
+   on the label is the "alive" cue, so no CSS pulse. */
 #btn-generate {
   height: 34px;
-  background: var(--accent);
-  color: #000;
+  background: var(--accent-dim);
+  color: var(--accent);
   font-weight: 600;
   letter-spacing: 0.03em;
-  box-shadow: 0 0 12px var(--accent-glow);
+  border: 1px solid rgba(0, 255, 65, 0.4);
+  box-shadow: 0 0 10px var(--accent-glow);
   transition:
     background 0.15s,
+    border-color 0.15s,
     box-shadow 0.2s,
     transform 0.12s;
-  animation: generate-pulse 2.6s ease-in-out infinite;
 }
 
 #btn-generate:hover:not(:disabled) {
-  background: #33ff66;
+  background: rgba(0, 255, 65, 0.22);
+  border-color: var(--accent);
   box-shadow: 0 0 22px var(--accent-glow), 0 0 8px var(--accent-glow);
   transform: translateY(-1px);
-  animation: none;
 }
 
 /* Finalized-run state: same slot as Generate, but a distinct calm blue
-   (no pulse) to signal it starts a fresh run rather than generating. */
+   to signal it starts a fresh run rather than generating. */
 #btn-generate.is-new-run {
-  background: rgba(0, 170, 255, 0.92);
-  color: #001018;
-  box-shadow: 0 0 12px rgba(0, 170, 255, 0.3);
-  animation: none;
+  background: rgba(0, 170, 255, 0.16);
+  color: #4fc3f7;
+  border-color: rgba(0, 170, 255, 0.4);
+  box-shadow: 0 0 10px rgba(0, 170, 255, 0.3);
 }
 
 #btn-generate.is-new-run:hover:not(:disabled) {
-  background: rgba(40, 190, 255, 1);
+  background: rgba(0, 170, 255, 0.26);
+  border-color: rgba(40, 190, 255, 0.7);
   box-shadow: 0 0 20px rgba(0, 170, 255, 0.4);
   transform: translateY(-1px);
-  animation: none;
 }
 
 #btn-generate:disabled {
   opacity: 0.35;
   box-shadow: none;
   cursor: not-allowed;
-  animation: none;
-}
-
-@keyframes generate-pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 9px var(--accent-glow);
-  }
-  50% {
-    box-shadow:
-      0 0 20px var(--accent-glow),
-      0 0 6px var(--accent-glow);
-  }
 }
 
 /* Save is a compact square (matching Generate's height) with a
@@ -726,46 +759,6 @@ button {
 #output-placeholder {
   color: var(--text-dim);
   font-style: italic;
-}
-
-/* Idle donut animation overlay inside output area. */
-
-#output-area.donut-active {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-}
-
-#donut-pre {
-  margin: 0;
-  padding: 0;
-  font-family: inherit;
-  font-size: inherit;
-  line-height: 1.35;
-  color: var(--accent);
-  text-shadow: 0 0 6px var(--mask-glow);
-  white-space: pre;
-  word-break: normal;
-  pointer-events: none;
-  user-select: none;
-}
-
-/* Idle ASCII scene canvas inside output area. */
-
-#output-area.scene-active {
-  display: flex;
-  align-items: stretch;
-  justify-content: stretch;
-  overflow: hidden;
-  padding: 0;
-}
-
-#ascii-scene-canvas {
-  width: 100%;
-  height: 100%;
-  display: block;
-  border-radius: var(--radius);
 }
 
 /* ---- Settings modal ---- */
@@ -1359,6 +1352,90 @@ button {
   font-size: 11px;
   color: var(--text-secondary);
   letter-spacing: 0.04em;
+}
+
+/* Randomize-remask row (Edit Frames "edit" phase). */
+#remask-randomize-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.remask-random-label {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+#remask-random-slider {
+  flex: 1;
+  min-width: 80px;
+  max-width: 220px;
+  height: 3px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+.remask-random-count {
+  width: 56px;
+  padding: 3px 6px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-align: right;
+}
+
+.remask-random-of {
+  white-space: nowrap;
+}
+
+/* Shuffle: an active control (brighter than the secondary Clear/Exit),
+   with a glow that ramps in with the diffusion reveal and lingers on
+   the way out (asymmetric transition: quick in, slow out). */
+.btn-shuffle {
+  font-size: 12px;
+  padding: 6px 16px;
+  border: 1px solid rgba(0, 255, 65, 0.28);
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-radius: var(--radius);
+  cursor: pointer;
+  box-shadow: 0 0 0 rgba(0, 255, 65, 0);
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    box-shadow 0.5s ease-out;
+}
+
+.btn-shuffle:hover:not(:disabled) {
+  background: rgba(0, 255, 65, 0.22);
+  border-color: rgba(0, 255, 65, 0.45);
+}
+
+.btn-shuffle:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* Active during the label's diffusion reveal: glow ramps up fast, and
+   because the base transition eases box-shadow out over 0.5s, it lags
+   behind the letters resolving when the class is removed. */
+.btn-shuffle.is-diffusing {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 14px var(--accent-glow),
+    0 0 4px var(--accent-glow) inset;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    box-shadow 0.08s ease-in;
 }
 
 /* Right-anchored action cluster so the status text never shifts as
@@ -1969,4 +2046,217 @@ input[type="checkbox"].app-checkbox:checked::after {
   text-transform: none;
   letter-spacing: 0;
   white-space: normal;
+}
+
+/* ================================================
+   Main Menu (landing page): title video + model
+   selection. Served at / by src/web/server.py.
+   ================================================ */
+
+/* Full-bleed, looping title-screen video backdrop. Sits above the
+   animated grid; the grid + floaters remain the fallback when the
+   video cannot play (body.menu-video-off hides it). */
+.menu-video {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 0;
+  pointer-events: none;
+}
+
+body.menu-video-off .menu-video {
+  display: none;
+}
+
+/* Darkening scrim over the backdrop so the panel stays legible. */
+.menu-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(10, 10, 10, 0.5) 0%,
+    rgba(10, 10, 10, 0.82) 100%
+  );
+}
+
+#menu {
+  position: relative;
+  z-index: 2;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.menu-panel {
+  width: 100%;
+  max-width: 560px;
+  background: rgba(10, 10, 10, 0.72);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 32px 32px 24px;
+  backdrop-filter: blur(6px);
+  box-shadow:
+    0 0 40px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(0, 255, 65, 0.05);
+}
+
+.menu-title {
+  font-size: 22px;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+
+.menu-subtitle {
+  margin-top: 6px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+
+.menu-system {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 20px;
+  min-height: 18px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.menu-system-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+/* The spinner only spins while the GPU check is in flight. */
+.menu-system:not(.menu-system-checking) .menu-system-spinner {
+  display: none;
+}
+
+.menu-model-list {
+  list-style: none;
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.menu-model-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background 0.15s,
+    box-shadow 0.15s;
+}
+
+.menu-model-row:hover,
+.menu-model-row:focus-visible {
+  border-color: var(--border-focus);
+  background: var(--bg-surface-hover);
+  box-shadow:
+    0 0 0 1px var(--accent-dim),
+    0 0 18px var(--accent-dim);
+  outline: none;
+}
+
+.menu-model-row.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  filter: grayscale(0.6);
+}
+
+.menu-model-row.is-disabled:hover {
+  border-color: var(--border);
+  background: var(--bg-surface);
+  box-shadow: none;
+}
+
+.menu-model-row.is-loading {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 1px var(--accent-dim);
+}
+
+.menu-model-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.menu-model-name {
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.menu-model-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.menu-model-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.menu-model-vram {
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.menu-model-status {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+
+.menu-error {
+  margin-top: 14px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.menu-links {
+  margin-top: 20px;
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+/* While a model is loading, freeze the other rows. */
+body.menu-busy .menu-model-row:not(.is-loading) {
+  pointer-events: none;
+  opacity: 0.5;
 }

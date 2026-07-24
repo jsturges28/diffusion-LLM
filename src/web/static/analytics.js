@@ -52,6 +52,21 @@ var overlaySelect = null;
 var overlayData = null;
 var overlayMode = "none";
 
+// Layered "Diff vs Original" controls (mirror the generator): two
+// opacity sliders plus a difference-blend toggle. State is kept here
+// so re-rendering the diff (on slider input) is cheap.
+var overlayDiffControls =
+  document.getElementById("overlay-diff-controls");
+var overlayDiffOrigInput =
+  document.getElementById("overlay-diff-original-opacity");
+var overlayDiffEditInput =
+  document.getElementById("overlay-diff-edited-opacity");
+var overlayDiffBlendInput =
+  document.getElementById("overlay-diff-blend");
+var overlayDiffOrigOpacity = 50;
+var overlayDiffEditOpacity = 100;
+var overlayDiffBlendOn = false;
+
 var comparePanel =
   document.getElementById("compare-panel");
 var btnCloseCompare =
@@ -792,10 +807,14 @@ function showOverlayUnavailable() {
   overlayViewer.hidden = false;
   overlaySelectGroup.hidden = true;
   overlayOutput.textContent = "";
+  overlayOutput.classList.remove("diff-overlay-mode");
   overlayOutput.hidden = true;
   overlayReadout.textContent = "";
   overlayReadout.hidden = true;
   overlayLegend.hidden = true;
+  if (overlayDiffControls) {
+    overlayDiffControls.hidden = true;
+  }
   overlayEmpty.hidden = false;
 }
 
@@ -804,10 +823,14 @@ function clearOverlay() {
   overlayViewer.hidden = true;
   overlaySelectGroup.hidden = true;
   overlayOutput.textContent = "";
+  overlayOutput.classList.remove("diff-overlay-mode");
   overlayOutput.hidden = false;
   overlayReadout.textContent = "";
   overlayReadout.hidden = true;
   overlayLegend.hidden = true;
+  if (overlayDiffControls) {
+    overlayDiffControls.hidden = true;
+  }
   overlayEmpty.hidden = true;
 }
 
@@ -860,6 +883,14 @@ function setOverlayMode(mode) {
     overlaySelect.value = mode;
   }
   overlayLegend.hidden = mode !== "commit";
+  if (overlayDiffControls) {
+    overlayDiffControls.hidden = mode !== "diff";
+  }
+  // The layered diff needs the stacking container; every other mode
+  // renders plain token spans, so drop the class when leaving diff.
+  if (mode !== "diff") {
+    overlayOutput.classList.remove("diff-overlay-mode");
+  }
   if (mode === "diff") {
     renderDiffOverlay();
   } else if (mode === "commit") {
@@ -941,6 +972,10 @@ function renderCommitOverlay() {
   );
 }
 
+// Layered diff (mirrors the generator): the original and edited final
+// frames are stacked with independent opacity and an optional
+// difference blend, driven by the control row. The shared builder in
+// overlays.js owns the layer construction.
 function renderDiffOverlay() {
   var curFinal = overlayFinalFrame(overlayData.frames);
   var origFinal = overlayFinalFrame(
@@ -953,24 +988,50 @@ function renderDiffOverlay() {
   overlayReadout.textContent =
     "Diverged " + diff.changedCount
     + "/" + diff.totalCount;
-  renderOverlayTokens(
-    curFinal,
-    function (i) {
-      if (diff.origins[i]) {
-        return "#ff8a3d";
+  overlayOutput.textContent = "";
+  overlayOutput.classList.add("diff-overlay-mode");
+  overlayOutput.appendChild(
+    overlaysBuildDiffLayers(
+      origFinal || [],
+      curFinal || [],
+      diff,
+      {
+        originalOpacity: overlayDiffOrigOpacity,
+        editedOpacity: overlayDiffEditOpacity,
+        blend: overlayDiffBlendOn,
       }
-      return diffColor(!!diff.changed[i]);
-    },
-    function (i) {
-      if (diff.origins[i]) {
-        return "\n(remasked here)";
-      }
-      if (diff.changed[i]) {
-        return "\nwas: " + diff.origText[i];
-      }
-      return "";
-    }
+    )
   );
+}
+
+// Wire the diff control row once: sliders and the blend toggle update
+// the retained state and re-render only while the diff overlay is the
+// active mode.
+function wireOverlayDiffControls() {
+  if (overlayDiffOrigInput) {
+    overlayDiffOrigInput.addEventListener("input", function () {
+      overlayDiffOrigOpacity = Number(overlayDiffOrigInput.value);
+      if (overlayMode === "diff") {
+        renderDiffOverlay();
+      }
+    });
+  }
+  if (overlayDiffEditInput) {
+    overlayDiffEditInput.addEventListener("input", function () {
+      overlayDiffEditOpacity = Number(overlayDiffEditInput.value);
+      if (overlayMode === "diff") {
+        renderDiffOverlay();
+      }
+    });
+  }
+  if (overlayDiffBlendInput) {
+    overlayDiffBlendInput.addEventListener("change", function () {
+      overlayDiffBlendOn = !!overlayDiffBlendInput.checked;
+      if (overlayMode === "diff") {
+        renderDiffOverlay();
+      }
+    });
+  }
 }
 
 function renderConvergenceChart(data, remaskSet) {
@@ -1762,6 +1823,38 @@ modalDelete.addEventListener("click", function (e) {
   for (var i = 0; i < btns.length; i++) {
     setEyeSlash(btns[i], false);
   }
+})();
+
+wireOverlayDiffControls();
+
+// Opening Analytics clears the generator's "new run saved" cue.
+try {
+  sessionStorage.removeItem("diffusion_analytics_new");
+} catch (_e) {
+  // Storage unavailable: nothing to clear.
+}
+
+// Reveal the "Generation" nav link only when a model is resident. The
+// generator is gated on an active model (see server.py), so surfacing
+// the link only when one is loaded keeps navigation honest: reached
+// from the menu with no model, the user has nowhere to "generate" yet.
+(function revealGenerationLink() {
+  var link = document.getElementById("link-generation");
+  if (!link) {
+    return;
+  }
+  fetch("/api/models")
+    .then(function (response) {
+      return response.json();
+    })
+    .then(function (info) {
+      if (info && info.active) {
+        link.hidden = false;
+      }
+    })
+    .catch(function () {
+      // Leave it hidden on failure; the menu is always reachable.
+    });
 })();
 
 fetchSystemInfo().then(function (info) {
