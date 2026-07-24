@@ -1,4 +1,4 @@
-// ASCII Scene Renderer — desert cactus background.
+// ASCII Scene Renderer: desert cactus background.
 //
 // Renders a pre-made desert ASCII art (block characters)
 // directly onto a visible canvas with green tint and a
@@ -178,7 +178,7 @@
           continue;
         }
 
-        // Subtle heat shimmer — small per-cell
+        // Subtle heat shimmer: small per-cell
         // brightness variation keyed on position
         // and time so the scene breathes.
         var shimmer =
@@ -191,7 +191,7 @@
         var lum = baseLum + shimmer;
 
         // Slow sun glow on bright sky cells in the
-        // upper portion — edges fade in and out.
+        // upper portion; edges fade in and out.
         var normRow =
           artRow / DESERT_ART_HEIGHT;
         if (normRow < 0.35 && baseLum <= 0.5) {
@@ -227,7 +227,7 @@
   }
 
   // --------------------------------------------------
-  // Title cutout — dissolving dark rectangle that
+  // Title cutout: dissolving dark rectangle that
   // clears a clean area for the title to render on.
   // The border uses scattered block chars that fade
   // from the desert art into the black zone.
@@ -300,7 +300,7 @@
         // t: 0 at inner edge, 1 at outer edge.
         var t = dist / DISSOLVE_W;
 
-        // Deterministic scatter — only some cells
+        // Deterministic scatter: only some cells
         // show a residual block char; the rest are
         // cleared to black.
         var hash = Math.sin(

@@ -1,8 +1,12 @@
 /* ================================================
-   LLaDA Diffusion Visualizer — dark terminal theme
+   LLaDA Diffusion Visualizer: dark terminal theme
    ================================================ */
 
 :root {
+  /* Render native controls (number-input steppers, any native
+     scrollbars) in dark mode so they match the theme instead of
+     showing light/white defaults in WebKitGTK. */
+  color-scheme: dark;
   --bg-primary: #0a0a0a;
   --bg-surface: #111111;
   --bg-surface-hover: #1a1a1a;
@@ -196,6 +200,93 @@ body {
 
 #prompt-row {
   margin-bottom: 10px;
+  position: relative;
+}
+
+/* Prompt history control, tucked into the prompt row's top-right. */
+#prompt-history {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  z-index: 2;
+}
+
+#prompt-history[hidden] {
+  display: none;
+}
+
+#prompt-history-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#prompt-history-nav[hidden] {
+  display: none;
+}
+
+#prompt-history-counter {
+  font-size: 10px;
+  color: var(--text-secondary);
+  min-width: 36px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.prompt-hist-btn,
+.prompt-hist-nav-btn,
+.prompt-hist-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 6px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    background 0.15s;
+}
+
+.prompt-hist-btn:hover,
+.prompt-hist-nav-btn:hover,
+.prompt-hist-icon:hover {
+  color: var(--text-primary);
+  border-color: var(--text-dim);
+}
+
+.prompt-hist-btn.is-active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.prompt-hist-confirm {
+  color: var(--accent);
+  border-color: rgba(0, 255, 65, 0.35);
+}
+
+.prompt-hist-confirm:hover {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.prompt-hist-cancel {
+  color: rgba(255, 68, 68, 0.85);
+  border-color: rgba(255, 68, 68, 0.3);
+}
+
+.prompt-hist-cancel:hover {
+  color: var(--danger);
+  background: rgba(255, 68, 68, 0.14);
 }
 
 #prompt-row label {
@@ -219,6 +310,8 @@ body {
   resize: vertical;
   outline: none;
   transition: border-color 0.2s;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
 
 #prompt-input:focus {
@@ -480,6 +573,22 @@ button {
 #btn-generate:hover:not(:disabled) {
   background: #33ff66;
   box-shadow: 0 0 22px var(--accent-glow), 0 0 8px var(--accent-glow);
+  transform: translateY(-1px);
+  animation: none;
+}
+
+/* Finalized-run state: same slot as Generate, but a distinct calm blue
+   (no pulse) to signal it starts a fresh run rather than generating. */
+#btn-generate.is-new-run {
+  background: rgba(0, 170, 255, 0.92);
+  color: #001018;
+  box-shadow: 0 0 12px rgba(0, 170, 255, 0.3);
+  animation: none;
+}
+
+#btn-generate.is-new-run:hover:not(:disabled) {
+  background: rgba(40, 190, 255, 1);
+  box-shadow: 0 0 20px rgba(0, 170, 255, 0.4);
   transform: translateY(-1px);
   animation: none;
 }
@@ -834,8 +943,7 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.85);
-  backdrop-filter: blur(4px);
+  background: rgba(0, 0, 0, 0.9);
   transition: opacity 0.4s;
 }
 
@@ -906,8 +1014,7 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.8);
-  backdrop-filter: blur(4px);
+  background: rgba(0, 0, 0, 0.86);
   transition: opacity 0.25s;
 }
 
@@ -1076,10 +1183,26 @@ button {
     background 0.15s;
 }
 
-.scrub-btn:hover {
+.scrub-btn:hover:not(:disabled) {
   color: var(--accent);
   border-color: var(--border-focus);
   background: var(--bg-surface-hover);
+}
+
+.scrub-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+#scrubber-slider:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* While a run is saving, the whole scrubber row is frozen; the dim +
+   "Saving in progress" tooltip (set on the container in JS) signal it. */
+#scrubber-controls.is-saving {
+  cursor: not-allowed;
 }
 
 #scrubber-slider {
@@ -1206,9 +1329,19 @@ button {
   50% { left: 100%; }
 }
 
-.btn-edit-frames:hover {
+.btn-edit-frames:hover:not(:disabled) {
   background: rgba(0, 255, 65, 0.22);
   border-color: rgba(0, 255, 65, 0.4);
+}
+
+/* Frozen while a run is saving (matches the Generate button). */
+.btn-edit-frames:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-edit-frames:disabled::after {
+  display: none;
 }
 
 /* ---- Guided edit controls ---- */
@@ -1343,15 +1476,55 @@ button {
 
 /* ---- Token-level rendering ---- */
 
+/* Themed native checkboxes (appearance:none) so the analytics select
+   boxes and the diff-blend toggle match the dark terminal aesthetic
+   identically across engines (WebKitGTK vs Firefox). */
+input[type="checkbox"].app-checkbox {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  flex-shrink: 0;
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-surface);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+input[type="checkbox"].app-checkbox:hover {
+  border-color: var(--text-dim);
+}
+
+input[type="checkbox"].app-checkbox:checked {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+input[type="checkbox"].app-checkbox:checked::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--accent);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
 .token-span {
   display: inline;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
+/* No text-shadow: the mask glow repainted across every masked token
+   span, which was costly to scroll in the WebKitGTK desktop window. */
 .token-mask {
   color: var(--mask-color);
-  text-shadow: 0 0 4px var(--mask-glow);
 }
 
 .token-resolved {
@@ -1620,11 +1793,10 @@ button {
   z-index: 6;
   display: flex;
   align-items: stretch;
-  background: rgba(10, 12, 16, 0.82);
+  background: rgba(10, 12, 16, 0.94);
   border: 1px solid var(--border);
   border-right: none;
   border-radius: var(--radius) 0 0 var(--radius);
-  backdrop-filter: blur(4px);
   transform: translateX(calc(100% - 26px));
   transition: transform 0.25s ease;
 }

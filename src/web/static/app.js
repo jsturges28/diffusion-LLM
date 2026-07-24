@@ -1,4 +1,4 @@
-// Diffusion LLM Visualizer — client-side logic.
+// Diffusion LLM Visualizer: client-side logic.
 
 "use strict";
 
@@ -22,6 +22,22 @@ var paramTooltips = {}; // name -> tooltip span
 
 var promptInput =
   document.getElementById("prompt-input");
+var promptHistoryGroup =
+  document.getElementById("prompt-history");
+var btnPromptHistory =
+  document.getElementById("btn-prompt-history");
+var promptHistoryNav =
+  document.getElementById("prompt-history-nav");
+var btnHistPrev =
+  document.getElementById("btn-hist-prev");
+var btnHistNext =
+  document.getElementById("btn-hist-next");
+var promptHistoryCounter =
+  document.getElementById("prompt-history-counter");
+var btnHistConfirm =
+  document.getElementById("btn-hist-confirm");
+var btnHistCancel =
+  document.getElementById("btn-hist-cancel");
 var btnGenerate =
   document.getElementById("btn-generate");
 var btnSave =
@@ -106,6 +122,8 @@ var stagedSettings = {
 // Scrubber DOM refs.
 var scrubberSection =
   document.getElementById("scrubber-section");
+var scrubberControls =
+  document.getElementById("scrubber-controls");
 var scrubberSlider =
   document.getElementById("scrubber-slider");
 var scrubberLabel =
@@ -229,6 +247,15 @@ var editedRunSaved = false;
 // via the Edit Frames auto-save). Prevents entering an edit session
 // from duplicating the original run's saved entry.
 var runSaved = false;
+// Prompt history (localStorage, per-browser): most-recent-first. While
+// browsing, the box is read-only and the pre-browse text is held in
+// promptHistoryDraft so Cancel can restore it.
+var PROMPT_HISTORY_KEY = "diffusion_prompt_history";
+var PROMPT_HISTORY_MAX = 30;
+var promptHistory = [];
+var promptHistoryIndex = -1;
+var promptHistoryDraft = null;
+var promptHistoryActive = false;
 // Snapshot of the complete run taken when Edit Frames is entered.
 // Partial resumes ("Run to Here") truncate the live run mid-way, so
 // exiting restores this to avoid stranding the user on an
@@ -458,7 +485,7 @@ function setModelSelectValue(id) {
   }
   var m = models[id];
   modelSelectValue.textContent =
-    m ? m.display_name : (id || "\u2014");
+    m ? m.display_name : (id || "-");
 }
 
 function setModelSelectDisabled(disabled) {
@@ -840,17 +867,12 @@ function validateAllParams() {
     validationHint.textContent = errors[0];
     validationHint.hidden = false;
     paramsValid = false;
-    if (modelReady && !isGenerating) {
-      btnGenerate.disabled = true;
-    }
   } else {
     validationHint.hidden = true;
     validationHint.textContent = "";
     paramsValid = true;
-    if (modelReady && !isGenerating) {
-      btnGenerate.disabled = false;
-    }
   }
+  updateGenerateButton();
 }
 
 // LLaDA-style block divisibility, applied only when the
@@ -995,7 +1017,7 @@ function connect() {
   ws.onclose = function () {
     setBadge("disconnected");
     modelReady = false;
-    btnGenerate.disabled = true;
+    updateGenerateButton();
     if (!suppressReconnect) {
       scheduleReconnect();
     }
@@ -1061,14 +1083,12 @@ function handleModelStatus(data) {
       + "\u2026"
     );
     loadingOverlay.classList.remove("hidden");
-    btnGenerate.disabled = true;
+    updateGenerateButton();
   } else if (data.status === "ready") {
     setBadge("ready");
     modelReady = true;
     loadingOverlay.classList.add("hidden");
-    if (paramsValid && !isGenerating) {
-      btnGenerate.disabled = false;
-    }
+    updateGenerateButton();
   }
 }
 
@@ -1525,6 +1545,131 @@ function buildOverlaySelect() {
   overlaySelectHasDiff = hasDiff;
 }
 
+// ---- Prompt history (localStorage) ----
+
+function loadPromptHistory() {
+  try {
+    var raw = localStorage.getItem(PROMPT_HISTORY_KEY);
+    if (!raw) {
+      return;
+    }
+    var parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      promptHistory = parsed.filter(function (p) {
+        return typeof p === "string" && p.length > 0;
+      });
+    }
+  } catch (_e) {
+    // Unavailable/corrupt storage: start with an empty history.
+    promptHistory = [];
+  }
+}
+
+function savePromptHistoryStore() {
+  try {
+    localStorage.setItem(
+      PROMPT_HISTORY_KEY, JSON.stringify(promptHistory)
+    );
+  } catch (_e) {
+    // Ignore quota/availability errors; history just won't persist.
+  }
+}
+
+// Record a used prompt at the front (most recent first), de-duplicated
+// and capped. Called when a run starts.
+function pushPromptHistory(text) {
+  var prompt = (text || "").trim();
+  if (!prompt) {
+    return;
+  }
+  promptHistory = promptHistory.filter(function (p) {
+    return p !== prompt;
+  });
+  promptHistory.unshift(prompt);
+  if (promptHistory.length > PROMPT_HISTORY_MAX) {
+    promptHistory.length = PROMPT_HISTORY_MAX;
+  }
+  savePromptHistoryStore();
+  updatePromptHistoryUI();
+}
+
+// Show the history control only when there is something to browse.
+function updatePromptHistoryUI() {
+  if (promptHistoryGroup) {
+    promptHistoryGroup.hidden = promptHistory.length === 0;
+  }
+}
+
+function _setPromptHistoryCounter() {
+  if (promptHistoryCounter) {
+    promptHistoryCounter.textContent =
+      (promptHistoryIndex + 1) + " / " + promptHistory.length;
+  }
+}
+
+// Enter browse mode: hold the current text as a draft, show the most
+// recent prompt, and make the box read-only while browsing.
+function enterPromptHistory() {
+  if (promptHistory.length === 0 || promptHistoryActive) {
+    return;
+  }
+  promptHistoryActive = true;
+  promptHistoryDraft = promptInput.value;
+  promptHistoryIndex = 0;
+  promptInput.value = promptHistory[0];
+  promptInput.readOnly = true;
+  if (btnPromptHistory) {
+    btnPromptHistory.classList.add("is-active");
+  }
+  if (promptHistoryNav) {
+    promptHistoryNav.hidden = false;
+  }
+  _setPromptHistoryCounter();
+}
+
+// Step through history (delta +1 = older, -1 = newer), wrapping.
+function cyclePromptHistory(delta) {
+  if (!promptHistoryActive || promptHistory.length === 0) {
+    return;
+  }
+  var n = promptHistory.length;
+  promptHistoryIndex =
+    (((promptHistoryIndex + delta) % n) + n) % n;
+  promptInput.value = promptHistory[promptHistoryIndex];
+  _setPromptHistoryCounter();
+}
+
+// Reset the browse UI without changing the box text. Shared by commit
+// and by starting a generation from a browsed prompt.
+function _exitPromptHistoryUI() {
+  promptHistoryActive = false;
+  promptHistoryDraft = null;
+  promptHistoryIndex = -1;
+  if (promptInput) {
+    promptInput.readOnly = false;
+  }
+  if (btnPromptHistory) {
+    btnPromptHistory.classList.remove("is-active");
+  }
+  if (promptHistoryNav) {
+    promptHistoryNav.hidden = true;
+  }
+}
+
+function confirmPromptHistory() {
+  // Keep the shown prompt; return to normal (editable) input.
+  _exitPromptHistoryUI();
+  promptInput.focus();
+}
+
+function cancelPromptHistory() {
+  // Restore the text the user had before browsing.
+  if (promptHistoryDraft !== null) {
+    promptInput.value = promptHistoryDraft;
+  }
+  _exitPromptHistoryUI();
+}
+
 // ---- Persistent UI settings (localStorage) ----
 
 var SETTINGS_KEY = "diffusion_settings";
@@ -1760,7 +1905,7 @@ function renderTargetPlaceholder(frameIndex) {
   notice.appendChild(label);
   notice.appendChild(
     document.createTextNode(
-      " \u2014 will be generated. "
+      " will be generated. "
       + "Output will diverge from this "
       + "preview based on edits to "
       + frameList + "."
@@ -1822,6 +1967,25 @@ function updateEditFramesLock() {
   } else {
     btnEditFrames.classList.remove("is-locked");
     btnEditFrames.removeAttribute("title");
+  }
+}
+
+// Once a run is finalized (an edited run has been saved), the primary
+// button becomes "New Run" (clears the canvas for a fresh prompt);
+// otherwise it is "Generate". Keeps the same slot/size.
+function updateGenerateButton() {
+  if (editedRunSaved) {
+    btnGenerate.textContent = "New Run";
+    btnGenerate.classList.add("is-new-run");
+    // New Run is client-side; only a completing save should hold it.
+    btnGenerate.disabled = isSaving;
+  } else {
+    btnGenerate.textContent = "Generate";
+    btnGenerate.classList.remove("is-new-run");
+    btnGenerate.disabled =
+      isGenerating
+      || isSaving
+      || !(modelReady && paramsValid);
   }
 }
 
@@ -2038,6 +2202,21 @@ function setSavingControls(saving) {
   btnScrubNext.disabled = disabled;
   btnScrubEnd.disabled = disabled;
   btnSelectFrame.disabled = disabled;
+  btnEditFrames.disabled = disabled;
+  // Dim the whole scrubber row and surface a tooltip on hover. The
+  // title lives on the (non-disabled) container because native
+  // tooltips do not fire on disabled controls.
+  if (scrubberControls) {
+    scrubberControls.classList.toggle("is-saving", disabled);
+    if (disabled) {
+      scrubberControls.title = "Saving in progress\u2026";
+    } else {
+      scrubberControls.removeAttribute("title");
+    }
+  }
+  // Reflect the saving state on the primary button too (so Generate is
+  // greyed out during a save, then becomes New Run once finalized).
+  updateGenerateButton();
 }
 
 // Edit Frames entry point. The current run is the "original": if it
@@ -2150,7 +2329,7 @@ function updateGuidedUI() {
     case "edit":
       guidedEditStatus.textContent =
         "Frame " + currentScrubFrame
-        + " \u2014 click tokens to remask ("
+        + ": click tokens to remask ("
         + count + " selected)." + renoiseNote();
       btnLockIn.hidden = false;
       btnLockIn.disabled = count === 0;
@@ -2199,13 +2378,13 @@ function updateGuidedUI() {
       unlockScrubberNav();
       if (currentScrubFrame === frameHistory.length - 1) {
         guidedEditStatus.textContent =
-          "Edit complete \u2014 confirm to save, or"
+          "Edit complete. Confirm to save, or"
           + " retry from the start.";
         btnConfirmEdit.hidden = false;
         btnRetryEdit.hidden = false;
       } else {
         guidedEditStatus.textContent =
-          "Reviewing edited run \u2014 return to the last"
+          "Reviewing edited run. Return to the last"
           + " frame to confirm or retry.";
       }
       break;
@@ -2387,8 +2566,9 @@ function setBadge(state) {
 function setGenerating(active) {
   isGenerating = active;
   // Generate stays visible; it just greys out while the model runs
-  // (and whenever the model is not ready or params are invalid).
-  btnGenerate.disabled = active || !(modelReady && paramsValid);
+  // (and whenever the model is not ready, params are invalid, or a
+  // save is completing) -- centralized in updateGenerateButton.
+  updateGenerateButton();
   promptInput.disabled = active;
   toggleExperimental.disabled = active;
   setModelSelectDisabled(active);
@@ -2436,14 +2616,66 @@ function setSaveAvailable(available) {
 
 function resetStatus() {
   statusStep.textContent =
-    "Step \u2014/\u2014";
+    "Step -/-";
   statusElapsed.textContent =
-    "Elapsed: \u2014";
+    "Elapsed: -";
   statusMessage.textContent = "";
   statusMessage.style.color = "";
 }
 
 // ---- Actions ----
+
+// Clear all live-run state (frames, edits, overlays, gates) back to a
+// pre-run baseline. Shared by Generate (fresh run) and New Run.
+function resetRunState() {
+  resetGuidedMode();
+  remaskedPositions = {};
+  perFrameRemasked = {};
+  frameHistory = [];
+  frameTokens = [];
+  perFrameElapsed = [];
+  frameCanvasIndex = [];
+  frameMeanConf = [];
+  commitSteps = null;
+  diffData = null;
+  overlayMode = "none";
+  if (overlaySelectGroup) {
+    overlaySelectGroup.hidden = true;
+  }
+  lastRunParams = null;
+  lastFinalText = null;
+  originalTotalFrames = 0;
+  originalFrameHistory = [];
+  originalFrameTokens = [];
+  remaskEdits = [];
+  editedRunSaved = false;
+  runSaved = false;
+  isResuming = false;
+  resumeFrameOffset = 0;
+  updateEditFramesLock();
+  updateGenerateButton();
+  setSaveAvailable(false);
+}
+
+// "New Run": reset to a clean slate for a new prompt once a run is
+// finalized (Generate has become "New Run"). Clears the canvas and the
+// prompt box (revealing its placeholder), but keeps prompt history.
+function startNewRun() {
+  _exitPromptHistoryUI();
+  resetRunState();
+  deactivateScrubber();
+  promptInput.value = "";
+  if (thinkingPanel) {
+    thinkingPanel.hidden = true;
+  }
+  clearSessionState();
+  resetStatus();
+  setGenerating(false);
+  // Return to the pre-generation idle canvas.
+  hasEverGenerated = false;
+  startIdleAnimation();
+  promptInput.focus();
+}
 
 function startGeneration() {
   if (
@@ -2471,37 +2703,11 @@ function startGeneration() {
     stopIdleAnimation();
   }
 
-  // A fresh run abandons any in-progress edit session so its
-  // controls do not linger once the new run completes.
-  resetGuidedMode();
-  remaskedPositions = {};
-  perFrameRemasked = {};
-
-  frameHistory = [];
-  frameTokens = [];
-  perFrameElapsed = [];
-  frameCanvasIndex = [];
-  frameMeanConf = [];
-  commitSteps = null;
-  diffData = null;
-  overlayMode = "none";
-  if (overlaySelectGroup) {
-    overlaySelectGroup.hidden = true;
-  }
-  lastRunParams = null;
-  lastFinalText = null;
-  originalTotalFrames = 0;
-  originalFrameHistory = [];
-  originalFrameTokens = [];
-  remaskEdits = [];
-  perFrameRemasked = {};
-  editedRunSaved = false;
-  runSaved = false;
-  updateEditFramesLock();
-  resetGuidedMode();
-  isResuming = false;
-  resumeFrameOffset = 0;
-  setSaveAvailable(false);
+  // A fresh run abandons any in-progress edit session and clears the
+  // previous run's state. Record the prompt in history first.
+  _exitPromptHistoryUI();
+  pushPromptHistory(prompt);
+  resetRunState();
 
   outputArea.textContent = "";
   if (thinkingPanel) {
@@ -2565,8 +2771,7 @@ function saveRun() {
   }
   btnSave.classList.remove("is-saved");
   btnSave.classList.add("is-saving");
-  statusMessage.textContent = "";
-  statusMessage.style.color = "";
+  startStatusDots("Saving run");
 
   var totalElapsed = perFrameElapsed.length > 0
     ? perFrameElapsed[perFrameElapsed.length - 1]
@@ -2614,6 +2819,7 @@ function saveRun() {
       btnSave.classList.remove("is-saving");
       setSavingControls(false);
       updateGuidedUI();
+      stopStatusDots();
       if (result.success) {
         // Flash a glowing check for half a second, then revert to
         // the (disabled) arrow. It stays disabled to prevent a
@@ -2628,6 +2834,7 @@ function saveRun() {
           editedRunSaved = true;
         }
         updateEditFramesLock();
+        updateGenerateButton();
         // Persist the saved state (incl. the saved/edited flags) so a
         // round-trip to Analytics and back keeps Edit Frames and Save
         // correctly locked.
@@ -2650,6 +2857,7 @@ function saveRun() {
       btnSave.classList.remove("is-saving", "is-saved");
       setSavingControls(false);
       updateGuidedUI();
+      stopStatusDots();
       btnSave.disabled = false;
       statusMessage.textContent =
         "Save failed: " + error.message;
@@ -2661,7 +2869,15 @@ function saveRun() {
 // ---- Event listeners ----
 
 btnGenerate.addEventListener(
-  "click", startGeneration
+  "click",
+  function () {
+    // The primary button is "New Run" once a run is finalized.
+    if (editedRunSaved) {
+      startNewRun();
+    } else {
+      startGeneration();
+    }
+  }
 );
 btnSave.addEventListener("click", saveRun);
 
@@ -2670,10 +2886,45 @@ promptInput.addEventListener(
   function (e) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      startGeneration();
+      // Enter runs a generation; in the finalized "New Run" state it
+      // is a no-op so it can't wipe the canvas unexpectedly.
+      if (!editedRunSaved) {
+        startGeneration();
+      }
     }
   }
 );
+
+// Prompt history controls.
+if (btnPromptHistory) {
+  btnPromptHistory.addEventListener("click", function () {
+    if (promptHistoryActive) {
+      cancelPromptHistory();
+    } else {
+      enterPromptHistory();
+    }
+  });
+}
+if (btnHistPrev) {
+  btnHistPrev.addEventListener("click", function () {
+    cyclePromptHistory(1);
+  });
+}
+if (btnHistNext) {
+  btnHistNext.addEventListener("click", function () {
+    cyclePromptHistory(-1);
+  });
+}
+if (btnHistConfirm) {
+  btnHistConfirm.addEventListener(
+    "click", confirmPromptHistory
+  );
+}
+if (btnHistCancel) {
+  btnHistCancel.addEventListener(
+    "click", cancelPromptHistory
+  );
+}
 
 toggleExperimental.addEventListener(
   "change", applyLimits
@@ -3234,6 +3485,7 @@ function restoreSessionState() {
   originalFrameTokens = s.originalFrameTokens || [];
   editedRunSaved = !!s.editedRunSaved;
   runSaved = !!s.runSaved;
+  updateGenerateButton();
   if (s.prompt) {
     promptInput.value = s.prompt;
   }
@@ -3271,6 +3523,8 @@ function restoreSessionState() {
 
 function boot() {
   loadSettings();
+  loadPromptHistory();
+  updatePromptHistoryUI();
   // Seed the idle-animation choice and reflect prefs without
   // starting the animation here (boot decides that below based on
   // whether a prior session is restored).

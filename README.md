@@ -118,9 +118,11 @@ The contract lives in `src/backends/`:
 
 ```
 .
-├── main.py                           # Supervisor entry point (uvicorn)
+├── main.py                           # Supervisor entry point (uvicorn, browser UI)
+├── desktop.py                        # Desktop launcher (pywebview native window)
 ├── requirements.txt                  # .venv: supervisor + LLaDA worker (transformers 4.38.2)
 ├── requirements-dgemma.txt           # .venv-dgemma: DiffusionGemma worker (transformers 5.13)
+├── requirements-desktop.txt          # optional: pywebview[qt] desktop wrapper (installs into .venv)
 ├── README.md
 ├── LICENSE
 ├── src/
@@ -145,13 +147,17 @@ The contract lives in `src/backends/`:
 │           ├── index.html            # Generator page
 │           ├── style.css             # Dark terminal aesthetic (shared)
 │           ├── app.js                # WebSocket client + frame rendering + heatmap
+│           ├── overlays.js           # Shared overlay math (commit-order / diff)
 │           ├── analytics.html        # Analytics Suite page
 │           ├── analytics.css         # Analytics-specific styles
 │           ├── analytics.js          # Analytics charts + run browser
 │           ├── custom_select.js      # Shared in-app dropdown widget
 │           └── ascii_scene.js        # Idle animation
+├── assets/
+│   └── icon.svg                      # App icon (desktop window + launcher)
 ├── scripts/
 │   ├── quantize_diffusiongemma_nf4.py # Produce the NF4 checkpoint from the bf16 base
+│   ├── install_desktop_entry.sh      # Generate a Linux .desktop launcher entry
 │   ├── spike_diffusiongemma.py       # Standalone load + generate probe
 │   └── ws_smoke_test.py              # End-to-end supervisor/worker smoke test
 ├── Results/                          # Saved runs from the web UI (Save button)
@@ -159,6 +165,8 @@ The contract lives in `src/backends/`:
 │       ├── metadata.json
 │       ├── final.txt
 │       ├── history.txt
+│       ├── tokens.json               # Per-frame token records (durable overlays)
+│       ├── original_tokens.json      # Pre-edit snapshot (edited runs only)
 │       └── diffusion.gif
 └── archive/                          # Old reference files and notes
 ```
@@ -193,6 +201,14 @@ DiffusionGemma is gated on Hugging Face. Accept its license, download the bf16 b
 
 This writes the NF4 checkpoint to the path referenced by the registry (`~/models/diffusiongemma-26B-A4B-it-nf4`). If you only want LLaDA, you can skip this environment entirely; the model selector will still list DiffusionGemma but activation will fail gracefully with a clear message.
 
+**Desktop app (`.venv`, optional).** The same UI can run in a native window instead of a browser tab via [pywebview](https://pywebview.flowrl.com/). It is not part of the core install; add it into `.venv` with the optional requirements file, which pulls the Qt/QtWebEngine (Chromium) backend that renders most smoothly:
+
+```bash
+.venv/bin/pip install -r requirements-desktop.txt
+```
+
+`desktop.py` automatically prefers the Qt backend when present and gracefully falls back to GTK/WebKit otherwise. If you prefer the lighter GTK/WebKit backend, install its system libraries and binding instead (`sudo apt install libgirepository1.0-dev libcairo2-dev gir1.2-webkit2-4.1` then `.venv/bin/pip install "pywebview[gtk]"`). To add an app-menu launcher with an icon on Linux, run `scripts/install_desktop_entry.sh` (it generates a `.desktop` entry with the correct absolute paths for your checkout).
+
 
 ## Quickstart
 
@@ -202,7 +218,19 @@ python3 main.py            # or: python3 main.py --host 0.0.0.0 --port 8000
 
 Open [http://localhost:8000](http://localhost:8000). Pick a model with the **Model** selector in the header (only one is resident in GPU memory at a time). The worker loads in the background (roughly 30 to 60 seconds on first activation) behind a loading overlay. Once ready, type a prompt, adjust parameters, and click **Generate** to watch the diffusion process stream live.
 
-After a run completes, a **Save** button appears and a **frame scrubber** slides into view below the output area.
+After a run completes, a **Save** button appears and a **frame scrubber** slides into view below the output area. While a save is in progress the status bar shows "Saving run…" and the scrubber is dimmed and frozen until it finishes.
+
+**Prompt history.** A small history icon at the top-right of the prompt box (shown once you have run at least one prompt) recalls earlier prompts, persisted per-browser. Click it to browse: `‹` / `›` cycle through your prompts (with an `i / N` position counter), the green check keeps the shown prompt for editing, and the red cross restores what you had typed. Prompts are recorded automatically each time you Generate.
+
+**New Run.** Once you have finalized a run by saving an edit (see Interactive remasking below), the **Generate** button becomes **New Run** in the same spot. Clicking it clears the canvas and prompt for a fresh start (the prompt box shows its "Enter a prompt" placeholder) and restores the **Generate** button.
+
+**Desktop window.** To run the UI in a native window instead of a browser (after the optional pywebview setup in Setup):
+
+```bash
+.venv/bin/python desktop.py
+```
+
+This owns the server lifecycle: it starts the supervisor on a private localhost port, opens the window, and gracefully stops the active model worker (freeing its VRAM) when you close it. The browser path (`main.py`) still works and serves the same app.
 
 #### Interactive remasking and resume
 
@@ -276,11 +304,13 @@ Clicking **Save** writes a timestamped folder under `Results/` containing `metad
 - [x] Reproducibility metadata (seed, GPU, git commit, library versions) and deterministic seeding
 - [x] Graceful VRAM handling: pre-flight free-memory check and worker load-error reporting
 - [x] Save runs (metadata, history, final text, GIF) with per-frame timing and confidence
+- [x] Optional desktop app: pywebview native window that owns the server lifecycle (graceful shutdown frees VRAM) plus a Linux app-menu launcher
+- [x] Prompt history (persisted per-browser) with a browse control, and a New Run flow that clears the canvas after a finalized run
 
 
 ## Roadmap
 
-Detailed, living notes for each item (technical hooks, files to touch, open questions) live in [ROADMAP.md](ROADMAP.md).
+Detailed, living notes for each item (technical hooks, files to touch, open questions) live in [ROADMAP.md](ROADMAP.md). Development conventions for agents and contributors live in [AGENTS.md](AGENTS.md), and the living per-session handoff (what shipped and where to pick up next) is [HANDOFF.md](HANDOFF.md).
 
 **Phase 2 (shipped for single-canvas): DiffusionGemma interactive remask and resume.** Single-canvas runs can now be re-entered via `decoder_input_ids` as a seed canvas: remasked positions are renoised and denoising continues under a reduced step budget. The remaining work is multi-canvas resume, which must target the correct canvas while preserving already-committed prior canvases (encoder-decoder KV-cache and adaptive stopping make this the hard part).
 

@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -31,7 +32,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -788,6 +789,65 @@ async def analytics_delete_run(run_id: str) -> JSONResponse:
         )
     logger.info("deleted run %s", run_id)
     return JSONResponse(content={"success": True})
+
+
+# -- HTML pages with automatic asset cache-busting --
+
+# Local CSS/JS references (external CDN/font URLs, which are not
+# root-relative, are left untouched).
+_ASSET_REF_RE = re.compile(
+    r'(?P<attr>href|src)="(?P<path>/[^"?#]+\.(?:css|js))"'
+)
+
+_NO_STORE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
+
+def _stamp_asset_versions(html: str) -> str:
+    """Append ``?v=<mtime>`` to local CSS/JS refs.
+
+    The version is each asset file's modification time, so the browser
+    re-fetches a file exactly when it changes -- automatic, per-file
+    cache-busting with no manual version bumping and no reliance on the
+    browser honoring ``no-store``.
+    """
+
+    def _replace(match: "re.Match[str]") -> str:
+        path = match.group("path")
+        asset = STATIC_DIR / path.lstrip("/")
+        try:
+            version = asset.stat().st_mtime_ns
+        except OSError:
+            return match.group(0)  # Unknown file: leave the ref as-is.
+        return f'{match.group("attr")}="{path}?v={version}"'
+
+    return _ASSET_REF_RE.sub(_replace, html)
+
+
+def _serve_stamped_page(filename: str) -> HTMLResponse:
+    html = (STATIC_DIR / filename).read_text(encoding="utf-8")
+    return HTMLResponse(
+        _stamp_asset_versions(html),
+        headers=dict(_NO_STORE_HEADERS),
+    )
+
+
+@app.get("/")
+async def serve_index() -> HTMLResponse:
+    return _serve_stamped_page("index.html")
+
+
+@app.get("/index.html")
+async def serve_index_html() -> HTMLResponse:
+    return _serve_stamped_page("index.html")
+
+
+@app.get("/analytics.html")
+async def serve_analytics_page() -> HTMLResponse:
+    return _serve_stamped_page("analytics.html")
 
 
 class _NoCacheStaticFiles(StaticFiles):

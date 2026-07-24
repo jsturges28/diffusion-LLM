@@ -48,6 +48,14 @@ analytics suite.
   Group By options were pruned to the shared columns; and the guided editor now
   ends on a Confirm/Retry review step, locking Edit Frames once an edited run is
   saved (until the next Generate).
+- Shipped (desktop wrapper): an optional pywebview launcher (`desktop.py`) runs
+  the UI in a native window and owns the server lifecycle (starts uvicorn on an
+  ephemeral localhost port, graceful shutdown frees worker VRAM on close), plus
+  a Linux app-menu entry generator (`scripts/install_desktop_entry.sh`) and an
+  app icon (`assets/icon.svg`). The browser path (`main.py`) is unchanged, so
+  there is no dual maintenance. Cross-platform packaging (AppImage / Windows /
+  macOS) remains deferred and is gated more by the CUDA/torch stack than by the
+  webview layer.
 - For the feature overview and architecture, see `README.md`. For the build
   history, see `.cursor/plans/`.
 
@@ -179,6 +187,17 @@ Still candidate directions:
   steps-to-converge distributions, and per-canvas statistics.
 - Canvas seeding experiments: pre-fill part of the canvas and watch the model
   complete around it.
+- Desktop UX: an in-app "camera" button to capture the current view (diffusion
+  output / analytics) to a PNG in ~/Downloads, via the pywebview JS->Python
+  bridge (with a browser-mode `<a download>` fallback). Cross-platform and
+  avoids depending on per-OS screenshot tools; fidelity is perfect for the token
+  output and charts (DOM rasterizers do not render `backdrop-filter`).
+- Random prompt generator: a "surprise me" control that fills the prompt box
+  with a generated prompt. Preferred approach is a tiny autoregressive model run
+  on CPU in the supervisor (model-agnostic, no contention with the resident
+  diffusion model on the 24 GB GPU, fast for a one-liner) rather than the
+  resident diffusion model (which would be clunky/slow, especially DiffusionGemma).
+  A natural first toe-dip toward the north-star of hosting autoregressive models.
 
 ---
 
@@ -195,6 +214,23 @@ Still candidate directions:
 - Environments: LLaDA and the supervisor run in `.venv` (transformers 4.38.2);
   DiffusionGemma runs in `.venv-dgemma` (transformers 5.13). Always use each
   environment's own Python explicitly.
+- Dependency files: `requirements.txt` (core `.venv`), `requirements-dgemma.txt`
+  (the `.venv-dgemma` env), and `requirements-desktop.txt` (optional pywebview
+  desktop add-on for `.venv`). These are flat, fully-pinned freezes, which is
+  idiomatic for an ML repo and encodes real structure (two incompatible
+  `transformers` universes plus an optional feature layer).
+
+## Dependency management: potential pyproject.toml consolidation
+
+The flat `requirements-*.txt` layout is intentional for now. Consider migrating
+to a single `pyproject.toml` with `[project.optional-dependencies]` extras (e.g.
+`dgemma`, `desktop`, a future `ar` for autoregressive models) plus a lockfile
+(uv / pip-tools) for the transitive pinning the flat freezes currently provide.
+That collapses everything into one authoritative file and scales to new groups
+without adding files. Triggers to make the switch: (a) the file count would
+exceed ~4-5, (b) a new incompatible environment is added (e.g. an autoregressive
+model class), or (c) the project is ever packaged/distributed. Until one of
+those, the flat files are simpler and reproducibility is already covered.
 
 ## References
 

@@ -1,10 +1,12 @@
 /* ================================================
-   Analytics Suite — supplements style.css
+   Analytics Suite: supplements style.css
    ================================================ */
 
 /* Override body overflow for scrollable page. */
 html, body {
   overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
 
 #analytics-app {

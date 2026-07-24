@@ -1,4 +1,4 @@
-// Analytics Suite — client-side logic.
+// Analytics Suite: client-side logic.
 
 "use strict";
 
@@ -508,6 +508,7 @@ function renderTable() {
       tdCheck.className = "col-check";
       var cb = document.createElement("input");
       cb.type = "checkbox";
+      cb.className = "app-checkbox";
       cb.checked = !!checkedIds[run.run_id];
       cb.setAttribute(
         "data-run-id", run.run_id

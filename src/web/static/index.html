@@ -10,7 +10,7 @@
     href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&display=swap"
     rel="stylesheet"
   />
-  <link rel="stylesheet" href="/style.css?v=3" />
+  <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
   <!-- Animated background grid + floating characters -->
@@ -46,6 +46,31 @@
     <section id="controls">
       <div id="prompt-row">
         <label for="prompt-input">Prompt</label>
+        <div id="prompt-history" hidden>
+          <button id="btn-prompt-history" type="button" class="prompt-hist-btn"
+            title="Use a previous prompt" aria-label="Use a previous prompt">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round"
+              stroke-linejoin="round" aria-hidden="true">
+              <path d="M3 3v5h5" />
+              <path d="M3.05 13a9 9 0 1 0 2.6-6.36L3 8" />
+              <path d="M12 7v5l3 2" />
+            </svg>
+          </button>
+          <span id="prompt-history-nav" hidden>
+            <button id="btn-hist-prev" type="button" class="prompt-hist-nav-btn"
+              title="Older prompt" aria-label="Older prompt">&lsaquo;</button>
+            <span id="prompt-history-counter"></span>
+            <button id="btn-hist-next" type="button" class="prompt-hist-nav-btn"
+              title="Newer prompt" aria-label="Newer prompt">&rsaquo;</button>
+            <button id="btn-hist-confirm" type="button"
+              class="prompt-hist-icon prompt-hist-confirm"
+              title="Use this prompt" aria-label="Use this prompt">&#x2713;</button>
+            <button id="btn-hist-cancel" type="button"
+              class="prompt-hist-icon prompt-hist-cancel"
+              title="Cancel" aria-label="Cancel">&#x2717;</button>
+          </span>
+        </div>
         <textarea
           id="prompt-input"
           rows="2"
@@ -137,7 +162,7 @@
           <input type="range" id="diff-edited-opacity" min="0" max="100" value="100" />
         </label>
         <label class="diff-blend-row">
-          <input type="checkbox" id="diff-blend-toggle" />
+          <input type="checkbox" id="diff-blend-toggle" class="app-checkbox" />
           <span>Difference blend</span>
         </label>
       </div>
@@ -159,8 +184,8 @@
 
     <!-- Status bar -->
     <footer id="status-bar">
-      <span id="status-step">Step —/—</span>
-      <span id="status-elapsed">Elapsed: —</span>
+      <span id="status-step">Step -/-</span>
+      <span id="status-elapsed">Elapsed: -</span>
       <span id="status-highlight">Highlighted Tokens: Off</span>
       <span id="status-commit">
         <span id="status-commit-text">Show Commit Order: Off</span>
@@ -377,9 +402,9 @@
     </div>
   </div>
 
-  <script src="/ascii_scene.js?v=3"></script>
-  <script src="/custom_select.js?v=3"></script>
-  <script src="/overlays.js?v=3"></script>
-  <script src="/app.js?v=3"></script>
+  <script src="/ascii_scene.js"></script>
+  <script src="/custom_select.js"></script>
+  <script src="/overlays.js"></script>
+  <script src="/app.js"></script>
 </body>
 </html>

@@ -1,0 +1,14 @@
+# Optional desktop-app dependencies, installed into .venv on top of
+# the core requirements. Provides the pywebview native-window wrapper
+# (desktop.py) with the Qt/QtWebEngine (Chromium) backend, which
+# desktop.py prefers for smoother rendering and falls back from to
+# GTK/WebKit when unavailable.
+#
+# Install with:
+#   .venv/bin/pip install -r requirements-desktop.txt
+#
+# For the lighter GTK/WebKit backend instead, install the system
+# WebKitGTK libraries and `pywebview[gtk]` (see the README); the
+# launcher will use whichever backend is present.
+-r requirements.txt
+pywebview[qt]==6.2.1
