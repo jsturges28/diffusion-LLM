@@ -2,7 +2,7 @@
 
 Durable guidance for any agent (or human) picking up work on **diffusion-LLM**.
 Read this first, then `HANDOFF.md` (the living, per-session handoff), then
-`README.md` and `ROADMAP.md`.
+`README.md` and `ROADMAP.md`. Take a look and let the user know what you think of the overall plan for this session. They prefer to discuss the overall direction, then ensure both sides are aligned sufficiently before going into Plan mode at the beginning of the session.
 
 ## What this project is
 
