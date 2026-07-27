@@ -76,13 +76,23 @@ var modalDelete =
   document.getElementById("modal-delete");
 var deleteRunLabel =
   document.getElementById("delete-run-label");
+var deleteModalTitle =
+  document.getElementById("delete-modal-title");
+var deleteModalNote =
+  document.getElementById("delete-modal-note");
 var btnDeleteConfirm =
   document.getElementById("btn-delete-confirm");
 var btnDeleteCancel =
   document.getElementById("btn-delete-cancel");
 var btnDeleteClose =
   document.getElementById("btn-delete-close");
-var pendingDeleteId = null;
+var btnBulkDelete =
+  document.getElementById("btn-bulk-delete");
+var bulkDeleteCount =
+  document.getElementById("bulk-delete-count");
+// Runs staged for the delete confirmation modal (1 for a row's own
+// trashcan, N for the bulk "delete selected" action).
+var pendingDeleteIds = [];
 
 // ---- Chart.js defaults ----
 
@@ -342,6 +352,27 @@ function updateCompareButton() {
   btnCompare.disabled = ids.length < 2;
 }
 
+// Show a trashcan with the selected count in the actions-column header
+// when one or more rows are checked; hide it when the selection is
+// empty. Kept in sync with the compare button on every selection change.
+function updateBulkDeleteButton() {
+  if (!btnBulkDelete) { return; }
+  var count = checkedRunIds().length;
+  if (count < 1) {
+    btnBulkDelete.hidden = true;
+    return;
+  }
+  btnBulkDelete.hidden = false;
+  if (bulkDeleteCount) {
+    bulkDeleteCount.textContent = "(" + count + ")";
+  }
+  var noun = count === 1 ? " run" : " runs";
+  btnBulkDelete.title = "Delete " + count + " selected" + noun;
+  btnBulkDelete.setAttribute(
+    "aria-label", "Delete " + count + " selected" + noun
+  );
+}
+
 function buildRemaskFrameSet(remaskEdits) {
   var set = {};
   if (!remaskEdits) { return set; }
@@ -479,7 +510,7 @@ function groupRuns(runs, key) {
 // DiffusionGemma rows leave them blank; those values still appear in
 // the per-run detail panel.
 var TABLE_KEYS = [
-  "prompt", "model", "elapsed_seconds", "created_at",
+  "created_at", "model", "prompt", "elapsed_seconds",
 ];
 
 function renderTable() {
@@ -518,6 +549,9 @@ function renderTable() {
       if (run.run_id === activeRunId) {
         tr.classList.add("row-selected");
       }
+      if (checkedIds[run.run_id]) {
+        tr.classList.add("row-checked");
+      }
 
       var tdCheck = document.createElement("td");
       tdCheck.className = "col-check";
@@ -536,11 +570,11 @@ function renderTable() {
         td.textContent = displayVal(
           run, TABLE_KEYS[k]
         );
-        if (TABLE_KEYS[k] === "prompt") {
-          td.className = "col-prompt";
-          td.title = run.prompt || "";
-          // Fixed-width slot keeps the prompt text aligned whether or
-          // not a "new run" dot is present.
+        // The leading data column (after the checkbox) carries the
+        // "new run" dot slot, so the pulse sits at the front of the
+        // row regardless of which column leads. A fixed-width slot
+        // keeps the text aligned whether or not a dot is present.
+        if (k === 0) {
           var slot = document.createElement("span");
           slot.className = "run-new-slot";
           if (overlaysIsNewRun(run.run_id)) {
@@ -551,19 +585,28 @@ function renderTable() {
           }
           td.insertBefore(slot, td.firstChild);
         }
+        if (TABLE_KEYS[k] === "prompt") {
+          td.className = "col-prompt";
+          td.title = run.prompt || "";
+        }
         tr.appendChild(td);
       }
 
+      // Edited marker: a checkmark filled with the diffusion dot
+      // pattern (a cutout of the mask glyph) for runs with a saved
+      // original; blank otherwise (no negative marker).
       var tdDiff = document.createElement("td");
-      tdDiff.className = "col-hasdiff";
+      tdDiff.className = "col-edited";
       if (run.has_diff) {
         tdDiff.innerHTML =
-          '<span class="hasdiff-yes" title="Diff vs'
-          + ' Original available">\u2713</span>';
-      } else {
-        tdDiff.innerHTML =
-          '<span class="hasdiff-no" title="No original'
-          + ' snapshot for this run">\u2717</span>';
+          '<svg class="edited-check" viewBox="0 0 24 24"'
+          + ' width="16" height="16" role="img"'
+          + ' aria-label="Edited">'
+          + '<title>Edited: diff vs original available</title>'
+          + '<path d="M4.5 12.5 L9.5 17.5 L19.5 6.5" fill="none"'
+          + ' stroke="url(#edited-dots)" stroke-width="3.2"'
+          + ' stroke-linecap="round" stroke-linejoin="round" />'
+          + '</svg>';
       }
       tr.appendChild(tdDiff);
 
@@ -1610,7 +1653,14 @@ function onRowClick(e) {
   if (cb) {
     var rid = cb.getAttribute("data-run-id");
     checkedIds[rid] = cb.checked;
+    // Shade the row immediately; renderTable applies row-checked on its
+    // next pass, but ticking a box does not re-render on its own.
+    var checkedRow = cb.closest("tr");
+    if (checkedRow) {
+      checkedRow.classList.toggle("row-checked", cb.checked);
+    }
     updateCompareButton();
+    updateBulkDeleteButton();
     return;
   }
 
@@ -1630,6 +1680,7 @@ function onSelectAll() {
   }
   renderTable();
   updateCompareButton();
+  updateBulkDeleteButton();
 }
 
 function onGroupChange() {
@@ -1642,6 +1693,7 @@ function loadAndRender() {
     checkedIds = {};
     selectAllCb.checked = false;
     updateCompareButton();
+    updateBulkDeleteButton();
     renderTable();
   });
 }
@@ -1652,11 +1704,40 @@ function runPath(runId) {
   return "Results/" + runId;
 }
 
-function openDeleteModal(runId) {
-  pendingDeleteId = runId;
-  deleteRunLabel.textContent = runPath(runId);
+// Update the confirmation modal copy for the staged deletion, then
+// reveal it. Single deletes show the run's path; bulk deletes show the
+// count. `pendingDeleteIds` must be set before calling.
+function showDeleteModal() {
+  var count = pendingDeleteIds.length;
+  if (count === 1) {
+    deleteModalTitle.textContent = "Delete this run?";
+    deleteRunLabel.textContent = runPath(pendingDeleteIds[0]);
+    deleteModalNote.innerHTML =
+      "This permanently removes the saved run from "
+      + "<code>Results/</code>. This cannot be undone.";
+  } else {
+    deleteModalTitle.textContent =
+      "Delete " + count + " runs?";
+    deleteRunLabel.textContent =
+      count + " selected runs will be removed.";
+    deleteModalNote.innerHTML =
+      "This permanently removes the saved runs from "
+      + "<code>Results/</code>. This cannot be undone.";
+  }
   btnDeleteConfirm.disabled = false;
   modalDelete.classList.remove("hidden");
+}
+
+function openDeleteModal(runId) {
+  pendingDeleteIds = [runId];
+  showDeleteModal();
+}
+
+function openBulkDeleteModal() {
+  var ids = checkedRunIds();
+  if (ids.length < 1) { return; }
+  pendingDeleteIds = ids;
+  showDeleteModal();
 }
 
 // Transient bottom-right confirmation toast. Styled inline (rather
@@ -1703,41 +1784,103 @@ function showToast(message) {
 }
 
 function closeDeleteModal() {
-  pendingDeleteId = null;
+  pendingDeleteIds = [];
+  btnDeleteConfirm.disabled = false;
   modalDelete.classList.add("hidden");
 }
 
-function confirmDelete() {
-  if (!pendingDeleteId) { return; }
-  var runId = pendingDeleteId;
-  btnDeleteConfirm.disabled = true;
-  fetch(
+// Delete a single run, resolving to a {runId, success} record so a
+// batch can report partial failures without one rejection aborting the
+// rest. Never rejects.
+function deleteOneRun(runId) {
+  return fetch(
     "/api/analytics/runs/" + encodeURIComponent(runId),
     { method: "DELETE" }
   )
     .then(function (r) { return r.json(); })
     .then(function (result) {
-      if (result && result.success) {
-        allRuns = allRuns.filter(function (run) {
-          return run.run_id !== runId;
-        });
-        delete checkedIds[runId];
-        if (activeRunId === runId) {
-          hideDetail();
-        }
-        updateCompareButton();
-        renderTable();
-        showToast(
-          "Successfully deleted run \u201c"
-          + runPath(runId) + "\u201d"
-        );
-      }
-      closeDeleteModal();
+      return {
+        runId: runId,
+        success: !!(result && result.success),
+      };
     })
     .catch(function () {
-      btnDeleteConfirm.disabled = false;
-      closeDeleteModal();
+      return { runId: runId, success: false };
     });
+}
+
+// Drop the successfully deleted runs from local state and refresh the
+// selection-dependent UI in one pass.
+function applyDeletions(deletedIds) {
+  if (deletedIds.length < 1) { return; }
+  var removed = {};
+  for (var i = 0; i < deletedIds.length; i++) {
+    removed[deletedIds[i]] = true;
+    delete checkedIds[deletedIds[i]];
+    // Clear any "new run" cue for the deleted run so the generator's
+    // and menu's counts decrement (write-through to the server).
+    overlaysClearNewRun(deletedIds[i]);
+    if (activeRunId === deletedIds[i]) {
+      hideDetail();
+    }
+  }
+  allRuns = allRuns.filter(function (run) {
+    return !removed[run.run_id];
+  });
+  selectAllCb.checked = false;
+  updateCompareButton();
+  updateBulkDeleteButton();
+  renderTable();
+}
+
+function reportDeletion(deleted, failed) {
+  if (deleted.length === 1 && failed.length === 0) {
+    showToast(
+      "Successfully deleted run \u201c"
+      + runPath(deleted[0]) + "\u201d"
+    );
+    return;
+  }
+  if (deleted.length > 0 && failed.length === 0) {
+    showToast(
+      "Successfully deleted " + deleted.length + " runs"
+    );
+    return;
+  }
+  if (deleted.length > 0 && failed.length > 0) {
+    showToast(
+      "Deleted " + deleted.length + " of "
+      + (deleted.length + failed.length)
+      + " runs; the rest failed"
+    );
+    return;
+  }
+  showToast("Failed to delete the selected runs");
+}
+
+function confirmDelete() {
+  var ids = pendingDeleteIds.slice();
+  if (ids.length < 1) { return; }
+  btnDeleteConfirm.disabled = true;
+
+  var requests = [];
+  for (var i = 0; i < ids.length; i++) {
+    requests.push(deleteOneRun(ids[i]));
+  }
+  Promise.all(requests).then(function (results) {
+    var deleted = [];
+    var failed = [];
+    for (var j = 0; j < results.length; j++) {
+      if (results[j].success) {
+        deleted.push(results[j].runId);
+      } else {
+        failed.push(results[j].runId);
+      }
+    }
+    applyDeletions(deleted);
+    closeDeleteModal();
+    reportDeletion(deleted, failed);
+  });
 }
 
 // ---- Per-chart tooltip toggle ----
@@ -1775,7 +1918,7 @@ if (groupByMount) {
       { value: "none", label: "Date" },
       { value: "model", label: "Model" },
       { value: "prompt", label: "Prompt" },
-      { value: "has_diff", label: "Diff vs Original?" },
+      { value: "has_diff", label: "Edited" },
     ],
     "none"
   );
@@ -1832,6 +1975,9 @@ document.addEventListener("click", handleTooltipToggle);
 btnDeleteConfirm.addEventListener("click", confirmDelete);
 btnDeleteCancel.addEventListener("click", closeDeleteModal);
 btnDeleteClose.addEventListener("click", closeDeleteModal);
+if (btnBulkDelete) {
+  btnBulkDelete.addEventListener("click", openBulkDeleteModal);
+}
 modalDelete.addEventListener("click", function (e) {
   if (e.target === modalDelete) {
     closeDeleteModal();
@@ -1879,4 +2025,7 @@ fetchSystemInfo().then(function (info) {
   }
 });
 
-loadAndRender();
+// Hydrate durable UI state (the "new run" cue) from the server before
+// the first table render, so per-row dots reflect saved runs across
+// restarts. persistHydrate always runs its callback, even on failure.
+persistHydrate(loadAndRender);

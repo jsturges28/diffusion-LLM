@@ -2285,11 +2285,15 @@ body.menu-video-off .menu-video {
 .menu-links {
   margin-top: 20px;
   display: flex;
+  align-items: center;
   justify-content: center;
-  gap: 14px;
+  gap: 8px;
   border-top: 1px solid var(--border);
   padding-top: 16px;
 }
+
+/* The menu's Analytics "new run" cue reuses the generator's pill badge
+   (.analytics-new-dot): a green count chip beside the Analytics link. */
 
 /* While a model is loading, freeze the other rows. */
 body.menu-busy .menu-model-row:not(.is-loading) {

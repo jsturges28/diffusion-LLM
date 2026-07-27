@@ -369,6 +369,26 @@
       });
   }
 
+  // ---- "New runs" badge on the Analytics link ----
+
+  // Mirror the generator's count on the menu: "N New" beside Analytics
+  // when saved runs remain unopened (the shared set lives in
+  // overlays.js and persists across app restarts).
+  function refreshAnalyticsNewBadge() {
+    var badge = document.getElementById("menu-analytics-new");
+    if (!badge || typeof overlaysNewRunCount !== "function") {
+      return;
+    }
+    var count = overlaysNewRunCount();
+    if (count > 0) {
+      badge.textContent = String(count);
+      badge.hidden = false;
+    } else {
+      badge.textContent = "";
+      badge.hidden = true;
+    }
+  }
+
   // ---- Boot ----
 
   function loadModels() {
@@ -390,5 +410,9 @@
 
   spawnFloaters();
   setupVideo();
+  // Hydrate durable UI state from the server before reading the "new
+  // run" cue, so the badge reflects saved runs across restarts. The
+  // video and model list load immediately; only the badge waits.
+  persistHydrate(refreshAnalyticsNewBadge);
   loadModels();
 })();

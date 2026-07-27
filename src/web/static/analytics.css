@@ -387,6 +387,16 @@ html, body {
   background: var(--accent-dim);
 }
 
+/* Checkbox-selected rows get a subtle accent wash, lighter than the
+   opened-run highlight (row-selected) so the two states stay distinct. */
+#runs-table tbody tr.row-checked {
+  background: rgba(0, 255, 65, 0.06);
+}
+
+#runs-table tbody tr.row-checked:hover {
+  background: rgba(0, 255, 65, 0.1);
+}
+
 #runs-table tbody td {
   padding: 7px 8px;
   color: var(--text-primary);
@@ -410,10 +420,10 @@ html, body {
   max-width: 180px;
 }
 
-/* Align the Prompt header with the prompt text: the cells start with a
-   fixed 14px "new run" dot slot (plus the 8px base cell padding), so
-   the header gets the same left offset. */
-#runs-table thead th.col-prompt {
+/* Align the leading (Date) header with its cell text: the first data
+   cell starts with a fixed 14px "new run" dot slot (plus the 8px base
+   cell padding), so the header gets the same left offset. */
+#runs-table thead th.col-date {
   padding-left: 22px;
 }
 
@@ -423,19 +433,41 @@ html, body {
   text-align: center;
 }
 
-.col-hasdiff {
-  width: 120px;
+/* "Edited" marker column: check centered under its header. The base
+   header rule (#runs-table thead th) is an ID selector, so centering
+   the header needs the same specificity, mirroring th.col-date above. */
+.col-edited {
+  width: 80px;
   text-align: center;
 }
 
-.hasdiff-yes {
-  color: var(--accent);
-  font-weight: 500;
+#runs-table thead th.col-edited {
+  text-align: center;
 }
 
-.hasdiff-no {
-  color: var(--danger);
-  opacity: 0.7;
+/* Edited marker: a checkmark whose stroke is filled with the diffusion
+   dot pattern (#edited-dots), so it reads as a cutout of the mask glyph.
+   Sized larger than a text glyph so the texture and shape are legible. */
+.svg-defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+
+/* Base tint a step above --accent-dim so the gaps between dots read
+   fuller, matching the medium shade glyph (U+2592) rather than the
+   sparsest light shade. */
+.edited-dots-bg {
+  fill: rgba(0, 255, 65, 0.3);
+}
+
+.edited-dots-fg {
+  fill: var(--accent);
+}
+
+.edited-check {
+  vertical-align: middle;
+  filter: drop-shadow(0 0 3px var(--accent-glow));
 }
 
 .row-delete-btn {
@@ -452,6 +484,48 @@ html, body {
 }
 
 .row-delete-btn:hover {
+  color: #ff6b6b;
+  background: rgba(255, 68, 68, 0.15);
+}
+
+/* Bulk-delete affordance in the actions-column header: trashcan plus the
+   selected count. Hidden (via the `hidden` attribute) until at least one
+   row is checked. Sits in the sticky header, so it does not scroll. */
+.bulk-delete-btn {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  color: var(--danger);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  vertical-align: middle;
+  transition: color 0.15s, background 0.15s;
+}
+
+.bulk-delete-btn svg {
+  display: block;
+  flex-shrink: 0;
+}
+
+/* Nudge the count to sit on the trashcan body's optical center (the
+   can's visual mass is below its geometric middle). */
+.bulk-delete-btn #bulk-delete-count {
+  position: relative;
+  top: 1px;
+}
+
+.bulk-delete-btn[hidden] {
+  display: none;
+}
+
+.bulk-delete-btn:hover {
   color: #ff6b6b;
   background: rgba(255, 68, 68, 0.15);
 }
