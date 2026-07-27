@@ -144,7 +144,8 @@ The contract lives in `src/backends/`:
 │   ├── analytics/
 │   │   └── metrics.py                # Run parsing, convergence + canvas boundaries
 │   └── web/
-│       ├── server.py                 # Supervisor: model manager, /ws proxy, analytics, save
+│       ├── server.py                 # Supervisor: model manager, /ws proxy, analytics, save, UI state
+│       ├── ui_state.py               # Durable server-side UI state (Settings, cues) store
 │       └── static/
 │           ├── menu.html             # Main Menu (landing page, model selection)
 │           ├── menu.js               # Menu: model/VRAM fetch + activate + navigate
@@ -165,6 +166,7 @@ The contract lives in `src/backends/`:
 │   ├── spike_diffusiongemma.py       # Standalone load + generate probe
 │   └── ws_smoke_test.py              # End-to-end supervisor/worker smoke test
 ├── Results/                          # Saved runs from the web UI (Save button)
+│   ├── ui_state.json                 # Durable UI state (Settings, "new run" cue, prompt history)
 │   └── <timestamp>_<model>/
 │       ├── metadata.json
 │       ├── final.txt
@@ -273,8 +275,8 @@ The status bar reflects both (`Highlighted Tokens: On/Off`, `Show Commit Order: 
 
 Click **Analytics** in the header (or navigate to `/analytics.html`) to open the Analytics Suite. It reads saved runs from `Results/` and provides interactive charts for comparing behavior across configurations and models.
 
-- **Run browser:** group runs by date, model, prompt, or whether they have a durable Diff vs Original. Columns are shared across models (prompt, model, time, date, and a sortable **Diff vs Original?** column showing a green check when a pre-edit snapshot was saved, a red cross otherwise). Clicking a row opens a wide **detail modal** (fades in like About/Help; close with the X or by clicking outside) laid out with the token overlay canvas as the centerpiece on the left and the run's info plus the convergence, timing, and confidence charts stacked on the right.
-- **Manage runs:** delete a saved run with the row's red trashcan action. A confirmation modal shows the run's folder path (`Results/<timestamp>_<model>`), and a toast confirms the deletion.
+- **Run browser:** group runs by date, model, prompt, or whether a run was edited. Columns are shared across models and ordered Date, Model, Prompt, Time, and a sortable **Edited** column (a checkmark, textured from the diffusion mask glyph, marks runs that carry a pre-edit snapshot for a Diff vs Original; blank otherwise). The leading Date column carries the pulsing green "new run" dot. Clicking a row opens a wide **detail modal** (fades in like About/Help; close with the X or by clicking outside) laid out with the token overlay canvas as the centerpiece on the left and the run's info plus the convergence, timing, and confidence charts stacked on the right.
+- **Manage runs:** delete a saved run with the row's red trashcan action. Select rows with the checkboxes to enable **bulk delete** (a trashcan with the selected count appears in the actions header) and highlight the selected rows. Either path opens a confirmation modal ("Delete this run?" / "Delete N runs?") showing the folder path or count, and a toast confirms the deletion.
 - **Convergence chart:** percentage of resolved tokens per frame. User remask edits are highlighted as blue segments with hover details.
 - **Timing chart:** cumulative elapsed time per frame (accumulates across resumes). Remask transitions are highlighted in green; the detected GPU is shown in the header.
 - **Confidence chart:** mean per-token confidence per frame, which climbs as a canvas converges. Shown for runs saved with confidence data.
@@ -303,9 +305,9 @@ Clicking **Save** writes a timestamped folder under `Results/` containing `metad
 - [x] Grouped overlay picker (None / Heatmap / Diff vs Original), per-token hover tooltips, and token-hover highlight option
 - [x] Commit-order (resolution-step) token coloring; counterfactual "Diff vs Original" overlay with opacity sliders and difference blend
 - [x] Durable overlays: per-token records (text, mask, id, confidence) plus the pre-edit snapshot persisted per run, and a static commit-order / Diff-vs-Original viewer in the Analytics Suite
-- [x] Analytics run detail as a wide fade-in modal with a corner overlay drawer, a sortable Diff-vs-Original column, and streamlined grouping
+- [x] Analytics run detail as a wide fade-in modal with a corner overlay drawer, a sortable Edited column, and streamlined grouping
 - [x] Guided-edit confirm/retry review step and Edit-Frames lock after an edited run is saved
-- [x] Persistent per-browser Settings (highlight tokens, commit order) with staged Save/Reset and status-bar readouts
+- [x] Persistent Settings (highlight tokens, commit order, diffusion text) with staged Save/Reset and status-bar readouts
 - [x] Analytics Suite: model-aware run browser, convergence, timing, confidence, canvas-boundary markers
 - [x] Analytics run deletion (confirmation modal + toast) and contained, toggleable chart tooltips with line burn-through
 - [x] Reproducibility metadata (seed, GPU, git commit, library versions) and deterministic seeding
@@ -318,9 +320,12 @@ Clicking **Save** writes a timestamped folder under `Results/` containing `metad
 - [x] Opt-in "diffusion-style text" effect (scramble-to-resolve on status messages) with a Default/Cycle mode, honoring reduced motion, reused for Shuffle/Generate/Lock-In button micro-interactions
 - [x] Confidence-driven mask rendering: masks use the accent color and their opacity tracks the model's live predicted confidence per position (LLaDA), rising to a "shatter" as a token nears its reveal
 - [x] Randomize-remasks control (slider + N-of-M + Shuffle) in Edit Frames; Edit Frames opens on the first editable frame
-- [x] Analytics "new run" cue: an unseen-run count badge on the Analytics link plus per-row green dots cleared when a run is opened
+- [x] Analytics "new run" cue: an unseen-run count badge on the Analytics link and Main Menu plus per-row green dots cleared when a run is opened; deleting a run decrements it, and the cue self-heals against runs that no longer exist
 - [x] In-place edited-run save: an edited/bundled run updates its pre-edit folder so it is a single Analytics row rather than a duplicate
 - [x] Robust GPU detection (resolves nvidia-smi across launch environments, with a driver/library-mismatch message)
+- [x] Durable server-side UI state (`Results/ui_state.json` via `/api/ui-state`): Settings, the "new run" cue, prompt history, and the generate teaser survive restarts and are shared across the browser and desktop app, independent of the window origin
+- [x] Analytics table rework: reordered columns (Date, Model, Prompt, Time, Edited), a diffusion-textured Edited checkmark, checkbox row highlighting, and multi-select bulk delete
+- [x] Desktop launcher persistence: a stable window port (with ephemeral fallback) and a persistent web-storage profile
 
 
 ## Roadmap

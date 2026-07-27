@@ -84,6 +84,20 @@ analytics suite.
   arrays + the last run id. **GPU/desktop robustness**: robust `nvidia-smi`
   resolution with logging, a driver/library-mismatch message on the menu, and a
   documented `libxcb-cursor0` (Qt/X11) dependency.
+- Shipped (persistence + analytics polish): **durable server-side UI state**.
+  Settings, the analytics "new run" cue, prompt history, and the generate
+  teaser now persist in `Results/ui_state.json` via `GET`/`PUT /api/ui-state`
+  (`src/web/ui_state.py`), hydrated into localStorage on boot (`persistHydrate`
+  / `persistSet` in `overlays.js`). This fixes desktop-app persistence, which
+  the QtWebEngine profile keyed by the launcher's varying window origin/port; it
+  also unifies state across the browser and desktop entry points. The cue is
+  reconciled against existing runs on read, so a deleted run cannot inflate the
+  count. Plus an **analytics table rework**: reordered columns (Date, Model,
+  Prompt, Time, Edited), the renamed **Edited** marker as a diffusion-textured
+  SVG checkmark (blank when unedited), the "new run" dot moved to the leading
+  column, checkbox row highlighting, and multi-select **bulk delete**. Desktop
+  launcher now uses a stable port (ephemeral fallback) and a persistent
+  web-storage profile.
 - For the feature overview and architecture, see `README.md`. For the build
   history, see `.cursor/plans/`.
 
@@ -198,8 +212,10 @@ Shipped from this backlog (see `README.md`):
   visible live and while scrubbing. DiffusionGemma is a separate follow-up.
 - Randomize remasks in Edit Frames (slider + N-of-M + Shuffle): seeds the
   meta-explainability question of whether a remask pattern shapes convergence.
-- "New run saved" analytics cue: a persisted count badge + per-row dots pointing
-  users to freshly saved runs, cleared per run on open.
+- "New run saved" analytics cue: a persisted count badge (generator + Main Menu)
+  + per-row dots pointing users to freshly saved runs, cleared per run on open.
+  Now backed by durable server-side UI state, decremented on delete, and
+  reconciled against existing runs so orphaned ids cannot inflate the count.
 
 Follow-ups unlocked by the durable-overlay data model:
 - Analytics scrubber: the layered Diff vs Original (Original/Edited opacity

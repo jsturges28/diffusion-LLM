@@ -31,7 +31,10 @@ analytics suite.
   at a time with a pre-flight VRAM check; proxies `/ws` (no auto-boot: it errors
   and closes if no worker is active); serves analytics + save + run-delete;
   auto-stamps HTML asset URLs. `/api/models` also returns `gpu_name` +
-  `free_vram_gib` + per-model `fits` for the menu.
+  `free_vram_gib` + per-model `fits` for the menu. Durable UI state
+  (`src/web/ui_state.py`, stored in `Results/ui_state.json`) is served via
+  `GET`/`PUT /api/ui-state`; the GET reconciles the "new run" cue against
+  existing run folders so deleted runs cannot inflate the count.
 - **Workers**: `src/backends/{llada_worker,dgemma_worker}.py` via `run_worker.py`;
   contract in `protocol.py` / `registry.py` / `worker_base.py`. LLaDA → `.venv`
   (transformers 4.38.2); DiffusionGemma → `.venv-dgemma` (transformers 5.13).
@@ -40,69 +43,60 @@ analytics suite.
 - **Frontend** (shared, schema-driven): `src/web/static/{menu.html, menu.js,
   index.html, app.js, overlays.js, analytics.html, analytics.js, analytics.css,
   style.css, custom_select.js}` + `assets/title-screen.{webm,mp4}`. `overlays.js`
-  holds the shared layered-diff builder (`overlaysBuildDiffLayers`); the old
-  `ascii_scene.js` idle animation was removed.
-- **Desktop**: `desktop.py` (pywebview; owns the server lifecycle — uvicorn on an
-  ephemeral localhost port on a daemon thread, graceful shutdown frees worker VRAM
-  on close; prefers Qt/QtWebEngine via `_select_gui`, falls back to GTK;
-  `_set_app_identity` sets GTK prgname + Qt desktopFileName for dock integration).
+  holds the shared layered-diff builder (`overlaysBuildDiffLayers`), the "new run"
+  registry, and the durable-UI-state layer (`persistHydrate` on boot +
+  `persistSet` write-through to `/api/ui-state`); the old `ascii_scene.js` idle
+  animation was removed.
+- **Desktop**: `desktop.py` (pywebview; owns the server lifecycle — uvicorn on a
+  stable localhost port `DESKTOP_PORT=8760` with an ephemeral fallback, on a
+  daemon thread, graceful shutdown frees worker VRAM on close; runs a persistent
+  (non-private) web-storage profile; prefers Qt/QtWebEngine via `_select_gui`,
+  falls back to GTK; `_set_app_identity` sets GTK prgname + Qt desktopFileName for
+  dock integration). Note: durable UI state now lives server-side, so it no longer
+  depends on the window origin/port.
   `scripts/install_desktop_entry.sh` generates a Linux `.desktop`; `assets/icon.svg`
   is the app icon.
 
 ## Recently shipped (this session)
 
-- **Main Menu** at `/` (`menu.html` / `menu.js`): a looping title-screen video
-  (`assets/title-screen.webm` with an `.mp4` fallback; WebM decodes in webviews
-  that lack H.264) over a model picker. Each row is left-stacked (name, then
-  `~X GiB` + status, then description) and shows "Available" + green check or
-  "Insufficient VRAM" + red X (greyed out); selecting a model shows a "Loading..."
-  diffusion cycle, activates the worker, and navigates to `/generate`. Falls back
-  to the animated grid if the video can't play.
-- **Generation gated behind model selection**: generator moved to `/generate`
-  (`/index.html` 307s there); `serve_generate` redirects to `/` when no model is
-  active; the `/ws` proxy no longer auto-boots a default worker. `/api/models`
-  returns `gpu_name` + `free_vram_gib` + per-model `fits` (effective-VRAM: a
-  resident model's VRAM counts as reclaimable) + `gpu_status`.
-- **Consistent header nav**: Menu / Generation / Analytics across pages; the
-  Analytics **Generation** link appears only when a model is resident.
-- **Analytics layered Diff vs Original**: the run modal's Diff overlay uses the
-  shared `overlaysBuildDiffLayers` (Original/Edited opacity sliders + Difference
-  blend); `app.js` refactored onto the same helper.
-- **Removed the idle-animation feature**: deleted `ascii_scene.js` + the donut +
-  the Idle Display setting; the resting state is a plain `showOutputPlaceholder()`.
-- **Diffusion-style text effect** (opt-in Setting, `appSettings.diffusionText`):
-  status messages resolve from block-glyph noise (`denoiseReveal`, per-element
-  timers), honoring `prefers-reduced-motion`. A **Mode** sub-setting
-  (`diffusionTextMode`) adds "Cycle" (re-diffuse on a loop). Button
-  micro-interactions reuse it: Shuffle press (reveal + lagging glow), the
-  Generate/New Run **idle cycle** (2s hold; always runs once before the first-ever
-  run as a discovery teaser, then follows the setting), and **Lock In** dissolving
-  into mask glyphs before it commits.
-- **Mask rendering**: `--mask-color` is now the accent green, and mask **opacity
-  tracks the model's live predicted confidence** (LLaDA): `streaming_sampler.py`
-  emits per-masked-position `true_conf`, and `renderFrameWithTokens` maps it from
-  a solid floor up to full as a token nears its reveal (Mapping A). DiffusionGemma
-  masks stay solid for now.
-- **Analytics "new run" cue**: a shared localStorage set (`overlays.js`) of unseen
-  run ids drives a count badge on the generator's Analytics link and a green dot
-  per new row in the table; opening a run clears just that one.
-- **In-place edited-run save**: an edited/bundled run reuses its pre-edit folder
-  (`SaveRunRequest.run_id` -> `_save_run_blocking` updates in place, path-guarded)
-  so it is one Analytics row, not two. `saveRun` sends `run_id` + a clean
-  `canvas_index`; the session now persists `frameCanvasIndex`/`frameMeanConf` +
-  `lastSavedRunId`, and save-success persists LAST (so the round-trip keeps the
-  final run id + "Saved to..." status). Guided-edit buttons freeze during any
-  save; the standalone Save is disabled during a guided session.
-- **Randomize remasks**: Edit Frames "edit" phase has a slider + "N of M" + Shuffle
-  (min 1); Edit Frames now opens on Frame 1 (Frame 0 is all-masked).
-- **GPU/desktop robustness**: `nvidia-smi` resolved via `shutil.which` + common
-  fallbacks with logging (fixes desktop-launch PATH gaps); `_gpu_status` detects a
-  driver/library mismatch and the menu says so. `README.md` +
-  `install_desktop_entry.sh` note the Qt/X11 `libxcb-cursor0` dependency.
-- Prior sessions (context): durable overlays + analytics token viewer, the wide
-  analytics detail modal, guided-edit Confirm/Retry, prompt history + New Run,
-  the optional desktop app, and automatic asset cache-busting. See git log /
-  `README.md` for detail.
+- **Durable server-side UI state** (fixes desktop persistence). QtWebEngine keys
+  localStorage by window origin, and the launcher's port varied per run, so
+  Settings / the "new run" cue / prompt history / the generate teaser reset every
+  restart. They now persist in `Results/ui_state.json` via `GET`/`PUT /api/ui-state`
+  (`src/web/ui_state.py`: whitelisted keys, bounded sizes, atomic writes, a lock).
+  The frontend hydrates localStorage from the server once on boot
+  (`persistHydrate` wraps each page's boot) and write-throughs on change
+  (`persistSet`), so the existing synchronous localStorage reads are unchanged.
+  State is now shared across the browser and desktop app. Tests in `tests/web/`.
+- **New-run cue hardening**: deleting a run now clears its id
+  (`overlaysClearNewRun` in `applyDeletions`), and `GET /api/ui-state` reconciles
+  the cue against existing run folders (`_reconcile_new_runs`), so an orphaned id
+  (a run deleted outside the app, or before this fix) can no longer inflate the
+  count. The Main Menu badge now matches the generator's green count pill.
+- **Analytics table rework**: columns reordered to Date, Model, Prompt, Time,
+  **Edited**, actions (`TABLE_KEYS` + `<thead>`). "Diff vs Original?" renamed to
+  **Edited**, rendered as an SVG checkmark filled with a diffusion dot pattern
+  (`#edited-dots`, medium-shade density), centered over its column, blank for
+  unedited runs. The "new run" dot moved from Prompt to the leading Date column.
+- **Bulk delete + row highlight**: checking rows shades them (`row-checked`,
+  applied inline on toggle) and shows a trashcan with the selected count in the
+  actions header; it deletes all selected via the shared confirm modal
+  ("Delete N runs?"), reporting partial failures.
+- **Desktop launcher persistence**: `desktop.py` now binds a stable port
+  (`DESKTOP_PORT=8760`, with an ephemeral fallback when it is busy) and runs a
+  persistent (non-private) web-storage profile. Secondary now that UI state is
+  server-side, but it keeps a stable window origin.
+
+## Previously shipped (recent sessions; now in git + README)
+
+- Main Menu + title video + generation gated behind model selection; consistent
+  Menu/Generation/Analytics nav; analytics layered Diff vs Original; removed the
+  idle-animation feature; opt-in diffusion-style text + button micro-interactions;
+  confidence-driven mask opacity (LLaDA); in-place edited-run save; randomize
+  remasks; GPU/desktop robustness (`nvidia-smi` resolution, `libxcb-cursor0`).
+- Earlier: durable overlays + the analytics token viewer, the wide detail modal,
+  guided-edit Confirm/Retry, prompt history + New Run, the optional desktop app,
+  and automatic asset cache-busting. See git log / `README.md` for detail.
 
 ## Conventions
 
@@ -116,17 +110,15 @@ analytics suite.
 
 ## Where to pick up
 
-All six previously-queued items shipped this session (Main Menu + title video +
-gate + per-model silos; analytics diff sliders; diffusion-style text; randomize
-remasks; the "new run" analytics cue), plus a round of refinements (mask
-confidence-opacity, button micro-interactions, in-place edited-run save, GPU/desktop
-robustness, and the save-flow fixes). The tree is at a clean, validated stopping
-point.
+This session shipped durable server-side UI state (fixing desktop persistence
+once and for all), the analytics table rework (Edited column + diffusion-textured
+checkmark, reordered columns, checkbox row highlight, multi-select bulk delete),
+and new-run-cue hardening (decrement on delete + server-side reconcile). All
+maintainer-validated; the tree is at a clean stopping point.
 
-Immediate next: the maintainer has **a couple of small changes** to make before the
-next session, and will then hand over **next-session ideas** (to be recorded here
-once described). Until then, deliberate any new work with the maintainer first
-(deliberate → Plan → Agent).
+Immediate next: the maintainer will hand over **next-session ideas**, to be
+deliberated and then recorded here (and in `ROADMAP.md`) before Plan mode
+(deliberate → Plan → Agent). Update this section once the plan is settled.
 
 Standing candidate directions (from the backlog below), none committed:
 - Multi-canvas DiffusionGemma resume (the remaining Phase 2 milestone).
