@@ -1423,13 +1423,9 @@ function loadPromptHistory() {
 }
 
 function savePromptHistoryStore() {
-  try {
-    localStorage.setItem(
-      PROMPT_HISTORY_KEY, JSON.stringify(promptHistory)
-    );
-  } catch (_e) {
-    // Ignore quota/availability errors; history just won't persist.
-  }
+  // Write-through to the server (see persistSet) so history survives
+  // desktop-app restarts, not just the current window origin.
+  persistSet(PROMPT_HISTORY_KEY, JSON.stringify(promptHistory));
 }
 
 // Record a used prompt at the front (most recent first), de-duplicated
@@ -1554,13 +1550,9 @@ function loadSettings() {
 }
 
 function saveSettings() {
-  try {
-    localStorage.setItem(
-      SETTINGS_KEY, JSON.stringify(appSettings)
-    );
-  } catch (_e) {
-    // Ignore quota/availability errors; just won't persist.
-  }
+  // persistSet mirrors to the server so settings survive desktop-app
+  // restarts (localStorage alone is keyed by the window's origin/port).
+  persistSet(SETTINGS_KEY, JSON.stringify(appSettings));
 }
 
 function settingsEqual(a, b) {
@@ -1892,11 +1884,9 @@ function generateTeaserActive() {
 }
 
 function markGenerateTeased() {
-  try {
-    localStorage.setItem(GENERATE_TEASED_KEY, "1");
-  } catch (_e) {
-    // Non-fatal: the teaser may simply repeat next session.
-  }
+  // Write-through to the server (see persistSet) so the one-time teaser
+  // does not replay every restart on a fresh window origin.
+  persistSet(GENERATE_TEASED_KEY, "1");
 }
 
 // The button idles with the diffusion cycle while it is clickable:
@@ -3969,4 +3959,7 @@ function boot() {
     });
 }
 
-boot();
+// Hydrate durable UI state from the server first (so boot's synchronous
+// localStorage reads see the persisted values), then boot. persistHydrate
+// always runs its callback, even if the fetch fails.
+persistHydrate(boot);

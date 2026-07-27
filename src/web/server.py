@@ -52,6 +52,7 @@ from src.analytics.metrics import (
 from src.backends.protocol import ModelInfo
 from src.backends.registry import DEFAULT_MODEL, REGISTRY
 from src.inference.render_gif import history_to_gif
+from src.web.ui_state import load_ui_state, set_ui_state_key
 
 logger = logging.getLogger("diffusion_supervisor")
 
@@ -954,6 +955,99 @@ async def analytics_delete_run(run_id: str) -> JSONResponse:
         )
     logger.info("deleted run %s", run_id)
     return JSONResponse(content={"success": True})
+
+
+# -- Durable UI state (origin-independent frontend preferences) --
+
+
+class UiStateValue(BaseModel):
+    """One UI-state value, stored verbatim as its localStorage string."""
+
+    value: str
+
+
+def _reconcile_new_runs(state: Dict[str, str]) -> Dict[str, str]:
+    """Prune the "new run" cue to run IDs whose folders still exist.
+
+    The cue accumulates IDs of saved-but-unviewed runs. A run deleted
+    outside the app (or before per-delete clearing existed) would linger
+    as an orphan and inflate the generator/menu count forever, since it
+    no longer appears in Analytics to open or delete. Reconciling here,
+    on the endpoint every page hydrates from, makes the count self-heal
+    everywhere. A freshly saved run is never pruned: its folder exists
+    before its ID is added to the cue.
+    """
+    raw = state.get("diffusion_new_runs")
+    if not raw:
+        return state
+    try:
+        ids = json.loads(raw)
+    except ValueError:
+        return state  # Corrupt value: leave it for load_ui_state to drop.
+    if not isinstance(ids, list):
+        return state
+
+    if RESULTS_DIR.is_dir():
+        existing = {
+            child.name
+            for child in RESULTS_DIR.iterdir()
+            if child.is_dir()
+        }
+    else:
+        existing = set()
+    pruned = [run_id for run_id in ids if run_id in existing]
+    if len(pruned) == len(ids):
+        return state
+
+    new_raw = json.dumps(pruned)
+    try:
+        set_ui_state_key(RESULTS_DIR, "diffusion_new_runs", new_raw)
+    except (KeyError, ValueError, OSError):
+        logger.exception("failed to reconcile new-run cue")
+        return state
+    state["diffusion_new_runs"] = new_raw
+    return state
+
+
+@app.get("/api/ui-state")
+async def get_ui_state() -> JSONResponse:
+    """Return durable UI state (Settings, analytics "new run" cue,
+    prompt history, generate teaser). The frontend hydrates
+    localStorage from this on boot so the values survive restarts
+    regardless of the window origin (see src/web/ui_state.py). The
+    "new run" cue is reconciled against existing runs so deleted runs
+    do not linger in the count.
+    """
+    state = await asyncio.to_thread(load_ui_state, RESULTS_DIR)
+    state = await asyncio.to_thread(_reconcile_new_runs, state)
+    return JSONResponse(content=state)
+
+
+@app.put("/api/ui-state/{key}")
+async def put_ui_state(
+    key: str, body: UiStateValue
+) -> JSONResponse:
+    try:
+        state = await asyncio.to_thread(
+            set_ui_state_key, RESULTS_DIR, key, body.value
+        )
+    except KeyError as exc:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "message": str(exc)},
+        )
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "message": str(exc)},
+        )
+    except OSError as exc:
+        logger.exception("failed to write ui-state key %s", key)
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "message": str(exc)},
+        )
+    return JSONResponse(content={"success": True, "state": state})
 
 
 # -- HTML pages with automatic asset cache-busting --

@@ -220,12 +220,116 @@ function overlaysComputeDiff(cur, orig, remaskEdits) {
   return result;
 }
 
+// ---- Durable UI state (server-backed localStorage mirror) ----
+//
+// The desktop app's window origin (scheme://host:port) can change
+// between launches because the launcher's port varies, which partitions
+// localStorage and made Settings, prompt history, the analytics "new
+// run" cue, and the generate teaser reset across restarts. The server
+// persists these keys in Results/ui_state.json (see src/web/ui_state.py).
+// We hydrate localStorage from it once on boot and write through on
+// change, so the fast synchronous localStorage reads elsewhere keep
+// working unchanged.
+
+var PERSIST_KEYS = [
+  "diffusion_settings",
+  "diffusion_new_runs",
+  "diffusion_prompt_history",
+  "diffusion_generate_teased",
+];
+
+// Debounce PUTs per key so rapid writes (e.g. successive settings
+// toggles) coalesce into one network call.
+var PERSIST_PUT_DEBOUNCE_MS = 250;
+var persistPutTimers = {};
+
+// Write `value` to localStorage immediately (so the many synchronous
+// reads see it at once) and debounce a write-through PUT to the server.
+// Unknown keys are stored locally only.
+function persistSet(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch (_e) {
+    // Non-fatal: fall through to the server write regardless.
+  }
+  if (PERSIST_KEYS.indexOf(key) === -1) {
+    return;
+  }
+  if (persistPutTimers[key]) {
+    clearTimeout(persistPutTimers[key]);
+  }
+  persistPutTimers[key] = setTimeout(function () {
+    persistPutTimers[key] = null;
+    persistPutKey(key, value);
+  }, PERSIST_PUT_DEBOUNCE_MS);
+}
+
+function persistPutKey(key, value) {
+  try {
+    fetch("/api/ui-state/" + encodeURIComponent(key), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value: value }),
+    }).catch(function () {
+      // Non-fatal: the in-session localStorage copy still holds.
+    });
+  } catch (_e) {
+    // Ignore: server persistence is best-effort.
+  }
+}
+
+// Fetch server state, mirror it into localStorage, then run `onReady`.
+// Always calls `onReady` exactly once (even on failure) so a page never
+// hangs on a persistence hiccup. Server values overwrite any stale
+// local copy left by a previous window origin.
+function persistHydrate(onReady) {
+  var done = false;
+  function finish() {
+    if (done) {
+      return;
+    }
+    done = true;
+    onReady();
+  }
+  try {
+    fetch("/api/ui-state")
+      .then(function (response) {
+        return response.json();
+      })
+      .then(function (state) {
+        persistApplyHydrated(state);
+        finish();
+      })
+      .catch(finish);
+  } catch (_e) {
+    finish();
+  }
+}
+
+function persistApplyHydrated(state) {
+  if (!state || typeof state !== "object") {
+    return;
+  }
+  for (var i = 0; i < PERSIST_KEYS.length; i++) {
+    var key = PERSIST_KEYS[i];
+    if (typeof state[key] !== "string") {
+      continue;
+    }
+    try {
+      localStorage.setItem(key, state[key]);
+    } catch (_e) {
+      // Non-fatal: this key just will not hydrate this session.
+    }
+  }
+}
+
 // ---- "New runs" registry (shared across generator + analytics) ----
 //
 // Run IDs saved since the user last viewed them in Analytics.
-// Persisted in localStorage so the generator's Analytics-link count and
-// the analytics table's per-row dots agree across page navigations; a
-// run is cleared individually when its detail is opened.
+// Persisted server-side (via persistSet) so the generator's
+// Analytics-link count and the analytics table's per-row dots agree
+// across page navigations and survive restarts; a run is cleared
+// individually when its detail is opened or when the run is deleted.
 
 var OVERLAYS_NEW_RUNS_KEY = "diffusion_new_runs";
 
@@ -243,13 +347,9 @@ function overlaysReadNewRuns() {
 }
 
 function overlaysWriteNewRuns(ids) {
-  try {
-    localStorage.setItem(
-      OVERLAYS_NEW_RUNS_KEY, JSON.stringify(ids)
-    );
-  } catch (_e) {
-    // Non-fatal: the cue simply will not persist.
-  }
+  // Write-through to the server so the cue survives restarts and stays
+  // consistent across the generator, menu, and analytics pages.
+  persistSet(OVERLAYS_NEW_RUNS_KEY, JSON.stringify(ids));
 }
 
 // Returns true if the run was newly added (was not already tracked),
