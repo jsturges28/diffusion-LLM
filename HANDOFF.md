@@ -116,9 +116,56 @@ checkmark, reordered columns, checkbox row highlight, multi-select bulk delete),
 and new-run-cue hardening (decrement on delete + server-side reconcile). All
 maintainer-validated; the tree is at a clean stopping point.
 
-Immediate next: the maintainer will hand over **next-session ideas**, to be
-deliberated and then recorded here (and in `ROADMAP.md`) before Plan mode
-(deliberate → Plan → Agent). Update this section once the plan is settled.
+**Next session (settled): Phase A, core autoregressive support.** Bring the first
+autoregressive LLM into the app, reusing the frame/token contract. Decisions are
+locked; start with a plan-time check of SmolLM3's required `transformers` version
+to pin the new env, then implement.
+
+- **New backend: SmolLM3-3B** (`HuggingFaceTB/SmolLM3-3B`) in a dedicated
+  **`.venv-ar`** with a CPU-first torch wheel (the model is CPU-primary). Add a
+  `ModelInfo` to `src/backends/registry.py` and a worker module implementing
+  `Backend.load` / `handle_generate` (`src/backends/worker_base.py:67-94`),
+  mirroring the DiffusionGemma worker. New `requirements-ar.txt`.
+- **AR streaming as growing-sequence frames**: a manual token-by-token sampling
+  loop (not HF's text streamer) so we capture per-token confidence, emitting one
+  frame per new token in the existing `{t, m, id, c}` shape (`m` always false,
+  `c` = sampling softmax confidence). Reuses streaming, save, token records, and
+  the scrubber (as a left-to-right replay) unchanged. Note: full-snapshot frames
+  make payload O(n^2) in tokens; fine for a few hundred, revisit for long runs.
+- **Model-type gate**: add `model_type` ("diffusion" | "autoregressive") or an
+  `is_autoregressive` flag to `ModelInfo`/`ModelCapabilities` (`protocol.py:45-70`)
+  and branch the diffusion-only UI off it in `app.js`: hide Edit Frames
+  (already `supports_resume`-gated, `app.js:1970-1975`), the Heatmap/Diff
+  overlays, and the analytics convergence chart; keep run + timing + confidence.
+- **Per-activation CPU/GPU device selection**: add `device` to the activate
+  request (`POST /api/models/{id}/activate`, currently body-less, `server.py`
+  ~495-515), thread it through `run_worker.py` into `Backend.load(device=...)`,
+  and skip `_preflight_vram` when `device="cpu"`. Menu rows are left-stacked with
+  no top-right slot (`style.css:2176-2276`), so add the toggle by making the AR
+  row `position: relative` and absolutely positioning the control (like
+  `#prompt-history`), greyed out (reuse the `fits` logic) when GPU will not fit.
+- **Analytics accommodation**: gate the convergence chart off for AR runs
+  (`compute_convergence`, `metrics.py:59-98`, would otherwise flatline); keep
+  timing (tokens/sec is a natural AR metric) and confidence.
+
+**Deferred (future session): Randomize Prompt.** A "randomize a short prompt"
+dice button left of the prompt-history button (mirror `#btn-prompt-history`,
+`index.html:49-81`, confirm/cancel without cycling) driven by an always-on CPU
+model, with a Settings model dropdown. Deferred because the randomizer must
+coexist with the resident model, which the one-worker-at-a-time manager
+(`_stop_locked` on every activate, `server.py:263-314`) forbids: it needs a
+separate concurrent CPU "utility" worker with its own lifecycle. High effort for
+the payoff right now, so build the bigger AR feature first.
+
+**Phase C (only if time this session):**
+- Top-k "change the last token" resume: the standout AR xAI feature. AR resume is
+  truncate-force-continue (easier than diffusion resume), slotting into the
+  existing `supports_resume` + resume-message path; top-k capture is opt-in like
+  DiffusionGemma's `entropy_signal`. Keep the scrubber for this.
+- Integrate the other candidates: Phi-4-mini-instruct (standard/reliable) and
+  Gemma-3n-E2B-it (novel MatFormer/effective-2B, trickiest).
+- Download-from-menu: a curated allowlist of the candidate models; needs a
+  dynamic registry layer (registry is a static dict today) + disk-space checks.
 
 Standing candidate directions (from the backlog below), none committed:
 - Multi-canvas DiffusionGemma resume (the remaining Phase 2 milestone).
@@ -126,10 +173,8 @@ Standing candidate directions (from the backlog below), none committed:
   frame; the layered diff currently renders the final frame only).
 - Mask confidence-opacity for DiffusionGemma (LLaDA shipped; dgemma uses a
   different signal, so it is a separate, heavier effort).
-- xAI: top-k alternatives on hover; per-position entropy sparkline; cross-model
-  comparison on identical prompt/seed; autoregressive baseline.
-- Random-prompt generator (tiny CPU-side AR model in the supervisor) and an in-app
-  camera/screenshot-to-Downloads button.
+- xAI: per-position entropy sparkline; cross-model comparison on identical
+  prompt/seed.
 
 ## North star & backlog
 
@@ -138,6 +183,7 @@ latent-space probes, reusing the diff/overlay tooling as a cross-model compariso
 lens. Standing backlog (`ROADMAP.md`): multi-canvas DiffusionGemma resume; a
 per-frame scrubber for the analytics overlays (the saved token stream already
 carries every frame); top-k alternatives on hover; per-position entropy sparkline;
-autoregressive baseline / random-prompt generator (preferably a tiny CPU-side AR
-model in the supervisor — model-agnostic, no GPU contention); in-app
+autoregressive baseline / random-prompt generator (a small CPU-only "utility"
+model in its own concurrent worker, since the supervisor stays torch-free and the
+main manager runs one worker at a time; model-agnostic, no GPU contention); in-app
 camera/screenshot-to-Downloads button; aggregate analytics across saved runs.

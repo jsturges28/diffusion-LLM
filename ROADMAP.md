@@ -103,6 +103,55 @@ analytics suite.
 
 ---
 
+## Next up: autoregressive model support (Phase A, planned)
+
+The north-star direction: host open-source **autoregressive (AR) LLMs** alongside
+the diffusion models, reusing the frame/token contract, overlays, and analytics.
+The backend contract already generalizes (a model is a `ModelInfo` in
+`registry.py` plus a worker implementing `Backend.load` / `handle_generate`), and
+the streaming "frame" (a full snapshot plus a `{t, m, id, c}` token list) maps
+cleanly onto AR: frame N is the sequence after N generated tokens, every token
+`m: false`, `c` = the sampling softmax confidence.
+
+**Phase A (settled, next session).** First AR model end to end:
+- **SmolLM3-3B** (`HuggingFaceTB/SmolLM3-3B`) in a dedicated **`.venv-ar`**
+  (CPU-first torch wheel; the model is CPU-primary), with `requirements-ar.txt`.
+  Chosen over Phi-4-mini (standard but less novel) and Gemma-3n-E2B (novel
+  MatFormer/effective-2B, but the trickiest first integration) for a clean
+  integration whose think/no-think mode reuses the existing thinking UI. All need
+  `transformers` >= ~4.53 (incompatible with LLaDA's 4.38.2), hence the new env;
+  pin the exact version at plan time.
+- **AR streaming**: a manual token-by-token sampling loop (not HF's text streamer)
+  capturing per-token confidence, one frame per new token. Reuses save, token
+  records, and the scrubber (left-to-right replay).
+- **Model-type gate**: `model_type` ("diffusion" | "autoregressive") or
+  `is_autoregressive` on `ModelInfo`/`ModelCapabilities`; hides diffusion-only UI
+  (Edit Frames, Heatmap/Diff overlays, convergence chart), keeps run + timing +
+  confidence.
+- **Per-activation CPU/GPU device**: `device` on the activate request threaded to
+  `run_worker.py` -> `Backend.load(device=...)`, skipping the VRAM preflight on
+  CPU; a greyed-when-it-won't-fit toggle on the AR menu row.
+- **Analytics**: drop the convergence chart for AR; keep timing (tokens/sec) and
+  confidence.
+
+**Phase C (if time).**
+- **Top-k "change the last token" resume**: the standout AR xAI feature. AR resume
+  is truncate-force-continue (easier than diffusion resume), reusing the
+  `supports_resume` + resume-message path; top-k capture is opt-in like
+  DiffusionGemma's `entropy_signal`.
+- Integrate **Phi-4-mini-instruct** and **Gemma-3n-E2B-it**.
+- **Download-from-menu**: a curated allowlist of the candidate models; needs a
+  dynamic registry layer (registry is a static dict today) + disk-space checks.
+
+**Deferred (future session): Randomize Prompt.** A dice button (left of the
+prompt-history button) that fills the prompt via a small always-on CPU model, with
+a Settings model dropdown. Deferred because the randomizer must coexist with the
+resident model, which the one-worker-at-a-time manager forbids; it needs a
+separate concurrent CPU "utility" worker with its own lifecycle. High effort for
+the near-term payoff, so the core AR feature comes first.
+
+---
+
 ## Phase 2: DiffusionGemma interactive remask and resume
 
 Status: **shipped for single-canvas runs**; multi-canvas resume remaining.
@@ -246,12 +295,14 @@ Still candidate directions:
   bridge (with a browser-mode `<a download>` fallback). Cross-platform and
   avoids depending on per-OS screenshot tools; fidelity is perfect for the token
   output and charts (DOM rasterizers do not render `backdrop-filter`).
-- Random prompt generator: a "surprise me" control that fills the prompt box
-  with a generated prompt. Preferred approach is a tiny autoregressive model run
-  on CPU in the supervisor (model-agnostic, no contention with the resident
-  diffusion model on the 24 GB GPU, fast for a one-liner) rather than the
-  resident diffusion model (which would be clunky/slow, especially DiffusionGemma).
-  A natural first toe-dip toward the north-star of hosting autoregressive models.
+- Random prompt generator (deferred; see "Next up" above): a "surprise me" dice
+  control that fills the prompt box with a generated prompt. A small
+  autoregressive model on CPU (model-agnostic, no contention with the resident
+  diffusion model on the 24 GB GPU, fast for a one-liner), but it must run in its
+  own concurrent "utility" worker: the supervisor stays torch-free and the main
+  manager runs one worker at a time, so the randomizer cannot share the resident
+  worker or load in-process. That lifecycle work is why it is deferred behind the
+  core AR generation feature.
 
 ---
 
