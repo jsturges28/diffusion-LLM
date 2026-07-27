@@ -2,9 +2,10 @@
 
 Wraps the existing FastAPI supervisor in a native window (pywebview)
 instead of a browser tab, and owns the server lifecycle: it starts
-uvicorn on a background thread bound to localhost on an ephemeral
-port, opens the window against it (at ``/``, the Main Menu, from which
-a model is selected before the generator page), and on window close
+uvicorn on a background thread bound to localhost on a stable port
+(see ``DESKTOP_PORT``), opens the window against it (at ``/``, the Main
+Menu, from which a model is selected before the generator page), and on
+window close
 signals a graceful shutdown so the model-worker subprocesses (and
 their VRAM) are released through the supervisor's existing shutdown
 hook.
@@ -50,6 +51,15 @@ STARTUP_TIMEOUT_SECONDS = 30.0
 SHUTDOWN_TIMEOUT_SECONDS = 35.0
 ICON_PATH = REPO_ROOT / "assets" / "icon.svg"
 
+# A fixed localhost port keeps the desktop window's origin
+# (scheme://host:port) stable across launches. Web storage (localStorage:
+# Settings, prompt history, the analytics "new run" cue) is partitioned
+# per origin, so an ephemeral port would hand each launch a fresh, empty
+# partition and silently defeat persistence even with a persistent
+# profile. Distinct from main.py's default 8000 so the browser and the
+# desktop app can run side by side without colliding.
+DESKTOP_PORT = 8760
+
 
 def _free_port() -> int:
     """Reserve an ephemeral localhost port for the supervisor."""
@@ -58,6 +68,40 @@ def _free_port() -> int:
         port = int(probe.getsockname()[1])
     assert port > 0, "failed to acquire an ephemeral port"
     return port
+
+
+def _port_available(port: int) -> bool:
+    """Return whether `port` can be bound on the loopback host now."""
+    assert 0 < port < 65536, "port must be in the valid range"
+    with socket.socket() as probe:
+        try:
+            probe.bind((HOST, port))
+        except OSError:
+            return False
+    return True
+
+
+def _resolve_port() -> int:
+    """Prefer the stable desktop port; fall back to an ephemeral one.
+
+    A stable origin is what lets localStorage survive restarts (see
+    ``DESKTOP_PORT``). If the fixed port is already taken (a second
+    instance, or an unrelated process), degrade to an ephemeral port so
+    the app still launches. Web storage will not carry over for that one
+    launch, which is a better failure than refusing to start.
+    """
+    if _port_available(DESKTOP_PORT):
+        return DESKTOP_PORT
+    fallback = _free_port()
+    print(
+        "[desktop] preferred port "
+        + str(DESKTOP_PORT)
+        + " is in use; falling back to ephemeral port "
+        + str(fallback)
+        + " (web storage will not persist this launch).",
+        file=sys.stderr,
+    )
+    return fallback
 
 
 def _wait_until_started(
@@ -131,17 +175,44 @@ def _select_gui() -> Optional[str]:
     return None
 
 
-def _window_start_kwargs() -> dict:
-    """Pass the window icon only if this pywebview build accepts it.
+def _persistent_storage_path() -> Path:
+    """Per-user data dir for web storage that must survive restarts.
 
-    The ``icon`` argument to ``webview.start`` is backend- and
-    version-dependent; the app-menu launcher icon comes from the
-    .desktop entry regardless (see scripts/install_desktop_entry.sh).
+    Respects ``XDG_DATA_HOME`` on Linux, else ``~/.local/share``.
+    """
+    base = os.environ.get("XDG_DATA_HOME")
+    root = Path(base) if base else Path.home() / ".local" / "share"
+    return root / APP_ID
+
+
+def _window_start_kwargs() -> dict:
+    """Optional ``webview.start`` kwargs, each gated on this pywebview
+    build's support (the arguments are backend- and version-dependent).
+
+    - ``icon``: app window icon. The app-menu launcher icon comes from
+      the .desktop entry regardless (see install_desktop_entry.sh).
+    - ``private_mode=False`` + ``storage_path``: persist web storage
+      (localStorage: Settings, prompt history, the analytics "new run"
+      cue) across app restarts. pywebview otherwise defaults to a
+      private, off-the-record profile that is cleared on close, so those
+      would reset every launch.
     """
     params = inspect.signature(webview.start).parameters
+    kwargs: dict = {}
     if "icon" in params and ICON_PATH.is_file():
-        return {"icon": str(ICON_PATH)}
-    return {}
+        kwargs["icon"] = str(ICON_PATH)
+    if "private_mode" in params:
+        kwargs["private_mode"] = False
+    if "storage_path" in params:
+        storage = _persistent_storage_path()
+        try:
+            storage.mkdir(parents=True, exist_ok=True)
+            kwargs["storage_path"] = str(storage)
+        except OSError:
+            # Fall back to pywebview's default persistent location
+            # (still non-private since private_mode is False).
+            pass
+    return kwargs
 
 
 def _start_window(gui: Optional[str]) -> None:
@@ -171,7 +242,7 @@ def _start_window(gui: Optional[str]) -> None:
 def main() -> None:
     gui = _select_gui()
     _set_app_identity(gui)
-    port = _free_port()
+    port = _resolve_port()
     server = uvicorn.Server(
         uvicorn.Config(
             app, host=HOST, port=port, log_level="info"
