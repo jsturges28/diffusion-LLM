@@ -539,6 +539,17 @@ function renderTable() {
         if (TABLE_KEYS[k] === "prompt") {
           td.className = "col-prompt";
           td.title = run.prompt || "";
+          // Fixed-width slot keeps the prompt text aligned whether or
+          // not a "new run" dot is present.
+          var slot = document.createElement("span");
+          slot.className = "run-new-slot";
+          if (overlaysIsNewRun(run.run_id)) {
+            var newDot = document.createElement("span");
+            newDot.className = "run-new-dot";
+            newDot.setAttribute("aria-hidden", "true");
+            slot.appendChild(newDot);
+          }
+          td.insertBefore(slot, td.firstChild);
         }
         tr.appendChild(td);
       }
@@ -589,6 +600,18 @@ function showDetail(runId) {
   activeRunId = runId;
   comparePanel.hidden = true;
   detailPanel.classList.remove("hidden");
+
+  // Opening a run clears its "new" dot (and decrements the generator's
+  // count on the next visit). Remove just this row's dot in place.
+  if (overlaysIsNewRun(runId)) {
+    overlaysClearNewRun(runId);
+    var openedRow = runsTbody.querySelector(
+      'tr[data-run-id="' + runId + '"] .run-new-slot'
+    );
+    if (openedRow) {
+      openedRow.textContent = "";
+    }
+  }
 
   var run = null;
   for (var i = 0; i < allRuns.length; i++) {
@@ -1826,13 +1849,6 @@ modalDelete.addEventListener("click", function (e) {
 })();
 
 wireOverlayDiffControls();
-
-// Opening Analytics clears the generator's "new run saved" cue.
-try {
-  sessionStorage.removeItem("diffusion_analytics_new");
-} catch (_e) {
-  // Storage unavailable: nothing to clear.
-}
 
 // Reveal the "Generation" nav link only when a model is resident. The
 // generator is gated on an active model (see server.py), so surfacing

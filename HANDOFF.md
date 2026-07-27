@@ -53,25 +53,52 @@ analytics suite.
 
 - **Main Menu** at `/` (`menu.html` / `menu.js`): a looping title-screen video
   (`assets/title-screen.webm` with an `.mp4` fallback; WebM decodes in webviews
-  that lack H.264) over a model picker showing the detected GPU + free VRAM and
-  greying out models that will not fit. Selecting a model activates its worker and
-  navigates to `/generate`. Fallback to the animated grid if the video can't play.
+  that lack H.264) over a model picker. Each row is left-stacked (name, then
+  `~X GiB` + status, then description) and shows "Available" + green check or
+  "Insufficient VRAM" + red X (greyed out); selecting a model shows a "Loading..."
+  diffusion cycle, activates the worker, and navigates to `/generate`. Falls back
+  to the animated grid if the video can't play.
 - **Generation gated behind model selection**: generator moved to `/generate`
   (`/index.html` 307s there); `serve_generate` redirects to `/` when no model is
   active; the `/ws` proxy no longer auto-boots a default worker. `/api/models`
-  gained `gpu_name` + `free_vram_gib` + per-model `fits` (effective-VRAM: a
-  resident model's VRAM counts as reclaimable).
-- **Consistent header nav**: Menu / Generation / Analytics across pages. On
-  Analytics the **Generation** link (`#link-generation`) appears only when a model
-  is resident (checked via `/api/models` `active`); stale back-icon and
-  empty-state links fixed.
-- **Analytics layered Diff vs Original** (#1 shipped): the run modal's Diff
-  overlay now uses the shared `overlaysBuildDiffLayers` with Original/Edited
-  opacity sliders + a Difference-blend toggle (final frame), matching the
-  generator; `app.js` refactored onto the same helper.
-- **Removed the idle-animation feature**: deleted `ascii_scene.js`, the donut,
-  and the Idle Display setting; the output area's resting state is now a plain
-  `showOutputPlaceholder()`.
+  returns `gpu_name` + `free_vram_gib` + per-model `fits` (effective-VRAM: a
+  resident model's VRAM counts as reclaimable) + `gpu_status`.
+- **Consistent header nav**: Menu / Generation / Analytics across pages; the
+  Analytics **Generation** link appears only when a model is resident.
+- **Analytics layered Diff vs Original**: the run modal's Diff overlay uses the
+  shared `overlaysBuildDiffLayers` (Original/Edited opacity sliders + Difference
+  blend); `app.js` refactored onto the same helper.
+- **Removed the idle-animation feature**: deleted `ascii_scene.js` + the donut +
+  the Idle Display setting; the resting state is a plain `showOutputPlaceholder()`.
+- **Diffusion-style text effect** (opt-in Setting, `appSettings.diffusionText`):
+  status messages resolve from block-glyph noise (`denoiseReveal`, per-element
+  timers), honoring `prefers-reduced-motion`. A **Mode** sub-setting
+  (`diffusionTextMode`) adds "Cycle" (re-diffuse on a loop). Button
+  micro-interactions reuse it: Shuffle press (reveal + lagging glow), the
+  Generate/New Run **idle cycle** (2s hold; always runs once before the first-ever
+  run as a discovery teaser, then follows the setting), and **Lock In** dissolving
+  into mask glyphs before it commits.
+- **Mask rendering**: `--mask-color` is now the accent green, and mask **opacity
+  tracks the model's live predicted confidence** (LLaDA): `streaming_sampler.py`
+  emits per-masked-position `true_conf`, and `renderFrameWithTokens` maps it from
+  a solid floor up to full as a token nears its reveal (Mapping A). DiffusionGemma
+  masks stay solid for now.
+- **Analytics "new run" cue**: a shared localStorage set (`overlays.js`) of unseen
+  run ids drives a count badge on the generator's Analytics link and a green dot
+  per new row in the table; opening a run clears just that one.
+- **In-place edited-run save**: an edited/bundled run reuses its pre-edit folder
+  (`SaveRunRequest.run_id` -> `_save_run_blocking` updates in place, path-guarded)
+  so it is one Analytics row, not two. `saveRun` sends `run_id` + a clean
+  `canvas_index`; the session now persists `frameCanvasIndex`/`frameMeanConf` +
+  `lastSavedRunId`, and save-success persists LAST (so the round-trip keeps the
+  final run id + "Saved to..." status). Guided-edit buttons freeze during any
+  save; the standalone Save is disabled during a guided session.
+- **Randomize remasks**: Edit Frames "edit" phase has a slider + "N of M" + Shuffle
+  (min 1); Edit Frames now opens on Frame 1 (Frame 0 is all-masked).
+- **GPU/desktop robustness**: `nvidia-smi` resolved via `shutil.which` + common
+  fallbacks with logging (fixes desktop-launch PATH gaps); `_gpu_status` detects a
+  driver/library mismatch and the menu says so. `README.md` +
+  `install_desktop_entry.sh` note the Qt/X11 `libxcb-cursor0` dependency.
 - Prior sessions (context): durable overlays + analytics token viewer, the wide
   analytics detail modal, guided-edit Confirm/Retry, prompt history + New Run,
   the optional desktop app, and automatic asset cache-busting. See git log /
@@ -87,34 +114,30 @@ analytics suite.
   a manual-verification checklist.
 - See `AGENTS.md` for the full workflow, commit discipline, and this handoff habit.
 
-## Where to pick up (items 4-6; items 1-3 shipped this session)
+## Where to pick up
 
-Items 1 (analytics diff sliders), 2/2b (Main Menu route + per-model silos), and 3
-(title video) shipped this session. The remaining three are independent polish and
-can be tackled in any order. Decisions were settled in earlier deliberation;
-confirm scope, then deliberate → Plan → Agent.
+All six previously-queued items shipped this session (Main Menu + title video +
+gate + per-model silos; analytics diff sliders; diffusion-style text; randomize
+remasks; the "new run" analytics cue), plus a round of refinements (mask
+confidence-opacity, button micro-interactions, in-place edited-run save, GPU/desktop
+robustness, and the save-flow fixes). The tree is at a clean, validated stopping
+point.
 
-**4. "Render diffusion-style text" Settings toggle.** Persist per-browser like the
-other settings (`appSettings` / localStorage). A scramble→resolve ("denoising")
-effect on dynamic status texts to start (the `startStatusDots` messages:
-"Running…", "Saving run…", "Done."), same green palette. Small shared utility;
-honor `prefers-reduced-motion`.
+Immediate next: the maintainer has **a couple of small changes** to make before the
+next session, and will then hand over **next-session ideas** (to be recorded here
+once described). Until then, deliberate any new work with the maintainer first
+(deliberate → Plan → Agent).
 
-**5. Randomize remasks in Edit Frames.** In the remask "edit" state, add a control
-to randomly select a subset of resolved token positions into `remaskedPositions`
-(then Lock In as usual). DECIDED UI: a **slider plus an "N of M" count input**.
-Grounding: `app.js` `remaskedPositions`, `enterRemaskMode` / `beginEditSession`,
-`updateGuidedUI` "edit" case, `lockInEdits`. Seeds a meta-explainability direction
-(does a remask pattern shape convergence paths?) — feature now, study later.
-
-**6. "New run saved" Analytics cue.** On save-success (`saveRun` `.then`), light up
-the header "Analytics" link with a transient rising "+1" and a glowing green "new"
-dot badge, to point users to where saved runs live. Clear the dot when Analytics is
-opened (session-scoped is fine).
-
-**Suggested sequencing:** #4/#5/#6 are independent; do them in any order. #5
-(randomize remasks) seeds the meta-explainability direction; #4 and #6 are small
-UI polish that can land quickly.
+Standing candidate directions (from the backlog below), none committed:
+- Multi-canvas DiffusionGemma resume (the remaining Phase 2 milestone).
+- Per-frame scrubber for the analytics overlays (saved token stream carries every
+  frame; the layered diff currently renders the final frame only).
+- Mask confidence-opacity for DiffusionGemma (LLaDA shipped; dgemma uses a
+  different signal, so it is a separate, heavier effort).
+- xAI: top-k alternatives on hover; per-position entropy sparkline; cross-model
+  comparison on identical prompt/seed; autoregressive baseline.
+- Random-prompt generator (tiny CPU-side AR model in the supervisor) and an in-app
+  camera/screenshot-to-Downloads button.
 
 ## North star & backlog
 

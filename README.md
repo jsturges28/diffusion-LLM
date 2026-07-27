@@ -27,7 +27,7 @@ Diffusion LLMs instead start from a corrupted sequence and refine the whole thin
 - **Forward process (corruption):** independently replace each token with `[MASK]` with probability *t* in [0, 1]. At *t* = 0 the text is clean; at *t* = 1 everything is masked.
 - **Reverse process (generation):** starting from a fully masked canvas, the Transformer predicts all masked positions at once, then **re-masks** the least confident predictions. Repeat for *N* steps until nothing is masked.
 
-The training loss is cross-entropy on masked positions only, weighted by 1/*t*, which provides a variational upper bound on negative log-likelihood. This makes LLaDA a principled generative model, not a fill-in-the-blank system like BERT. In the UI, unresolved positions render as `░`.
+The training loss is cross-entropy on masked positions only, weighted by 1/*t*, which provides a variational upper bound on negative log-likelihood. This makes LLaDA a principled generative model, not a fill-in-the-blank system like BERT. In the UI, unresolved positions render as `░`; their opacity tracks the model's live predicted confidence for that position, so a mask starts solid and brightens toward a "shatter" as the model grows confident about what it will become, then resolves into the token.
 
 ### DiffusionGemma: block-autoregressive text diffusion
 
@@ -213,6 +213,8 @@ This writes the NF4 checkpoint to the path referenced by the registry (`~/models
 
 `desktop.py` automatically prefers the Qt backend when present and gracefully falls back to GTK/WebKit otherwise. If you prefer the lighter GTK/WebKit backend, install its system libraries and binding instead (`sudo apt install libgirepository1.0-dev libcairo2-dev gir1.2-webkit2-4.1` then `.venv/bin/pip install "pywebview[gtk]"`). To add an app-menu launcher with an icon on Linux, run `scripts/install_desktop_entry.sh` (it generates a `.desktop` entry with the correct absolute paths for your checkout).
 
+On an X11 session (rather than Wayland), the Qt backend needs the `xcb` platform plugin's runtime dependency, which Qt 6.5+ does not bundle: if the app aborts on launch with "xcb-cursor0 or libxcb-cursor0 is needed to load the Qt xcb platform plugin," install it with `sudo apt install libxcb-cursor0`. This is easy to hit after an NVIDIA driver update, which can flip the login session from Wayland to X11.
+
 
 ## Quickstart
 
@@ -259,10 +261,11 @@ A collapsible **Overlay** drawer in the top-right of the output area recolors th
 - **Heatmap:** recolor resolved tokens by confidence (dim, desaturated tones for low, bright green for high).
 - **Diff vs Original:** compare an edited run against the original. It is listed but disabled until you have edited and resumed a run. When active, a slim control row below the scrubber provides independent **Original** / **Edited** opacity sliders and a **Difference blend** toggle, alongside a `Diverged N/total` readout.
 
-Two persistent preferences live in **Settings** (in the header) and are saved per-browser; the modal stages changes behind **Save** / **Reset** with inline status feedback:
+Persistent preferences live in **Settings** (in the header) and are saved per-browser; the modal stages changes behind **Save** / **Reset** with inline status feedback:
 
 - **Show Commit Order:** tint resolved tokens by the step at which they settled, from light green (early) to red-orange (late), with a matching gradient legend in the status bar.
 - **Highlight tokens:** add a light hover highlight so the full span of the hovered token is easy to see.
+- **Render diffusion-style text:** dynamic status messages resolve from scrambled block-glyph noise, like a denoising pass, in the green palette (skipped automatically under `prefers-reduced-motion`). A **Mode** sub-setting picks **Default** (resolve once) or **Cycle** (keep re-diffusing while the status is active). The same effect drives small button interactions (Shuffle, the Generate/New Run idle cycle, and Lock In dissolving into mask glyphs).
 
 The status bar reflects both (`Highlighted Tokens: On/Off`, `Show Commit Order: On/Off`). An explicit overlay selection (Heatmap or Diff) takes precedence; otherwise Commit Order, when enabled, is the ambient tint. Hovering any token still shows its position (`Token X/total` for LLaDA, `Token: X` for DiffusionGemma) and confidence for that frame (masked tokens report 0).
 
@@ -310,8 +313,14 @@ Clicking **Save** writes a timestamped folder under `Results/` containing `metad
 - [x] Save runs (metadata, history, final text, GIF) with per-frame timing and confidence
 - [x] Optional desktop app: pywebview native window that owns the server lifecycle (graceful shutdown frees VRAM) plus a Linux app-menu launcher
 - [x] Prompt history (persisted per-browser) with a browse control, and a New Run flow that clears the canvas after a finalized run
-- [x] Main Menu landing page: looping title-screen video (WebM/MP4) over a GPU/VRAM-aware model picker that greys out models that will not fit; generation gated behind model selection
+- [x] Main Menu landing page: looping title-screen video (WebM/MP4) over a GPU/VRAM-aware model picker (Available / Insufficient VRAM) that greys out models that will not fit; generation gated behind model selection
 - [x] Analytics layered "Diff vs Original" overlay (Original/Edited opacity sliders + difference blend) mirroring the generator
+- [x] Opt-in "diffusion-style text" effect (scramble-to-resolve on status messages) with a Default/Cycle mode, honoring reduced motion, reused for Shuffle/Generate/Lock-In button micro-interactions
+- [x] Confidence-driven mask rendering: masks use the accent color and their opacity tracks the model's live predicted confidence per position (LLaDA), rising to a "shatter" as a token nears its reveal
+- [x] Randomize-remasks control (slider + N-of-M + Shuffle) in Edit Frames; Edit Frames opens on the first editable frame
+- [x] Analytics "new run" cue: an unseen-run count badge on the Analytics link plus per-row green dots cleared when a run is opened
+- [x] In-place edited-run save: an edited/bundled run updates its pre-edit folder so it is a single Analytics row rather than a duplicate
+- [x] Robust GPU detection (resolves nvidia-smi across launch environments, with a driver/library-mismatch message)
 
 
 ## Roadmap

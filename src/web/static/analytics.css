@@ -410,6 +410,13 @@ html, body {
   max-width: 180px;
 }
 
+/* Align the Prompt header with the prompt text: the cells start with a
+   fixed 14px "new run" dot slot (plus the 8px base cell padding), so
+   the header gets the same left offset. */
+#runs-table thead th.col-prompt {
+  padding-left: 22px;
+}
+
 /* Per-row delete action. */
 .col-actions {
   width: 28px;

@@ -172,13 +172,21 @@ body {
   position: relative;
 }
 
+/* Count badge on the Analytics link: how many saved runs are unviewed. */
 .analytics-new-dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
   margin-left: 5px;
-  border-radius: 50%;
+  border-radius: 999px;
   background: var(--accent);
+  color: #000;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
   vertical-align: middle;
   box-shadow: 0 0 6px var(--accent-glow);
   animation: analytics-dot-pulse 1.6s ease-in-out infinite;
@@ -187,6 +195,24 @@ body {
 @keyframes analytics-dot-pulse {
   0%, 100% { opacity: 1; box-shadow: 0 0 6px var(--accent-glow); }
   50% { opacity: 0.5; box-shadow: 0 0 12px var(--accent-glow); }
+}
+
+/* Per-row "new run" dot in the Analytics table. The fixed-width slot
+   reserves space so prompt text stays aligned across all rows. */
+.run-new-slot {
+  display: inline-block;
+  width: 14px;
+  vertical-align: middle;
+}
+
+.run-new-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent-glow);
+  animation: analytics-dot-pulse 1.6s ease-in-out infinite;
 }
 
 /* Transient "+1" that rises and fades above the Analytics link. */
@@ -2157,9 +2183,9 @@ body.menu-video-off .menu-video {
 
 .menu-model-row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
   padding: 14px 16px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -2198,13 +2224,6 @@ body.menu-video-off .menu-video {
   box-shadow: 0 0 0 1px var(--accent-dim);
 }
 
-.menu-model-main {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-
 .menu-model-name {
   color: var(--accent);
   font-size: 14px;
@@ -2218,13 +2237,12 @@ body.menu-video-off .menu-video {
   line-height: 1.4;
 }
 
+/* VRAM + status on one left-aligned line under the description. */
 .menu-model-meta {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 4px;
-  flex-shrink: 0;
-  text-align: right;
+  align-items: center;
+  gap: 12px;
+  margin-top: 2px;
 }
 
 .menu-model-vram {
@@ -2237,6 +2255,24 @@ body.menu-video-off .menu-video {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-dim);
+}
+
+/* "Loading..." reads in the accent palette like the status bar. */
+.menu-model-status.is-loading-status {
+  color: var(--accent);
+}
+
+.menu-status-icon {
+  font-weight: 700;
+  font-size: 11px;
+}
+
+.menu-status-ok {
+  color: var(--accent);
+}
+
+.menu-status-bad {
+  color: var(--danger);
 }
 
 .menu-error {

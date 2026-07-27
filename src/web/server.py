@@ -69,48 +69,121 @@ VRAM_SETTLE_TIMEOUT_S = 8.0
 # -- Model worker manager --
 
 
-def _gpu_name() -> Optional[str]:
-    """Best-effort GPU name via nvidia-smi."""
-    try:
-        out = subprocess.run(
-            [
-                "nvidia-smi",
-                "--query-gpu=name",
-                "--format=csv,noheader",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=5,
+# nvidia-smi is often absent from PATH when the app is launched from a
+# desktop entry (a minimal session PATH), which silently made GPU info
+# unavailable. Resolve it explicitly with common fallbacks, cached, and
+# log the outcome once so a missing binary is diagnosable.
+_NVIDIA_SMI_FALLBACKS = (
+    "/usr/bin/nvidia-smi",
+    "/usr/local/bin/nvidia-smi",
+    "/usr/lib/wsl/lib/nvidia-smi",
+)
+_nvidia_smi_resolved = False
+_nvidia_smi_path_cached: Optional[str] = None
+
+
+def _nvidia_smi_path() -> Optional[str]:
+    """Resolve the nvidia-smi binary (PATH, then common paths). Cached."""
+    global _nvidia_smi_resolved, _nvidia_smi_path_cached
+    if _nvidia_smi_resolved:
+        return _nvidia_smi_path_cached
+    found = shutil.which("nvidia-smi")
+    if not found:
+        for candidate in _NVIDIA_SMI_FALLBACKS:
+            if Path(candidate).is_file():
+                found = candidate
+                break
+    _nvidia_smi_path_cached = found
+    _nvidia_smi_resolved = True
+    if found is None:
+        logger.warning(
+            "nvidia-smi not found on PATH or common paths"
+            " (%s); GPU info will be unavailable",
+            ", ".join(_NVIDIA_SMI_FALLBACKS),
         )
-        if out.returncode == 0:
-            lines = out.stdout.strip().splitlines()
-            if lines:
-                return lines[0].strip()
-    except Exception:
+    else:
+        logger.info("using nvidia-smi at %s", found)
+    return found
+
+
+def _nvidia_smi_query(field: str) -> Optional[str]:
+    """Return one --query-gpu field's first-GPU value, or None.
+
+    Failures are logged (not swallowed) so a broken GPU probe does not
+    silently masquerade as "no GPU".
+    """
+    binary = _nvidia_smi_path()
+    if binary is None:
         return None
-    return None
-
-
-def _free_vram_gib() -> Optional[float]:
-    """Free GPU memory in GiB via nvidia-smi (None if unknown)."""
     try:
         out = subprocess.run(
             [
-                "nvidia-smi",
-                "--query-gpu=memory.free",
+                binary,
+                "--query-gpu=" + field,
                 "--format=csv,noheader,nounits",
             ],
             capture_output=True,
             text=True,
             timeout=5,
         )
-        if out.returncode == 0:
-            lines = out.stdout.strip().splitlines()
-            if lines:
-                return float(lines[0].strip()) / 1024.0
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - best-effort GPU probe
+        logger.warning("nvidia-smi query failed: %s", exc)
         return None
-    return None
+    if out.returncode != 0:
+        logger.warning(
+            "nvidia-smi exited %d: %s",
+            out.returncode,
+            out.stderr.strip(),
+        )
+        return None
+    lines = out.stdout.strip().splitlines()
+    if not lines:
+        return None
+    return lines[0].strip()
+
+
+def _gpu_name() -> Optional[str]:
+    """Best-effort GPU name via nvidia-smi."""
+    return _nvidia_smi_query("name")
+
+
+def _free_vram_gib() -> Optional[float]:
+    """Free GPU memory in GiB via nvidia-smi (None if unknown)."""
+    raw = _nvidia_smi_query("memory.free")
+    if raw is None:
+        return None
+    try:
+        return float(raw) / 1024.0
+    except ValueError:
+        return None
+
+
+def _gpu_status() -> str:
+    """Classify GPU availability for a clearer Main Menu message.
+
+    Returns one of: "ok", "no_nvidia_smi", "mismatch" (driver/library
+    version mismatch, e.g. after an NVIDIA update pending a reboot), or
+    "error". Only called when the GPU name is unreadable, to explain why.
+    """
+    binary = _nvidia_smi_path()
+    if binary is None:
+        return "no_nvidia_smi"
+    try:
+        out = subprocess.run(
+            [binary, "-L"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception as exc:  # noqa: BLE001 - best-effort GPU probe
+        logger.warning("nvidia-smi status probe failed: %s", exc)
+        return "error"
+    if out.returncode == 0:
+        return "ok"
+    combined = (out.stderr + " " + out.stdout).lower()
+    if "mismatch" in combined or "nvml" in combined:
+        return "mismatch"
+    return "error"
 
 
 def _git_commit() -> Optional[str]:
@@ -398,12 +471,17 @@ def _models_snapshot() -> Dict[str, Any]:
             resident_reclaimable_gib=resident_reclaimable_gib,
         )
         models.append(data)
+    gpu = _gpu_name()
+    # Only classify the failure reason when the name is unreadable, so a
+    # healthy system pays no extra nvidia-smi call.
+    gpu_status = "ok" if gpu is not None else _gpu_status()
     return {
         "models": models,
         "active": active_id,
         "default": DEFAULT_MODEL,
-        "gpu_name": _gpu_name(),
+        "gpu_name": gpu,
         "free_vram_gib": free_vram_gib,
+        "gpu_status": gpu_status,
     }
 
 
@@ -549,6 +627,11 @@ class SaveRunRequest(BaseModel):
     canvas_index: Optional[List[int]] = None
     mean_conf: Optional[List[Optional[float]]] = None
     remask_edits: Optional[List[RemaskEdit]] = None
+    # When set, update this existing run folder in place instead of
+    # creating a new one. Used when a saved run is edited-and-resumed:
+    # the edited (bundled) run replaces its pre-edit original so it is a
+    # single Analytics row rather than two.
+    run_id: Optional[str] = None
 
 
 def _make_run_dir(base: Path, model_id: str) -> Path:
@@ -556,6 +639,21 @@ def _make_run_dir(base: Path, model_id: str) -> Path:
     safe_model = model_id.replace("/", "_")
     run_dir = base / f"{timestamp}_{safe_model}"
     run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
+
+
+def _existing_run_dir(run_id: str) -> Path:
+    """Resolve an existing run folder for in-place update.
+
+    Path-guarded like the delete/frames endpoints: the resolved dir
+    must be a direct child of RESULTS_DIR and already exist.
+    """
+    results_root = RESULTS_DIR.resolve()
+    run_dir = (results_root / run_id).resolve()
+    if run_dir.parent != results_root:
+        raise ValueError(f"invalid run id: {run_id}")
+    if not run_dir.is_dir():
+        raise FileNotFoundError(f"Run not found: {run_id}")
     return run_dir
 
 
@@ -586,7 +684,16 @@ def _save_run_blocking(body: SaveRunRequest) -> str:
     checkpoint = ""
     if model_id in REGISTRY:
         checkpoint = REGISTRY[model_id].checkpoint
-    run_dir = _make_run_dir(RESULTS_DIR, model_id)
+    run_dir: Optional[Path] = None
+    if body.run_id:
+        # Update the pre-edit run's folder in place; if it is gone
+        # (e.g. deleted), fall back to a fresh folder rather than fail.
+        try:
+            run_dir = _existing_run_dir(body.run_id)
+        except (ValueError, FileNotFoundError):
+            run_dir = None
+    if run_dir is None:
+        run_dir = _make_run_dir(RESULTS_DIR, model_id)
 
     metadata: Dict[str, Any] = {
         "backend": model_id,

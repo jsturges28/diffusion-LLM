@@ -273,6 +273,10 @@ var editedRunSaved = false;
 // via the Edit Frames auto-save). Prevents entering an edit session
 // from duplicating the original run's saved entry.
 var runSaved = false;
+// Folder id of this run's last save. An edited/bundled save reuses it
+// so the pre-edit run's folder is updated in place (one Analytics row)
+// rather than creating a duplicate.
+var lastSavedRunId = null;
 // Prompt history (localStorage, per-browser): most-recent-first. While
 // browsing, the box is read-only and the pre-browse text is held in
 // promptHistoryDraft so Cancel can restore it.
@@ -1872,6 +1876,9 @@ function updateGenerateButton() {
 // diffusion cycle before the user's first-ever fresh run, then follows
 // the "Render diffusion-style text" setting. Persisted per browser.
 var GENERATE_TEASED_KEY = "diffusion_generate_teased";
+// The button holds its resolved text longer than the status bar so the
+// primary CTA reads calmly rather than flickering.
+var GENERATE_CYCLE_HOLD_MS = 2000;
 var generateCycleTimer = null;
 var generateCycleActive = false;
 var generateCycleLabel = "";
@@ -1917,7 +1924,7 @@ function startGenerateCycle() {
       generateCycleLabel,
       function () {
         generateCycleTimer = setTimeout(
-          runOnce, STATUS_CYCLE_HOLD_MS
+          runOnce, GENERATE_CYCLE_HOLD_MS
         );
       },
       true
@@ -2134,17 +2141,24 @@ function updateRandomizeRow() {
     return;
   }
   var total = resolvedPositions(currentScrubFrame).length;
+  // Remasking 0 tokens is a no-op, so the target floor is 1 (whenever
+  // there is at least one resolved token to pick from).
+  var floor = total > 0 ? 1 : 0;
   if (randomizeInitFrame !== currentScrubFrame) {
     randomizeInitFrame = currentScrubFrame;
     var selected = Object.keys(remaskedPositions).length;
-    remaskRandomSlider.value = String(Math.min(selected, total));
+    remaskRandomSlider.value = String(
+      clampInt(selected, floor, total)
+    );
   }
   var target = clampInt(
-    parseInt(remaskRandomSlider.value, 10) || 0, 0, total
+    parseInt(remaskRandomSlider.value, 10) || floor, floor, total
   );
   remaskRandomTotal.textContent = String(total);
+  remaskRandomSlider.min = String(floor);
   remaskRandomSlider.max = String(total);
   remaskRandomSlider.value = String(target);
+  remaskRandomCount.min = String(floor);
   remaskRandomCount.max = String(total);
   remaskRandomCount.value = String(target);
   var disabled = total === 0;
@@ -2262,9 +2276,11 @@ function lockScrubberNav() {
   scrubberSlider.disabled = true;
 }
 
-// Freeze scrubber navigation + Select Frame while a save is in flight
-// (e.g. the Edit Frames auto-save), so nothing races the snapshot.
-// Exit is intentionally left interactive.
+// Freeze scrubber navigation and every guided-edit action while a save
+// is in flight, so no save path (auto-save, Confirm, or the standalone
+// Save button during review) leaves interactive controls that could
+// race the snapshot. The subsequent updateGuidedUI() re-derives each
+// button's per-phase state once the save settles.
 function setSavingControls(saving) {
   var disabled = !!saving;
   scrubberSlider.disabled = disabled;
@@ -2274,6 +2290,16 @@ function setSavingControls(saving) {
   btnScrubEnd.disabled = disabled;
   btnSelectFrame.disabled = disabled;
   btnEditFrames.disabled = disabled;
+  // Guided-edit action buttons (visible only mid edit session) freeze
+  // too, so the dimmed slider matches the Confirm-checkmark behavior.
+  btnLockIn.disabled = disabled;
+  btnClearGuided.disabled = disabled;
+  btnEditAnother.disabled = disabled;
+  btnRunToHere.disabled = disabled;
+  btnResumeEnd.disabled = disabled;
+  btnConfirmEdit.disabled = disabled;
+  btnRetryEdit.disabled = disabled;
+  btnExitEdit.disabled = disabled;
   // Dim the whole scrubber row and surface a tooltip on hover. The
   // title lives on the (non-disabled) container because native
   // tooltips do not fire on disabled controls.
@@ -2314,12 +2340,16 @@ function enterRemaskMode() {
 function beginEditSession() {
   captureEditSnapshot();
   remaskMode = "select";
-  scrubberMinFrame = 0;
+  // Start at frame 1: frame 0 is the fully-masked canvas with nothing
+  // to remask, so it is never a useful selection. (Guarded for the
+  // degenerate single-frame case.)
+  var startFrame = frameHistory.length > 1 ? 1 : 0;
+  scrubberMinFrame = startFrame;
   remaskModeEdits = [];
   guidedResumeAction = null;
   clearRemaskedPositions();
 
-  scrubberSlider.min = "0";
+  scrubberSlider.min = String(startFrame);
   scrubberSlider.max = String(frameHistory.length - 1);
   btnEditFrames.hidden = true;
   guidedEditControls.hidden = false;
@@ -2327,7 +2357,7 @@ function beginEditSession() {
     overlaySelectGroup.hidden = true;
   }
 
-  navigateToFrame(0);
+  navigateToFrame(startFrame);
   updateGuidedUI();
 }
 
@@ -2383,6 +2413,10 @@ function updateGuidedUI() {
   }
 
   guidedEditControls.hidden = false;
+  // The guided flow owns saving during an edit session (auto-save on
+  // entry, then Confirm/Retry). Disable the standalone Save so it can
+  // never race or double-fire with the review-step Confirm.
+  btnSave.disabled = true;
 
   var count =
     Object.keys(remaskedPositions).length;
@@ -2879,6 +2913,7 @@ function resetRunState() {
   remaskEdits = [];
   editedRunSaved = false;
   runSaved = false;
+  lastSavedRunId = null;
   isResuming = false;
   resumeFrameOffset = 0;
   updateEditFramesLock();
@@ -2956,6 +2991,22 @@ function startGeneration() {
 // shape {t, m, id, c?}. Confidence is included only when present
 // (masked positions carry none), mirroring the live protocol so a
 // saved run can drive the durable analytics overlays.
+// Return a clean List[int] of length frameCount, or null to omit it.
+// The server's canvas_index is List[int] and rejects null entries, so a
+// sparse/misaligned array (which can arise from a resumed run) must be
+// dropped rather than sent.
+function cleanCanvasIndex(arr, frameCount) {
+  if (!arr || arr.length !== frameCount) {
+    return null;
+  }
+  for (var i = 0; i < arr.length; i++) {
+    if (typeof arr[i] !== "number" || !isFinite(arr[i])) {
+      return null;
+    }
+  }
+  return arr.slice();
+}
+
 function tokenRecordsFrom(frames) {
   var out = [];
   for (var fi = 0; fi < frames.length; fi++) {
@@ -2980,22 +3031,20 @@ function tokenRecordsFrom(frames) {
 
 // ---- "New run saved" Analytics cue ----
 
-// Session-scoped so the dot survives an Analytics-and-back round trip
-// until the runs are actually viewed (analytics.js clears it on load).
-var ANALYTICS_CUE_KEY = "diffusion_analytics_new";
-
-function analyticsCueActive() {
-  try {
-    return sessionStorage.getItem(ANALYTICS_CUE_KEY) === "1";
-  } catch (_e) {
-    return false;
-  }
-}
-
-// Reflect the persisted cue flag on the header dot (called at boot).
+// The header badge shows how many saved runs have not yet been opened
+// in Analytics (the shared set lives in overlays.js). Cleared per run
+// when its detail is opened there, so the count stays in sync.
 function refreshAnalyticsCue() {
-  if (analyticsNewDot) {
-    analyticsNewDot.hidden = !analyticsCueActive();
+  if (!analyticsNewDot) {
+    return;
+  }
+  var count = overlaysNewRunCount();
+  if (count > 0) {
+    analyticsNewDot.textContent = String(count);
+    analyticsNewDot.hidden = false;
+  } else {
+    analyticsNewDot.textContent = "";
+    analyticsNewDot.hidden = true;
   }
 }
 
@@ -3020,17 +3069,16 @@ function flashAnalyticsPlusOne() {
   }, 1500);
 }
 
-// Light up the Analytics link after a successful save.
-function showAnalyticsCue() {
-  try {
-    sessionStorage.setItem(ANALYTICS_CUE_KEY, "1");
-  } catch (_e) {
-    // Non-fatal: the dot just will not persist across navigation.
+// Register a freshly saved run as "new" and light up the header badge.
+// The "+1" flashes only when the run is genuinely new (not an in-place
+// update of a run already counted), so editing-and-resaving a run does
+// not double-count it.
+function showAnalyticsCue(runId) {
+  var added = overlaysAddNewRun(runId);
+  refreshAnalyticsCue();
+  if (added) {
+    flashAnalyticsPlusOne();
   }
-  if (analyticsNewDot) {
-    analyticsNewDot.hidden = false;
-  }
-  flashAnalyticsPlusOne();
 }
 
 function saveRun() {
@@ -3072,9 +3120,19 @@ function saveRun() {
     elapsed_seconds: totalElapsed,
     per_frame_elapsed: perFrameElapsed.slice(),
     frame_tokens: tokenRecordsFrom(frameTokens),
-    canvas_index: frameCanvasIndex.slice(),
     mean_conf: frameMeanConf.slice(),
   };
+
+  // canvas_index must be a clean List[int] matching the frame count.
+  // If it is sparse or misaligned (e.g. a resumed run whose pre-resume
+  // indices were not restored), omit it rather than send nulls that
+  // would fail server validation and break the whole save.
+  var canvasIndexClean = cleanCanvasIndex(
+    frameCanvasIndex, frameHistory.length
+  );
+  if (canvasIndexClean !== null) {
+    payload.canvas_index = canvasIndexClean;
+  }
 
   if (remaskEdits.length > 0) {
     payload.remask_edits = remaskEdits;
@@ -3083,6 +3141,11 @@ function saveRun() {
     if (originalFrameTokens.length > 0) {
       payload.original_frame_tokens =
         tokenRecordsFrom(originalFrameTokens);
+    }
+    // Update the pre-edit run's folder in place so the bundled edited
+    // run replaces its original (one Analytics row, not two).
+    if (lastSavedRunId) {
+      payload.run_id = lastSavedRunId;
     }
   }
 
@@ -3117,16 +3180,20 @@ function saveRun() {
         }
         updateEditFramesLock();
         updateGenerateButton();
-        // Persist the saved state (incl. the saved/edited flags) so a
-        // round-trip to Analytics and back keeps Edit Frames and Save
-        // correctly locked.
-        saveSessionState();
-        // Point the user to where the saved run now lives.
-        showAnalyticsCue();
+        // Point the user to where the saved run now lives (the run id
+        // is the folder name at the end of the returned path). Remember
+        // it so a later edited save updates this folder in place.
+        var savedParts = String(result.path || "").split("/");
+        lastSavedRunId = savedParts[savedParts.length - 1] || null;
+        showAnalyticsCue(lastSavedRunId || "");
         statusMessage.textContent =
           "Saved to " + result.path;
         statusMessage.style.color =
           "var(--accent)";
+        // Persist LAST, so the session captures the final run id and
+        // "Saved to..." status (not the transient "Saving run..." text
+        // or a stale run id) and survives a round-trip to Analytics.
+        saveSessionState();
       } else {
         btnSave.disabled = false;
         statusMessage.textContent =
@@ -3475,8 +3542,9 @@ if (remaskRandomSlider) {
 if (remaskRandomCount) {
   remaskRandomCount.addEventListener("input", function () {
     var total = resolvedPositions(currentScrubFrame).length;
+    var floor = total > 0 ? 1 : 0;
     var n = clampInt(
-      parseInt(remaskRandomCount.value, 10) || 0, 0, total
+      parseInt(remaskRandomCount.value, 10) || floor, floor, total
     );
     remaskRandomCount.value = String(n);
     remaskRandomSlider.value = String(n);
@@ -3738,12 +3806,15 @@ function saveSessionState() {
     originalTotalFrames: originalTotalFrames,
     editedRunSaved: editedRunSaved,
     runSaved: runSaved,
+    lastSavedRunId: lastSavedRunId,
     statusStep: statusStep.textContent,
     statusElapsed: statusElapsed.textContent,
     statusMessage: statusMessage.textContent,
   };
   var full = Object.assign({}, base, {
     frameTokens: frameTokens,
+    frameCanvasIndex: frameCanvasIndex,
+    frameMeanConf: frameMeanConf,
     originalFrameHistory: originalFrameHistory,
     originalFrameTokens: originalFrameTokens,
   });
@@ -3802,6 +3873,12 @@ function restoreSessionState() {
 
   frameHistory = s.frameHistory;
   frameTokens = s.frameTokens || [];
+  // Canvas index + mean confidence must be restored too: a later
+  // Edit-Frames resume truncates them to the resume offset, and if they
+  // were left empty they would extend to sparse (null) arrays that fail
+  // the save's canvas_index validation.
+  frameCanvasIndex = s.frameCanvasIndex || [];
+  frameMeanConf = s.frameMeanConf || [];
   commitSteps = null;
   diffData = null;
   perFrameElapsed = s.perFrameElapsed || [];
@@ -3814,6 +3891,7 @@ function restoreSessionState() {
   originalFrameTokens = s.originalFrameTokens || [];
   editedRunSaved = !!s.editedRunSaved;
   runSaved = !!s.runSaved;
+  lastSavedRunId = s.lastSavedRunId || null;
   updateGenerateButton();
   if (s.prompt) {
     promptInput.value = s.prompt;

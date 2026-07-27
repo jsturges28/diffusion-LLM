@@ -219,3 +219,67 @@ function overlaysComputeDiff(cur, orig, remaskEdits) {
   }
   return result;
 }
+
+// ---- "New runs" registry (shared across generator + analytics) ----
+//
+// Run IDs saved since the user last viewed them in Analytics.
+// Persisted in localStorage so the generator's Analytics-link count and
+// the analytics table's per-row dots agree across page navigations; a
+// run is cleared individually when its detail is opened.
+
+var OVERLAYS_NEW_RUNS_KEY = "diffusion_new_runs";
+
+function overlaysReadNewRuns() {
+  try {
+    var raw = localStorage.getItem(OVERLAYS_NEW_RUNS_KEY);
+    if (!raw) {
+      return [];
+    }
+    var parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_e) {
+    return [];
+  }
+}
+
+function overlaysWriteNewRuns(ids) {
+  try {
+    localStorage.setItem(
+      OVERLAYS_NEW_RUNS_KEY, JSON.stringify(ids)
+    );
+  } catch (_e) {
+    // Non-fatal: the cue simply will not persist.
+  }
+}
+
+// Returns true if the run was newly added (was not already tracked),
+// so callers can flash the "+1" cue only for genuinely new runs.
+function overlaysAddNewRun(runId) {
+  if (!runId) {
+    return false;
+  }
+  var ids = overlaysReadNewRuns();
+  if (ids.indexOf(runId) === -1) {
+    ids.push(runId);
+    overlaysWriteNewRuns(ids);
+    return true;
+  }
+  return false;
+}
+
+function overlaysClearNewRun(runId) {
+  var ids = overlaysReadNewRuns();
+  var idx = ids.indexOf(runId);
+  if (idx !== -1) {
+    ids.splice(idx, 1);
+    overlaysWriteNewRuns(ids);
+  }
+}
+
+function overlaysNewRunCount() {
+  return overlaysReadNewRuns().length;
+}
+
+function overlaysIsNewRun(runId) {
+  return overlaysReadNewRuns().indexOf(runId) !== -1;
+}

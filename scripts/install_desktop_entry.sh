@@ -49,4 +49,17 @@ if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database "$APPS_DIR" >/dev/null 2>&1 || true
 fi
 
+# Qt's xcb platform plugin (used on X11 sessions) needs libxcb-cursor at
+# runtime since Qt 6.5; without it the desktop app aborts on launch with
+# a "libxcb-cursor0 is needed to load the Qt xcb platform plugin" error
+# (common after an NVIDIA driver update flips the session to X11). Warn
+# if it looks absent so the launcher is not a silent core dump.
+if command -v ldconfig >/dev/null 2>&1; then
+  if ! ldconfig -p 2>/dev/null | grep -q "libxcb-cursor"; then
+    echo "Warning: libxcb-cursor not found. If the desktop app fails to" >&2
+    echo "launch on an X11 session with a Qt 'xcb' plugin error, run:" >&2
+    echo "  sudo apt install libxcb-cursor0" >&2
+  fi
+fi
+
 echo "Done. Look for \"LLM XAI Visualizer\" in your app menu."

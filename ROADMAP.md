@@ -67,6 +67,23 @@ analytics suite.
   + difference blend, from the #1 backlog item), and removal of the old
   idle-animation feature (ASCII scene + donut + the Idle Display setting) in
   favor of a plain output placeholder.
+- Shipped (this session, continued): the remaining backlog polish plus a round
+  of refinements. An opt-in **diffusion-style text** effect (status messages
+  resolve from block-glyph noise; a Default/Cycle Mode sub-setting; honors
+  reduced motion) reused for button micro-interactions (Shuffle press, the
+  Generate/New Run idle cycle with a one-time discovery teaser, and Lock In
+  dissolving into mask glyphs). **Confidence-driven mask rendering**: masks are
+  the accent green and their opacity tracks the model's live predicted confidence
+  for LLaDA (`streaming_sampler.py` emits per-masked-position confidence), rising
+  from a solid floor to full as a token nears its reveal. A **randomize-remasks**
+  control (slider + N-of-M + Shuffle) in Edit Frames, which now opens on Frame 1.
+  An Analytics **"new run" cue**: a persisted set of unseen runs drives a count
+  badge on the generator's Analytics link and a per-row green dot cleared on open.
+  **In-place edited-run save** so an edited run replaces its pre-edit original
+  (one Analytics row, not two), with the session persisting canvas/confidence
+  arrays + the last run id. **GPU/desktop robustness**: robust `nvidia-smi`
+  resolution with logging, a driver/library-mismatch message on the menu, and a
+  documented `libxcb-cursor0` (Qt/X11) dependency.
 - For the feature overview and architecture, see `README.md`. For the build
   history, see `.cursor/plans/`.
 
@@ -175,6 +192,14 @@ Shipped from this backlog (see `README.md`):
   edited run against the original, with opacity sliders and a difference blend.
   Now durable: the pre-edit snapshot is saved, so the diff is reviewable in the
   Analytics Suite. A propagation heatmap remains a possible extension.
+- Confidence-driven mask opacity (LLaDA): a still-masked token's opacity tracks
+  the model's live predicted confidence for that position, rising from a solid
+  floor to full as it nears the reveal, so the "heating up" before a commit is
+  visible live and while scrubbing. DiffusionGemma is a separate follow-up.
+- Randomize remasks in Edit Frames (slider + N-of-M + Shuffle): seeds the
+  meta-explainability question of whether a remask pattern shapes convergence.
+- "New run saved" analytics cue: a persisted count badge + per-row dots pointing
+  users to freshly saved runs, cleared per run on open.
 
 Follow-ups unlocked by the durable-overlay data model:
 - Analytics scrubber: the layered Diff vs Original (Original/Edited opacity
