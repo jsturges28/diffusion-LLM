@@ -49,7 +49,7 @@ code without reason.
 in user-facing text, and avoid them in the frontend (`src/web/static/`) and prose
 generally (including this file). Replace each with a comma, semicolon, colon,
 period, or nothing, whichever reads best (for example, prefer "Frame 5: click
-tokens to remask" over an em-dash separator).
+tokens to remask" over an em-dash separator). If you happen to find or come across em-dashes present from previous sessions, feel free to remove them unless they're strictly necessary.
 
 ## Verification (before handing back)
 
