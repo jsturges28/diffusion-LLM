@@ -3,7 +3,7 @@
 Living, per-session handoff. The agent updates this at the end of each session so
 the next one can pick up cold (see `AGENTS.md`). Read `README.md` + `ROADMAP.md`
 first, then deliberate the work below with the maintainer before Plan mode
-(deliberate → Plan → Agent).
+(deliberate in Ask mode → Plan → Agent).
 
 ## What it is
 
