@@ -14,16 +14,19 @@ public roadmap live in `README.md`; the deeper living roadmap in `ROADMAP.md`.
 
 ## Environments (never touch system Python)
 
-Two models need incompatible `transformers` versions, so there are two venvs:
+Models need incompatible `transformers` versions, so there are three venvs:
 
 - `.venv`: supervisor + LLaDA worker (`transformers==4.38.2`). Use
   `.venv/bin/python` and `.venv/bin/pip`.
 - `.venv-dgemma`: DiffusionGemma worker (`transformers` v5). Use
   `.venv-dgemma/bin/python`.
+- `.venv-ar`: SmolLM3 autoregressive worker (`transformers` >= 4.53,
+  CUDA torch wheel that also runs on CPU). Use `.venv-ar/bin/python`.
 
 Dependency files: `requirements.txt` (core `.venv`), `requirements-dgemma.txt`
-(the DiffusionGemma env), `requirements-desktop.txt` (optional `pywebview[qt]`
-desktop add-on for `.venv`). Pin versions; do not install to system/user Python.
+(the DiffusionGemma env), `requirements-ar.txt` (the SmolLM3 env),
+`requirements-desktop.txt` (optional `pywebview[qt]` desktop add-on for
+`.venv`). Pin versions; do not install to system/user Python.
 
 ## Workflow cadence
 

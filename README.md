@@ -4,12 +4,13 @@
 
 This repository is a local **visual playground and analytics suite** for **discrete diffusion language models**: models that generate text not left-to-right (autoregressive decoding) but by **iteratively denoising a corrupted sequence** over many steps. A web UI (FastAPI + WebSocket) streams every intermediate frame to the browser so you can watch the sequence resolve, scrub back through the history, remask tokens and resume, color tokens by model confidence or the order in which they resolved, diff an edited run against the original, and compare runs in an analytics suite. The goal is an enjoyable, hands-on tool for building intuition about how diffusion LLMs behave, with a strong lean toward explainability (xAI).
 
-The suite now hosts **two** diffusion models, both running locally on a single 24 GB GPU (one resident at a time):
+The suite hosts two diffusion models plus a first **autoregressive baseline**, all running locally on a single 24 GB GPU (one resident at a time); the autoregressive model can also run on CPU, so a machine without a GPU can still try the suite:
 
 - **[LLaDA-8B-Instruct](https://huggingface.co/GSAI-ML/LLaDA-8B-Instruct):** the first competitive large-scale discrete diffusion language model, pre-trained on 2.3T tokens and instruction-tuned to roughly LLaMA 3 8B quality ([paper](https://arxiv.org/abs/2502.09992)). Masked diffusion over a single canvas, run in bfloat16 (~17 GB VRAM). Supports interactive remasking and resume.
 - **DiffusionGemma-26B-A4B:** Google's block-autoregressive text-diffusion model, a 26B-parameter Mixture-of-Experts (\~4B active) built on Gemma. Run here as a self-quantized 4-bit NF4 checkpoint (\~18 GB VRAM). Denoises 256-token canvases with adaptive stopping and an optional reasoning (thinking) channel. Single-canvas runs now also support interactive remasking and resume (via seed-canvas re-entry); multi-canvas resume is still on the roadmap.
+- **[SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B) (autoregressive baseline):** a 3B decoder-only transformer that generates the ordinary way, left to right. Added as a contrast to the diffusion models: it streams token-by-token, one frame per new token, with per-token sampling confidence, reusing the same scrubber/save/analytics tooling as a left-to-right replay. It has an optional extended-reasoning (thinking) channel and runs in bfloat16 on GPU or CPU (chosen per activation). Diffusion-only affordances (Edit Frames, the Diff overlay, Commit Order, the convergence chart) are hidden for it, while timing, confidence, and the Heatmap remain.
 
-Because the two models depend on incompatible `transformers` versions and neither pair fits in 24 GB together, the app uses a **supervisor plus per-model worker** architecture: a lightweight server spawns exactly one model worker at a time, each in its own virtual environment, and proxies the browser WebSocket to it.
+Because these models depend on incompatible `transformers` versions and a single large model already saturates 24 GB, the app uses a **supervisor plus per-model worker** architecture: a lightweight server spawns exactly one model worker at a time, each in its own virtual environment, and proxies the browser WebSocket to it.
 
 
 ## How It Works
@@ -102,6 +103,7 @@ Supervisor  (.venv, no torch/transformers)
 Model Worker  (exactly one alive)
   - LLaDA worker          .venv          transformers 4.38.2
   - DiffusionGemma worker .venv-dgemma   transformers 5.13
+  - SmolLM3 worker        .venv-ar       transformers >= 4.53
 ```
 
 Pages and entry point: the app opens on a **Main Menu** at `/` (a looping title-screen video over a GPU/VRAM-aware model picker). Selecting a model activates its worker and enters the generator at `/generate`; the generator is gated behind model selection, so hitting it without an active model redirects back to the menu. The Analytics Suite at `/analytics.html` is model-agnostic and always available. The desktop app opens on the same menu.
@@ -124,6 +126,7 @@ The contract lives in `src/backends/`:
 ├── desktop.py                        # Desktop launcher (pywebview native window)
 ├── requirements.txt                  # .venv: supervisor + LLaDA worker (transformers 4.38.2)
 ├── requirements-dgemma.txt           # .venv-dgemma: DiffusionGemma worker (transformers 5.13)
+├── requirements-ar.txt               # .venv-ar: SmolLM3 autoregressive worker (transformers >= 4.53)
 ├── requirements-desktop.txt          # optional: pywebview[qt] desktop wrapper (installs into .venv)
 ├── README.md
 ├── LICENSE
@@ -134,12 +137,14 @@ The contract lives in `src/backends/`:
 │   │   ├── worker_base.py            # Shared worker FastAPI scaffolding
 │   │   ├── run_worker.py             # Generic per-model worker launcher
 │   │   ├── llada_worker.py           # LLaDA backend
-│   │   └── dgemma_worker.py          # DiffusionGemma backend
+│   │   ├── dgemma_worker.py          # DiffusionGemma backend
+│   │   └── smollm3_worker.py         # SmolLM3 autoregressive backend
 │   ├── inference/
 │   │   ├── llada_sampler.py          # Core LLaDA sampling loop + history recording
 │   │   ├── streaming_sampler.py      # LLaDA live streaming + per-token confidence
 │   │   ├── dgemma_sampler.py         # DiffusionGemma live streaming + confidence
 │   │   ├── dgemma_nf4.py             # NF4 (4-bit) MoE-expert quantization
+│   │   ├── ar_sampler.py             # Autoregressive token-by-token streaming + confidence
 │   │   └── render_gif.py             # Render diffusion history frames to GIF
 │   ├── analytics/
 │   │   └── metrics.py                # Run parsing, convergence + canvas boundaries
@@ -207,6 +212,22 @@ DiffusionGemma is gated on Hugging Face. Accept its license, download the bf16 b
 
 This writes the NF4 checkpoint to the path referenced by the registry (`~/models/diffusiongemma-26B-A4B-it-nf4`). If you only want LLaDA, you can skip this environment entirely; the model selector will still list DiffusionGemma but activation will fail gracefully with a clear message.
 
+**SmolLM3 (`.venv-ar`, transformers >= 4.53), optional:**
+
+```bash
+python3 -m venv .venv-ar
+.venv-ar/bin/pip install -r requirements-ar.txt
+```
+
+SmolLM3-3B weights (~6 GB) download automatically from Hugging Face on first activation. The pinned torch is the standard CUDA build, so this environment runs the model on the GPU when one is present and on CPU otherwise; the Main Menu row for SmolLM3 carries a CPU/GPU toggle. On a machine with no GPU, this is the model you can still run.
+
+If you have no GPU and want to avoid downloading the large CUDA libraries, install the CPU-only torch wheel first, then the rest:
+
+```bash
+.venv-ar/bin/pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+.venv-ar/bin/pip install -r requirements-ar.txt
+```
+
 **Desktop app (`.venv`, optional).** The same UI can run in a native window instead of a browser tab via [pywebview](https://pywebview.flowrl.com/). It is not part of the core install; add it into `.venv` with the optional requirements file, which pulls the Qt/QtWebEngine (Chromium) backend that renders most smoothly:
 
 ```bash
@@ -224,7 +245,9 @@ On an X11 session (rather than Wayland), the Qt backend needs the `xcb` platform
 python3 main.py            # or: python3 main.py --host 0.0.0.0 --port 8000
 ```
 
-Open [http://localhost:8000](http://localhost:8000). You land on the **Main Menu**: a looping title screen over a model picker that shows the detected GPU and free VRAM, greying out any model that will not fit. Selecting a model loads it in the background (roughly 30 to 60 seconds on first activation) and opens the generator (which is reachable only after a model is chosen). Type a prompt, adjust parameters, and click **Generate** to watch the diffusion process stream live. To switch models later, use the **Model** selector in the generator header (only one is resident in GPU memory at a time).
+Open [http://localhost:8000](http://localhost:8000). You land on the **Main Menu** (titled **LLM Visualizer**): a looping title screen over a model picker that shows the detected GPU (with free VRAM) and CPU (with free RAM). Each row carries a family glyph (diffusion vs autoregressive) beside its name and a device tag on the right: a static **GPU** for the diffusion models, and a **GPU / CPU** toggle for the autoregressive model. A small pill extending left of each tag shows the signed **VRAM headroom** (green `+X.X GiB` if it fits, red `-X.X GiB` if it is short); hovering it details required vs available VRAM. Available counts memory reclaimed from unloading the current model, so switching accounts for the resident one freeing up.
+
+Selecting a model contracts the menu to that row and asks you to **confirm** (green check to load, red X to go back). **On the first activation its weights download from Hugging Face** (LLaDA ~16 GB, SmolLM3 ~6 GB, cached under `~/.cache/huggingface`); a model whose weights are not cached yet is gated behind a **Click to Download** veneer with a progress bar so you can pre-fetch it (its description stays hidden until the download finishes and is then revealed, and a success/error message with **Ok** confirms the result). A row reading **Resident** is the model currently loaded in memory. Type a prompt, adjust parameters, and click **Generate** to watch generation stream live. To switch models (or the autoregressive model's device) later, use the **Model** selector in the generator header, which confirms the switch the same way; its collapsed tag tickers between the device and VRAM headroom (a "Device tag ticker" Setting toggles this off), and hovering a listed model shows its full VRAM readout (only one model is resident at a time).
 
 After a run completes, a **Save** button appears and a **frame scrubber** slides into view below the output area. While a save is in progress the status bar shows "Saving run…" and the scrubber is dimmed and frozen until it finishes.
 
@@ -239,6 +262,8 @@ After a run completes, a **Save** button appears and a **frame scrubber** slides
 ```
 
 This owns the server lifecycle: it starts the supervisor on a private localhost port, opens the window, and gracefully stops the active model worker (freeing its VRAM) when you close it. The browser path (`main.py`) still works and serves the same app.
+
+**Freeing stuck GPU memory.** A worker is normally stopped when you switch models or close the app, and the supervisor sweeps stray workers on startup (plus a `PR_SET_PDEATHSIG` guard). If a hard crash ever leaves one behind holding VRAM, list GPU processes with `nvidia-smi` and clear them with `pkill -f "src.backends.run_worker"`, then relaunch.
 
 #### Interactive remasking and resume
 
@@ -326,6 +351,14 @@ Clicking **Save** writes a timestamped folder under `Results/` containing `metad
 - [x] Durable server-side UI state (`Results/ui_state.json` via `/api/ui-state`): Settings, the "new run" cue, prompt history, and the generate teaser survive restarts and are shared across the browser and desktop app, independent of the window origin
 - [x] Analytics table rework: reordered columns (Date, Model, Prompt, Time, Edited), a diffusion-textured Edited checkmark, checkbox row highlighting, and multi-select bulk delete
 - [x] Desktop launcher persistence: a stable window port (with ephemeral fallback) and a persistent web-storage profile
+- [x] First autoregressive model (SmolLM3-3B) in a dedicated `.venv-ar`: token-by-token streaming with per-token confidence, per-activation CPU/GPU device selection (CPU-capable for GPU-less hosts), and a `model_type` gate that hides diffusion-only UI (Edit Frames, Diff, Commit Order, convergence) while keeping timing, confidence, and the Heatmap
+- [x] Non-blocking activation with a menu progress bar and Cancel; a startup sweep + `PR_SET_PDEATHSIG` guard so a crashed supervisor cannot orphan a VRAM-holding worker
+- [x] Signed VRAM-headroom pill on each device tag (green/red, accounting for the reclaimable resident model); menu GPU + CPU readout; model-family glyphs; select-to-confirm on the menu and dropdown
+- [x] "Click to Download" veneer that pre-fetches an uncached model's weights (with a progress bar, no VRAM) before selection; Analytics **Processor** column and per-run timing header (GPU/CPU name)
+- [x] Smooth download progress via a cache disk-size poller (repo total from Hub metadata, polling the `blobs/` directory including in-progress parts), with Xet disabled before the first Hub import so the classic downloader is used
+- [x] Model dropdown polish: fixed-width device pill (the signed headroom is shrunk to fit), a collapsed-width option list with ellipsized names, and a hover VRAM side-popup whose trailing +/-X is tinted green (fits) or red (short)
+- [x] Loaded model highlighted (and inert) in the dropdown with its loaded device locked while the other device stays switchable; the device-tag ticker is gated off on CPU (headroom is GPU-only)
+- [x] Autoregressive step counter is 1-based, so a full N-token run reads "Step N/N" (matching the diffusion convention)
 
 
 ## Roadmap
@@ -340,6 +373,10 @@ Detailed, living notes for each item (technical hooks, files to touch, open ques
 
 ### Possible extensions
 
+- [ ] Shared tabbed **Settings page** (`/settings.html`) reached from a gear icon in the header and on the Main Menu
+- [ ] Redesigned app icon: three denoising shade-block glyphs (`▓ ▒ ░`) fading in opacity
+- [ ] Analytics per-frame token scrubber (reuse the generator's scrubber and overlays; token + confidence tooltip across frames)
+- [ ] Autoregressive analysis tools for SmolLM3: top-k alternatives on hover, "change the last token" resume, per-position entropy sparkline
 - [ ] Side-by-side comparison with autoregressive generation
 - [ ] Alignment experiments (RLHF / DPO) or fine-tuning on custom instruction data
 

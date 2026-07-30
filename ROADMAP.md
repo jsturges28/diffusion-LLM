@@ -28,7 +28,7 @@ analytics suite.
   canvas-boundary markers), reproducibility metadata, graceful VRAM handling, and
   the DiffusionGemma thinking-mode split view.
 - Shipped (latest session): DiffusionGemma single-canvas remask/resume (Phase 2
-  below, via seed-canvas re-entry); two xAI overlays — commit-order
+  below, via seed-canvas re-entry); two xAI overlays: commit-order
   (resolution-step) token coloring and the counterfactual "Diff vs Original"
   comparison (opacity sliders + difference blend); a grouped overlay picker
   (None / Heatmap / Diff) with persistent per-browser settings (highlight tokens,
@@ -98,12 +98,65 @@ analytics suite.
   column, checkbox row highlighting, and multi-select **bulk delete**. Desktop
   launcher now uses a stable port (ephemeral fallback) and a persistent
   web-storage profile.
+- Shipped (this session): the **first autoregressive model**, SmolLM3-3B, in a
+  dedicated `.venv-ar` (Phase A below). Token-by-token streaming with per-token
+  sampling confidence (`src/inference/ar_sampler.py`,
+  `src/backends/smollm3_worker.py`); a `model_type` capability flag
+  (`protocol.py`) that gates diffusion-only UI (Edit Frames, Diff overlay,
+  Commit Order, convergence) off while keeping timing, confidence, and the
+  Heatmap; per-activation CPU/GPU device selection threaded from the Main Menu
+  through `run_worker.py` into `Backend.load(device=...)`, with the GPU
+  pre-flight skipped on CPU and a CPU-capable torch wheel so GPU-less hosts can
+  run it.
+- Shipped (this session): the **menu + model-switch UX pass** on top of Phase A,
+  validated on hardware. Non-blocking activation with a menu progress bar +
+  Cancel; signed VRAM-headroom pills (accounting for the reclaimable resident
+  model); a "Click to Download" veneer that pre-fetches uncached weights with a
+  smooth **disk-size progress poller** (`hf_download.py`, replacing the tqdm hook
+  that `snapshot_download` never routes to per-file byte downloads; Xet disabled
+  before the first Hub import); select-to-confirm on the menu and dropdown; the
+  rename to **LLM Visualizer**; model-family glyphs (diffusion D+F superposition
+  with a crisp reversed epsilon; autoregressive @-to-R with a feedback loop); an
+  Analytics **Processor** column + per-run timing device name; dropdown polish
+  (fixed-width device pill, collapsed-width list with ellipsized names, green/red
+  headroom tint, CPU-gated ticker, loaded-model highlight with a locked device);
+  a 1-based AR step counter; and orphaned-worker guards (startup sweep +
+  `PR_SET_PDEATHSIG`).
 - For the feature overview and architecture, see `README.md`. For the build
   history, see `.cursor/plans/`.
 
 ---
 
-## Next up: autoregressive model support (Phase A, planned)
+## Next session (accepted directions)
+
+Agreed with the maintainer for the next fresh session (deliberate each in Ask
+mode before Plan). The analytics scrubber and AR items are detailed further in
+their own sections below.
+
+1. **Shared Settings page + gear icon.** Promote the generator-only Settings
+   modal (`index.html`, logic in `app.js`) to a shared **`/settings.html`** page
+   with a left tab rail + right pane; replace the header "Settings" text with a
+   gear icon and add a matching gear entry to the Main Menu (`menu.html`, which
+   today links only to Analytics). All settings are global and server-persisted
+   (`ui_state.py`), so a page beats duplicating the modal. Tab grouping to settle
+   in Plan (a first cut: Appearance / Overlays / Interface, with room for future
+   Models / Analytics tabs).
+2. **App icon redesign.** Replace the token-grid `assets/icon.svg` with three
+   denoising shade-block glyphs (`▓ ▒ ░`, the `DENOISE_GLYPHS` set in
+   `app.js` / `menu.js`) fading most to least opaque; export SVG + PNG. Refs
+   `desktop.py`, `scripts/install_desktop_entry.sh`.
+3. **Analytics token scrubber.** Add a per-frame scrubber to the analytics
+   detail modal (data already saved per frame in `tokens.json`), reusing the
+   generator's scrubber / overlay logic, with the token + confidence tooltip and
+   the Commit Order / Diff overlays per frame. No Edit Frames. (See the
+   "analytics scrubber" follow-up below.)
+4. **Autoregressive analysis tools (Phase C).** Top-k alternatives on hover,
+   then top-k "change the last token" resume, then a per-position entropy
+   sparkline for SmolLM3. (See Phase C above.)
+
+---
+
+## Autoregressive model support (Phase A shipped; Phase C next)
 
 The north-star direction: host open-source **autoregressive (AR) LLMs** alongside
 the diffusion models, reusing the frame/token contract, overlays, and analytics.
@@ -113,26 +166,34 @@ the streaming "frame" (a full snapshot plus a `{t, m, id, c}` token list) maps
 cleanly onto AR: frame N is the sequence after N generated tokens, every token
 `m: false`, `c` = the sampling softmax confidence.
 
-**Phase A (settled, next session).** First AR model end to end:
+**Phase A (shipped this session).** First AR model end to end:
 - **SmolLM3-3B** (`HuggingFaceTB/SmolLM3-3B`) in a dedicated **`.venv-ar`**
-  (CPU-first torch wheel; the model is CPU-primary), with `requirements-ar.txt`.
-  Chosen over Phi-4-mini (standard but less novel) and Gemma-3n-E2B (novel
-  MatFormer/effective-2B, but the trickiest first integration) for a clean
-  integration whose think/no-think mode reuses the existing thinking UI. All need
-  `transformers` >= ~4.53 (incompatible with LLaDA's 4.38.2), hence the new env;
-  pin the exact version at plan time.
-- **AR streaming**: a manual token-by-token sampling loop (not HF's text streamer)
-  capturing per-token confidence, one frame per new token. Reuses save, token
-  records, and the scrubber (left-to-right replay).
-- **Model-type gate**: `model_type` ("diffusion" | "autoregressive") or
-  `is_autoregressive` on `ModelInfo`/`ModelCapabilities`; hides diffusion-only UI
-  (Edit Frames, Heatmap/Diff overlays, convergence chart), keeps run + timing +
-  confidence.
-- **Per-activation CPU/GPU device**: `device` on the activate request threaded to
-  `run_worker.py` -> `Backend.load(device=...)`, skipping the VRAM preflight on
-  CPU; a greyed-when-it-won't-fit toggle on the AR menu row.
-- **Analytics**: drop the convergence chart for AR; keep timing (tokens/sec) and
-  confidence.
+  (`transformers==4.53.0`, incompatible with LLaDA's 4.38.2), with
+  `requirements-ar.txt`. Chosen over Phi-4-mini (standard but less novel) and
+  Gemma-3n-E2B (novel MatFormer/effective-2B, but the trickiest first
+  integration) for a clean integration whose think/no-think mode reuses the
+  existing thinking UI. The torch wheel is the standard CUDA build, so it runs
+  on GPU or CPU (not a CPU-only wheel), the code picks the device per
+  activation.
+- **AR streaming**: a manual token-by-token sampling loop (not HF's text
+  streamer) capturing per-token confidence, one full-snapshot frame per new
+  token (`ar_sampler.py`). Reuses save, token records, and the scrubber
+  (left-to-right replay). Note: full-snapshot frames make the payload O(n^2) in
+  tokens; the registry caps the recommended `max_new_tokens` at 256 and the
+  worker clamps harder (~128) on CPU.
+- **Model-type gate**: `model_type` ("diffusion" | "autoregressive") on
+  `ModelCapabilities`; hides diffusion-only UI (Edit Frames, Diff overlay,
+  Commit Order, convergence chart), keeps run + timing + confidence + Heatmap
+  (the natural per-token AR confidence view).
+- **Per-activation CPU/GPU device**: `device` on the activate request threaded
+  through `run_worker.py` -> `create_worker_app` -> `Backend.load(device=...)`,
+  skipping the VRAM preflight on CPU; a CPU/GPU toggle on the AR menu row that
+  greys the GPU option when a GPU is absent or the model will not fit. A
+  body-less activate resolves to GPU-if-present-else-CPU server-side.
+- **Analytics**: convergence chart dropped for AR (would flatline); timing and
+  confidence kept. `model_type` is persisted in each run's `metadata.json`.
+
+Remaining AR follow-ups now live under Phase C below.
 
 **Phase C (if time).**
 - **Top-k "change the last token" resume**: the standout AR xAI feature. AR resume

@@ -1,4 +1,4 @@
-# HANDOFF — next session
+# HANDOFF: next session
 
 Living, per-session handoff. The agent updates this at the end of each session so
 the next one can pick up cold (see `AGENTS.md`). Read `README.md` + `ROADMAP.md`
@@ -14,14 +14,19 @@ scrub frame history, remask tokens and resume, color tokens by confidence or
 commit order, diff an edited run against the original, and compare runs in an
 analytics suite.
 
-## Models (one resident in the 24GB GPU at a time)
+## Models (one resident at a time)
 
-- **LLaDA-8B-Instruct** — masked discrete diffusion, bf16 (~17GB). Interactive
+- **LLaDA-8B-Instruct**: masked discrete diffusion, bf16 (~17GB). Interactive
   remask/resume + guided multi-frame editing.
-- **DiffusionGemma-26B-A4B** — block-autoregressive encoder-decoder MoE,
+- **DiffusionGemma-26B-A4B**: block-autoregressive encoder-decoder MoE,
   self-quantized 4-bit NF4 (~18GB), 256-token canvases, adaptive stopping,
   optional "thinking" channel. Single-canvas remask/resume works; **multi-canvas
-  resume is NOT done** (Edit Frames disabled for multi-canvas runs — deferred).
+  resume is NOT done** (Edit Frames disabled for multi-canvas runs, deferred).
+- **SmolLM3-3B**: autoregressive baseline, decoder-only, bf16 (~6GB), in
+  `.venv-ar`. Streams token-by-token (one full-snapshot frame per token) with
+  per-token sampling confidence; optional thinking channel. Runs on GPU or CPU
+  (per-activation toggle on the menu), so it is the model a GPU-less host can
+  run. No resume; diffusion-only UI is gated off (see below).
 
 ## Architecture (process isolation; incompatible transformers versions)
 
@@ -35,11 +40,14 @@ analytics suite.
   (`src/web/ui_state.py`, stored in `Results/ui_state.json`) is served via
   `GET`/`PUT /api/ui-state`; the GET reconciles the "new run" cue against
   existing run folders so deleted runs cannot inflate the count.
-- **Workers**: `src/backends/{llada_worker,dgemma_worker}.py` via `run_worker.py`;
-  contract in `protocol.py` / `registry.py` / `worker_base.py`. LLaDA → `.venv`
-  (transformers 4.38.2); DiffusionGemma → `.venv-dgemma` (transformers 5.13).
-- **Samplers**: `src/inference/{streaming_sampler,dgemma_sampler}.py`; NF4 in
-  `dgemma_nf4.py`. Analytics metrics: `src/analytics/metrics.py`.
+- **Workers**: `src/backends/{llada_worker,dgemma_worker,smollm3_worker}.py` via
+  `run_worker.py`; contract in `protocol.py` / `registry.py` / `worker_base.py`.
+  LLaDA → `.venv` (transformers 4.38.2); DiffusionGemma → `.venv-dgemma`
+  (transformers 5.13); SmolLM3 → `.venv-ar` (transformers 4.53). `run_worker.py`
+  takes `--device`, forwarded via `create_worker_app(device=...)` into
+  `Backend.load(device=...)` (kw-only, default "cuda").
+- **Samplers**: `src/inference/{streaming_sampler,dgemma_sampler,ar_sampler}.py`;
+  NF4 in `dgemma_nf4.py`. Analytics metrics: `src/analytics/metrics.py`.
 - **Frontend** (shared, schema-driven): `src/web/static/{menu.html, menu.js,
   index.html, app.js, overlays.js, analytics.html, analytics.js, analytics.css,
   style.css, custom_select.js}` + `assets/title-screen.{webm,mp4}`. `overlays.js`
@@ -47,7 +55,7 @@ analytics suite.
   registry, and the durable-UI-state layer (`persistHydrate` on boot +
   `persistSet` write-through to `/api/ui-state`); the old `ascii_scene.js` idle
   animation was removed.
-- **Desktop**: `desktop.py` (pywebview; owns the server lifecycle — uvicorn on a
+- **Desktop**: `desktop.py` (pywebview; owns the server lifecycle: uvicorn on a
   stable localhost port `DESKTOP_PORT=8760` with an ephemeral fallback, on a
   daemon thread, graceful shutdown frees worker VRAM on close; runs a persistent
   (non-private) web-storage profile; prefers Qt/QtWebEngine via `_select_gui`,
@@ -59,35 +67,122 @@ analytics suite.
 
 ## Recently shipped (this session)
 
-- **Durable server-side UI state** (fixes desktop persistence). QtWebEngine keys
-  localStorage by window origin, and the launcher's port varied per run, so
-  Settings / the "new run" cue / prompt history / the generate teaser reset every
-  restart. They now persist in `Results/ui_state.json` via `GET`/`PUT /api/ui-state`
-  (`src/web/ui_state.py`: whitelisted keys, bounded sizes, atomic writes, a lock).
-  The frontend hydrates localStorage from the server once on boot
-  (`persistHydrate` wraps each page's boot) and write-throughs on change
-  (`persistSet`), so the existing synchronous localStorage reads are unchanged.
-  State is now shared across the browser and desktop app. Tests in `tests/web/`.
-- **New-run cue hardening**: deleting a run now clears its id
-  (`overlaysClearNewRun` in `applyDeletions`), and `GET /api/ui-state` reconciles
-  the cue against existing run folders (`_reconcile_new_runs`), so an orphaned id
-  (a run deleted outside the app, or before this fix) can no longer inflate the
-  count. The Main Menu badge now matches the generator's green count pill.
-- **Analytics table rework**: columns reordered to Date, Model, Prompt, Time,
-  **Edited**, actions (`TABLE_KEYS` + `<thead>`). "Diff vs Original?" renamed to
-  **Edited**, rendered as an SVG checkmark filled with a diffusion dot pattern
-  (`#edited-dots`, medium-shade density), centered over its column, blank for
-  unedited runs. The "new run" dot moved from Prompt to the leading Date column.
-- **Bulk delete + row highlight**: checking rows shades them (`row-checked`,
-  applied inline on toggle) and shows a trashcan with the selected count in the
-  actions header; it deletes all selected via the shared confirm modal
-  ("Delete N runs?"), reporting partial failures.
-- **Desktop launcher persistence**: `desktop.py` now binds a stable port
-  (`DESKTOP_PORT=8760`, with an ephemeral fallback when it is busy) and runs a
-  persistent (non-private) web-storage profile. Secondary now that UI state is
-  server-side, but it keeps a stable window origin.
+**Validated on hardware this session** (the maintainer confirmed the menu,
+download, dropdown, CPU/GPU, and AR flows working). In-sandbox checks
+(`py_compile`, `node --check`, `pytest`, ReadLints) also pass.
+
+**Dropdown, ticker, glyphs, and download (final polish pass).**
+
+- **Download** (`hf_download.py`, `server.py`): the "Click to Download" veneer
+  now reports a smooth bar via a **disk-size poller** (repo total from
+  `HfApi().repo_info(files_metadata=True)`; polls the cache `blobs/` dir incl.
+  `*.incomplete`), replacing the old tqdm hook, which `snapshot_download` never
+  routes to the per-file byte downloads (only the outer file-count bar). Xet is
+  disabled (`HF_HUB_DISABLE_XET=1`) before the first `huggingface_hub` import in
+  `server.py` + `run_worker.py` so the classic downloader is used.
+- **Family glyphs** (final, `menu.js`): diffusion = a faint "D" + faint "F"
+  with a crisp full-opacity reversed epsilon over their overlap (the D bowl +
+  F mid bar), reading as a superposition resolving; autoregressive = an "@"
+  that becomes an "R" (inner "a" counter, a tail that loops over the head back
+  to a start node, two matched legs). Tooltip stays on the wrapper span.
+- **Dropdown polish**: the collapsed device pill is fixed-width (the wider
+  `+/-X` face is shrunk to fit, so the border never grows) and its ticker is
+  gated off on CPU (headroom is a GPU-only figure); the option list matches the
+  collapsed width with ellipsized names (`title` = full name); the hover
+  side-popup tints only the trailing signed `+/-X` green/red (body stays grey),
+  matching the border. Ticker gated by the "Device tag ticker" Setting
+  (`gpuTicker`, default on) + reduced motion.
+- **Loaded-model affordance** (`app.js`/`style.css`): the resident model's
+  dropdown row is tinted like the Generate button and inert (re-selecting it is
+  redundant); its loaded device button is locked (`is-current`) while the other
+  device stays switchable (GPU <-> CPU).
+- **AR "Step" fix** (`ar_sampler.py`): frames emit a 1-based `index`, so a full
+  N-token run ends "Step N/N" (matching the diffusion convention) instead of
+  "N-1/N".
+- **Veneer + confirm**: a veneered (uncached) model hides its description and
+  shows "Click to Download"; on success **Ok** removes the veneer and
+  denoise-reveals the description; the menu contracts to a check/X confirm
+  before loading (the confirm box no longer inherits the row's pointer cursor).
+
+**Earlier: Menu VRAM headroom, download, and UX polish** (device-aware
+activation + that pass).
+
+- **Non-blocking activation**: `manager.activate` spawns and returns; a
+  background `_monitor_startup` task tracks `starting|downloading|loading|ready|
+  error` (`server.py`), polled via `GET /api/models/activation`; `POST
+  /api/models/activate/cancel` stops it. The menu shows a progress bar + Cancel;
+  `switchModel` polls the same way. This also fixed the VRAM-on-close leak (the
+  load no longer holds the manager lock).
+- **VRAM fits fix + headroom**: reclaimable VRAM is counted only when the
+  resident model is on `cuda` (`_models_snapshot`), fixing GPU models wrongly
+  reading "Available" while a CPU-resident model was loaded. Each model now
+  carries a signed `vram_headroom_gib = (free + reclaimable) - required`, shown
+  as a green/red pill left of the device tag (menu + dropdown), replacing the
+  old "~X GiB Available/Insufficient" text.
+- **Orphaned-worker guards**: startup sweep kills stray `run_worker` procs with
+  ppid 1 (`_sweep_orphan_workers`), plus the `PR_SET_PDEATHSIG` spawn guard.
+- **"Click to Download" veneer**: uncached HF-repo models show a veneer that
+  pre-fetches weights (no VRAM) via `POST /api/models/{id}/download` +
+  `_run_download` (supervisor thread, `download_with_progress`) with a progress
+  bar, then restores the row. `downloaded`/`downloadable` are in the snapshot.
+- **Select-to-confirm**: the menu contracts to the chosen row with a check/X
+  confirm before loading; the dropdown confirm was reworked (cursor/centering,
+  "Unload the current model X and load Y on GPU/CPU?", max-content width).
+- **Rename to "LLM Visualizer"** across menu/index/analytics/about/titles +
+  desktop `WINDOW_TITLE` (kept `APP_ID`). Menu GPU:/CPU: readout, model-family
+  glyphs (diffusion/AR) beside each name, and Analytics **Processor** column +
+  per-run timing header (GPU/CPU name).
+
+**Earlier: Phase A, first autoregressive model (SmolLM3-3B).** The AR baseline
+end to end, reusing the frame/token contract.
+
+- **New env + deps**: `.venv-ar` with `requirements-ar.txt` (torch 2.8.0 CUDA
+  wheel + `transformers==4.53.0` + worker server stack); built and validated
+  (SmolLM3 runs on GPU and CPU). `requirements-ar.txt` still lists direct deps
+  only, so a `.venv-ar/bin/pip freeze > requirements-ar.txt` to capture the full
+  transitive pins is a remaining nice-to-have. README has a CPU-only install
+  note. Note `.venv-ar` is now in `.gitignore`.
+- **`model_type` capability flag** (`src/backends/protocol.py`):
+  `Literal["diffusion","autoregressive"]` on `ModelCapabilities`, default
+  "diffusion"; reaches the client via `/api/models`.
+- **Device threading**: `Backend.load(*, device="cuda")` +
+  `create_worker_app(backend, *, device=...)` (`worker_base.py`), `--device` in
+  `run_worker.py`; LLaDA/DiffusionGemma `load` updated (dgemma refuses non-cuda;
+  LLaDA falls back to CPU). Supervisor `manager.activate(*, device=None)`
+  resolves None → cuda-if-GPU-else-cpu, appends `--device`, and skips
+  `_preflight_vram` on CPU. `activate_model` accepts an optional `{device}` body.
+- **Registry**: `SMOLLM3` (`src/backends/registry.py`), id `smollm3`,
+  `.venv-ar`, `HuggingFaceTB/SmolLM3-3B`, `min_vram_gib=8.0`,
+  `model_type="autoregressive"`, `supports_resume=False`; params
+  max_new_tokens/temperature(0.6)/top_p(0.95)/seed/thinking.
+- **AR sampler** (`src/inference/ar_sampler.py`): manual token-by-token KV-cache
+  loop in a thread, full-snapshot frames `{t, m:false, id, c}` + `done`
+  {final_text, thinking}; `c` = untempered softmax prob of the sampled token;
+  temperature/top_p sampling; `<think>` split; cancel between tokens.
+- **AR worker** (`src/backends/smollm3_worker.py`): mirrors dgemma, `load(*,
+  device)` bf16 on GPU/CPU, clamps params (CPU caps max_new_tokens to 128), no
+  resume.
+- **Menu CPU/GPU toggle** (`menu.js`/`style.css`): AR row is always selectable
+  (CPU fallback) and carries a `.menu-model-device` toggle; GPU option greys out
+  when no GPU or won't fit; `selectModel` posts `{device}`.
+- **Generator gating** (`app.js`): `isAutoregressive()`; Diff option omitted
+  from the overlay picker for AR; Commit Order setting disabled + forced Off +
+  dimmed (`updateCommitSettingAvailability`), `effectiveColorMode` and the
+  status bar guarded; Edit Frames already `supports_resume`-gated.
+- **Analytics gating**: `model_type` persisted in `metadata.json`
+  (`_save_run_blocking`); `analytics.js` hides the convergence chart
+  (`#convergence-section`) for AR runs and skips their series in the compare
+  view; timing + confidence kept.
 
 ## Previously shipped (recent sessions; now in git + README)
+
+- Durable server-side UI state (`Results/ui_state.json` via `/api/ui-state`,
+  `src/web/ui_state.py`): Settings, the "new run" cue, prompt history, and the
+  generate teaser survive restarts and are shared across browser + desktop,
+  independent of window origin; the cue self-heals against deleted runs. Plus an
+  analytics table rework (reordered columns, diffusion-textured Edited
+  checkmark, checkbox row highlight, multi-select bulk delete) and a stable
+  desktop launcher port with a persistent web-storage profile.
 
 - Main Menu + title video + generation gated behind model selection; consistent
   Menu/Generation/Analytics nav; analytics layered Diff vs Original; removed the
@@ -100,81 +195,75 @@ analytics suite.
 
 ## Conventions
 
-- Use `.venv/bin/python` and `.venv-dgemma/bin/python` explicitly; never system
-  Python. Dependency files: `requirements.txt`, `requirements-dgemma.txt`,
-  `requirements-desktop.txt`. Follow TigerStyle and `.cursor/rules/`.
+- Use `.venv/bin/python`, `.venv-dgemma/bin/python`, and `.venv-ar/bin/python`
+  explicitly; never system Python. Dependency files: `requirements.txt`,
+  `requirements-dgemma.txt`, `requirements-ar.txt`, `requirements-desktop.txt`.
+  Follow TigerStyle and `.cursor/rules/`.
 - Verify: `.venv/bin/python -m pytest`; `node --check` on changed JS; `py_compile`
-  on changed Python; ReadLints. GUI/GPU can't be tested in-sandbox — hand back with
+  on changed Python; ReadLints. GUI/GPU can't be tested in-sandbox; hand back with
   a manual-verification checklist.
 - See `AGENTS.md` for the full workflow, commit discipline, and this handoff habit.
 
 ## Where to pick up
 
-This session shipped durable server-side UI state (fixing desktop persistence
-once and for all), the analytics table rework (Edited column + diffusion-textured
-checkmark, reordered columns, checkbox row highlight, multi-select bulk delete),
-and new-run-cue hardening (decrement on delete + server-side reconcile). All
-maintainer-validated; the tree is at a clean stopping point.
+This session shipped and **validated on hardware** Phase A (SmolLM3), the menu
+VRAM-headroom / download / UX pass, and a final polish pass (dropdown, glyphs,
+disk-size download poller, loaded-model affordance, AR step fix). The next
+session's focus, agreed with the maintainer, is below. Deliberate each in Ask
+mode before Plan.
 
-**Next session (settled): Phase A, core autoregressive support.** Bring the first
-autoregressive LLM into the app, reusing the frame/token contract. Decisions are
-locked; start with a plan-time check of SmolLM3's required `transformers` version
-to pin the new env, then implement.
+**1 + 2. Shared Settings page + gear icon (one coupled feature).** Promote
+Settings from the generator-only modal (`index.html:371-429`, logic in `app.js`)
+to a **shared `/settings.html` page** with a **left tab rail + right pane** (the
+list is growing: 5 rows + a conditional "Mode" sub-row). Both entry points link
+to it: replace the header "Settings" text (`index.html:40`, `#link-settings`)
+with a **gear icon**, and add a matching gear entry to the Main Menu nav
+(`menu.html:66-68`, which today only links to Analytics). All settings are
+already global and server-persisted (`ui_state.py`), so a page (not a duplicated
+modal) is the clean fit. Tab grouping to settle in Plan; a first cut: Appearance
+(diffusion-style text + its Mode sub-row, highlight tokens), Overlays (commit
+order), Interface (device-tag ticker), with room for future Models/Analytics
+tabs. Keep the staged Save/Reset shared across tabs; new gear glyph in the
+family-icon style.
 
-- **New backend: SmolLM3-3B** (`HuggingFaceTB/SmolLM3-3B`) in a dedicated
-  **`.venv-ar`** with a CPU-first torch wheel (the model is CPU-primary). Add a
-  `ModelInfo` to `src/backends/registry.py` and a worker module implementing
-  `Backend.load` / `handle_generate` (`src/backends/worker_base.py:67-94`),
-  mirroring the DiffusionGemma worker. New `requirements-ar.txt`.
-- **AR streaming as growing-sequence frames**: a manual token-by-token sampling
-  loop (not HF's text streamer) so we capture per-token confidence, emitting one
-  frame per new token in the existing `{t, m, id, c}` shape (`m` always false,
-  `c` = sampling softmax confidence). Reuses streaming, save, token records, and
-  the scrubber (as a left-to-right replay) unchanged. Note: full-snapshot frames
-  make payload O(n^2) in tokens; fine for a few hundred, revisit for long runs.
-- **Model-type gate**: add `model_type` ("diffusion" | "autoregressive") or an
-  `is_autoregressive` flag to `ModelInfo`/`ModelCapabilities` (`protocol.py:45-70`)
-  and branch the diffusion-only UI off it in `app.js`: hide Edit Frames
-  (already `supports_resume`-gated, `app.js:1970-1975`), the Heatmap/Diff
-  overlays, and the analytics convergence chart; keep run + timing + confidence.
-- **Per-activation CPU/GPU device selection**: add `device` to the activate
-  request (`POST /api/models/{id}/activate`, currently body-less, `server.py`
-  ~495-515), thread it through `run_worker.py` into `Backend.load(device=...)`,
-  and skip `_preflight_vram` when `device="cpu"`. Menu rows are left-stacked with
-  no top-right slot (`style.css:2176-2276`), so add the toggle by making the AR
-  row `position: relative` and absolutely positioning the control (like
-  `#prompt-history`), greyed out (reuse the `fits` logic) when GPU will not fit.
-- **Analytics accommodation**: gate the convergence chart off for AR runs
-  (`compute_convergence`, `metrics.py:59-98`, would otherwise flatline); keep
-  timing (tokens/sec is a natural AR metric) and confidence.
+**3. App icon redesign.** Replace the token-grid `assets/icon.svg` with **three
+denoising shade-block glyphs (`▓ ▒ ░`, the `DENOISE_GLYPHS` set in `app.js:3119`
+/ `menu.js:499`) fading most to least opaque**, evoking a token mid-denoise (not
+the D+F family logo). Keep the dark rounded tile + accent green; export a PNG
+alongside the SVG for dock / window-icon fidelity. Refs: `assets/icon.svg`,
+`desktop.py:52` (`ICON_PATH`), `scripts/install_desktop_entry.sh`.
 
-**Deferred (future session): Randomize Prompt.** A "randomize a short prompt"
-dice button left of the prompt-history button (mirror `#btn-prompt-history`,
-`index.html:49-81`, confirm/cancel without cycling) driven by an always-on CPU
-model, with a Settings model dropdown. Deferred because the randomizer must
-coexist with the resident model, which the one-worker-at-a-time manager
-(`_stop_locked` on every activate, `server.py:263-314`) forbids: it needs a
-separate concurrent CPU "utility" worker with its own lifecycle. High effort for
-the payoff right now, so build the bigger AR feature first.
+**4. Analytics token scrubber (+ tooltip parity).** The detail modal already
+renders a static final-frame token overlay with a hover tooltip (position +
+confidence); add a **per-frame scrubber** so any saved frame can be reviewed
+(the data is already there: `tokens.json` carries every frame, served via
+`load_run_frames`). Reuse the generator's scrubber / overlay logic (`app.js` /
+`overlays.js`) so Commit Order / Diff overlays scrub per frame too. Explicitly
+**no Edit Frames** in analytics. Lowest-risk, high-value; already the "analytics
+scrubber" follow-up in `ROADMAP.md`.
 
-**Phase C (only if time this session):**
-- Top-k "change the last token" resume: the standout AR xAI feature. AR resume is
-  truncate-force-continue (easier than diffusion resume), slotting into the
-  existing `supports_resume` + resume-message path; top-k capture is opt-in like
-  DiffusionGemma's `entropy_signal`. Keep the scrubber for this.
-- Integrate the other candidates: Phi-4-mini-instruct (standard/reliable) and
-  Gemma-3n-E2B-it (novel MatFormer/effective-2B, trickiest).
-- Download-from-menu: a curated allowlist of the candidate models; needs a
-  dynamic registry layer (registry is a static dict today) + disk-space checks.
+**5. Autoregressive analysis tools (Phase C).** SmolLM3 has no Edit Frames (it
+is left-to-right), so add AR-native xAI. Suggested order: (a) **top-k
+alternatives on hover** (competing tokens + probabilities per position; opt-in
+logit capture in `ar_sampler.py`, mirroring DiffusionGemma's `entropy_signal`);
+(b) **top-k "change the last token" resume** (truncate-force-continue: set
+`supports_resume=True` and add `handle_resume` in `smollm3_worker.py`, reusing
+the resume path + scrubber); (c) a **per-position entropy sparkline**. Mind the
+documented O(n^2) AR frame-payload caveat for long runs. See `ROADMAP.md` Phase C.
 
-Standing candidate directions (from the backlog below), none committed:
-- Multi-canvas DiffusionGemma resume (the remaining Phase 2 milestone).
-- Per-frame scrubber for the analytics overlays (saved token stream carries every
-  frame; the layered diff currently renders the final frame only).
-- Mask confidence-opacity for DiffusionGemma (LLaDA shipped; dgemma uses a
-  different signal, so it is a separate, heavier effort).
-- xAI: per-position entropy sparkline; cross-model comparison on identical
-  prompt/seed.
+**Standing backlog (unchanged; see `ROADMAP.md`):** multi-canvas DiffusionGemma
+resume (the remaining Phase 2 milestone); mask confidence-opacity for
+DiffusionGemma; integrate Phi-4-mini-instruct / Gemma-3n-E2B-it (share
+`ar_sampler.py` + `.venv-ar`); download-from-menu for a curated candidate
+allowlist (needs a dynamic registry layer); cross-model comparison on identical
+prompt/seed; aggregate analytics across runs; the deferred Randomize-Prompt
+utility worker.
+
+**Remaining nice-to-have from this session:** confirm SmolLM3's thinking
+delimiter on a real thinking-on run (`ar_sampler.py` splits on `<think>` /
+`</think>`; adjust `_split_thinking` / `_STRIP_TOKENS` if the tags differ), and
+`.venv-ar/bin/pip freeze > requirements-ar.txt` to capture the full transitive
+pins.
 
 ## North star & backlog
 
