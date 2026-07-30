@@ -159,6 +159,17 @@
                   </div>
                   <div id="overlay-output"></div>
                 </div>
+                <!-- Per-frame scrubber: replay any saved frame through
+                     the active overlay (opens on the final frame). -->
+                <div id="overlay-scrubber" hidden>
+                  <button id="overlay-scrub-prev" type="button"
+                    class="scrub-btn" title="Previous frame">&lsaquo;</button>
+                  <input type="range" id="overlay-scrubber-slider"
+                    min="0" max="0" value="0" />
+                  <button id="overlay-scrub-next" type="button"
+                    class="scrub-btn" title="Next frame">&rsaquo;</button>
+                  <span id="overlay-scrubber-label">Frame 0 / 0</span>
+                </div>
                 <!-- Layered Diff vs Original controls (shown only when
                      the Diff overlay is selected). -->
                 <div id="overlay-diff-controls" hidden>

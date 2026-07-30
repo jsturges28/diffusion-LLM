@@ -47,10 +47,32 @@ var overlayLegend =
   document.getElementById("overlay-legend");
 var overlayEmpty =
   document.getElementById("overlay-empty");
+var overlayScrubber =
+  document.getElementById("overlay-scrubber");
+var overlayScrubSlider =
+  document.getElementById("overlay-scrubber-slider");
+var overlayScrubPrev =
+  document.getElementById("overlay-scrub-prev");
+var overlayScrubNext =
+  document.getElementById("overlay-scrub-next");
+var overlayScrubLabel =
+  document.getElementById("overlay-scrubber-label");
 var overlaySelect = null;
 // Cached frames payload and current overlay mode for the open run.
 var overlayData = null;
 var overlayMode = "none";
+// Frame shown by the scrubber. Defaults to the final frame so the
+// viewer opens exactly as before; scrubbing back replays earlier
+// frames through the active overlay.
+var overlayFrameIndex = 0;
+// Per-run derived data, memoized and invalidated when a new run loads:
+// the Commit Order gradient's per-position steps and the diff change
+// set (neither depends on the scrubber frame).
+var overlayCommitSteps = null;
+var overlayDiffData = null;
+// Whether the open run is autoregressive; gates Commit Order + Diff
+// off (diffusion-only overlays for now), keeping None + Heatmap.
+var overlayIsAutoregressive = false;
 
 // Layered "Diff vs Original" controls (mirror the generator): two
 // opacity sliders plus a difference-blend toggle. State is kept here
@@ -715,7 +737,7 @@ function showDetail(runId) {
 
   renderTable();
   loadRunCharts(runId, run);
-  loadRunOverlays(runId);
+  loadRunOverlays(runId, run);
 }
 
 function hideDetail() {
@@ -869,6 +891,35 @@ function overlayFinalFrame(frames) {
   return null;
 }
 
+// Index of the last frame carrying token records (mirrors
+// overlayFinalFrame). Used as the scrubber's default position so the
+// viewer opens on the resolved output. Returns 0 when none qualify.
+function overlayFinalFrameIndex(frames) {
+  if (!frames) {
+    return 0;
+  }
+  for (var i = frames.length - 1; i >= 0; i--) {
+    if (frames[i] && frames[i].length > 0) {
+      return i;
+    }
+  }
+  return 0;
+}
+
+// The token array at scrubber frame ``index`` (guarded). An empty or
+// out-of-range frame yields null, which renders as a blank canvas
+// (e.g. an all-masked early frame with no records).
+function overlayFrameAt(index) {
+  if (!overlayData || !overlayData.frames) {
+    return null;
+  }
+  var frames = overlayData.frames;
+  if (index < 0 || index >= frames.length) {
+    return null;
+  }
+  return frames[index];
+}
+
 function overlayConfText(c) {
   if (typeof c !== "number") {
     return "0";
@@ -876,16 +927,19 @@ function overlayConfText(c) {
   return String(+c.toFixed(3));
 }
 
-function loadRunOverlays(runId) {
+function loadRunOverlays(runId, run) {
   overlayData = null;
+  overlayCommitSteps = null;
+  overlayDiffData = null;
+  overlayIsAutoregressive = runIsAutoregressive(run);
   fetchFrames(runId).then(function (data) {
     if (!data || data.error) {
       showOverlayUnavailable();
       return;
     }
-    var hasCommit = !!data.records_available;
+    var hasRecords = !!data.records_available;
     var hasDiff = overlayDiffAvailable(data);
-    if (!hasCommit && !hasDiff) {
+    if (!hasRecords && !hasDiff) {
       showOverlayUnavailable();
       return;
     }
@@ -896,11 +950,61 @@ function loadRunOverlays(runId) {
     overlaySelectGroup.hidden = false;
     setOverlayDrawerOpen(false);
     // Mirror the generator: default to None; the drawer offers the
-    // durable overlays (Commit Order for record runs, Diff vs
-    // Original when a pre-edit snapshot was saved).
+    // durable overlays (Heatmap for record runs, plus Commit Order and
+    // Diff vs Original for diffusion runs with the required data).
     buildOverlaySelect(data);
+    setupOverlayScrubber(data);
     setOverlayMode("none");
   });
+}
+
+// Configure the per-frame scrubber for the loaded run. Opens on the
+// final frame carrying records (the viewer's prior behavior); a run
+// with a single usable frame keeps the scrubber hidden and disabled.
+function setupOverlayScrubber(data) {
+  var frames = data.frames || [];
+  var maxIndex = frames.length > 0 ? frames.length - 1 : 0;
+  overlayFrameIndex = overlayFinalFrameIndex(frames);
+  if (!overlayScrubber) {
+    return;
+  }
+  var hasMultiple = frames.length > 1;
+  overlayScrubber.hidden = !hasMultiple;
+  overlayScrubSlider.min = "0";
+  overlayScrubSlider.max = String(maxIndex);
+  overlayScrubSlider.value = String(overlayFrameIndex);
+  overlayScrubSlider.disabled = !hasMultiple;
+  updateOverlayScrubLabel();
+}
+
+// Clamp to range, sync the slider + label, and re-render the active
+// overlay at the new frame.
+function setOverlayFrame(index) {
+  if (!overlayData || !overlayData.frames) {
+    return;
+  }
+  var maxIndex = overlayData.frames.length > 0
+    ? overlayData.frames.length - 1
+    : 0;
+  var clamped = Math.max(0, Math.min(index, maxIndex));
+  overlayFrameIndex = clamped;
+  if (overlayScrubSlider) {
+    overlayScrubSlider.value = String(clamped);
+  }
+  updateOverlayScrubLabel();
+  renderCurrentOverlay();
+}
+
+function updateOverlayScrubLabel() {
+  if (!overlayScrubLabel) {
+    return;
+  }
+  var maxIndex = overlayData && overlayData.frames
+    && overlayData.frames.length > 0
+    ? overlayData.frames.length - 1
+    : 0;
+  overlayScrubLabel.textContent =
+    "Frame " + overlayFrameIndex + " / " + maxIndex;
 }
 
 function showOverlayUnavailable() {
@@ -915,11 +1019,16 @@ function showOverlayUnavailable() {
   if (overlayDiffControls) {
     overlayDiffControls.hidden = true;
   }
+  if (overlayScrubber) {
+    overlayScrubber.hidden = true;
+  }
   overlayEmpty.hidden = false;
 }
 
 function clearOverlay() {
   overlayData = null;
+  overlayCommitSteps = null;
+  overlayDiffData = null;
   overlayViewer.hidden = true;
   overlaySelectGroup.hidden = true;
   overlayOutput.textContent = "";
@@ -930,6 +1039,9 @@ function clearOverlay() {
   overlayLegend.hidden = true;
   if (overlayDiffControls) {
     overlayDiffControls.hidden = true;
+  }
+  if (overlayScrubber) {
+    overlayScrubber.hidden = true;
   }
   overlayEmpty.hidden = true;
 }
@@ -948,17 +1060,27 @@ function setOverlayDrawerOpen(open) {
 }
 
 // Build the overlay custom-select mirroring the generator: None /
-// Commit Order / Diff vs Original, each gated on data availability.
+// Heatmap for every record run, plus Commit Order / Diff vs Original
+// for diffusion runs, each gated on data availability. Autoregressive
+// runs omit Commit Order and Diff (diffusion-only overlays for now;
+// their own xAI tools come later).
 function buildOverlaySelect(data) {
   var canDiff = overlayDiffAvailable(data);
   var options = [
     { value: "none", label: "None" },
     {
+      value: "heatmap",
+      label: "Heatmap",
+      disabled: !data.records_available,
+    },
+  ];
+  if (!overlayIsAutoregressive) {
+    options.push({
       value: "commit",
       label: "Commit Order",
       disabled: !data.records_available,
-    },
-    {
+    });
+    options.push({
       value: "diff",
       label: "Diff vs Original",
       disabled: !canDiff,
@@ -966,8 +1088,8 @@ function buildOverlaySelect(data) {
         ? undefined
         : "Only available for an edited run saved with"
           + " its original snapshot.",
-    },
-  ];
+    });
+  }
   overlaySelectMount.innerHTML = "";
   overlaySelect = createCustomSelect(options, "none");
   overlaySelectMount.appendChild(overlaySelect);
@@ -991,22 +1113,51 @@ function setOverlayMode(mode) {
   if (mode !== "diff") {
     overlayOutput.classList.remove("diff-overlay-mode");
   }
-  if (mode === "diff") {
+  renderCurrentOverlay();
+}
+
+// Re-render the active overlay mode at the current scrubber frame.
+// Called on a mode change and on every scrubber move.
+function renderCurrentOverlay() {
+  if (overlayMode === "diff") {
     renderDiffOverlay();
-  } else if (mode === "commit") {
+  } else if (overlayMode === "commit") {
     renderCommitOverlay();
+  } else if (overlayMode === "heatmap") {
+    renderHeatmapOverlay();
   } else {
     renderNoneOverlay();
   }
 }
 
-// Plain final-frame tokens with no coloring (drawer set to None).
+// Plain tokens at the current scrubber frame, no coloring (None).
 function renderNoneOverlay() {
   overlayReadout.hidden = true;
   overlayReadout.textContent = "";
   renderOverlayTokens(
-    overlayFinalFrame(overlayData.frames),
+    overlayFrameAt(overlayFrameIndex),
     function () { return null; },
+    function () { return ""; }
+  );
+}
+
+// Confidence heatmap: recolor resolved tokens at the current frame by
+// their persisted per-token confidence, using the shared heatColor
+// scale. Kept for autoregressive runs too (the natural per-token
+// confidence view). Masked positions render as the mask glyph.
+function renderHeatmapOverlay() {
+  overlayReadout.hidden = true;
+  overlayReadout.textContent = "";
+  var frame = overlayFrameAt(overlayFrameIndex);
+  renderOverlayTokens(
+    frame,
+    function (i) {
+      var tok = frame ? frame[i] : null;
+      if (tok && typeof tok.c === "number") {
+        return heatColor(tok.c);
+      }
+      return null;
+    },
     function () { return ""; }
   );
 }
@@ -1050,11 +1201,16 @@ function renderCommitOverlay() {
   overlayReadout.hidden = true;
   overlayReadout.textContent = "";
   var frames = overlayData.frames;
-  var frame = overlayFinalFrame(frames);
-  var steps = overlaysComputeCommitSteps(frames);
+  // Commit steps come from the full frame stream (final frame is
+  // ground truth), so they are memoized per run and applied to
+  // whichever frame the scrubber shows (mirrors the generator).
+  if (overlayCommitSteps === null) {
+    overlayCommitSteps = overlaysComputeCommitSteps(frames);
+  }
+  var steps = overlayCommitSteps;
   var maxStep = frames.length - 1;
   renderOverlayTokens(
-    frame,
+    overlayFrameAt(overlayFrameIndex),
     function (i) {
       var step = steps[i];
       if (typeof step === "number" && step >= 0) {
@@ -1077,23 +1233,40 @@ function renderCommitOverlay() {
 // difference blend, driven by the control row. The shared builder in
 // overlays.js owns the layer construction.
 function renderDiffOverlay() {
-  var curFinal = overlayFinalFrame(overlayData.frames);
-  var origFinal = overlayFinalFrame(
-    overlayData.original_frames
-  );
-  var diff = overlaysComputeDiff(
-    curFinal, origFinal, overlayData.remask_edits
-  );
+  // The change set is computed from the two runs' final frames (so it
+  // is stable across the scrub) and memoized; only the rendered layers
+  // vary per frame.
+  if (overlayDiffData === null) {
+    var curFinal = overlayFinalFrame(overlayData.frames);
+    var origFinal = overlayFinalFrame(
+      overlayData.original_frames
+    );
+    overlayDiffData = overlaysComputeDiff(
+      curFinal, origFinal, overlayData.remask_edits
+    );
+  }
+  var diff = overlayDiffData;
   overlayReadout.hidden = false;
   overlayReadout.textContent =
     "Diverged " + diff.changedCount
     + "/" + diff.totalCount;
+
+  // Edited layer at the current frame; original layer clamped to its
+  // final frame once it ends (the runs can differ in length / resume
+  // boundaries), matching the generator (app.js renderDiffOverlay).
+  var editedTokens = overlayFrameAt(overlayFrameIndex) || [];
+  var origFrames = overlayData.original_frames || [];
+  var oIdx = Math.min(
+    overlayFrameIndex, origFrames.length - 1
+  );
+  var origTokens = (oIdx >= 0 ? origFrames[oIdx] : null) || [];
+
   overlayOutput.textContent = "";
   overlayOutput.classList.add("diff-overlay-mode");
   overlayOutput.appendChild(
     overlaysBuildDiffLayers(
-      origFinal || [],
-      curFinal || [],
+      origTokens,
+      editedTokens,
       diff,
       {
         originalOpacity: overlayDiffOrigOpacity,
@@ -1130,6 +1303,27 @@ function wireOverlayDiffControls() {
       if (overlayMode === "diff") {
         renderDiffOverlay();
       }
+    });
+  }
+}
+
+// Wire the per-frame scrubber once: the slider and the prev/next
+// arrows all route through setOverlayFrame, which clamps, syncs the
+// controls, and re-renders the active overlay at the chosen frame.
+function wireOverlayScrubber() {
+  if (overlayScrubSlider) {
+    overlayScrubSlider.addEventListener("input", function () {
+      setOverlayFrame(Number(overlayScrubSlider.value));
+    });
+  }
+  if (overlayScrubPrev) {
+    overlayScrubPrev.addEventListener("click", function () {
+      setOverlayFrame(overlayFrameIndex - 1);
+    });
+  }
+  if (overlayScrubNext) {
+    overlayScrubNext.addEventListener("click", function () {
+      setOverlayFrame(overlayFrameIndex + 1);
     });
   }
 }
@@ -2040,6 +2234,7 @@ modalDelete.addEventListener("click", function (e) {
 })();
 
 wireOverlayDiffControls();
+wireOverlayScrubber();
 
 // Reveal the "Generation" nav link only when a model is resident. The
 // generator is gated on an active model (see server.py), so surfacing

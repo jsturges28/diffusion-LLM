@@ -823,3 +823,73 @@ html, body {
 #overlay-diff-controls[hidden] {
   display: none;
 }
+
+/* Per-frame scrubber below the overlay canvas. Mirrors the generator's
+   scrubber; the arrow-button look comes from style.css (.scrub-btn),
+   while the slider is keyed to this id since style.css scopes its
+   thumb styles to the generator's #scrubber-slider. */
+#overlay-scrubber {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+#overlay-scrubber[hidden] {
+  display: none;
+}
+
+#overlay-scrubber-slider {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+#overlay-scrubber-slider:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+#overlay-scrubber-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  background: var(--accent);
+  border: none;
+  border-radius: 50%;
+  cursor: grab;
+  box-shadow: 0 0 6px var(--accent-glow);
+  transition: box-shadow 0.15s;
+}
+
+#overlay-scrubber-slider::-webkit-slider-thumb:hover {
+  box-shadow: 0 0 10px var(--accent-glow);
+}
+
+#overlay-scrubber-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  background: var(--accent);
+  border: none;
+  border-radius: 50%;
+  cursor: grab;
+  box-shadow: 0 0 6px var(--accent-glow);
+}
+
+#overlay-scrubber-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  min-width: 92px;
+  text-align: right;
+}
