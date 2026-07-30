@@ -10,7 +10,7 @@ pulling in torch or transformers.
 from __future__ import annotations
 
 from enum import Enum
-from typing import List, Optional, Tuple, Union
+from typing import Dict, List, Literal, Optional, Tuple, Union
 
 from pydantic import BaseModel
 
@@ -24,11 +24,26 @@ class ParamType(str, Enum):
     BOOL = "bool"
 
 
+class ParamOverride(BaseModel):
+    """Per-device overrides for a ``ParamSpec``.
+
+    Keyed by device ("cpu" / "cuda") on ``ParamSpec.overrides``. Any
+    field left None falls back to the base spec. Lets one parameter
+    carry device-specific caps (e.g. a lower CPU token budget) that
+    the frontend and worker both honor, instead of a hidden clamp.
+    """
+
+    default: Optional[Union[int, float, str, bool]] = None
+    recommended: Optional[Tuple[float, float]] = None
+    experimental: Optional[Tuple[float, float]] = None
+
+
 class ParamSpec(BaseModel):
     """One user-facing generation parameter.
 
     ``recommended`` / ``experimental`` are (low, high) bounds for
     numeric params; ``options`` lists choices for ``SELECT``.
+    ``overrides`` optionally narrows the default/bounds per device.
     """
 
     name: str
@@ -39,12 +54,18 @@ class ParamSpec(BaseModel):
     options: Optional[List[str]] = None
     recommended: Optional[Tuple[float, float]] = None
     experimental: Optional[Tuple[float, float]] = None
+    overrides: Optional[Dict[str, ParamOverride]] = None
     help: Optional[str] = None
 
 
 class ModelCapabilities(BaseModel):
     """Feature flags a worker advertises to the frontend."""
 
+    # Generation paradigm. Diffusion-only UI (Edit Frames, the
+    # Heatmap/Diff overlays, Commit Order, the convergence chart) is
+    # gated off for "autoregressive" models, which stream a growing
+    # left-to-right sequence rather than denoising a masked canvas.
+    model_type: Literal["diffusion", "autoregressive"] = "diffusion"
     supports_resume: bool = False
     supports_cfg: bool = False
     # Character shown for an unresolved token in the UI.

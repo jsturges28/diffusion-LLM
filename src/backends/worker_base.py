@@ -68,10 +68,19 @@ class Backend(ABC):
     """Model-specific worker logic (loading + streaming)."""
 
     model_info: ModelInfo
+    # Set to a progress dict ({fraction, downloaded_bytes, total_bytes})
+    # while weights download during ``load``, then back to None. Read by
+    # ``/health`` to report a "downloading" state to the supervisor.
+    load_progress: Optional[Dict[str, Any]] = None
 
     @abstractmethod
-    def load(self) -> None:
-        """Blocking model + tokenizer load (runs in a thread)."""
+    def load(self, *, device: str = "cuda") -> None:
+        """Blocking model + tokenizer load (runs in a thread).
+
+        ``device`` is the requested placement ("cuda" or "cpu"),
+        chosen per activation so CPU-only hosts can still run small
+        models. GPU-only backends may ignore it.
+        """
 
     @abstractmethod
     async def handle_generate(
@@ -106,8 +115,14 @@ async def _send_busy(ws: WebSocket) -> None:
     )
 
 
-def create_worker_app(backend: Backend) -> FastAPI:
-    """Build the FastAPI app hosting a single model worker."""
+def create_worker_app(
+    backend: Backend, *, device: str = "cuda"
+) -> FastAPI:
+    """Build the FastAPI app hosting a single model worker.
+
+    ``device`` is forwarded to ``backend.load`` so the supervisor can
+    place a model on CPU or GPU per activation.
+    """
     app = FastAPI(title=f"worker:{backend.model_info.id}")
     model_ready = asyncio.Event()
     load_failed = asyncio.Event()
@@ -118,7 +133,9 @@ def create_worker_app(backend: Backend) -> FastAPI:
     async def _startup() -> None:
         async def _load() -> None:
             try:
-                await asyncio.to_thread(backend.load)
+                await asyncio.to_thread(
+                    backend.load, device=device
+                )
             except Exception as exc:  # noqa: BLE001
                 load_error["message"] = str(exc)
                 load_failed.set()
@@ -136,10 +153,14 @@ def create_worker_app(backend: Backend) -> FastAPI:
 
     @app.get("/health")
     async def _health() -> JSONResponse:
+        progress = getattr(backend, "load_progress", None)
         if load_failed.is_set():
             status = "error"
         elif model_ready.is_set():
             status = "ready"
+        elif progress is not None:
+            # Weights are still downloading from the HF Hub.
+            status = "downloading"
         else:
             status = "loading"
         versions: Dict[str, str] = {}
@@ -158,6 +179,8 @@ def create_worker_app(backend: Backend) -> FastAPI:
             "id": backend.model_info.id,
             "versions": versions,
         }
+        if status == "downloading":
+            payload["progress"] = progress
         if status == "error":
             payload["message"] = load_error.get(
                 "message", "Model failed to load."

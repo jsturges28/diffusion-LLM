@@ -48,7 +48,15 @@ class DgemmaBackend(Backend):
         self.tokenizer: Any = None
         self.last_run_state: Optional[Dict[str, Any]] = None
 
-    def load(self) -> None:
+    def load(self, *, device: str = "cuda") -> None:
+        # The NF4 experts assume a CUDA compute path (bitsandbytes),
+        # so DiffusionGemma is GPU-only; a CPU request is refused
+        # rather than silently attempting an unsupported placement.
+        if device != "cuda":
+            raise RuntimeError(
+                "DiffusionGemma (NF4) requires a CUDA GPU;"
+                f" device={device!r} is not supported."
+            )
         path = Path(self.model_info.checkpoint).expanduser()
         if not path.is_dir():
             raise RuntimeError(
@@ -59,7 +67,7 @@ class DgemmaBackend(Backend):
         logger.info("loading tokenizer from %s", path)
         self.tokenizer = AutoTokenizer.from_pretrained(str(path))
         logger.info("loading NF4 model from %s", path)
-        self.model = load_quantized(str(path))
+        self.model = load_quantized(str(path), device=device)
         logger.info("DiffusionGemma NF4 loaded")
 
     def _bounds(

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Diffusion LLM Visualizer</title>
+  <title>LLM Visualizer</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
@@ -21,7 +21,7 @@
     <!-- Header -->
     <header id="header">
       <h1>
-        <span class="title-accent">Diffusion</span> LLM Visualizer
+        <span class="title-accent">LLM</span> Visualizer
       </h1>
       <nav id="header-nav">
         <a href="/" class="header-link"
@@ -216,7 +216,7 @@
   <div id="modal-about" class="modal-overlay hidden">
     <div class="modal-box">
       <button class="modal-close" aria-label="Close">&times;</button>
-      <h2><span class="title-accent">Diffusion</span> LLM Visualizer</h2>
+      <h2><span class="title-accent">LLM</span> Visualizer</h2>
       <div class="modal-body">
         <p>This tool visualizes <strong>discrete diffusion language modeling</strong> in real time. Instead of generating text one token at a time (left to right), a diffusion LLM starts from noise or masked tokens and iteratively refines an entire block over many denoising steps. Use the <strong>Model</strong> selector in the header to switch between the available models (only one is resident in GPU memory at a time).</p>
         <h3>How diffusion LLMs work</h3>
@@ -401,6 +401,16 @@
           </div>
           <label class="toggle-switch">
             <input type="checkbox" id="setting-diffusion-text" />
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="settings-row">
+          <div class="settings-label-group">
+            <label>Device tag ticker</label>
+            <span class="settings-desc">Cycle the header model's device tag between the device (GPU/CPU) and its VRAM headroom. Off shows just the device.</span>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="setting-gpu-ticker" />
             <span class="toggle-slider"></span>
           </label>
         </div>

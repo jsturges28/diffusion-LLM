@@ -1,6 +1,7 @@
 .cursor
 .venv
 .venv-dgemma
+.venv-ar
 data/
 archive/
 Results/

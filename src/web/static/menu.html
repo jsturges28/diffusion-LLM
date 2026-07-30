@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Diffusion LLM Visualizer</title>
+  <title>LLM Visualizer</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
@@ -33,7 +33,7 @@
   <main id="menu">
     <section id="menu-panel" class="menu-panel">
       <h1 class="menu-title">
-        <span class="title-accent">Diffusion</span> LLM Visualizer
+        <span class="title-accent">LLM</span> Visualizer
       </h1>
       <p class="menu-subtitle">Select a model to begin</p>
 
@@ -46,6 +46,20 @@
 
       <ul id="menu-model-list" class="menu-model-list"
         role="listbox" aria-label="Available models"></ul>
+
+      <div id="menu-activation" class="menu-activation" hidden>
+        <div id="menu-activation-progress"
+          class="menu-activation-progress" hidden>
+          <span id="menu-activation-pct"
+            class="menu-activation-pct"></span>
+          <span class="menu-activation-bar">
+            <span id="menu-activation-fill"
+              class="menu-activation-fill"></span>
+          </span>
+        </div>
+        <button id="menu-activation-cancel" type="button"
+          class="menu-activation-cancel">Cancel</button>
+      </div>
 
       <p id="menu-error" class="menu-error" hidden></p>
 

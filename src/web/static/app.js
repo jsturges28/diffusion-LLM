@@ -1,4 +1,4 @@
-// Diffusion LLM Visualizer: client-side logic.
+// LLM Visualizer: client-side logic.
 
 "use strict";
 
@@ -12,6 +12,8 @@ var MAX_RECONNECT_DELAY_MS = 16000;
 var models = {}; // id -> ModelInfo
 var activeModelId = null;
 var activeModel = null; // ModelInfo of the active model
+var activeDevice = null; // "cuda" | "cpu": the active model's device
+var gpuPresent = false; // whether a usable GPU was detected
 var suppressReconnect = false;
 
 // Dynamic parameter DOM, rebuilt per model from its schema.
@@ -90,6 +92,8 @@ var settingCommitCb =
   document.getElementById("setting-commit-order");
 var settingDiffusionCb =
   document.getElementById("setting-diffusion-text");
+var settingGpuTickerCb =
+  document.getElementById("setting-gpu-ticker");
 var diffusionModeRow =
   document.getElementById("diffusion-mode-row");
 var diffusionModeMount =
@@ -119,18 +123,21 @@ var DEFAULT_SETTINGS = {
   commitOrder: false,
   diffusionText: false,
   diffusionTextMode: "default",
+  gpuTicker: true,
 };
 var appSettings = {
   highlightTokens: false,
   commitOrder: false,
   diffusionText: false,
   diffusionTextMode: "default",
+  gpuTicker: true,
 };
 var stagedSettings = {
   highlightTokens: false,
   commitOrder: false,
   diffusionText: false,
   diffusionTextMode: "default",
+  gpuTicker: true,
 };
 
 // Scrubber DOM refs.
@@ -361,6 +368,17 @@ function setMaskChar() {
   }
 }
 
+// Autoregressive models stream a growing left-to-right sequence
+// instead of denoising a masked canvas, so diffusion-only affordances
+// (Diff overlay, Commit Order, convergence) are gated off for them.
+function isAutoregressive() {
+  return !!(
+    activeModel
+    && activeModel.capabilities
+    && activeModel.capabilities.model_type === "autoregressive"
+  );
+}
+
 function setLoadingText(text) {
   if (loadingText) {
     loadingText.textContent = text;
@@ -373,13 +391,195 @@ function fetchModels() {
   });
 }
 
+function modelIsAR(model) {
+  return !!(
+    model
+    && model.capabilities
+    && model.capabilities.model_type === "autoregressive"
+  );
+}
+
+// The device a plain row-click (on the name) would target: GPU when
+// present, else CPU for the CPU-capable AR models. Diffusion is GPU.
+function defaultDeviceFor(model) {
+  if (modelIsAR(model)) {
+    return gpuPresent ? "cuda" : "cpu";
+  }
+  return "cuda";
+}
+
+// Full VRAM readout shown to the side of a dropdown option on hover
+// (the compact dropdown carries no headroom pill; the Main Menu does).
+// Returns null when there is nothing quantitative to show.
+function buildOptionInfo(model) {
+  var required = Math.round(model.min_vram_gib || 0);
+  var headroom = model.vram_headroom_gib;
+  var pop = document.createElement("div");
+  pop.className = "option-info";
+  if (typeof headroom === "number") {
+    var available = (
+      (model.min_vram_gib || 0) + headroom
+    ).toFixed(1);
+    var positive = headroom >= 0;
+    var sign = (positive ? "+" : "\u2212")
+      + Math.abs(headroom).toFixed(1);
+    // Body stays grey; only the trailing signed headroom is tinted
+    // (green when it fits, red when short), matching the border.
+    pop.appendChild(document.createTextNode(
+      "Required " + required
+      + " GiB \u00b7 Available " + available
+      + " GiB \u00b7 "
+    ));
+    var head = document.createElement("span");
+    head.className = "option-info-headroom "
+      + (positive ? "is-positive" : "is-negative");
+    head.textContent = sign;
+    pop.appendChild(head);
+    pop.classList.add(positive ? "is-positive" : "is-negative");
+    return pop;
+  }
+  if (required > 0) {
+    pop.textContent = "Requires ~" + required + " GiB VRAM";
+    return pop;
+  }
+  return null;
+}
+
+// A small green device pill (used both in the collapsed value and,
+// for AR models, as clickable GPU/CPU buttons in each option row).
+function buildDevicePill(label, active) {
+  var pill = document.createElement("span");
+  pill.className =
+    "device-pill" + (active ? " is-active" : "");
+  pill.textContent = label;
+  return pill;
+}
+
+// Interval id for the collapsed-slot device/headroom ticker.
+var collapsedTickerTimer = null;
+
+function stopCollapsedTicker() {
+  if (collapsedTickerTimer !== null) {
+    clearInterval(collapsedTickerTimer);
+    collapsedTickerTimer = null;
+  }
+}
+
+// Cycle the collapsed device pill between the device (GPU/CPU) and the
+// signed VRAM headroom (+Z / -Z, no unit), ~2s per side with a fade.
+// Static device label when the ticker Setting is off, reduced motion
+// is preferred, or there is no headroom to show.
+function startCollapsedTicker(pill, model, device) {
+  stopCollapsedTicker();
+  var deviceLabel = device === "cpu" ? "CPU" : "GPU";
+  // Move the label into an inner span so only the text fades; the
+  // pill's border and background stay static through the cycle.
+  var textEl = document.createElement("span");
+  textEl.className = "ticker-text";
+  textEl.textContent = deviceLabel;
+  pill.textContent = "";
+  pill.appendChild(textEl);
+  var headroom = model.vram_headroom_gib;
+  // Headroom is a GPU-VRAM figure, so it does not apply on CPU; there
+  // the pill stays a static "CPU" tag rather than cycling.
+  var canTick = appSettings.gpuTicker
+    && !prefersReducedMotion()
+    && device !== "cpu"
+    && typeof headroom === "number";
+  if (!canTick) {
+    return;
+  }
+  var headLabel = (headroom >= 0 ? "+" : "\u2212")
+    + Math.abs(headroom).toFixed(1);
+  var showingDevice = true;
+  collapsedTickerTimer = setInterval(function () {
+    textEl.classList.add("ticker-fade");
+    setTimeout(function () {
+      showingDevice = !showingDevice;
+      textEl.textContent = showingDevice ? deviceLabel : headLabel;
+      // Shrink the wider signed-headroom face so it fits the pill's
+      // fixed GPU/CPU width without stretching the border.
+      textEl.classList.toggle("is-headroom", !showingDevice);
+      textEl.classList.remove("ticker-fade");
+    }, 350);
+  }, 2000);
+}
+
 function setModelSelectValue(id) {
   if (!modelSelectValue) {
     return;
   }
+  stopCollapsedTicker();
   var m = models[id];
-  modelSelectValue.textContent =
-    m ? m.display_name : (id || "-");
+  modelSelectValue.innerHTML = "";
+  var nameEl = document.createElement("span");
+  nameEl.className = "model-select-value-name";
+  nameEl.textContent = m ? m.display_name : (id || "-");
+  // Full name on hover, since a long name ellipsizes to the fixed width.
+  nameEl.title = m ? m.display_name : "";
+  modelSelectValue.appendChild(nameEl);
+  if (m) {
+    // The collapsed value shows the active model's current device.
+    var dev = id === activeModelId && activeDevice
+      ? activeDevice
+      : defaultDeviceFor(m);
+    var pill = buildDevicePill(
+      dev === "cpu" ? "CPU" : "GPU", false
+    );
+    pill.classList.add("device-pill-collapsed");
+    modelSelectValue.appendChild(pill);
+    startCollapsedTicker(pill, m, dev);
+  }
+}
+
+// Device control for one option row: a static GPU pill for diffusion
+// models, or a clickable GPU/CPU toggle for AR models. Each button
+// routes through requestSwitch so any change goes past the confirm.
+function buildOptionDevice(model, activeId) {
+  var wrap = document.createElement("span");
+  wrap.className = "option-device";
+  if (!modelIsAR(model)) {
+    wrap.appendChild(buildDevicePill("GPU", true));
+    return wrap;
+  }
+  var isActiveModel = model.id === activeId;
+  var current = isActiveModel && activeDevice
+    ? activeDevice
+    : defaultDeviceFor(model);
+  var devices = [
+    { value: "cuda", label: "GPU" },
+    { value: "cpu", label: "CPU" },
+  ];
+  for (var i = 0; i < devices.length; i++) {
+    (function (dev) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      // The loaded model's current device is redundant to re-select, so
+      // it is locked (is-current); the other device stays switchable.
+      var isCurrent = isActiveModel && dev.value === activeDevice;
+      btn.className =
+        "device-pill device-pill-btn"
+        + (dev.value === current ? " is-active" : "")
+        + (isCurrent ? " is-current" : "");
+      btn.textContent = dev.label;
+      if (dev.value === "cuda" && !gpuPresent) {
+        btn.disabled = true;
+        btn.title = "No GPU detected";
+      }
+      if (isCurrent) {
+        btn.title = "Currently loaded";
+      }
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        if (btn.disabled) {
+          return;
+        }
+        requestSwitch(model.id, dev.value);
+      });
+      wrap.appendChild(btn);
+    })(devices[i]);
+  }
+  return wrap;
 }
 
 function setModelSelectDisabled(disabled) {
@@ -396,6 +596,7 @@ function openModelList() {
   if (modelSelectDisabled || !modelSelectList) {
     return;
   }
+  closeSwitchConfirm();
   modelSelectList.hidden = false;
   modelSelect.classList.add("open");
 }
@@ -429,11 +630,111 @@ function renderModelSelector(list, activeId) {
       + (m.id === activeId ? " is-active" : "");
     li.setAttribute("role", "option");
     li.setAttribute("data-id", m.id);
-    li.textContent = m.display_name;
+    var nameEl = document.createElement("span");
+    nameEl.className = "model-select-name";
+    nameEl.textContent = m.display_name;
+    nameEl.title = m.display_name;
+    li.appendChild(nameEl);
+    li.appendChild(buildOptionDevice(m, activeId));
+    // Full VRAM readout to the side of the row on hover (keeps the
+    // option compact; the pill/toggle alone stays in the row).
+    var info = buildOptionInfo(m);
+    if (info) {
+      li.appendChild(info);
+      // Capture this row's info element per iteration: a plain closure
+      // over the loop-scoped ``var info`` would leave every row toggling
+      // the last option's popover (SmolLM3's).
+      (function (infoEl) {
+        li.addEventListener("mouseenter", function () {
+          infoEl.classList.add("is-visible");
+        });
+        li.addEventListener("mouseleave", function () {
+          infoEl.classList.remove("is-visible");
+        });
+      })(info);
+    }
     modelSelectList.appendChild(li);
   }
   setModelSelectValue(activeId);
   sizeModelSelect(list);
+}
+
+// ---- Model / device switch confirmation ----
+
+var switchConfirmEl = null;
+
+function closeSwitchConfirm() {
+  if (switchConfirmEl && switchConfirmEl.parentNode) {
+    switchConfirmEl.parentNode.removeChild(switchConfirmEl);
+  }
+  switchConfirmEl = null;
+}
+
+// Any model or device change routes here: no-op if already active on
+// that device, otherwise open a small confirm popover on the dropdown.
+function requestSwitch(id, device) {
+  closeModelList();
+  var model = models[id];
+  if (!model) {
+    return;
+  }
+  if (id === activeModelId && device === activeDevice) {
+    return;
+  }
+  openSwitchConfirm(id, device);
+}
+
+function openSwitchConfirm(id, device) {
+  closeSwitchConfirm();
+  var model = models[id];
+  if (!model || !modelSelect) {
+    return;
+  }
+  var box = document.createElement("div");
+  box.className = "switch-confirm";
+  // Clicks inside the popover must not bubble to the dropdown's
+  // toggle handler (which would open/close the option list).
+  box.addEventListener("click", function (e) {
+    e.stopPropagation();
+  });
+  var currentName = activeModel
+    ? activeModel.display_name
+    : "the current model";
+  var msg = document.createElement("span");
+  msg.className = "switch-confirm-msg";
+  msg.textContent =
+    "Unload the current model " + currentName
+    + " and load " + model.display_name + " on "
+    + (device === "cpu" ? "CPU" : "GPU") + "?";
+  var actions = document.createElement("span");
+  actions.className = "switch-confirm-actions";
+  var yes = document.createElement("button");
+  yes.type = "button";
+  yes.className = "switch-confirm-yes";
+  yes.title = "Confirm switch";
+  yes.setAttribute("aria-label", "Confirm switch");
+  yes.textContent = "\u2713";
+  yes.addEventListener("click", function (e) {
+    e.stopPropagation();
+    closeSwitchConfirm();
+    switchModel(id, device);
+  });
+  var no = document.createElement("button");
+  no.type = "button";
+  no.className = "switch-confirm-no";
+  no.title = "Cancel";
+  no.setAttribute("aria-label", "Cancel switch");
+  no.textContent = "\u2717";
+  no.addEventListener("click", function (e) {
+    e.stopPropagation();
+    closeSwitchConfirm();
+  });
+  actions.appendChild(yes);
+  actions.appendChild(no);
+  box.appendChild(msg);
+  box.appendChild(actions);
+  modelSelect.appendChild(box);
+  switchConfirmEl = box;
 }
 
 function sizeModelSelect(list) {
@@ -468,6 +769,46 @@ function numericSpecs() {
   return out;
 }
 
+// Per-device override for a spec, if one applies to the active device.
+function specOverride(spec) {
+  if (
+    spec.overrides
+    && activeDevice
+    && spec.overrides[activeDevice]
+  ) {
+    return spec.overrides[activeDevice];
+  }
+  return null;
+}
+
+// Device-aware (low, high) bounds: an active-device override wins over
+// the base recommended/experimental bounds when present.
+function specBounds(spec, experimental) {
+  var override = specOverride(spec);
+  if (override) {
+    var ob = experimental
+      ? override.experimental
+      : override.recommended;
+    if (ob) {
+      return ob;
+    }
+  }
+  return experimental ? spec.experimental : spec.recommended;
+}
+
+// Device-aware default value for a spec.
+function specDefault(spec) {
+  var override = specOverride(spec);
+  if (
+    override
+    && override.default !== null
+    && override.default !== undefined
+  ) {
+    return override.default;
+  }
+  return spec.default;
+}
+
 function activeLimits() {
   var experimental = toggleExperimental.checked;
   var out = {};
@@ -477,9 +818,7 @@ function activeLimits() {
   var specs = activeModel.param_specs;
   for (var i = 0; i < specs.length; i++) {
     var s = specs[i];
-    var b = experimental
-      ? s.experimental
-      : s.recommended;
+    var b = specBounds(s, experimental);
     if (b) {
       out[s.name] = { min: b[0], max: b[1] };
     }
@@ -579,14 +918,14 @@ function buildParamInput(spec) {
   } else if (spec.type === "bool") {
     input = document.createElement("input");
     input.type = "checkbox";
-    input.checked = Boolean(spec.default);
+    input.checked = Boolean(specDefault(spec));
   } else {
     input = document.createElement("input");
     input.type = "number";
     if (spec.step !== null && spec.step !== undefined) {
       input.step = String(spec.step);
     }
-    input.value = String(spec.default);
+    input.value = String(specDefault(spec));
   }
   input.id = "param-" + spec.name;
   return input;
@@ -839,8 +1178,10 @@ function getParamValues() {
   return out;
 }
 
-function switchModel(id) {
-  if (id === activeModelId) {
+function switchModel(id, device) {
+  // Same model on the same device is a no-op (requestSwitch also
+  // guards this before showing the confirm).
+  if (id === activeModelId && (device || activeDevice) === activeDevice) {
     return;
   }
   suppressReconnect = true;
@@ -856,31 +1197,79 @@ function switchModel(id) {
   loadingOverlay.classList.remove("hidden");
   setModelSelectDisabled(true);
 
+  var options = { method: "POST" };
+  if (device) {
+    options.headers = { "Content-Type": "application/json" };
+    options.body = JSON.stringify({ device: device });
+  }
   fetch(
     "/api/models/" + encodeURIComponent(id) + "/activate",
-    { method: "POST" }
+    options
   )
     .then(function (r) {
       return r.json();
     })
     .then(function (res) {
-      if (res.ok) {
-        location.reload();
+      // Non-blocking activation: poll until the new worker is ready,
+      // then reload so the page picks up the new model/device.
+      if (res && res.ok) {
+        pollSwitch(name);
       } else {
         throw new Error(
-          res.message || "activation failed"
+          (res && res.message) || "activation failed"
         );
       }
     })
-    .catch(function (err) {
-      suppressReconnect = false;
-      setModelSelectDisabled(false);
-      setModelSelectValue(activeModelId);
-      loadingOverlay.classList.add("hidden");
-      statusMessage.textContent =
-        "Model switch failed: " + err.message;
-      statusMessage.style.color = "var(--danger)";
+    .catch(switchFailed);
+}
+
+function pollSwitch(name) {
+  fetch("/api/models/activation")
+    .then(function (r) {
+      return r.json();
+    })
+    .then(function (status) {
+      if (status.state === "ready") {
+        location.reload();
+        return;
+      }
+      if (status.state === "error") {
+        switchFailed(
+          new Error(status.message || "load failed")
+        );
+        return;
+      }
+      if (
+        status.state === "downloading"
+        && status.progress
+        && typeof status.progress.fraction === "number"
+      ) {
+        setLoadingText(
+          "Downloading " + name + " "
+          + Math.round(status.progress.fraction * 100) + "%"
+        );
+      } else {
+        setLoadingText("Loading " + name + "\u2026");
+      }
+      setTimeout(function () {
+        pollSwitch(name);
+      }, 500);
+    })
+    .catch(function () {
+      setTimeout(function () {
+        pollSwitch(name);
+      }, 800);
     });
+}
+
+function switchFailed(err) {
+  suppressReconnect = false;
+  setModelSelectDisabled(false);
+  setModelSelectValue(activeModelId);
+  loadingOverlay.classList.add("hidden");
+  statusMessage.textContent =
+    "Model switch failed: " + err.message;
+  statusMessage.style.color = "var(--danger)";
 }
 
 // ---- WebSocket connection ----
@@ -1198,7 +1587,9 @@ function effectiveColorMode() {
   if (overlayMode === "conf" || overlayMode === "diff") {
     return overlayMode;
   }
-  if (appSettings.commitOrder) {
+  // Commit order is meaningless for autoregressive runs (tokens
+  // resolve strictly left to right), so it never tints them.
+  if (appSettings.commitOrder && !isAutoregressive()) {
     return "commit";
   }
   return "none";
@@ -1381,7 +1772,12 @@ function buildOverlaySelect() {
   var options = [
     { value: "none", label: "None" },
     { value: "conf", label: "Heatmap" },
-    {
+  ];
+  // Diff vs Original needs an edit-and-resume branch, which
+  // autoregressive models do not support, so it is omitted for them
+  // (Heatmap, the natural per-token confidence view, stays).
+  if (!isAutoregressive()) {
+    options.push({
       value: "diff",
       label: "Diff vs Original",
       disabled: !hasDiff,
@@ -1389,8 +1785,8 @@ function buildOverlaySelect() {
         ? undefined
         : "Edit and resume a run (via Edit Frames) to"
           + " compare it against the original.",
-    },
-  ];
+    });
+  }
   overlaySelectMount.innerHTML = "";
   overlaySelect = createCustomSelect(options, overlayMode);
   overlaySelectMount.appendChild(overlaySelect);
@@ -1541,6 +1937,8 @@ function loadSettings() {
       appSettings.diffusionTextMode =
         parsed.diffusionTextMode === "cycle"
           ? "cycle" : "default";
+      // Default on when the key is absent (older saved state).
+      appSettings.gpuTicker = parsed.gpuTicker !== false;
     }
   } catch (_e) {
     // Unavailable or corrupt storage: keep defaults. Note that
@@ -1561,6 +1959,7 @@ function settingsEqual(a, b) {
     && a.commitOrder === b.commitOrder
     && a.diffusionText === b.diffusionText
     && a.diffusionTextMode === b.diffusionTextMode
+    && a.gpuTicker === b.gpuTicker
   );
 }
 
@@ -1571,13 +1970,14 @@ function updateStatusPrefs() {
       "Highlighted Tokens: "
       + (appSettings.highlightTokens ? "On" : "Off");
   }
+  var commitOn = appSettings.commitOrder && !isAutoregressive();
   if (statusCommitText) {
     statusCommitText.textContent =
       "Show Commit Order: "
-      + (appSettings.commitOrder ? "On" : "Off");
+      + (commitOn ? "On" : "Off");
   }
   if (commitLegend) {
-    commitLegend.hidden = !appSettings.commitOrder;
+    commitLegend.hidden = !commitOn;
   }
 }
 
@@ -1588,8 +1988,31 @@ function applySettings() {
   updateHoverHighlight();
   // Toggling the effect starts/stops the Generate idle cycle live.
   updateGenerateIdleEffect();
+  // Restart the collapsed device ticker so the GPU-ticker toggle takes
+  // effect immediately.
+  setModelSelectValue(activeModelId);
   if (scrubberActive) {
     renderFrameWithTokens(currentScrubFrame);
+  }
+}
+
+// Commit Order does not apply to autoregressive models (tokens
+// resolve strictly left to right), so its toggle is disabled and
+// forced Off, and its settings row is dimmed, when one is active.
+function updateCommitSettingAvailability() {
+  var disabled = isAutoregressive();
+  if (disabled) {
+    stagedSettings.commitOrder = false;
+  }
+  if (settingCommitCb) {
+    settingCommitCb.disabled = disabled;
+    settingCommitCb.checked = stagedSettings.commitOrder;
+    var row = settingCommitCb.closest(".settings-row");
+    if (row) {
+      row.classList.toggle(
+        "settings-row-disabled", disabled
+      );
+    }
   }
 }
 
@@ -1598,11 +2021,12 @@ function syncSettingsControls() {
   if (settingHighlightCb) {
     settingHighlightCb.checked = stagedSettings.highlightTokens;
   }
-  if (settingCommitCb) {
-    settingCommitCb.checked = stagedSettings.commitOrder;
-  }
+  updateCommitSettingAvailability();
   if (settingDiffusionCb) {
     settingDiffusionCb.checked = stagedSettings.diffusionText;
+  }
+  if (settingGpuTickerCb) {
+    settingGpuTickerCb.checked = stagedSettings.gpuTicker;
   }
   if (selectDiffusionMode) {
     selectDiffusionMode.value = stagedSettings.diffusionTextMode;
@@ -3282,15 +3706,21 @@ if (modelSelect && modelSelectList) {
     toggleModelList();
   });
   modelSelectList.addEventListener("click", function (e) {
+    // Per-model device buttons handle their own clicks
+    // (stopPropagation); a click on the row name targets the
+    // model's default device. Both route through the confirm.
     var opt = e.target.closest(".model-select-option");
     if (!opt) {
       return;
     }
     var id = opt.getAttribute("data-id");
-    closeModelList();
-    if (id && id !== activeModelId) {
-      switchModel(id);
+    // The loaded model is inert here: re-selecting it is redundant, and
+    // any device change goes through its (still enabled) other-device
+    // button, so a name-area click on the active row does nothing.
+    if (!id || id === activeModelId) {
+      return;
     }
+    requestSwitch(id, defaultDeviceFor(models[id]));
   });
   modelSelect.addEventListener("keydown", function (e) {
     if (e.key === "Enter" || e.key === " ") {
@@ -3303,6 +3733,7 @@ if (modelSelect && modelSelectList) {
   document.addEventListener("click", function (e) {
     if (!modelSelect.contains(e.target)) {
       closeModelList();
+      closeSwitchConfirm();
     }
   });
 }
@@ -3432,6 +3863,13 @@ if (settingDiffusionCb) {
   });
 }
 
+if (settingGpuTickerCb) {
+  settingGpuTickerCb.addEventListener("change", function () {
+    stagedSettings.gpuTicker = settingGpuTickerCb.checked;
+    updateSettingsButtons();
+  });
+}
+
 if (diffusionModeMount) {
   selectDiffusionMode = createCustomSelect(
     [
@@ -3459,6 +3897,7 @@ if (btnSettingsSave) {
     appSettings.commitOrder = stagedSettings.commitOrder;
     appSettings.diffusionText = stagedSettings.diffusionText;
     appSettings.diffusionTextMode = stagedSettings.diffusionTextMode;
+    appSettings.gpuTicker = stagedSettings.gpuTicker;
     saveSettings();
     applySettings();
     // Disable + blur the button so it visibly de-presses.
@@ -3481,6 +3920,7 @@ if (btnSettingsReset) {
     stagedSettings.diffusionText = DEFAULT_SETTINGS.diffusionText;
     stagedSettings.diffusionTextMode =
       DEFAULT_SETTINGS.diffusionTextMode;
+    stagedSettings.gpuTicker = DEFAULT_SETTINGS.gpuTicker;
     syncSettingsControls();
     updateSettingsButtons();
     setSettingsStatus("", false);
@@ -3716,6 +4156,7 @@ linkSettings.addEventListener(
     stagedSettings.commitOrder = appSettings.commitOrder;
     stagedSettings.diffusionText = appSettings.diffusionText;
     stagedSettings.diffusionTextMode = appSettings.diffusionTextMode;
+    stagedSettings.gpuTicker = appSettings.gpuTicker;
     syncSettingsControls();
     updateSettingsButtons();
     setSettingsStatus("", false);
@@ -3936,6 +4377,8 @@ function boot() {
         || (list[0] && list[0].id);
       activeModel =
         models[activeModelId] || list[0] || null;
+      activeDevice = info.active_device || null;
+      gpuPresent = !!info.gpu_name;
       renderModelSelector(list, activeModelId);
       if (activeModel) {
         buildParamPanel(activeModel);

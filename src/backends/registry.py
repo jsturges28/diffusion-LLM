@@ -13,6 +13,7 @@ from typing import Dict
 from src.backends.protocol import (
     ModelCapabilities,
     ModelInfo,
+    ParamOverride,
     ParamSpec,
     ParamType,
 )
@@ -113,7 +114,7 @@ LLADA = ModelInfo(
 
 DGEMMA = ModelInfo(
     id="diffusiongemma",
-    display_name="DiffusionGemma-26B-A4B (NF4)",
+    display_name="DiffusionGemma-26B-A4B",
     description=(
         "Block-autoregressive text diffusion"
         " (encoder-decoder MoE), 4-bit NF4 experts."
@@ -202,7 +203,90 @@ DGEMMA = ModelInfo(
 )
 
 
+SMOLLM3 = ModelInfo(
+    id="smollm3",
+    display_name="SmolLM3-3B",
+    description=(
+        "Autoregressive transformer (left-to-right)."
+        " Decoder-only, streamed token-by-token with"
+        " per-token sampling confidence. Runs on GPU or CPU."
+    ),
+    # 3.08B params in bf16 (~6 GiB weights) plus KV cache/activations.
+    # Only consulted for the GPU pre-flight; a CPU activation skips it.
+    min_vram_gib=8.0,
+    worker_module="src.backends.smollm3_worker",
+    venv_python=".venv-ar/bin/python",
+    checkpoint="HuggingFaceTB/SmolLM3-3B",
+    capabilities=ModelCapabilities(
+        model_type="autoregressive",
+        supports_resume=False,
+        supports_cfg=False,
+    ),
+    param_specs=[
+        ParamSpec(
+            name="max_new_tokens",
+            label="Max Tokens",
+            type=ParamType.INT,
+            default=256,
+            step=1,
+            # Full-snapshot frames make the stream payload grow with
+            # the token count, so the recommended ceiling stays modest.
+            recommended=(16, 256),
+            experimental=(1, 2048),
+            # CPU decoding is slow, so the default budget is lower and
+            # the recommended cap is 128 on CPU (transparent in the UI,
+            # instead of a hidden clamp). Experimental still lifts it.
+            overrides={
+                "cpu": ParamOverride(
+                    default=128, recommended=(16, 128)
+                )
+            },
+            help="Number of tokens to generate.",
+        ),
+        ParamSpec(
+            name="temperature",
+            label="Temperature",
+            type=ParamType.FLOAT,
+            default=0.6,
+            step=0.05,
+            recommended=(0.0, 1.5),
+            experimental=(0.0, 10.0),
+            help="Sampling temperature; 0 is greedy (argmax).",
+        ),
+        ParamSpec(
+            name="top_p",
+            label="Top-p",
+            type=ParamType.FLOAT,
+            default=0.95,
+            step=0.05,
+            recommended=(0.0, 1.0),
+            experimental=(0.0, 1.0),
+            help="Nucleus sampling probability mass.",
+        ),
+        ParamSpec(
+            name="seed",
+            label="Seed",
+            type=ParamType.INT,
+            default=-1,
+            step=1,
+            recommended=(-1, _SEED_MAX),
+            experimental=(-1, _SEED_MAX),
+            help="Random seed; -1 = nondeterministic.",
+        ),
+        ParamSpec(
+            name="thinking",
+            label="Thinking",
+            type=ParamType.BOOL,
+            default=False,
+            help="Enable the extended reasoning channel"
+            " (shown in a separate panel).",
+        ),
+    ],
+)
+
+
 REGISTRY: Dict[str, ModelInfo] = {
     LLADA.id: LLADA,
     DGEMMA.id: DGEMMA,
+    SMOLLM3.id: SMOLLM3,
 }

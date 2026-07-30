@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport"
     content="width=device-width, initial-scale=1.0" />
-  <title>Analytics - Diffusion LLM Visualizer</title>
+  <title>Analytics - LLM Visualizer</title>
   <link rel="preconnect"
     href="https://fonts.googleapis.com" />
   <link rel="preconnect"
@@ -36,8 +36,8 @@
     <!-- Header -->
     <header id="header">
       <h1>
-        <span class="title-accent">Diffusion</span>
-        LLM Analytics
+        <span class="title-accent">LLM</span>
+        Analytics
       </h1>
       <nav id="header-nav">
         <a href="/" class="header-link">Menu</a>
@@ -79,6 +79,9 @@
                   data-key="created_at">Date</th>
                 <th class="sortable"
                   data-key="model">Model</th>
+                <th class="sortable"
+                  data-key="processor"
+                  title="Device the run executed on">Processor</th>
                 <th class="col-prompt sortable"
                   data-key="prompt">Prompt</th>
                 <th class="sortable"
@@ -182,7 +185,7 @@
             <div class="detail-side">
               <div id="detail-meta"></div>
 
-              <div class="chart-section">
+              <div class="chart-section" id="convergence-section">
                 <div class="chart-header-row">
                   <h3>Convergence</h3>
                   <div class="zoom-controls">

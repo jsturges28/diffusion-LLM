@@ -13,13 +13,17 @@ The supervisor itself never imports torch or transformers.
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import json
 import logging
 import os
+import platform
 import re
 import shutil
+import signal
 import socket
 import subprocess
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -53,6 +57,15 @@ from src.backends.protocol import ModelInfo
 from src.backends.registry import DEFAULT_MODEL, REGISTRY
 from src.inference.render_gif import history_to_gif
 from src.web.ui_state import load_ui_state, set_ui_state_key
+
+# Disable the Xet download client before the first huggingface_hub
+# import. Here huggingface_hub is imported lazily (in _is_downloaded /
+# the download task), so setting the flag now, at module load, still
+# precedes it. The flag is cached in hf constants at import time, so
+# setting it any later is a no-op; Xet bypasses our tqdm progress hook,
+# whereas the classic downloader routes through it, so the menu's
+# download bar fills smoothly.
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
 logger = logging.getLogger("diffusion_supervisor")
 
@@ -187,6 +200,127 @@ def _gpu_status() -> str:
     return "error"
 
 
+def _cpu_name() -> Optional[str]:
+    """Best-effort CPU model name (Linux /proc/cpuinfo, then platform).
+
+    Returned to the Main Menu so a GPU-less user can see what will run
+    the CPU-capable models. Optional, mirroring the GPU probes.
+    """
+    try:
+        text = Path("/proc/cpuinfo").read_text(encoding="utf-8")
+    except OSError:
+        text = ""
+    for line in text.splitlines():
+        if line.lower().startswith("model name"):
+            _, _, value = line.partition(":")
+            name = value.strip()
+            if name:
+                return name
+    fallback = platform.processor() or platform.machine()
+    return fallback or None
+
+
+def _free_ram_gib() -> Optional[float]:
+    """Available system RAM in GiB (Linux /proc/meminfo), or None."""
+    try:
+        text = Path("/proc/meminfo").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        if not line.startswith("MemAvailable:"):
+            continue
+        parts = line.split()
+        # Format: "MemAvailable:   12345678 kB".
+        if len(parts) < 2:
+            return None
+        try:
+            kib = float(parts[1])
+        except ValueError:
+            return None
+        return kib / (1024.0 * 1024.0)
+    return None
+
+
+_WORKER_CMD_MARKER = "src.backends.run_worker"
+
+
+def _proc_ppid(pid_dir: Path) -> Optional[int]:
+    """Parent PID for a /proc entry, or None if unreadable."""
+    try:
+        status = (pid_dir / "status").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in status.splitlines():
+        if line.startswith("PPid:"):
+            try:
+                return int(line.split()[1])
+            except (IndexError, ValueError):
+                return None
+    return None
+
+
+def _sweep_orphan_workers() -> None:
+    """Terminate leftover worker processes orphaned by a prior crash.
+
+    A worker whose supervisor died is reparented to init (ppid 1) yet
+    may still hold VRAM (the PDEATHSIG guard covers most cases, but not
+    e.g. a supervisor that predates it). We match our worker command
+    line and terminate only orphans (ppid == 1), never a worker still
+    owned by a live supervisor, so a browser and desktop instance can
+    coexist. Best-effort and Linux-only (/proc); a no-op elsewhere.
+    """
+    proc_root = Path("/proc")
+    if not proc_root.is_dir():
+        return
+    for entry in proc_root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            raw = (entry / "cmdline").read_bytes()
+        except OSError:
+            continue
+        cmdline = raw.replace(b"\x00", b" ").decode(
+            "utf-8", "replace"
+        )
+        if _WORKER_CMD_MARKER not in cmdline:
+            continue
+        if _proc_ppid(entry) != 1:
+            continue  # still owned by a live supervisor
+        try:
+            os.kill(int(entry.name), signal.SIGTERM)
+            logger.warning(
+                "swept orphaned worker pid %s", entry.name
+            )
+        except OSError:  # noqa: PERF203 - best-effort
+            pass
+
+
+def _is_repo_checkpoint(checkpoint: str) -> bool:
+    """True when the checkpoint is an HF repo id, not a local path.
+
+    Repo-id checkpoints (e.g. ``org/name``) download from the Hub;
+    local paths (``~/models/...``) are produced offline (e.g. the
+    DiffusionGemma quantize script) and are not UI-downloadable.
+    """
+    value = checkpoint.strip()
+    if not value or value.startswith(("~", "/", ".")):
+        return False
+    return value.count("/") == 1
+
+
+def _is_downloaded(checkpoint: str) -> bool:
+    """Whether the checkpoint's files are present locally."""
+    if _is_repo_checkpoint(checkpoint):
+        try:
+            from huggingface_hub import snapshot_download
+
+            snapshot_download(checkpoint, local_files_only=True)
+            return True
+        except Exception:  # noqa: BLE001 - not (fully) cached
+            return False
+    return Path(checkpoint).expanduser().is_dir()
+
+
 def _git_commit() -> Optional[str]:
     try:
         out = subprocess.run(
@@ -222,6 +356,38 @@ def _venv_cuda_lib_dirs(python_path: Path) -> List[str]:
     return dirs
 
 
+def _set_pdeathsig() -> None:
+    """Child-side: ask the kernel to SIGTERM this worker if the
+    supervisor dies (Linux ``PR_SET_PDEATHSIG``).
+
+    Belt-and-suspenders against orphaned workers holding VRAM: even if
+    the supervisor is hard-killed (e.g. the desktop window closes mid
+    load before the graceful stop can run), the worker is signalled.
+    Best-effort and Linux-only; a failure here must not block spawn.
+    """
+    try:
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        pr_set_pdeathsig = 1
+        libc.prctl(pr_set_pdeathsig, signal.SIGTERM)
+    except Exception:  # noqa: BLE001 - best-effort orphan guard
+        pass
+
+
+def _worker_popen_kwargs() -> Dict[str, Any]:
+    """Extra ``Popen`` kwargs to keep workers from being orphaned.
+
+    On Linux, put the worker in its own session and arm PDEATHSIG.
+    Elsewhere, return nothing (``preexec_fn`` is POSIX-only and the
+    app targets Linux).
+    """
+    if sys.platform.startswith("linux"):
+        return {
+            "start_new_session": True,
+            "preexec_fn": _set_pdeathsig,
+        }
+    return {}
+
+
 class ModelManager:
     """Spawns/stops one model worker subprocess at a time.
 
@@ -231,10 +397,28 @@ class ModelManager:
 
     def __init__(self) -> None:
         self.active_id: Optional[str] = None
+        self.active_device: Optional[str] = None
         self.active_versions: Dict[str, str] = {}
+        # Activation is non-blocking: activate() spawns the worker and
+        # returns; a background monitor task tracks these until ready,
+        # and the client polls them. States: idle | starting |
+        # downloading | loading | ready | error.
+        self.load_state: str = "idle"
+        self.load_progress: Optional[Dict[str, Any]] = None
+        self.load_error: Optional[str] = None
         self._proc: Optional[subprocess.Popen] = None
         self._port: Optional[int] = None
+        self._monitor_task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
+        # Download-only state (pre-fetch weights without loading into
+        # VRAM). Independent of the worker, so it can run alongside a
+        # resident model. States: idle | downloading | done | error.
+        self.download_state: str = "idle"
+        self.download_target: Optional[str] = None
+        self.download_progress: Optional[Dict[str, Any]] = None
+        self.download_error: Optional[str] = None
+        self._download_task: Optional[asyncio.Task] = None
+        self._download_cancelled = False
 
     @staticmethod
     def _free_port() -> int:
@@ -244,6 +428,23 @@ class ModelManager:
             return int(sock.getsockname()[1])
         finally:
             sock.close()
+
+    @staticmethod
+    def _resolve_device(device: Optional[str]) -> str:
+        """Normalize the requested device to "cuda" or "cpu".
+
+        A None request (body-less activate, e.g. the generator's
+        in-header model switch) auto-selects the GPU when one is
+        detected and CPU otherwise, so a GPU-less host still works.
+        """
+        if device is None:
+            return "cuda" if _gpu_name() is not None else "cpu"
+        if device not in ("cuda", "cpu"):
+            raise ValueError(
+                f"invalid device: {device!r}"
+                " (expected 'cuda' or 'cpu')"
+            )
+        return device
 
     def _alive(self) -> bool:
         return (
@@ -260,11 +461,26 @@ class ModelManager:
         assert self._port is not None
         return f"ws://127.0.0.1:{self._port}/ws"
 
-    async def activate(self, model_id: str) -> None:
+    async def activate(
+        self, model_id: str, *, device: Optional[str] = None
+    ) -> None:
+        """Spawn the worker and return immediately (non-blocking).
+
+        A background monitor task then tracks startup (download /
+        load / ready / error), which the client polls via
+        ``/api/models/activation``. Keeping the load off the lock lets
+        ``stop`` / ``cancel_activation`` terminate a still-loading
+        worker instead of deadlocking behind a held lock.
+        """
         if model_id not in REGISTRY:
             raise KeyError(model_id)
+        device = self._resolve_device(device)
         async with self._lock:
-            if self.active_id == model_id and self._alive():
+            if (
+                self.active_id == model_id
+                and self.active_device == device
+                and self._alive()
+            ):
                 return
             await self._stop_locked()
             info = REGISTRY[model_id]
@@ -273,7 +489,10 @@ class ModelManager:
                 raise RuntimeError(
                     f"venv python not found: {python}"
                 )
-            await self._preflight_vram(info)
+            # CPU placement has no VRAM cost, so skip the GPU
+            # pre-flight (which would otherwise block on nvidia-smi).
+            if device != "cpu":
+                await self._preflight_vram(info)
             port = self._free_port()
             env = dict(os.environ)
             env["PYTHONPATH"] = str(REPO_ROOT)
@@ -285,9 +504,10 @@ class ModelManager:
                 )
                 env["LD_LIBRARY_PATH"] = ":".join(parts)
             logger.info(
-                "spawning worker %s on port %d",
+                "spawning worker %s on port %d (device=%s)",
                 model_id,
                 port,
+                device,
             )
             proc = subprocess.Popen(
                 [
@@ -300,18 +520,175 @@ class ModelManager:
                     "127.0.0.1",
                     "--port",
                     str(port),
+                    "--device",
+                    device,
                 ],
                 cwd=str(REPO_ROOT),
                 env=env,
+                **_worker_popen_kwargs(),
             )
             self._proc = proc
             self._port = port
             self.active_id = model_id
+            self.active_device = device
+            self.active_versions = {}
+            self.load_state = "starting"
+            self.load_progress = None
+            self.load_error = None
+            self._monitor_task = asyncio.create_task(
+                self._monitor_startup(proc, port)
+            )
+
+    async def _monitor_startup(
+        self, proc: subprocess.Popen, port: int
+    ) -> None:
+        """Poll the worker's /health until ready/error/exit.
+
+        Updates ``load_state`` / ``load_progress`` so the client poll
+        reflects downloading vs loading, and caches versions on ready.
+        The startup deadline only guards reaching the first response;
+        once the worker is answering (loading/downloading), there is no
+        wall-clock cap so long first-time downloads are not cut off
+        (the user can cancel instead).
+        """
+        url = f"http://127.0.0.1:{port}/health"
+        startup_deadline = (
+            time.monotonic() + WORKER_START_TIMEOUT_S
+        )
+        responded = False
+        async with httpx.AsyncClient() as client:
+            while True:
+                if proc.poll() is not None:
+                    self.load_state = "error"
+                    self.load_error = (
+                        "worker exited during startup"
+                        f" (code {proc.returncode})"
+                    )
+                    return
+                if (
+                    not responded
+                    and time.monotonic() > startup_deadline
+                ):
+                    self.load_state = "error"
+                    self.load_error = (
+                        "worker did not start in time"
+                    )
+                    return
+                try:
+                    resp = await client.get(url, timeout=2.0)
+                    if resp.status_code == 200:
+                        responded = True
+                        if self._apply_health(resp.json()):
+                            return
+                except Exception:  # noqa: BLE001 - worker still coming up
+                    pass
+                await asyncio.sleep(0.5)
+
+    def _apply_health(self, body: Dict[str, Any]) -> bool:
+        """Fold one /health body into load state. True when terminal."""
+        status = body.get("status")
+        if status == "error":
+            self.load_state = "error"
+            self.load_error = body.get(
+                "message", "model failed to load"
+            )
+            return True
+        if status == "ready":
+            self.active_versions = body.get("versions", {})
+            self.load_progress = None
+            self.load_state = "ready"
+            return True
+        if status == "downloading":
+            self.load_state = "downloading"
+            self.load_progress = body.get("progress")
+        else:
+            self.load_state = "loading"
+            self.load_progress = None
+        return False
+
+    async def cancel_activation(self) -> None:
+        """Cancel an in-flight activation and free the worker/VRAM.
+
+        Safe to call anytime: it stops the current worker (and its
+        monitor). The lock is free during load, so this never
+        deadlocks against ``activate``.
+        """
+        async with self._lock:
+            await self._stop_locked()
+
+    # -- download-only (pre-fetch weights, no VRAM) --
+
+    def start_download(self, model_id: str) -> None:
+        """Begin downloading a model's weights without loading them.
+
+        Runs in a background task so a resident model keeps serving.
+        Raises for an unknown / non-downloadable model, or if a
+        download is already running.
+        """
+        if model_id not in REGISTRY:
+            raise KeyError(model_id)
+        checkpoint = REGISTRY[model_id].checkpoint
+        if not _is_repo_checkpoint(checkpoint):
+            raise ValueError(
+                f"{model_id} is not downloadable from the Hub"
+            )
+        if self.download_state == "downloading":
+            raise RuntimeError("a download is already running")
+        self._download_cancelled = False
+        self.download_target = model_id
+        self.download_state = "downloading"
+        self.download_progress = None
+        self.download_error = None
+        self._download_task = asyncio.create_task(
+            self._run_download(model_id, checkpoint)
+        )
+
+    async def _run_download(
+        self, model_id: str, checkpoint: str
+    ) -> None:
+        from src.inference.hf_download import (
+            download_with_progress,
+        )
+
+        def _sink(progress: Dict[str, Any]) -> None:
+            if not self._download_cancelled:
+                self.download_progress = progress
+
+        try:
+            await asyncio.to_thread(
+                download_with_progress,
+                checkpoint,
+                sink=_sink,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            self.download_state = "error"
+            self.download_error = str(exc)
+            logger.exception("download failed for %s", model_id)
+            return
+        if not self._download_cancelled:
+            self.download_progress = None
+            self.download_state = "done"
+
+    async def cancel_download(self) -> None:
+        """Best-effort cancel of the pre-fetch (UI stops tracking).
+
+        The underlying HF download thread may run to completion, but
+        the UI state resets so the row is usable again.
+        """
+        self._download_cancelled = True
+        if self._download_task is not None:
+            self._download_task.cancel()
             try:
-                await self._await_health(port, proc)
-            except Exception:
-                await self._stop_locked()
-                raise
+                await self._download_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._download_task = None
+        self.download_state = "idle"
+        self.download_target = None
+        self.download_progress = None
+        self.download_error = None
 
     async def _preflight_vram(self, info: ModelInfo) -> None:
         """Refuse activation if the model cannot fit in VRAM.
@@ -347,47 +724,18 @@ class ModelManager:
                 f" try again."
             )
 
-    async def _await_health(
-        self, port: int, proc: subprocess.Popen
-    ) -> None:
-        url = f"http://127.0.0.1:{port}/health"
-        deadline = time.monotonic() + WORKER_START_TIMEOUT_S
-        async with httpx.AsyncClient() as client:
-            while time.monotonic() < deadline:
-                if proc.poll() is not None:
-                    raise RuntimeError(
-                        "worker exited during startup"
-                        f" (code {proc.returncode})"
-                    )
-                try:
-                    resp = await client.get(url, timeout=2.0)
-                    if resp.status_code == 200:
-                        body = resp.json()
-                        status = body.get("status")
-                        if status == "error":
-                            raise RuntimeError(
-                                body.get(
-                                    "message",
-                                    "model failed to load",
-                                )
-                            )
-                        if status == "ready":
-                            self.active_versions = body.get(
-                                "versions", {}
-                            )
-                            return
-                except RuntimeError:
-                    raise
-                except Exception:
-                    pass
-                await asyncio.sleep(0.5)
-        raise RuntimeError("worker health check timed out")
-
     async def stop(self) -> None:
         async with self._lock:
             await self._stop_locked()
 
     async def _stop_locked(self) -> None:
+        if self._monitor_task is not None:
+            self._monitor_task.cancel()
+            try:
+                await self._monitor_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._monitor_task = None
         if self._proc is not None and self._alive():
             logger.info("stopping worker %s", self.active_id)
             self._proc.terminate()
@@ -400,11 +748,22 @@ class ModelManager:
         self._proc = None
         self._port = None
         self.active_id = None
+        self.active_device = None
         self.active_versions = {}
+        self.load_state = "idle"
+        self.load_progress = None
+        self.load_error = None
 
 
 manager = ModelManager()
 app = FastAPI(title="Diffusion LLM Visualizer")
+
+
+@app.on_event("startup")
+async def _startup() -> None:
+    # Reap any worker orphaned by a prior crashed supervisor before we
+    # start serving, so stale workers cannot keep holding VRAM.
+    await asyncio.to_thread(_sweep_orphan_workers)
 
 
 @app.on_event("shutdown")
@@ -415,29 +774,47 @@ async def _shutdown() -> None:
 # -- Model API --
 
 
+def _model_headroom_gib(
+    info: ModelInfo,
+    *,
+    free_vram_gib: Optional[float],
+    resident_reclaimable_gib: float,
+) -> Optional[float]:
+    """Signed VRAM headroom in GiB: (free + reclaimable) - required.
+
+    A resident GPU model's VRAM counts as reclaimable, since the
+    supervisor stops the current worker before spawning the next
+    (see ``_preflight_vram``). Positive means it fits with that much
+    to spare; negative means it is short by that much. None when the
+    model needs no VRAM or free VRAM is unreadable.
+    """
+    if info.min_vram_gib <= 0:
+        return None
+    if free_vram_gib is None:
+        return None
+    return round(
+        (free_vram_gib + resident_reclaimable_gib)
+        - info.min_vram_gib,
+        1,
+    )
+
+
 def _model_fits(
     info: ModelInfo,
     *,
     status: str,
-    free_vram_gib: Optional[float],
-    resident_reclaimable_gib: float,
+    headroom_gib: Optional[float],
 ) -> bool:
-    """Whether ``info`` can be activated given current VRAM.
+    """Whether ``info`` can be activated, derived from headroom.
 
-    A resident model's VRAM is counted as reclaimable, since the
-    supervisor stops the current worker before spawning the next
-    (see ``_preflight_vram``). Unreadable free VRAM is treated as
-    "fits" to mirror the pre-flight's skip-on-unreadable behavior.
+    Unreadable free VRAM / no requirement (headroom None) is treated
+    as "fits", mirroring the pre-flight's skip-on-unreadable behavior.
     """
     if status == "active":
         return True
-    if info.min_vram_gib <= 0:
+    if headroom_gib is None:
         return True
-    if free_vram_gib is None:
-        return True
-    return (
-        free_vram_gib + resident_reclaimable_gib
-    ) >= info.min_vram_gib
+    return headroom_gib >= 0
 
 
 def _models_snapshot() -> Dict[str, Any]:
@@ -448,11 +825,15 @@ def _models_snapshot() -> Dict[str, Any]:
     """
     free_vram_gib = _free_vram_gib()
     active_id = manager.active_id
+    # Only a resident GPU worker reclaims VRAM when stopped; a
+    # CPU-resident model frees no VRAM, so it must not inflate the
+    # free pool (which previously made GPU models look "Available").
     resident_reclaimable_gib = 0.0
     if (
         active_id is not None
         and manager.status(active_id) == "active"
         and active_id in REGISTRY
+        and manager.active_device == "cuda"
     ):
         resident_reclaimable_gib = REGISTRY[
             active_id
@@ -464,13 +845,20 @@ def _models_snapshot() -> Dict[str, Any]:
         data.pop("worker_module", None)
         data.pop("venv_python", None)
         status = manager.status(model_id)
-        data["status"] = status
-        data["fits"] = _model_fits(
+        headroom = _model_headroom_gib(
             info,
-            status=status,
             free_vram_gib=free_vram_gib,
             resident_reclaimable_gib=resident_reclaimable_gib,
         )
+        data["status"] = status
+        data["vram_headroom_gib"] = headroom
+        data["fits"] = _model_fits(
+            info, status=status, headroom_gib=headroom
+        )
+        data["downloadable"] = _is_repo_checkpoint(
+            info.checkpoint
+        )
+        data["downloaded"] = _is_downloaded(info.checkpoint)
         models.append(data)
     gpu = _gpu_name()
     # Only classify the failure reason when the name is unreadable, so a
@@ -479,10 +867,13 @@ def _models_snapshot() -> Dict[str, Any]:
     return {
         "models": models,
         "active": active_id,
+        "active_device": manager.active_device,
         "default": DEFAULT_MODEL,
         "gpu_name": gpu,
         "free_vram_gib": free_vram_gib,
         "gpu_status": gpu_status,
+        "cpu_name": _cpu_name(),
+        "free_ram_gib": _free_ram_gib(),
     }
 
 
@@ -492,10 +883,23 @@ async def list_models() -> JSONResponse:
     return JSONResponse(snapshot)
 
 
+class ActivateRequest(BaseModel):
+    """Optional activation body: pick CPU/GPU placement.
+
+    Body-less activation (the generator's model switch) leaves
+    ``device`` None, letting the manager auto-select.
+    """
+
+    device: Optional[str] = None
+
+
 @app.post("/api/models/{model_id}/activate")
-async def activate_model(model_id: str) -> JSONResponse:
+async def activate_model(
+    model_id: str, body: Optional[ActivateRequest] = None
+) -> JSONResponse:
+    device = body.device if body is not None else None
     try:
-        await manager.activate(model_id)
+        await manager.activate(model_id, device=device)
     except KeyError:
         return JSONResponse(
             status_code=404,
@@ -504,15 +908,90 @@ async def activate_model(model_id: str) -> JSONResponse:
                 "message": f"unknown model: {model_id}",
             },
         )
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "message": str(exc)},
+        )
     except Exception as exc:  # noqa: BLE001
         logger.exception("activation failed")
         return JSONResponse(
             status_code=500,
             content={"ok": False, "message": str(exc)},
         )
+    # Non-blocking: the worker is spawned and loading in the
+    # background. The client polls /api/models/activation for progress.
     return JSONResponse(
-        {"ok": True, "active": manager.active_id}
+        {
+            "ok": True,
+            "active": manager.active_id,
+            "state": manager.load_state,
+        }
     )
+
+
+@app.get("/api/models/activation")
+async def activation_status() -> JSONResponse:
+    """Current activation progress for the client's loading poll."""
+    return JSONResponse(
+        {
+            "active": manager.active_id,
+            "device": manager.active_device,
+            "state": manager.load_state,
+            "progress": manager.load_progress,
+            "message": manager.load_error,
+        }
+    )
+
+
+@app.post("/api/models/activate/cancel")
+async def cancel_activation() -> JSONResponse:
+    """Cancel an in-flight load, stopping the worker and freeing VRAM."""
+    await manager.cancel_activation()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/models/{model_id}/download")
+async def download_model(model_id: str) -> JSONResponse:
+    """Pre-fetch a model's weights (no VRAM). Client polls status."""
+    try:
+        manager.start_download(model_id)
+    except KeyError:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "ok": False,
+                "message": f"unknown model: {model_id}",
+            },
+        )
+    except (ValueError, RuntimeError) as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "message": str(exc)},
+        )
+    return JSONResponse(
+        {"ok": True, "state": manager.download_state}
+    )
+
+
+@app.get("/api/models/download-status")
+async def download_status() -> JSONResponse:
+    """Current pre-fetch progress for the download veneer's poll."""
+    return JSONResponse(
+        {
+            "target": manager.download_target,
+            "state": manager.download_state,
+            "progress": manager.download_progress,
+            "message": manager.download_error,
+        }
+    )
+
+
+@app.post("/api/models/download/cancel")
+async def cancel_download() -> JSONResponse:
+    """Best-effort cancel of an in-flight pre-fetch."""
+    await manager.cancel_download()
+    return JSONResponse({"ok": True})
 
 
 # -- WebSocket proxy to the active worker --
@@ -696,9 +1175,32 @@ def _save_run_blocking(body: SaveRunRequest) -> str:
     if run_dir is None:
         run_dir = _make_run_dir(RESULTS_DIR, model_id)
 
+    model_type = "diffusion"
+    if model_id in REGISTRY:
+        model_type = REGISTRY[model_id].capabilities.model_type
+    # Which device the resident worker ran on, for the analytics
+    # Processor column and per-run timing header. "Unknown" only when
+    # no device is recorded (older runs / an unexpected save path).
+    device = manager.active_device
+    if device == "cuda":
+        processor = "GPU"
+        processor_name = _gpu_name()
+    elif device == "cpu":
+        processor = "CPU"
+        processor_name = _cpu_name()
+    else:
+        processor = "Unknown"
+        processor_name = None
     metadata: Dict[str, Any] = {
         "backend": model_id,
         "model": checkpoint or model_id,
+        # Lets the analytics suite gate diffusion-only charts (e.g.
+        # convergence) off for autoregressive runs. Absent on runs
+        # saved before this field existed (all of which are diffusion).
+        "model_type": model_type,
+        # GPU / CPU / Unknown, plus the device name for the timing header.
+        "processor": processor,
+        "processor_name": processor_name,
         "created_at": datetime.now().isoformat(
             timespec="seconds"
         ),

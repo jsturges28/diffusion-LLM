@@ -42,7 +42,7 @@ import webview  # noqa: E402
 
 from src.web.server import app  # noqa: E402
 
-WINDOW_TITLE = "LLM XAI Visualizer"
+WINDOW_TITLE = "LLM Visualizer"
 APP_ID = "llm-xai-visualizer"
 HOST = "127.0.0.1"
 WINDOW_WIDTH = 1280

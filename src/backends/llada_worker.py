@@ -25,6 +25,7 @@ from src.backends.worker_base import (
     Backend,
     FrameStreamer,
 )
+from src.inference.hf_download import download_with_progress
 from src.inference.streaming_sampler import (
     streaming_generate,
     streaming_resume,
@@ -63,14 +64,27 @@ class LladaBackend(Backend):
         self.model: Any = None
         self.tokenizer: Any = None
         self.last_run_state: Optional[Dict[str, Any]] = None
+        self.load_progress: Optional[Dict[str, Any]] = None
 
     # -- loading --
 
-    def load(self) -> None:
-        device = torch.device(
-            "cuda" if torch.cuda.is_available() else "cpu"
+    def load(self, *, device: str = "cuda") -> None:
+        # Fall back to CPU when CUDA was requested but is unavailable,
+        # so a GPU-less host degrades instead of erroring on load.
+        resolved = (
+            "cuda"
+            if device == "cuda" and torch.cuda.is_available()
+            else "cpu"
         )
+        device = torch.device(resolved)
         name = self.model_info.checkpoint
+        # Fetch weights first (progress via /health) so the first
+        # activation shows a download bar; a cache hit is a no-op.
+        logger.info("ensuring weights for %s", name)
+        download_with_progress(
+            name, sink=lambda p: setattr(self, "load_progress", p)
+        )
+        self.load_progress = None
         logger.info("loading tokenizer %s", name)
         tok = AutoTokenizer.from_pretrained(
             name, trust_remote_code=True

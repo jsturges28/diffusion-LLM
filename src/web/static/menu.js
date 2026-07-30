@@ -17,12 +17,29 @@
   var systemText = document.getElementById("menu-system-text");
   var modelList = document.getElementById("menu-model-list");
   var errorBox = document.getElementById("menu-error");
+  var activationBox =
+    document.getElementById("menu-activation");
+  var activationProgress =
+    document.getElementById("menu-activation-progress");
+  var activationFill =
+    document.getElementById("menu-activation-fill");
+  var activationPct =
+    document.getElementById("menu-activation-pct");
+  var activationCancel =
+    document.getElementById("menu-activation-cancel");
 
   console.assert(!!modelList, "menu: model list mount missing");
   console.assert(!!systemText, "menu: system text mount missing");
 
   // Guards a second activation while one is already in flight.
   var selecting = false;
+  // True while the select -> confirm prompt is showing (pre-activation).
+  var confirming = false;
+  // The in-flight selection ({ model, li }) and its status poll timer.
+  var activeSelection = null;
+  var pollTimer = null;
+  // The row element whose weights are currently pre-downloading.
+  var downloadRow = null;
 
   // ---- Background fallback (grid is CSS-only; add floaters too) ----
 
@@ -73,31 +90,51 @@
 
   // ---- System (GPU / VRAM) readout ----
 
-  function formatFreeVram(gib) {
+  function formatFree(gib, unknownLabel) {
     if (typeof gib !== "number") {
-      return "free VRAM unknown";
+      return unknownLabel;
     }
     return gib.toFixed(1) + " GiB free";
   }
 
-  function renderSystem(info) {
-    systemBox.classList.remove("menu-system-checking");
+  // One labeled readout line: an accent-green tag (GPU / CPU) styled
+  // like the analytics chart headers, then the device detail.
+  function makeSystemLine(tag, detail) {
+    var line = document.createElement("span");
+    line.className = "menu-system-line";
+    var tagEl = document.createElement("span");
+    tagEl.className = "menu-system-tag";
+    tagEl.textContent = tag;
+    var detailEl = document.createElement("span");
+    detailEl.className = "menu-system-detail";
+    detailEl.textContent = detail;
+    line.appendChild(tagEl);
+    line.appendChild(detailEl);
+    return line;
+  }
+
+  function gpuDetail(info) {
     if (info.gpu_name) {
-      systemText.textContent =
-        info.gpu_name + "  \u00B7  "
-        + formatFreeVram(info.free_vram_gib);
-      return;
+      return info.gpu_name + "  \u00B7  "
+        + formatFree(info.free_vram_gib, "free VRAM unknown");
     }
     // No readable GPU name: explain why when we can (a driver/library
     // mismatch usually just needs a reboot).
     if (info.gpu_status === "mismatch") {
-      systemText.textContent =
-        "GPU present, driver/library mismatch"
-        + " (a reboot may be needed)";
-    } else {
-      systemText.textContent =
-        "GPU not detected  \u00B7  free VRAM unknown";
+      return "driver/library mismatch (a reboot may be needed)";
     }
+    return "not detected";
+  }
+
+  function renderSystem(info) {
+    systemBox.classList.remove("menu-system-checking");
+    systemText.textContent = "";
+    systemText.appendChild(
+      makeSystemLine("GPU:", gpuDetail(info))
+    );
+    var cpu = (info.cpu_name || "unknown") + "  \u00B7  "
+      + formatFree(info.free_ram_gib, "RAM free unknown");
+    systemText.appendChild(makeSystemLine("CPU:", cpu));
   }
 
   function showSystemError(message) {
@@ -125,78 +162,220 @@
 
   // ---- Model rows ----
 
-  function vramLabel(model) {
-    var gib = model.min_vram_gib;
-    if (typeof gib !== "number" || gib <= 0) {
-      return "";
-    }
-    return "~" + Math.round(gib) + " GiB";
+  // Autoregressive models run on CPU too, so they are never gated by
+  // VRAM: a GPU-less or low-VRAM host just falls back to CPU.
+  function isAutoregressive(model) {
+    return !!(
+      model.capabilities
+      && model.capabilities.model_type === "autoregressive"
+    );
   }
 
-  // Render the status indicator: Available + green check (fits),
-  // Insufficient VRAM + red cross (does not fit), or Resident (active).
-  function applyStatus(statusEl, model, fits) {
+  // Model-family glyph pinned right of the name. The wrapper's title
+  // gives a hover tooltip. (Both are first-pass shapes to iterate on
+  // once rendered; the SVG path coordinates are cheap to nudge.)
+  //
+  // Autoregressive: an "@" that resolves into an "R". An inner "a"
+  // counter sits under a head arch whose stroke loops over the top back
+  // to the filled start node (the autoregressive feedback: build on
+  // what was just emitted), dropping two matched legs (the "R" base).
+  var _AR_ICON =
+    '<svg viewBox="0 0 24 24" width="13" height="13" fill="none"'
+    + ' stroke="currentColor" stroke-width="1.5" stroke-linecap="round"'
+    + ' stroke-linejoin="round" aria-hidden="true">'
+    + '<path d="M7 14 A5 5 0 0 0 17 14" />'
+    + '<path d="M7 14 V19 M17 14 V19" />'
+    + '<path d="M17 14 C 21 8 13 4 10 9" />'
+    + '<path d="M10 10 H14 V13 H10 Z" />'
+    + '<circle cx="10" cy="9" r="1.15" fill="currentColor"'
+    + ' stroke="none" /></svg>';
+  // Diffusion: a "D" and an "F" in superposition. The overlap (the D's
+  // bowl plus the F's mid bar) reads as a backwards epsilon and is drawn
+  // crisp at full opacity; the non-overlapping strokes (stems, the F top
+  // bar, the D top/bottom) stay faint, so both letters still register.
+  var _DIFFUSION_ICON =
+    '<svg viewBox="0 0 24 24" width="13" height="13" fill="none"'
+    + ' stroke="currentColor" stroke-linecap="round"'
+    + ' stroke-linejoin="round" aria-hidden="true">'
+    + '<path d="M7 5 v14 h4 a7 7 0 0 0 0 -14 z" opacity="0.3"'
+    + ' stroke-width="1.3" />'
+    + '<path d="M7 5 v14 M7 5 h8 M7 12 h6" opacity="0.3"'
+    + ' stroke-width="1.3" />'
+    + '<path d="M11 5 a7 7 0 0 1 0 14 M7 12 h6"'
+    + ' stroke-width="1.9" /></svg>';
+
+  function buildFamilyIcon(model) {
+    var ar = isAutoregressive(model);
+    var span = document.createElement("span");
+    span.className = "model-family-icon";
+    span.title = "Model Family: "
+      + (ar ? "Autoregressive" : "Diffusion");
+    span.innerHTML = ar ? _AR_ICON : _DIFFUSION_ICON;
+    return span;
+  }
+
+  // Signed VRAM-headroom pill that extends left of the device tag:
+  // green +X.X GiB when the model fits, red -X.X GiB when it is short.
+  // Available = free + reclaimable (what you get after the current
+  // model unloads); required = the model's min VRAM.
+  function buildHeadroomOblong(model) {
+    var headroom = model.vram_headroom_gib;
+    if (typeof headroom !== "number") {
+      return null;
+    }
+    var el = document.createElement("span");
+    el.className = "device-headroom "
+      + (headroom >= 0 ? "is-positive" : "is-negative");
+    el.textContent = (headroom >= 0 ? "+" : "\u2212")
+      + Math.abs(headroom).toFixed(1) + " GiB";
+    var required = Math.round(model.min_vram_gib || 0);
+    var available = (
+      (model.min_vram_gib || 0) + headroom
+    ).toFixed(1);
+    el.title = (headroom >= 0
+      ? "Fits. "
+      : "Insufficient VRAM. ")
+      + "Required: " + required + " GiB, Available: "
+      + available + " GiB";
+    return el;
+  }
+
+  // Status indicator: only "Resident" for the active model. Fit is
+  // now shown by the headroom pill on the device tag.
+  function applyStatus(statusEl, model) {
     statusEl.className = "menu-model-status";
-    statusEl.textContent = "";
-    if (model.status === "active") {
-      statusEl.appendChild(
-        document.createTextNode("Resident")
-      );
-      return;
-    }
-    var icon = document.createElement("span");
-    icon.className = "menu-status-icon";
-    icon.setAttribute("aria-hidden", "true");
-    if (fits) {
-      statusEl.appendChild(
-        document.createTextNode("Available ")
-      );
-      icon.classList.add("menu-status-ok");
-      icon.textContent = "\u2713";
-    } else {
-      statusEl.appendChild(
-        document.createTextNode("Insufficient VRAM ")
-      );
-      icon.classList.add("menu-status-bad");
-      icon.textContent = "\u2717";
-    }
-    statusEl.appendChild(icon);
+    statusEl.textContent =
+      model.status === "active" ? "Resident" : "";
   }
 
-  function buildRow(model) {
+  // CPU/GPU segmented toggle for an autoregressive row. GPU is the
+  // default when a GPU is present and the model fits; otherwise CPU
+  // is forced and the GPU option is disabled with an explanatory
+  // tooltip. Exposes getDevice() for the activation POST.
+  function buildDeviceToggle(model, gpuPresent, fits) {
+    var gpuOk = gpuPresent && fits;
+    var wrap = document.createElement("div");
+    wrap.className = "menu-model-device";
+    var oblong = buildHeadroomOblong(model);
+    if (oblong) {
+      wrap.appendChild(oblong);
+    }
+    var current = gpuOk ? "cuda" : "cpu";
+    var btns = {};
+
+    function makeButton(value, label) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className =
+        "menu-device-btn"
+        + (value === current ? " is-active" : "");
+      btn.textContent = label;
+      if (value === "cuda" && !gpuOk) {
+        btn.disabled = true;
+        btn.classList.add("is-unavailable");
+        btn.title = gpuPresent
+          ? "Not enough free VRAM for GPU"
+          : "No GPU detected";
+      }
+      btn.addEventListener("click", function (event) {
+        // Do not let a toggle click activate the row.
+        event.stopPropagation();
+        if (btn.disabled) {
+          return;
+        }
+        current = value;
+        btns.cuda.classList.toggle(
+          "is-active", current === "cuda"
+        );
+        btns.cpu.classList.toggle(
+          "is-active", current === "cpu"
+        );
+      });
+      return btn;
+    }
+
+    btns.cuda = makeButton("cuda", "GPU");
+    btns.cpu = makeButton("cpu", "CPU");
+    wrap.appendChild(btns.cuda);
+    wrap.appendChild(btns.cpu);
+    wrap.getDevice = function () {
+      return current;
+    };
+    return wrap;
+  }
+
+  // Static, non-interactive device tag for GPU-only (diffusion) rows,
+  // matching the AR toggle's active pill so all rows read consistently.
+  function buildStaticDeviceTag(model, label) {
+    var wrap = document.createElement("div");
+    wrap.className = "menu-model-device menu-model-device-static";
+    var oblong = buildHeadroomOblong(model);
+    if (oblong) {
+      wrap.appendChild(oblong);
+    }
+    var tag = document.createElement("span");
+    tag.className = "menu-device-btn is-active";
+    tag.textContent = label;
+    wrap.appendChild(tag);
+    return wrap;
+  }
+
+  function buildRow(model, gpuPresent) {
     var fits = model.fits !== false;
+    var ar = isAutoregressive(model);
     var li = document.createElement("li");
     li.className = "menu-model-row";
     li.setAttribute("role", "option");
     li.setAttribute("data-id", model.id);
 
+    var nameRow = document.createElement("div");
+    nameRow.className = "menu-model-name-row";
     var name = document.createElement("span");
     name.className = "menu-model-name";
     name.textContent = model.display_name || model.id;
+    nameRow.appendChild(name);
+    nameRow.appendChild(buildFamilyIcon(model));
     var desc = document.createElement("span");
     desc.className = "menu-model-desc";
     desc.textContent = model.description || "";
 
-    // VRAM + status stacked under the name/description (left-aligned),
-    // so the status text changing length never reflows the row.
+    // Status ("Resident" or blank) under the name; fit/VRAM detail is
+    // now carried by the device tag's headroom pill.
     var meta = document.createElement("div");
     meta.className = "menu-model-meta";
-    var vram = document.createElement("span");
-    vram.className = "menu-model-vram";
-    vram.textContent = vramLabel(model);
     var status = document.createElement("span");
     status.className = "menu-model-status";
-    applyStatus(status, model, fits);
-    meta.appendChild(vram);
+    applyStatus(status, model);
     meta.appendChild(status);
 
-    // Meta (~X GiB + status) sits directly under the model name,
-    // above the description.
-    li.appendChild(name);
+    li.appendChild(nameRow);
     li.appendChild(meta);
     li.appendChild(desc);
 
-    if (fits) {
+    // A model whose weights are not cached yet gets a "Click to
+    // Download" veneer; clicking it pre-fetches, then the row becomes
+    // selectable. Tracked on the row so one click handler can dispatch.
+    var needsDownload = !!(
+      model.downloadable && !model.downloaded
+    );
+    li._needsDownload = needsDownload;
+
+    // An AR row carries a CPU/GPU toggle and stays selectable even
+    // when it will not fit on the GPU, since CPU is always a fallback.
+    // Diffusion rows carry a static GPU-only tag.
+    if (ar) {
+      var toggle = buildDeviceToggle(model, gpuPresent, fits);
+      li._getDevice = toggle.getDevice;
+      li.appendChild(toggle);
+    } else {
+      li.appendChild(buildStaticDeviceTag(model, "GPU"));
+    }
+
+    if (needsDownload) {
+      li.classList.add("needs-download");
+      li.appendChild(buildDownloadVeneer());
+      wireRow(li, model);
+    } else if (ar || fits) {
       wireRow(li, model);
     } else {
       li.classList.add("is-disabled");
@@ -208,23 +387,106 @@
     return li;
   }
 
+  // Translucent overlay for uncached models. Three states: an idle
+  // "Click to Download" label, a progress area (bar + percent +
+  // cancel), and a message area (success/error + Ok) shown on finish.
+  function buildDownloadVeneer() {
+    var veneer = document.createElement("div");
+    veneer.className = "menu-model-veneer";
+    var label = document.createElement("span");
+    label.className = "menu-model-veneer-label";
+    label.textContent = "Click to Download";
+    veneer.appendChild(label);
+    var prog = document.createElement("div");
+    prog.className = "menu-model-veneer-progress";
+    prog.hidden = true;
+    var pct = document.createElement("span");
+    pct.className = "menu-model-veneer-pct";
+    pct.textContent = "Downloading 0%";
+    var bar = document.createElement("span");
+    bar.className = "menu-model-veneer-bar";
+    var fill = document.createElement("span");
+    fill.className = "menu-model-veneer-fill";
+    bar.appendChild(fill);
+    var cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "menu-model-veneer-cancel";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", function (event) {
+      event.stopPropagation();
+      cancelDownload();
+    });
+    prog.appendChild(pct);
+    prog.appendChild(bar);
+    prog.appendChild(cancel);
+    veneer.appendChild(prog);
+    var message = document.createElement("div");
+    message.className = "menu-model-veneer-message";
+    message.hidden = true;
+    veneer.appendChild(message);
+    return veneer;
+  }
+
+  // Fill the veneer's message area with a success/error line and an
+  // Ok button; hides the label + progress. onOk fires on click.
+  function showVeneerMessage(li, text, isError, onOk) {
+    var veneer = li.querySelector(".menu-model-veneer");
+    if (!veneer) {
+      return;
+    }
+    var parts = veneerParts(li);
+    if (parts.label) {
+      parts.label.hidden = true;
+    }
+    if (parts.prog) {
+      parts.prog.hidden = true;
+    }
+    var message = veneer.querySelector(".menu-model-veneer-message");
+    if (!message) {
+      return;
+    }
+    message.innerHTML = "";
+    message.hidden = false;
+    message.classList.toggle("is-error", !!isError);
+    var msgText = document.createElement("span");
+    msgText.className = "menu-model-veneer-message-text";
+    msgText.textContent = text;
+    var ok = document.createElement("button");
+    ok.type = "button";
+    ok.className = "menu-model-veneer-ok";
+    ok.textContent = "Ok";
+    ok.addEventListener("click", function (event) {
+      event.stopPropagation();
+      onOk();
+    });
+    message.appendChild(msgText);
+    message.appendChild(ok);
+  }
+
   function wireRow(li, model) {
     li.tabIndex = 0;
-    li.addEventListener("click", function () {
-      selectModel(model, li);
-    });
+    var handler = function () {
+      if (li._needsDownload) {
+        beginDownload(model, li);
+      } else {
+        beginConfirm(model, li);
+      }
+    };
+    li.addEventListener("click", handler);
     li.addEventListener("keydown", function (event) {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        selectModel(model, li);
+        handler();
       }
     });
   }
 
-  function renderModels(list) {
+  function renderModels(list, gpuPresent) {
     modelList.innerHTML = "";
     for (var i = 0; i < list.length; i++) {
-      modelList.appendChild(buildRow(list[i]));
+      modelList.appendChild(
+        buildRow(list[i], gpuPresent)
+      );
     }
   }
 
@@ -331,19 +593,164 @@
     if (status) {
       stopLoadingCycle(status);
       status.classList.remove("is-loading-status");
-      applyStatus(status, model, model.fits !== false);
+      applyStatus(status, model);
     }
   }
 
-  function selectModel(model, li) {
-    if (selecting) {
+  function stopPolling() {
+    if (pollTimer !== null) {
+      clearTimeout(pollTimer);
+      pollTimer = null;
+    }
+  }
+
+  // Remove the select -> confirm animation state (restore the full
+  // menu): un-contract the list and drop any confirm prompt.
+  function resetMenuConfirm() {
+    confirming = false;
+    if (!modelList) {
       return;
     }
-    selecting = true;
+    modelList.classList.remove("is-confirming");
+    var rows = modelList.querySelectorAll(
+      ".menu-model-row.is-confirmed"
+    );
+    for (var i = 0; i < rows.length; i++) {
+      rows[i].classList.remove("is-confirmed");
+    }
+    var prompts = modelList.querySelectorAll(
+      ".menu-model-confirm"
+    );
+    for (var j = 0; j < prompts.length; j++) {
+      prompts[j].parentNode.removeChild(prompts[j]);
+    }
+  }
+
+  // Reset all in-flight selection UI (row highlight, activation panel,
+  // and the confirm contraction).
+  function finishSelecting() {
+    selecting = false;
+    stopPolling();
+    if (activationBox) {
+      activationBox.hidden = true;
+    }
+    if (activationProgress) {
+      activationProgress.hidden = true;
+    }
+    if (activeSelection) {
+      clearRowLoading(
+        activeSelection.li, activeSelection.model
+      );
+      activeSelection = null;
+    }
+    resetMenuConfirm();
+  }
+
+  function selectionLabel() {
+    var m = activeSelection ? activeSelection.model : null;
+    return m ? m.display_name || m.id : "model";
+  }
+
+  // Selecting a model first contracts the menu to that row and shows a
+  // confirm prompt (green check / red X). Check proceeds to load; X
+  // reverses back to the full menu.
+  function beginConfirm(model, li) {
+    if (selecting || confirming) {
+      return;
+    }
+    confirming = true;
+    activeSelection = { model: model, li: li };
     clearError();
-    setRowLoading(li);
+    modelList.classList.add("is-confirming");
+    li.classList.add("is-confirmed");
+    var device = li._getDevice ? li._getDevice() : "cuda";
+    var box = document.createElement("div");
+    box.className = "menu-model-confirm";
+    // Clicks in the confirm box must not bubble to the row handler.
+    box.addEventListener("click", function (event) {
+      event.stopPropagation();
+    });
+    var msg = document.createElement("span");
+    msg.className = "menu-model-confirm-msg";
+    msg.textContent = "Load " + (model.display_name || model.id)
+      + " on " + (device === "cpu" ? "CPU" : "GPU") + "?";
+    var actions = document.createElement("span");
+    actions.className = "menu-model-confirm-actions";
+    var yes = document.createElement("button");
+    yes.type = "button";
+    yes.className = "menu-confirm-yes";
+    yes.title = "Confirm";
+    yes.setAttribute("aria-label", "Confirm and load");
+    yes.textContent = "\u2713";
+    yes.addEventListener("click", function (event) {
+      event.stopPropagation();
+      confirmSelection();
+    });
+    var no = document.createElement("button");
+    no.type = "button";
+    no.className = "menu-confirm-no";
+    no.title = "Cancel";
+    no.setAttribute("aria-label", "Cancel");
+    no.textContent = "\u2717";
+    no.addEventListener("click", function (event) {
+      event.stopPropagation();
+      resetMenuConfirm();
+      activeSelection = null;
+    });
+    actions.appendChild(yes);
+    actions.appendChild(no);
+    box.appendChild(msg);
+    box.appendChild(actions);
+    li.appendChild(box);
+  }
+
+  // Confirm accepted: drop the prompt (keep the contracted layout) and
+  // start the real activation/loading.
+  function confirmSelection() {
+    if (!confirming || !activeSelection) {
+      return;
+    }
+    confirming = false;
+    var prompts = modelList.querySelectorAll(
+      ".menu-model-confirm"
+    );
+    for (var i = 0; i < prompts.length; i++) {
+      prompts[i].parentNode.removeChild(prompts[i]);
+    }
+    selectModel(activeSelection.model, activeSelection.li);
+  }
+
+  // ---- Download-only (pre-fetch weights, no VRAM) ----
+
+  function veneerParts(li) {
+    return {
+      label: li.querySelector(".menu-model-veneer-label"),
+      prog: li.querySelector(".menu-model-veneer-progress"),
+      pct: li.querySelector(".menu-model-veneer-pct"),
+      fill: li.querySelector(".menu-model-veneer-fill"),
+    };
+  }
+
+  function beginDownload(model, li) {
+    if (selecting || confirming || downloadRow) {
+      return;
+    }
+    clearError();
+    downloadRow = li;
+    li.classList.add("is-downloading");
+    document.body.classList.add("menu-busy");
+    var parts = veneerParts(li);
+    if (parts.label) {
+      parts.label.hidden = true;
+    }
+    if (parts.prog) {
+      parts.prog.hidden = false;
+    }
+    if (parts.fill) {
+      parts.fill.style.width = "0%";
+    }
     fetch(
-      "/api/models/" + encodeURIComponent(model.id) + "/activate",
+      "/api/models/" + encodeURIComponent(model.id) + "/download",
       { method: "POST" }
     )
       .then(function (response) {
@@ -351,22 +758,292 @@
       })
       .then(function (result) {
         if (result && result.ok) {
+          pollDownload(model, li);
+        } else {
+          throw new Error(
+            (result && result.message) || "download failed"
+          );
+        }
+      })
+      .catch(function (err) {
+        downloadFailed(
+          model, li,
+          err && err.message ? err.message : String(err)
+        );
+      });
+  }
+
+  function pollDownload(model, li) {
+    if (downloadRow !== li) {
+      return;
+    }
+    fetch("/api/models/download-status")
+      .then(function (response) {
+        return response.json();
+      })
+      .then(function (status) {
+        if (downloadRow !== li) {
+          return;
+        }
+        if (status.state === "done") {
+          finishDownload(model, li);
+          return;
+        }
+        if (status.state === "error") {
+          downloadFailed(
+            model, li, status.message || "download failed"
+          );
+          return;
+        }
+        if (status.state === "idle") {
+          resetDownload(li);
+          return;
+        }
+        var pct = status.progress
+          && typeof status.progress.fraction === "number"
+          ? Math.round(status.progress.fraction * 100)
+          : 0;
+        var parts = veneerParts(li);
+        if (parts.pct) {
+          parts.pct.textContent = "Downloading " + pct + "%";
+        }
+        if (parts.fill) {
+          parts.fill.style.width = pct + "%";
+        }
+        pollTimer = setTimeout(function () {
+          pollDownload(model, li);
+        }, 500);
+      })
+      .catch(function () {
+        if (downloadRow !== li) {
+          return;
+        }
+        pollTimer = setTimeout(function () {
+          pollDownload(model, li);
+        }, 800);
+      });
+  }
+
+  // Restore the veneer to its idle "Click to Download" state.
+  function resetDownload(li) {
+    stopPolling();
+    downloadRow = null;
+    li.classList.remove("is-downloading");
+    document.body.classList.remove("menu-busy");
+    var parts = veneerParts(li);
+    if (parts.prog) {
+      parts.prog.hidden = true;
+    }
+    if (parts.label) {
+      parts.label.hidden = false;
+    }
+    if (parts.fill) {
+      parts.fill.style.width = "0%";
+    }
+    var veneer = li.querySelector(".menu-model-veneer");
+    var message = veneer
+      ? veneer.querySelector(".menu-model-veneer-message")
+      : null;
+    if (message) {
+      message.hidden = true;
+    }
+  }
+
+  // Download succeeded: keep the veneer, show a success message the
+  // user acknowledges with Ok (frees the other rows meanwhile).
+  function finishDownload(model, li) {
+    stopPolling();
+    downloadRow = null;
+    li.classList.remove("is-downloading");
+    document.body.classList.remove("menu-busy");
+    showVeneerMessage(
+      li,
+      "Download successful for "
+      + (model.display_name || model.id) + "!",
+      false,
+      function () {
+        completeDownload(model, li);
+      }
+    );
+  }
+
+  // Ok on success: drop the veneer and denoise-reveal the (until now
+  // hidden) model description; the row is then selectable.
+  function completeDownload(model, li) {
+    li.classList.remove("needs-download");
+    li._needsDownload = false;
+    model.downloaded = true;
+    var veneer = li.querySelector(".menu-model-veneer");
+    if (veneer) {
+      veneer.parentNode.removeChild(veneer);
+    }
+    var desc = li.querySelector(".menu-model-desc");
+    if (desc) {
+      if (prefersReducedMotion()) {
+        desc.textContent = model.description || "";
+      } else {
+        revealOnce(desc, model.description || "");
+      }
+    }
+  }
+
+  // Download failed: show the error on the veneer with Ok to retry.
+  function downloadFailed(model, li, message) {
+    stopPolling();
+    downloadRow = null;
+    li.classList.remove("is-downloading");
+    document.body.classList.remove("menu-busy");
+    showVeneerMessage(
+      li,
+      "Download attempt unsuccessful. Error: " + message,
+      true,
+      function () {
+        resetDownload(li);
+      }
+    );
+  }
+
+  function cancelDownload() {
+    if (!downloadRow) {
+      return;
+    }
+    var li = downloadRow;
+    fetch(
+      "/api/models/download/cancel", { method: "POST" }
+    ).catch(function () {
+      // Best-effort; the UI resets regardless.
+    });
+    resetDownload(li);
+  }
+
+  // Show the download progress bar (only while downloading weights).
+  function updateActivationProgress(state, progress) {
+    if (!activationProgress) {
+      return;
+    }
+    if (
+      state === "downloading"
+      && progress
+      && typeof progress.fraction === "number"
+    ) {
+      var pct = Math.round(progress.fraction * 100);
+      activationProgress.hidden = false;
+      if (activationFill) {
+        activationFill.style.width = pct + "%";
+      }
+      if (activationPct) {
+        activationPct.textContent = "Downloading " + pct + "%";
+      }
+    } else {
+      activationProgress.hidden = true;
+    }
+  }
+
+  // Poll activation state until ready / error (or cancelled).
+  function pollActivation() {
+    if (!selecting) {
+      return;
+    }
+    fetch("/api/models/activation")
+      .then(function (response) {
+        return response.json();
+      })
+      .then(function (status) {
+        if (!selecting) {
+          return;
+        }
+        if (status.state === "ready") {
           window.location.assign(GENERATE_URL);
           return;
         }
-        throw new Error(
-          (result && result.message) || "activation failed"
+        if (status.state === "error") {
+          var label = selectionLabel();
+          finishSelecting();
+          showError(
+            "Could not load " + label + ": "
+            + (status.message || "load failed")
+          );
+          return;
+        }
+        updateActivationProgress(
+          status.state, status.progress
+        );
+        pollTimer = setTimeout(pollActivation, 500);
+      })
+      .catch(function () {
+        if (!selecting) {
+          return;
+        }
+        pollTimer = setTimeout(pollActivation, 800);
+      });
+  }
+
+  function selectModel(model, li) {
+    if (selecting) {
+      return;
+    }
+    selecting = true;
+    activeSelection = { model: model, li: li };
+    clearError();
+    setRowLoading(li);
+    if (activationBox) {
+      activationBox.hidden = false;
+    }
+    // AR rows carry a device toggle; send the choice so the worker
+    // loads on CPU or GPU. Other rows post no body (server default).
+    var options = { method: "POST" };
+    if (li._getDevice) {
+      options.headers = { "Content-Type": "application/json" };
+      options.body = JSON.stringify({ device: li._getDevice() });
+    }
+    fetch(
+      "/api/models/" + encodeURIComponent(model.id) + "/activate",
+      options
+    )
+      .then(function (response) {
+        return response.json();
+      })
+      .then(function (result) {
+        if (!selecting) {
+          return;
+        }
+        // Activation is non-blocking; the worker loads in the
+        // background and we poll for progress until it is ready.
+        if (result && result.ok) {
+          pollActivation();
+          return;
+        }
+        var label = selectionLabel();
+        finishSelecting();
+        showError(
+          "Could not load " + label + ": "
+          + ((result && result.message) || "activation failed")
         );
       })
       .catch(function (err) {
-        selecting = false;
-        clearRowLoading(li, model);
+        finishSelecting();
         showError(
           "Could not load "
           + (model.display_name || model.id) + ": "
           + (err && err.message ? err.message : String(err))
         );
       });
+  }
+
+  // Cancel an in-flight load: stop the worker (freeing VRAM) and
+  // reset the UI so the user can pick again.
+  function cancelSelection() {
+    if (!selecting) {
+      return;
+    }
+    stopPolling();
+    fetch(
+      "/api/models/activate/cancel", { method: "POST" }
+    ).catch(function () {
+      // Best-effort; the UI resets regardless.
+    });
+    finishSelecting();
+    clearError();
   }
 
   // ---- "New runs" badge on the Analytics link ----
@@ -398,7 +1075,7 @@
       })
       .then(function (info) {
         renderSystem(info);
-        renderModels(info.models || []);
+        renderModels(info.models || [], !!info.gpu_name);
       })
       .catch(function (err) {
         showSystemError("Could not reach the server.");
@@ -406,6 +1083,10 @@
           err && err.message ? err.message : String(err)
         );
       });
+  }
+
+  if (activationCancel) {
+    activationCancel.addEventListener("click", cancelSelection);
   }
 
   spawnFloaters();

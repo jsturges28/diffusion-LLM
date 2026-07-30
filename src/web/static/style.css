@@ -813,6 +813,16 @@ button {
   border-bottom: 1px solid var(--border);
 }
 
+/* A preference that does not apply to the active model (e.g. Commit
+   Order for an autoregressive model): dimmed and non-interactive. */
+.settings-row-disabled {
+  opacity: 0.4;
+}
+
+.settings-row-disabled .toggle-switch {
+  pointer-events: none;
+}
+
 .modal-body .settings-row:first-child {
   padding-top: 4px;
 }
@@ -1826,6 +1836,17 @@ input[type="checkbox"].app-checkbox:checked::after {
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
 }
 
+/* The model list carries name + family icon + device tag + headroom
+   pill, so let it grow to its content rather than clip to the
+   collapsed box width (options were overflowing). */
+.model-select-list {
+  right: auto;
+  /* Match the collapsed control width instead of growing to fit the
+     widest name+device row; long names ellipsize (see
+     .model-select-name) so every row shares the fixed width. */
+  width: 100%;
+}
+
 .model-select-option,
 .custom-select-option {
   padding: 6px 8px;
@@ -1842,6 +1863,240 @@ input[type="checkbox"].app-checkbox:checked::after {
 .model-select-option.is-active,
 .custom-select-option.is-active {
   color: var(--accent, #00ff41);
+}
+
+/* The loaded model is tinted like the Generate button to read as
+   "currently selected", and is inert (redundant to re-select); a device
+   change goes through its other-device button. Scoped to the model
+   dropdown so hyperparameter selects keep their plain highlight. */
+.model-select-option.is-active {
+  background: var(--accent-dim);
+  cursor: default;
+}
+
+.model-select-option.is-active:hover {
+  background: var(--accent-dim);
+}
+
+/* The loaded device stays filled-green (from .device-pill.is-active)
+   but is locked; the sibling device button remains clickable. */
+.device-pill-btn.is-current {
+  pointer-events: none;
+  cursor: default;
+}
+
+/* Model dropdown: option rows lay name (left) against a device
+   control (right); the collapsed value shows the active device. */
+.model-select-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.model-select-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* Row and collapsed model names ellipsize so the dropdown keeps the
+   fixed collapsed width; the device pill/toggle stays pinned. */
+.model-select-name,
+.model-select-value-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.option-device {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+/* Anchor the per-option hover readout to the left of the row. */
+.model-select-option {
+  position: relative;
+}
+
+.option-info {
+  position: absolute;
+  right: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  padding: 5px 9px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s;
+  z-index: 60;
+}
+
+.option-info.is-visible {
+  opacity: 1;
+}
+
+.option-info.is-positive {
+  border-color: var(--accent);
+}
+
+.option-info.is-negative {
+  border-color: var(--danger);
+}
+
+/* Only the trailing signed headroom is tinted; the "Required ...
+   Available ..." body keeps the grey .option-info color. */
+.option-info-headroom.is-positive {
+  color: var(--accent);
+}
+
+.option-info-headroom.is-negative {
+  color: var(--danger);
+}
+
+.device-pill {
+  padding: 2px 8px;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+}
+
+.device-pill-btn {
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s, color 0.15s;
+}
+
+.device-pill-btn + .device-pill-btn {
+  border-left: 1px solid var(--border);
+}
+
+.device-pill-btn:not(.is-active):hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-surface-hover);
+}
+
+.device-pill.is-active {
+  color: var(--bg-primary);
+  background: var(--accent);
+  font-weight: 500;
+}
+
+.device-pill-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* The collapsed value's device tag is outlined, not filled, so it
+   does not overpower the header. */
+.device-pill-collapsed {
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  color: var(--accent);
+  background: transparent;
+  font-variant-numeric: tabular-nums;
+  /* Fixed to the GPU/CPU width so the border never grows for the
+     wider signed headroom; the +/-X face is shrunk to fit instead. */
+  width: 40px;
+  box-sizing: border-box;
+  padding: 2px 5px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+/* The ticker fades only its inner text, so the pill's outline and
+   background stay steady across the device/headroom flip. */
+.device-pill-collapsed .ticker-text {
+  display: inline-block;
+  transition: opacity 0.35s ease;
+}
+
+/* The signed-headroom face (+/-X) is longer than GPU/CPU, so shrink it
+   to fit the fixed pill width without stretching the border. */
+.device-pill-collapsed .ticker-text.is-headroom {
+  font-size: 0.8em;
+  letter-spacing: -0.03em;
+}
+
+/* Mid-flip of the device/headroom ticker. */
+.device-pill-collapsed .ticker-text.ticker-fade {
+  opacity: 0;
+}
+
+/* Confirm popover for a model/device switch, under the dropdown. */
+.switch-confirm {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 30;
+  width: 260px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-focus);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  white-space: normal;
+  /* Only the buttons are interactive; the box itself is not the
+     clickable dropdown, so do not inherit its pointer cursor. */
+  cursor: default;
+}
+
+.switch-confirm-msg {
+  font-size: 11px;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.switch-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.switch-confirm-yes,
+.switch-confirm-no {
+  width: 26px;
+  height: 26px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.switch-confirm-yes {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.switch-confirm-no {
+  color: var(--danger);
+  border-color: var(--danger);
 }
 
 .custom-select-option.is-disabled {
@@ -2140,7 +2395,7 @@ body.menu-video-off .menu-video {
 }
 
 .menu-subtitle {
-  margin-top: 6px;
+  margin-top: 14px;
   text-align: center;
   color: var(--text-secondary);
   font-size: 12px;
@@ -2156,6 +2411,33 @@ body.menu-video-off .menu-video {
   margin-top: 20px;
   min-height: 18px;
   font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* GPU + CPU readout lines stack, matching the analytics chart-header
+   look (small, uppercase, letter-spaced, accent tag). */
+#menu-system-text {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+
+.menu-system-line {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.menu-system-tag {
+  color: var(--accent);
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.menu-system-detail {
   color: var(--text-secondary);
 }
 
@@ -2191,10 +2473,114 @@ body.menu-video-off .menu-video {
   border-radius: var(--radius);
   background: var(--bg-surface);
   cursor: pointer;
+  /* Anchor the AR row's CPU/GPU toggle to the top-right. */
+  position: relative;
+  /* Explicit cap so the select -> confirm collapse can animate
+     max-height to 0 for the non-chosen rows. */
+  max-height: 260px;
   transition:
     border-color 0.15s,
     background 0.15s,
-    box-shadow 0.15s;
+    box-shadow 0.15s,
+    opacity 0.25s,
+    max-height 0.3s ease,
+    padding 0.25s;
+}
+
+/* Select -> confirm: collapse the other rows (removing the list gap so
+   the modal contracts) and focus the chosen row. */
+.menu-model-list.is-confirming {
+  gap: 0;
+}
+
+.menu-model-list.is-confirming
+  .menu-model-row:not(.is-confirmed) {
+  opacity: 0;
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-width: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* On the chosen row, the description dissolves and the confirm prompt
+   takes its place. */
+.menu-model-desc {
+  overflow: hidden;
+  transition: opacity 0.2s, max-height 0.2s;
+  max-height: 80px;
+}
+
+.menu-model-row.is-confirmed .menu-model-desc {
+  opacity: 0;
+  max-height: 0;
+}
+
+.menu-model-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  opacity: 0;
+  max-height: 0;
+  overflow: hidden;
+  transition: opacity 0.25s, max-height 0.25s;
+  /* Only the buttons are interactive; the box is not the clickable
+     row, so do not inherit the row's pointer cursor. */
+  cursor: default;
+}
+
+.menu-model-row.is-confirmed .menu-model-confirm {
+  opacity: 1;
+  max-height: 60px;
+  margin-top: 4px;
+}
+
+/* In the confirm state, only the check/X are interactive: the row's
+   name/tag area is inert (default cursor), the confirm box re-enables
+   pointer events for its buttons. */
+.menu-model-row.is-confirmed {
+  pointer-events: none;
+}
+
+.menu-model-row.is-confirmed .menu-model-confirm {
+  pointer-events: auto;
+}
+
+.menu-model-confirm-msg {
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.menu-model-confirm-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.menu-confirm-yes,
+.menu-confirm-no {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.menu-confirm-yes {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.menu-confirm-no {
+  color: var(--danger);
+  border-color: var(--danger);
 }
 
 .menu-model-row:hover,
@@ -2224,11 +2610,24 @@ body.menu-video-off .menu-video {
   box-shadow: 0 0 0 1px var(--accent-dim);
 }
 
+.menu-model-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .menu-model-name {
   color: var(--accent);
   font-size: 14px;
   font-weight: 500;
   letter-spacing: 0.02em;
+}
+
+/* Family glyph (diffusion vs autoregressive) beside the model name. */
+.model-family-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-secondary);
 }
 
 .menu-model-desc {
@@ -2275,11 +2674,153 @@ body.menu-video-off .menu-video {
   color: var(--danger);
 }
 
+/* CPU/GPU toggle on an autoregressive row, tucked top-right like the
+   generator's #prompt-history control. */
+.menu-model-device {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: inline-flex;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  z-index: 2;
+}
+
+.menu-device-btn {
+  padding: 3px 10px;
+  font-family: inherit;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.menu-device-btn + .menu-device-btn {
+  border-left: 1px solid var(--border);
+}
+
+/* Static GPU-only tag (diffusion rows): same pill, not interactive. */
+.menu-model-device-static .menu-device-btn {
+  cursor: default;
+}
+
+.menu-device-btn:not(.is-active):hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-surface-hover);
+}
+
+.menu-device-btn.is-active {
+  color: var(--bg-primary);
+  background: var(--accent);
+}
+
+.menu-device-btn.is-unavailable,
+.menu-device-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Signed VRAM-headroom pill that extends left of a device tag (its
+   left edge is rounded by the tag container's overflow clip). Shared
+   by the Main Menu tags and the generator dropdown option tags. */
+.device-headroom {
+  padding: 3px 8px;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  background: var(--bg-primary);
+  border-right: 1px solid var(--border);
+}
+
+.device-headroom.is-positive {
+  color: var(--accent);
+}
+
+.device-headroom.is-negative {
+  color: var(--danger);
+}
+
+/* Smaller in the generator dropdown to respect its dimensions. */
+.option-device .device-headroom {
+  padding: 2px 6px;
+  font-size: 9px;
+}
+
 .menu-error {
   margin-top: 14px;
   text-align: center;
   font-size: 12px;
   color: var(--danger);
+}
+
+/* Activation status: a download progress bar (when downloading
+   weights) plus a Cancel button, shown while a model is loading. */
+.menu-activation {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.menu-activation[hidden] {
+  display: none;
+}
+
+.menu-activation-progress {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.menu-activation-pct {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.menu-activation-bar {
+  width: 70%;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-surface-hover);
+  overflow: hidden;
+}
+
+.menu-activation-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.menu-activation-cancel {
+  padding: 5px 16px;
+  font-family: inherit;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.menu-activation-cancel:hover {
+  color: var(--danger);
+  border-color: var(--danger);
 }
 
 .menu-links {
@@ -2296,7 +2837,138 @@ body.menu-video-off .menu-video {
    (.analytics-new-dot): a green count chip beside the Analytics link. */
 
 /* While a model is loading, freeze the other rows. */
-body.menu-busy .menu-model-row:not(.is-loading) {
+body.menu-busy
+  .menu-model-row:not(.is-loading):not(.is-downloading) {
   pointer-events: none;
   opacity: 0.5;
+}
+
+/* "Click to Download" veneer over a model whose weights are not cached
+   yet: a thin translucent cover with a centered prompt, then a
+   progress bar + cancel while fetching. */
+.menu-model-veneer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(10, 10, 10, 0.6);
+  border-radius: var(--radius);
+  z-index: 4;
+  cursor: pointer;
+}
+
+.menu-model-veneer-label {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  transition: color 0.15s;
+}
+
+.menu-model-row.needs-download:hover .menu-model-veneer-label {
+  color: var(--accent);
+}
+
+.menu-model-veneer-progress {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 70%;
+}
+
+.menu-model-veneer-pct {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.menu-model-veneer-bar {
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-surface-hover);
+  overflow: hidden;
+}
+
+.menu-model-veneer-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.menu-model-veneer-cancel {
+  padding: 4px 14px;
+  font-family: inherit;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  /* High contrast so it reads clearly over the translucent veneer. */
+  color: var(--text-primary);
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.menu-model-veneer-cancel:hover {
+  color: var(--bg-primary);
+  background: var(--danger);
+}
+
+/* While veneered, hide the description so the "Click to Download"
+   label / progress bar do not clash with it; it is denoise-revealed
+   once the download completes. visibility keeps the row height. */
+.menu-model-row.needs-download .menu-model-desc {
+  visibility: hidden;
+}
+
+/* Success / error message + Ok, shown on the veneer when a download
+   finishes (the user acknowledges before the row unlocks). */
+.menu-model-veneer-message {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 84%;
+  text-align: center;
+}
+
+.menu-model-veneer-message-text {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--accent);
+  max-height: 60px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+
+.menu-model-veneer-message.is-error .menu-model-veneer-message-text {
+  color: var(--danger);
+}
+
+.menu-model-veneer-ok {
+  padding: 4px 18px;
+  font-family: inherit;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--bg-primary);
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.menu-model-veneer-message.is-error .menu-model-veneer-ok {
+  color: var(--text-primary);
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--text-secondary);
 }

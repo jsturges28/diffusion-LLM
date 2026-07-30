@@ -300,6 +300,9 @@ function paramVal(run, key) {
   if (key === "model") {
     return run.backend || run.model || "";
   }
+  if (key === "processor") {
+    return run.processor || "Unknown";
+  }
   if (key === "elapsed_seconds") {
     return run.elapsed_seconds;
   }
@@ -510,7 +513,8 @@ function groupRuns(runs, key) {
 // DiffusionGemma rows leave them blank; those values still appear in
 // the per-run detail panel.
 var TABLE_KEYS = [
-  "created_at", "model", "prompt", "elapsed_seconds",
+  "created_at", "model", "processor", "prompt",
+  "elapsed_seconds",
 ];
 
 function renderTable() {
@@ -787,6 +791,24 @@ function resetTooltipToggles() {
   }
 }
 
+// Autoregressive runs have no masked canvas, so the convergence chart
+// (percent resolved per frame) would flatline at 100%; it is hidden
+// for them while timing and confidence stay.
+function runIsAutoregressive(run) {
+  return !!(run && run.model_type === "autoregressive");
+}
+
+// The compare metrics payload carries no model fields, so resolve a
+// run's type from the already-loaded run list by id.
+function runIdIsAutoregressive(runId) {
+  for (var i = 0; i < allRuns.length; i++) {
+    if (allRuns[i].run_id === runId) {
+      return runIsAutoregressive(allRuns[i]);
+    }
+  }
+  return false;
+}
+
 function loadRunCharts(runId, run) {
   fetchMetrics(runId).then(function (data) {
     if (data.error) { return; }
@@ -804,8 +826,20 @@ function loadRunCharts(runId, run) {
       remaskEdits
     );
 
-    renderConvergenceChart(data, remaskSet);
-    renderTimingChart(data, remaskSet);
+    var convergenceSection = document.getElementById(
+      "convergence-section"
+    );
+    if (runIsAutoregressive(run)) {
+      if (convergenceSection) {
+        convergenceSection.hidden = true;
+      }
+    } else {
+      if (convergenceSection) {
+        convergenceSection.hidden = false;
+      }
+      renderConvergenceChart(data, remaskSet);
+    }
+    renderTimingChart(data, remaskSet, run);
     renderConfidenceChart(data);
   });
 }
@@ -1213,7 +1247,7 @@ function convergenceOptions(remaskSet) {
   };
 }
 
-function renderTimingChart(data, remaskSet) {
+function renderTimingChart(data, remaskSet, run) {
   if (
     !data.per_frame_elapsed
     || data.per_frame_elapsed.length === 0
@@ -1223,8 +1257,13 @@ function renderTimingChart(data, remaskSet) {
   }
   timingSection.hidden = false;
 
-  if (gpuName) {
-    gpuLabel.textContent = "(" + gpuName + ")";
+  // Prefer the run's own processor name (GPU or CPU); fall back to the
+  // detected GPU for older runs saved before processor_name existed.
+  var deviceName = (run && run.processor_name) || gpuName;
+  if (deviceName) {
+    gpuLabel.textContent = "(" + deviceName + ")";
+  } else {
+    gpuLabel.textContent = "";
   }
 
   var canvas = document.getElementById(
@@ -1479,6 +1518,10 @@ function showComparison(ids) {
 
     for (var i = 0; i < results.length; i++) {
       if (results[i].error) { continue; }
+      // AR runs have no meaningful convergence curve; omit them.
+      if (runIdIsAutoregressive(results[i].run_id)) {
+        continue;
+      }
       if (results[i].convergence.length
         > maxConvLen) {
         maxConvLen =
@@ -1494,6 +1537,7 @@ function showComparison(ids) {
     for (var j = 0; j < results.length; j++) {
       var res = results[j];
       if (res.error) { continue; }
+      if (runIdIsAutoregressive(res.run_id)) { continue; }
       var color = COMPARE_COLORS[
         j % COMPARE_COLORS.length
       ];
@@ -1917,6 +1961,7 @@ if (groupByMount) {
     [
       { value: "none", label: "Date" },
       { value: "model", label: "Model" },
+      { value: "processor", label: "Processor" },
       { value: "prompt", label: "Prompt" },
       { value: "has_diff", label: "Edited" },
     ],
