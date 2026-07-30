@@ -122,6 +122,19 @@ analytics suite.
   headroom tint, CPU-gated ticker, loaded-model highlight with a locked device);
   a 1-based AR step counter; and orphaned-worker guards (startup sweep +
   `PR_SET_PDEATHSIG`).
+- Shipped (this session): the **analytics per-frame scrubber + durable
+  Heatmap**, and the **app icon redesign**. The detail modal's token overlay
+  gained a frame scrubber that replays every saved frame through the overlays
+  (None / Heatmap / Commit Order / Diff), reusing the shared overlay math
+  (`src/web/static/overlays.js`) and mirroring the generator; the new
+  **Heatmap** recolors by persisted confidence, while Commit Order and Diff
+  stay gated to diffusion runs (autoregressive runs get None + Heatmap). This
+  was frontend-only, since the frames endpoint already shipped every frame
+  (`analytics.js` / `analytics.html` / `analytics.css`). The app icon is now
+  three CP437 diffusion shade blocks (`░ ▒ ▓`) as vector dither patterns under
+  a corner-to-corner dark-to-bright green denoise gradient (`assets/icon.svg`,
+  plus `assets/icon.png` via `scripts/render_icon.py`; `desktop.py` prefers the
+  PNG, the launcher keeps the SVG).
 - For the feature overview and architecture, see `README.md`. For the build
   history, see `.cursor/plans/`.
 
@@ -129,9 +142,9 @@ analytics suite.
 
 ## Next session (accepted directions)
 
-Agreed with the maintainer for the next fresh session (deliberate each in Ask
-mode before Plan). The analytics scrubber and AR items are detailed further in
-their own sections below.
+Agreed with the maintainer (deliberate each in Ask mode before Plan). The AR
+items are detailed further in their own section below. (The app icon redesign
+and the analytics per-frame scrubber shipped this session; see above.)
 
 1. **Shared Settings page + gear icon.** Promote the generator-only Settings
    modal (`index.html`, logic in `app.js`) to a shared **`/settings.html`** page
@@ -141,16 +154,7 @@ their own sections below.
    (`ui_state.py`), so a page beats duplicating the modal. Tab grouping to settle
    in Plan (a first cut: Appearance / Overlays / Interface, with room for future
    Models / Analytics tabs).
-2. **App icon redesign.** Replace the token-grid `assets/icon.svg` with three
-   denoising shade-block glyphs (`▓ ▒ ░`, the `DENOISE_GLYPHS` set in
-   `app.js` / `menu.js`) fading most to least opaque; export SVG + PNG. Refs
-   `desktop.py`, `scripts/install_desktop_entry.sh`.
-3. **Analytics token scrubber.** Add a per-frame scrubber to the analytics
-   detail modal (data already saved per frame in `tokens.json`), reusing the
-   generator's scrubber / overlay logic, with the token + confidence tooltip and
-   the Commit Order / Diff overlays per frame. No Edit Frames. (See the
-   "analytics scrubber" follow-up below.)
-4. **Autoregressive analysis tools (Phase C).** Top-k alternatives on hover,
+2. **Autoregressive analysis tools (Phase C).** Top-k alternatives on hover,
    then top-k "change the last token" resume, then a per-position entropy
    sparkline for SmolLM3. (See Phase C above.)
 
@@ -327,14 +331,13 @@ Shipped from this backlog (see `README.md`):
   Now backed by durable server-side UI state, decremented on delete, and
   reconciled against existing runs so orphaned ids cannot inflate the count.
 
-Follow-ups unlocked by the durable-overlay data model:
-- Analytics scrubber: the layered Diff vs Original (Original/Edited opacity
-  sliders + difference blend) now ships in the analytics viewer on the final
-  frame. Since the saved per-token stream carries every frame, a per-frame
-  scrubber for the analytics overlays (commit-order / diff across frames)
-  remains an additive follow-up, with no re-save.
-- Durable Heatmap render: per-token confidence is now persisted, so a
-  confidence heatmap in the analytics viewer is a render-only addition.
+Shipped from the durable-overlay data model:
+- Analytics per-frame scrubber: the detail modal's token overlay now replays
+  every saved frame through None / Heatmap / Commit Order / Diff (the layered
+  Diff clamps the original to its final frame past its end), reusing the shared
+  overlay math with no re-save. Commit Order and Diff stay diffusion-only.
+- Durable Heatmap render: the persisted per-token confidence now drives a
+  Heatmap overlay in the analytics viewer (kept for autoregressive runs too).
 
 Still candidate directions:
 

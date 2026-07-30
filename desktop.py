@@ -49,7 +49,13 @@ WINDOW_WIDTH = 1280
 WINDOW_HEIGHT = 860
 STARTUP_TIMEOUT_SECONDS = 30.0
 SHUTDOWN_TIMEOUT_SECONDS = 35.0
-ICON_PATH = REPO_ROOT / "assets" / "icon.svg"
+# Prefer the rasterized PNG for window-icon fidelity (some webview
+# backends render an SVG window icon poorly), falling back to the SVG
+# source until the PNG is generated. Regenerate the PNG after editing
+# the icon with: .venv/bin/python scripts/render_icon.py
+ICON_SVG_PATH = REPO_ROOT / "assets" / "icon.svg"
+ICON_PNG_PATH = REPO_ROOT / "assets" / "icon.png"
+ICON_PATH = ICON_PNG_PATH if ICON_PNG_PATH.is_file() else ICON_SVG_PATH
 
 # A fixed localhost port keeps the desktop window's origin
 # (scheme://host:port) stable across launches. Web storage (localStorage:

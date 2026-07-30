@@ -164,10 +164,12 @@ The contract lives in `src/backends/`:
 │           ├── custom_select.js      # Shared in-app dropdown widget
 │           └── assets/               # Title-screen video (title-screen.webm/.mp4)
 ├── assets/
-│   └── icon.svg                      # App icon (desktop window + launcher)
+│   ├── icon.svg                      # App icon source (vector; app-menu launcher)
+│   └── icon.png                      # Rasterized window icon (via scripts/render_icon.py)
 ├── scripts/
 │   ├── quantize_diffusiongemma_nf4.py # Produce the NF4 checkpoint from the bf16 base
 │   ├── install_desktop_entry.sh      # Generate a Linux .desktop launcher entry
+│   ├── render_icon.py                # Render assets/icon.png from the icon geometry
 │   ├── spike_diffusiongemma.py       # Standalone load + generate probe
 │   └── ws_smoke_test.py              # End-to-end supervisor/worker smoke test
 ├── Results/                          # Saved runs from the web UI (Save button)
@@ -184,6 +186,8 @@ The contract lives in `src/backends/`:
 
 
 ## Setup
+
+**Platform.** This app is currently built and tested only on **Ubuntu 24.04** (Linux). The desktop app, launcher script, and GPU/VRAM tooling assume a Linux environment, so other operating systems are unsupported for now; broader cross-OS support (Windows, macOS) is a future goal, not a current guarantee.
 
 Requires Python 3.10+ and a CUDA GPU. The two models live in separate virtual environments because of their conflicting `transformers` versions.
 
@@ -306,7 +310,7 @@ Click **Analytics** in the header (or navigate to `/analytics.html`) to open the
 - **Timing chart:** cumulative elapsed time per frame (accumulates across resumes). Remask transitions are highlighted in green; the detected GPU is shown in the header.
 - **Confidence chart:** mean per-token confidence per frame, which climbs as a canvas converges. Shown for runs saved with confidence data.
 - **Canvas boundaries:** for multi-canvas DiffusionGemma runs, dashed amber markers on the charts mark where one canvas commits and the next begins. Single-canvas runs show none.
-- **Token overlay:** a static, final-frame view of the run's tokens inside the detail modal, with a corner **Overlay** drawer mirroring the generator's (**None** / **Commit Order** / **Diff vs Original**). Commit Order tints each token by when it settled (early-to-late gradient legend); Diff vs Original (available only for edited runs with a saved snapshot) stacks the original and edited runs with independent **Original** / **Edited** opacity sliders and a **Difference blend** toggle, plus a `Diverged N/total` readout, matching the generator's layered diff. Hovering a token shows its position and persisted confidence. This makes the generator's explainability overlays durable and reviewable post-hoc; runs saved before this feature (or without token data) show a short unavailable note.
+- **Token overlay + per-frame scrubber:** a scrubbable view of the run's tokens inside the detail modal, with a corner **Overlay** drawer mirroring the generator's. A frame scrubber (prev / slider / next, `Frame i / N`) replays every saved frame through the active overlay, opening on the final frame. The drawer offers **None** and **Heatmap** for every run with token records (Heatmap recolors resolved tokens by their persisted confidence), plus **Commit Order** and **Diff vs Original** for diffusion runs. Commit Order tints each token by when it settled (early-to-late gradient legend); Diff vs Original (available only for edited runs with a saved snapshot) stacks the original and edited runs with independent **Original** / **Edited** opacity sliders and a **Difference blend** toggle, plus a `Diverged N/total` readout, matching the generator's layered diff (the original layer clamps to its final frame past its end). Autoregressive runs, which have no masked canvas, show only None + Heatmap. Hovering a token shows its position and persisted confidence. This makes the generator's explainability overlays durable and scrubbable post-hoc; runs saved before durable overlays (or without token data) show a short unavailable note.
 - **Chart controls:** scroll-wheel zoom and +/-/Reset on every chart. Tooltips are kept fully inside the plot area (never spilling onto the axes) and each chart has a toggle to hide/show its tooltip box; when the box would cover a line, the covered segment and the hovered point glow through it.
 
 #### Saving and reproducibility
@@ -331,6 +335,7 @@ Clicking **Save** writes a timestamped folder under `Results/` containing `metad
 - [x] Commit-order (resolution-step) token coloring; counterfactual "Diff vs Original" overlay with opacity sliders and difference blend
 - [x] Durable overlays: per-token records (text, mask, id, confidence) plus the pre-edit snapshot persisted per run, and a static commit-order / Diff-vs-Original viewer in the Analytics Suite
 - [x] Analytics run detail as a wide fade-in modal with a corner overlay drawer, a sortable Edited column, and streamlined grouping
+- [x] Analytics per-frame token scrubber and durable Heatmap: the detail modal's overlay replays every saved frame (None / Heatmap / Commit Order / Diff), Heatmap recoloring by persisted confidence, with Commit Order and Diff gated to diffusion runs (autoregressive runs get None + Heatmap)
 - [x] Guided-edit confirm/retry review step and Edit-Frames lock after an edited run is saved
 - [x] Persistent Settings (highlight tokens, commit order, diffusion text) with staged Save/Reset and status-bar readouts
 - [x] Analytics Suite: model-aware run browser, convergence, timing, confidence, canvas-boundary markers
@@ -374,8 +379,6 @@ Detailed, living notes for each item (technical hooks, files to touch, open ques
 ### Possible extensions
 
 - [ ] Shared tabbed **Settings page** (`/settings.html`) reached from a gear icon in the header and on the Main Menu
-- [ ] Redesigned app icon: three denoising shade-block glyphs (`▓ ▒ ░`) fading in opacity
-- [ ] Analytics per-frame token scrubber (reuse the generator's scrubber and overlays; token + confidence tooltip across frames)
 - [ ] Autoregressive analysis tools for SmolLM3: top-k alternatives on hover, "change the last token" resume, per-position entropy sparkline
 - [ ] Side-by-side comparison with autoregressive generation
 - [ ] Alignment experiments (RLHF / DPO) or fine-tuning on custom instruction data

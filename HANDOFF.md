@@ -67,11 +67,49 @@ analytics suite.
 
 ## Recently shipped (this session)
 
-**Validated on hardware this session** (the maintainer confirmed the menu,
-download, dropdown, CPU/GPU, and AR flows working). In-sandbox checks
-(`py_compile`, `node --check`, `pytest`, ReadLints) also pass.
+**Validated this session**: the maintainer confirmed the analytics scrubber +
+Heatmap clean, and iterated on then approved the icon design. In-sandbox checks
+(`py_compile`, `node --check`, `pytest` 18/18, ReadLints) pass. The desktop
+window/dock icon render is the one GUI item to eyeball on hardware.
 
-**Dropdown, ticker, glyphs, and download (final polish pass).**
+**Analytics per-frame scrubber + durable Heatmap** (frontend-only; the frames
+endpoint `/api/analytics/runs/{id}/frames` already shipped every frame, so no
+server / `metrics.py` / `tokens.json` change).
+
+- **Scrubber** (`analytics.html`, `analytics.css`, `analytics.js`): the detail
+  modal's token overlay gained a prev/slider/next `Frame i / N` scrubber that
+  replays every saved frame through the active overlay, opening on the final
+  frame. `renderNoneOverlay` / `renderCommitOverlay` / `renderDiffOverlay` and
+  the new `renderHeatmapOverlay` render `overlayFrameAt(overlayFrameIndex)`, with
+  `renderCurrentOverlay()` as the shared dispatch (mode change + every scrub).
+  Commit steps and the diff change-set are memoized per run (cleared on load);
+  the layered Diff clamps the original to its final frame past its end, mirroring
+  the generator.
+- **Durable Heatmap** (`analytics.js` + shared `overlays.js` `heatColor`): a new
+  drawer option recolors resolved tokens by persisted confidence.
+- **AR gating**: `loadRunOverlays(runId, run)` threads `model_type`;
+  `buildOverlaySelect` offers only None + Heatmap for autoregressive runs (Commit
+  Order + Diff stay diffusion-only), reusing the existing `runIsAutoregressive`.
+- **Edge cases**: single-frame / legacy runs keep the scrubber hidden + disabled
+  (the "unavailable" path is unchanged); empty or out-of-range frames render as a
+  blank canvas.
+
+**App icon redesign** (`assets/icon.svg`, `assets/icon.png`,
+`scripts/render_icon.py`, `desktop.py`, `README.md`).
+
+- The token-grid icon is replaced by **three CP437 diffusion shade blocks
+  (`░ ▒ ▓`)** as vector dither `<pattern>`s (25% / 50% / 75% coverage), drawn as
+  vertical-rectangle cells (taller than wide, matching a monospace glyph) under a
+  **corner-to-corner dark-to-bright green denoise gradient** (`#245a34` ->
+  `#00ff41`) revealed through an SVG `<mask>`. A finer 4px dither plus the
+  diagonal keep the dense block's solid columns from reading as flat color walls.
+- **PNG**: no SVG rasterizer exists on the hosts, so `scripts/render_icon.py`
+  (Pillow, already a dep) redraws the same geometry to `assets/icon.png` (512px,
+  4x supersampled). `desktop.py` `ICON_PATH` prefers the PNG and falls back to the
+  SVG; the app-menu launcher keeps the SVG. Regenerate with
+  `.venv/bin/python scripts/render_icon.py` (keep it in sync with the SVG).
+
+**Earlier session: dropdown, ticker, glyphs, and download (final polish pass).**
 
 - **Download** (`hf_download.py`, `server.py`): the "Click to Download" veneer
   now reports a smooth bar via a **disk-size poller** (repo total from
@@ -206,13 +244,12 @@ end to end, reusing the frame/token contract.
 
 ## Where to pick up
 
-This session shipped and **validated on hardware** Phase A (SmolLM3), the menu
-VRAM-headroom / download / UX pass, and a final polish pass (dropdown, glyphs,
-disk-size download poller, loaded-model affordance, AR step fix). The next
-session's focus, agreed with the maintainer, is below. Deliberate each in Ask
-mode before Plan.
+This session shipped and validated the **analytics per-frame scrubber + durable
+Heatmap** and the **app icon redesign** (see "Recently shipped"). The next
+candidates, agreed with the maintainer, are below. Deliberate each in Ask mode
+before Plan.
 
-**1 + 2. Shared Settings page + gear icon (one coupled feature).** Promote
+**1. Shared Settings page + gear icon (one coupled feature).** Promote
 Settings from the generator-only modal (`index.html:371-429`, logic in `app.js`)
 to a **shared `/settings.html` page** with a **left tab rail + right pane** (the
 list is growing: 5 rows + a conditional "Mode" sub-row). Both entry points link
@@ -226,23 +263,7 @@ order), Interface (device-tag ticker), with room for future Models/Analytics
 tabs. Keep the staged Save/Reset shared across tabs; new gear glyph in the
 family-icon style.
 
-**3. App icon redesign.** Replace the token-grid `assets/icon.svg` with **three
-denoising shade-block glyphs (`▓ ▒ ░`, the `DENOISE_GLYPHS` set in `app.js:3119`
-/ `menu.js:499`) fading most to least opaque**, evoking a token mid-denoise (not
-the D+F family logo). Keep the dark rounded tile + accent green; export a PNG
-alongside the SVG for dock / window-icon fidelity. Refs: `assets/icon.svg`,
-`desktop.py:52` (`ICON_PATH`), `scripts/install_desktop_entry.sh`.
-
-**4. Analytics token scrubber (+ tooltip parity).** The detail modal already
-renders a static final-frame token overlay with a hover tooltip (position +
-confidence); add a **per-frame scrubber** so any saved frame can be reviewed
-(the data is already there: `tokens.json` carries every frame, served via
-`load_run_frames`). Reuse the generator's scrubber / overlay logic (`app.js` /
-`overlays.js`) so Commit Order / Diff overlays scrub per frame too. Explicitly
-**no Edit Frames** in analytics. Lowest-risk, high-value; already the "analytics
-scrubber" follow-up in `ROADMAP.md`.
-
-**5. Autoregressive analysis tools (Phase C).** SmolLM3 has no Edit Frames (it
+**2. Autoregressive analysis tools (Phase C).** SmolLM3 has no Edit Frames (it
 is left-to-right), so add AR-native xAI. Suggested order: (a) **top-k
 alternatives on hover** (competing tokens + probabilities per position; opt-in
 logit capture in `ar_sampler.py`, mirroring DiffusionGemma's `entropy_signal`);
@@ -259,11 +280,11 @@ allowlist (needs a dynamic registry layer); cross-model comparison on identical
 prompt/seed; aggregate analytics across runs; the deferred Randomize-Prompt
 utility worker.
 
-**Remaining nice-to-have from this session:** confirm SmolLM3's thinking
-delimiter on a real thinking-on run (`ar_sampler.py` splits on `<think>` /
-`</think>`; adjust `_split_thinking` / `_STRIP_TOKENS` if the tags differ), and
-`.venv-ar/bin/pip freeze > requirements-ar.txt` to capture the full transitive
-pins.
+**Remaining AR nice-to-haves (from the SmolLM3 session):** confirm SmolLM3's
+thinking delimiter on a real thinking-on run (`ar_sampler.py` splits on
+`<think>` / `</think>`; adjust `_split_thinking` / `_STRIP_TOKENS` if the tags
+differ), and `.venv-ar/bin/pip freeze > requirements-ar.txt` to capture the full
+transitive pins.
 
 ## North star & backlog
 

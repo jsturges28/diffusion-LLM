@@ -1,30 +1,50 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Diffusion LLM Visualizer">
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="LLM Visualizer">
   <defs>
-    <!-- Left (masked/dim) to right (resolved/bright): the denoising sweep. -->
-    <linearGradient id="denoise" gradientUnits="userSpaceOnUse" x1="40" y1="0" x2="216" y2="0">
+    <!-- Denoise gradient: dark green -> bright green on a corner-to-corner
+         diagonal of the block trio (top-left to bottom-right), matching
+         the original icon's palette. The vertical component keeps the
+         dense block's solid columns from reading as flat color walls. -->
+    <linearGradient id="denoise" gradientUnits="userSpaceOnUse" x1="16" y1="80" x2="240" y2="176">
       <stop offset="0" stop-color="#245a34" />
       <stop offset="1" stop-color="#00ff41" />
     </linearGradient>
+
+    <!-- The three CP437 diffusion shade blocks (light/medium/dark) as
+         vector dither patterns, so they read as the real glyphs but
+         rasterize identically without a font. Each 8x8 tile is a 2x2
+         group of 4px pixels; coverage rises 25% -> 50% -> 75%. The
+         pixels are white so they drive the mask below, letting the
+         gradient show only through the dither. -->
+    <pattern id="shadeLight" patternUnits="userSpaceOnUse" width="8" height="8">
+      <rect x="0" y="0" width="4" height="4" fill="#fff" />
+    </pattern>
+    <pattern id="shadeMedium" patternUnits="userSpaceOnUse" width="8" height="8">
+      <rect x="0" y="0" width="4" height="4" fill="#fff" />
+      <rect x="4" y="4" width="4" height="4" fill="#fff" />
+    </pattern>
+    <pattern id="shadeDark" patternUnits="userSpaceOnUse" width="8" height="8">
+      <rect x="0" y="0" width="4" height="4" fill="#fff" />
+      <rect x="4" y="0" width="4" height="4" fill="#fff" />
+      <rect x="0" y="4" width="4" height="4" fill="#fff" />
+    </pattern>
+
+    <!-- Union of the three blocks' dither pixels; the gradient rect is
+         painted only where this mask is white. Each block is a vertical
+         rectangle (taller than wide) matching a monospace cell; edges
+         sit on the 8px tile grid so no pixel is clipped. -->
+    <mask id="ditherMask">
+      <rect x="16" y="80" width="64" height="96" fill="url(#shadeDark)" />
+      <rect x="96" y="80" width="64" height="96" fill="url(#shadeMedium)" />
+      <rect x="176" y="80" width="64" height="96" fill="url(#shadeLight)" />
+    </mask>
   </defs>
 
+  <!-- Dark rounded app tile in the suite's terminal palette. -->
   <rect width="256" height="256" rx="48" fill="#0a0a0a" />
   <rect x="0.75" y="0.75" width="254.5" height="254.5" rx="47.25" fill="none" stroke="#1e1e1e" stroke-width="1.5" />
 
-  <!-- Four rows of "tokens" resolving left to right (last line short). -->
-  <g fill="url(#denoise)">
-    <rect x="40" y="64" width="44" height="18" rx="6" />
-    <rect x="92" y="64" width="30" height="18" rx="6" />
-    <rect x="130" y="64" width="58" height="18" rx="6" />
-
-    <rect x="40" y="106" width="58" height="18" rx="6" />
-    <rect x="106" y="106" width="26" height="18" rx="6" />
-    <rect x="140" y="106" width="48" height="18" rx="6" />
-
-    <rect x="40" y="148" width="34" height="18" rx="6" />
-    <rect x="82" y="148" width="50" height="18" rx="6" />
-    <rect x="140" y="148" width="48" height="18" rx="6" />
-
-    <rect x="40" y="190" width="44" height="18" rx="6" />
-    <rect x="92" y="190" width="40" height="18" rx="6" />
-  </g>
+  <!-- Denoise gradient revealed through the shade-block dither: densest
+       (dark green) on the left resolving to sparsest (bright green) on
+       the right. -->
+  <rect x="16" y="80" width="224" height="96" fill="url(#denoise)" mask="url(#ditherMask)" />
 </svg>
