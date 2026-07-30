@@ -114,6 +114,14 @@ bottom-right; the pager hides during confirm/selecting.
   again and resumes instead of bricking on load. The non-functional Cancel
   button + all its wiring (endpoint, method, `_download_cancelled`) were removed.
 
+**In-app docs refresh.** The About / Help modals (`index.html`, `#modal-about` /
+`#modal-help`) were brought current: SmolLM3-3B added to both (model blurb,
+hyperparameters, confidence semantics, AR gating), the overlays/settings section
+rewritten for the Commit Order overlay + shared Settings page, the analytics
+token-overlay section updated for the per-frame scrubber + Heatmap + AR gating,
+and a menu download / pagination note added to Quick start. `AGENTS.md` now asks
+each session to check About/Help whenever `HANDOFF.md` is touched.
+
 **Analytics per-frame scrubber + durable Heatmap** (frontend-only; the frames
 endpoint `/api/analytics/runs/{id}/frames` already shipped every frame, so no
 server / `metrics.py` / `tokens.json` change).
@@ -289,17 +297,49 @@ end to end, reusing the frame/token contract.
 This session shipped and validated a large batch (see "Recently shipped"): the
 analytics scrubber + Heatmap, the app icon redesign, the Settings page + Commit
 Order overlay + menu pagination, and cross-page download navigation with a
-draggable toast + partial-cache fix. The next candidate, agreed with the
-maintainer, is below. Deliberate in Ask mode before Plan.
+draggable toast + partial-cache fix. The next candidates, agreed with the
+maintainer, are below (sequence: the `results/` rename as a warm-up, then AR
+Phase C, then Mamba-3). Deliberate each in Ask mode before Plan.
 
-**1. Autoregressive analysis tools (Phase C).** SmolLM3 has no Edit Frames (it
-is left-to-right), so add AR-native xAI. Suggested order: (a) **top-k
-alternatives on hover** (competing tokens + probabilities per position; opt-in
-logit capture in `ar_sampler.py`, mirroring DiffusionGemma's `entropy_signal`);
-(b) **top-k "change the last token" resume** (truncate-force-continue: set
+**1. Rename `Results/` -> `results/` (small mechanical warm-up, its own
+commit).** Almost everything routes through one constant,
+`RESULTS_DIR = Path("Results")` (`src/web/server.py:74`); also update
+`.gitignore` (`Results/`) and the doc/comment references (`src/web/ui_state.py`,
+`src/web/static/overlays.js`, `analytics.html`, `desktop.py`, the Help copy in
+`index.html`, and `README` / `ROADMAP` / `HANDOFF`). `Results/` is gitignored,
+so saved runs + `ui_state.json` are untracked: there is no `git mv`, just a
+local `mv Results results` so existing analytics history carries over. Settle in
+Plan: the name (`results/` vs the code-native `runs/`, cf. `run_dir` / `run_id`
+/ `list_runs`) and the location (repo root vs a nested ignored parent like
+`data/results/`).
+
+**2. Autoregressive analysis tools (Phase C).** SmolLM3 has no Edit Frames (it
+is left-to-right), so add AR-native xAI, leading with the standout: (a) **top-k
+"change the last token" resume** (truncate-force-continue: set
 `supports_resume=True` and add `handle_resume` in `smollm3_worker.py`, reusing
-the resume path + scrubber); (c) a **per-position entropy sparkline**. Mind the
-documented O(n^2) AR frame-payload caveat for long runs. See `ROADMAP.md` Phase C.
+the resume path + scrubber; opt-in top-k logit capture in `ar_sampler.py`,
+mirroring DiffusionGemma's `entropy_signal`); (b) **top-k alternatives on hover**
+(competing tokens + probabilities per position, sharing that same capture
+plumbing); (c) a **per-position entropy sparkline**. Mind the documented O(n^2)
+AR frame-payload caveat for long runs. See `ROADMAP.md` Phase C.
+
+**3. State-space models: Mamba-3 (new model class).** A genuinely new xAI
+direction: SSMs compress all context into a fixed-size recurrent state, so they
+unlock overlays no other model here can show. Target the 1.5B SISO / MIMO
+checkpoints on the `state-spaces` HF org (Mamba-3, arXiv 2603.15569). **Key open
+decision, settle first: base vs instruct.** The `state-spaces` weights are base
+LMs (Pile / SlimPajama), not instruction-tuned, so chat prompting reads as raw
+completion unless we find an instruct-tuned variant or frame it as a
+base-completion model. Constraints: its own `.venv-ssm`; native `mamba-ssm` +
+`causal-conv1d` CUDA / Triton kernels, so GPU-only (no CPU fallback like SmolLM3)
+and likely a custom decode loop rather than transformers `.generate`. VRAM is
+trivial (~3 GB weights + constant state). The **streaming baseline reuses the AR
+frame / token contract** and `model_type` gating (no Edit Frames; keep timing,
+confidence, Heatmap); reserve a distinct `ssm` capability flag for later.
+**Phase-2 xAI payoff:** SSM-native overlays on the recurrent state, per-token
+Δ / state-write intensity, a state-norm evolution sparkline, and fixed-state
+forgetting / retrieval probes, all gated on capturing kernel intermediates
+(forward hooks or the reference path). Sequenced after (2).
 
 **Standing backlog (unchanged; see `ROADMAP.md`):** multi-canvas DiffusionGemma
 resume (the remaining Phase 2 milestone); mask confidence-opacity for

@@ -98,3 +98,11 @@ up cold. Mirror its structure:
 
 Also update `README.md` (feature overview + Implementation Status) and
 `ROADMAP.md` (shipped vs backlog) as features land.
+
+Whenever you touch `HANDOFF.md` at session end, also check the in-app **About**
+and **Help** modals (`src/web/static/index.html`, `#modal-about` /
+`#modal-help`). If the session landed anything a user would notice: a new model,
+a new page, changed overlays or settings, a new hyperparameter, or a workflow
+change, update the matching About/Help copy in the same pass so the in-app docs
+never fall behind. Small internal-only fixes do not require an About/Help edit.
+Follow the no-em-dash rule there too.

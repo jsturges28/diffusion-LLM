@@ -163,9 +163,26 @@ items are detailed further in their own section below. (The analytics scrubber,
 app icon, Settings page + Commit Order overlay, menu pagination, and download
 navigation all shipped this session; see above.)
 
-1. **Autoregressive analysis tools (Phase C).** Top-k alternatives on hover,
-   then top-k "change the last token" resume, then a per-position entropy
-   sparkline for SmolLM3. (See Phase C above.)
+1. **Rename `Results/` -> `results/` (mechanical warm-up).** Routes through the
+   single `RESULTS_DIR = Path("Results")` constant (`src/web/server.py`), plus
+   `.gitignore` and doc/comment references. `Results/` is gitignored, so saved
+   runs are untracked (no `git mv`; a local `mv` carries existing history over).
+   Open in Plan: the name (`results/` vs the code-native `runs/`) and whether to
+   nest it under an ignored parent (e.g. `data/results/`) or keep it at the root.
+2. **Autoregressive analysis tools (Phase C).** Leading with the standout, top-k
+   "change the last token" resume, then top-k alternatives on hover (shared
+   logit capture), then a per-position entropy sparkline for SmolLM3. (See Phase
+   C above.)
+3. **State-space models: Mamba-3 (new model class).** Integrate a 1.5B Mamba-3
+   SISO / MIMO checkpoint (`state-spaces` HF org, arXiv 2603.15569) as the first
+   SSM, opening a distinct xAI lens: the fixed-size recurrent state. Key open
+   decision, base vs instruct (the `state-spaces` weights are base LMs, not
+   instruction-tuned). Own `.venv-ssm`; native `mamba-ssm` / `causal-conv1d`
+   CUDA kernels (GPU-only, custom decode loop); ~3 GB VRAM. The streaming
+   baseline reuses the AR frame / token contract and `model_type` gating; the
+   phase-2 payoff is SSM-native state overlays (per-token Δ / state-write
+   intensity, state-norm sparkline, fixed-state forgetting probes), which need
+   kernel-intermediate capture. Sequenced after the AR tools.
 
 ---
 
