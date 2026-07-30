@@ -135,6 +135,22 @@ analytics suite.
   a corner-to-corner dark-to-bright green denoise gradient (`assets/icon.svg`,
   plus `assets/icon.png` via `scripts/render_icon.py`; `desktop.py` prefers the
   PNG, the launcher keeps the SVG).
+- Shipped (this session): the **Settings page + Commit Order overlay**, **menu
+  pagination**, and **cross-page download navigation**. Commit Order moved from a
+  persistent Settings toggle to a generator overlay-picker option (diffusion-only,
+  `app.js`), matching analytics. The generator's Settings modal became a shared
+  **`/settings.html`** page (left tab rail: Appearance / Interface) with a gear
+  icon in the generator, Main Menu, and Analytics headers; the settings schema
+  now lives in `overlays.js` (`SETTINGS_DEFAULTS` / `parseSettings` /
+  `settingsEqual`), shared by `app.js` and `settings.js`. The Main Menu model
+  list is paginated (`i/N` pager, `menu.js`). A model download now runs as a
+  global task the user can navigate away from: a shared draggable, corner-snapping
+  toast (`download_toast.js`, persisted via `diffusion_download_toast_corner`)
+  surfaces progress/completion when the inline veneer is off-screen; the menu
+  re-attaches the veneer on return, `POST /api/models/download/ack` clears the
+  terminal state, and `is_repo_cached` / `_has_incomplete` (`hf_download.py`)
+  make a partial (`*.incomplete`) cache resume instead of bricking. The
+  non-functional Cancel button was removed (real cancellation deferred).
 - For the feature overview and architecture, see `README.md`. For the build
   history, see `.cursor/plans/`.
 
@@ -143,18 +159,11 @@ analytics suite.
 ## Next session (accepted directions)
 
 Agreed with the maintainer (deliberate each in Ask mode before Plan). The AR
-items are detailed further in their own section below. (The app icon redesign
-and the analytics per-frame scrubber shipped this session; see above.)
+items are detailed further in their own section below. (The analytics scrubber,
+app icon, Settings page + Commit Order overlay, menu pagination, and download
+navigation all shipped this session; see above.)
 
-1. **Shared Settings page + gear icon.** Promote the generator-only Settings
-   modal (`index.html`, logic in `app.js`) to a shared **`/settings.html`** page
-   with a left tab rail + right pane; replace the header "Settings" text with a
-   gear icon and add a matching gear entry to the Main Menu (`menu.html`, which
-   today links only to Analytics). All settings are global and server-persisted
-   (`ui_state.py`), so a page beats duplicating the modal. Tab grouping to settle
-   in Plan (a first cut: Appearance / Overlays / Interface, with room for future
-   Models / Analytics tabs).
-2. **Autoregressive analysis tools (Phase C).** Top-k alternatives on hover,
+1. **Autoregressive analysis tools (Phase C).** Top-k alternatives on hover,
    then top-k "change the last token" resume, then a per-position entropy
    sparkline for SmolLM3. (See Phase C above.)
 

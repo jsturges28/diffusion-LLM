@@ -27,6 +27,11 @@
     document.getElementById("menu-activation-pct");
   var activationCancel =
     document.getElementById("menu-activation-cancel");
+  var modelPager = document.getElementById("menu-pager");
+  var modelPagePrev = document.getElementById("menu-page-prev");
+  var modelPageNext = document.getElementById("menu-page-next");
+  var modelPageCounter =
+    document.getElementById("menu-page-counter");
 
   console.assert(!!modelList, "menu: model list mount missing");
   console.assert(!!systemText, "menu: system text mount missing");
@@ -37,6 +42,21 @@
   var confirming = false;
   // The in-flight selection ({ model, li }) and its status poll timer.
   var activeSelection = null;
+  // Model pagination: show up to MODELS_PER_PAGE rows per page, with a
+  // prev/counter/next pager in the panel's bottom-left corner.
+  var MODELS_PER_PAGE = 3;
+  var pagedModels = [];
+  var pagedGpuPresent = false;
+  var currentPage = 0;
+
+  // Cross-page download navigation: the download is a global server task
+  // (see download_toast.js), so the user can page/navigate away while it
+  // runs. reattachSettled gates the toast until the initial re-attach has
+  // paged to and bound the target row; lastDownloadStatus / prevDownload-
+  // State track the toast module's poll for binding + the row fence.
+  var reattachSettled = false;
+  var lastDownloadStatus = null;
+  var prevDownloadState = null;
   var pollTimer = null;
   // The row element whose weights are currently pre-downloading.
   var downloadRow = null;
@@ -388,8 +408,8 @@
   }
 
   // Translucent overlay for uncached models. Three states: an idle
-  // "Click to Download" label, a progress area (bar + percent +
-  // cancel), and a message area (success/error + Ok) shown on finish.
+  // "Click to Download" label, a progress area (bar + percent), and a
+  // message area (success/error + Ok) shown on finish.
   function buildDownloadVeneer() {
     var veneer = document.createElement("div");
     veneer.className = "menu-model-veneer";
@@ -408,17 +428,8 @@
     var fill = document.createElement("span");
     fill.className = "menu-model-veneer-fill";
     bar.appendChild(fill);
-    var cancel = document.createElement("button");
-    cancel.type = "button";
-    cancel.className = "menu-model-veneer-cancel";
-    cancel.textContent = "Cancel";
-    cancel.addEventListener("click", function (event) {
-      event.stopPropagation();
-      cancelDownload();
-    });
     prog.appendChild(pct);
     prog.appendChild(bar);
-    prog.appendChild(cancel);
     veneer.appendChild(prog);
     var message = document.createElement("div");
     message.className = "menu-model-veneer-message";
@@ -482,11 +493,71 @@
   }
 
   function renderModels(list, gpuPresent) {
+    pagedModels = list || [];
+    pagedGpuPresent = gpuPresent;
+    currentPage = 0;
+    renderCurrentPage();
+  }
+
+  function pageCount() {
+    return Math.max(
+      1, Math.ceil(pagedModels.length / MODELS_PER_PAGE)
+    );
+  }
+
+  // Render just the current page of models and refresh the pager.
+  function renderCurrentPage() {
+    var pages = pageCount();
+    currentPage = Math.min(Math.max(currentPage, 0), pages - 1);
+    var start = currentPage * MODELS_PER_PAGE;
+    var slice = pagedModels.slice(
+      start, start + MODELS_PER_PAGE
+    );
     modelList.innerHTML = "";
-    for (var i = 0; i < list.length; i++) {
+    for (var i = 0; i < slice.length; i++) {
       modelList.appendChild(
-        buildRow(list[i], gpuPresent)
+        buildRow(slice[i], pagedGpuPresent)
       );
+    }
+    if (modelPageCounter) {
+      modelPageCounter.textContent =
+        (currentPage + 1) + " / " + pages;
+    }
+    if (modelPagePrev) {
+      modelPagePrev.disabled = currentPage <= 0;
+    }
+    if (modelPageNext) {
+      modelPageNext.disabled = currentPage >= pages - 1;
+    }
+    updatePagerVisibility();
+  }
+
+  // The pager shows only when models exist and no confirm/selection is
+  // in progress (paging mid-confirm would rebuild the contracted row).
+  function updatePagerVisibility() {
+    if (!modelPager) {
+      return;
+    }
+    modelPager.hidden = !(
+      pagedModels.length > 0 && !confirming && !selecting
+    );
+  }
+
+  // Step one page within bounds and re-render.
+  function goToPage(delta) {
+    var next = currentPage + delta;
+    if (next < 0 || next > pageCount() - 1) {
+      return;
+    }
+    currentPage = next;
+    renderCurrentPage();
+    // Re-bind (or release) the download veneer for the new page and let
+    // the toast reflect whether the download row is now visible.
+    if (reattachSettled) {
+      syncDownloadBinding();
+      if (typeof downloadToastRefresh === "function") {
+        downloadToastRefresh();
+      }
     }
   }
 
@@ -608,6 +679,10 @@
   // menu): un-contract the list and drop any confirm prompt.
   function resetMenuConfirm() {
     confirming = false;
+    updatePagerVisibility();
+    if (typeof downloadToastRefresh === "function") {
+      downloadToastRefresh();
+    }
     if (!modelList) {
       return;
     }
@@ -659,6 +734,10 @@
       return;
     }
     confirming = true;
+    updatePagerVisibility();
+    if (typeof downloadToastRefresh === "function") {
+      downloadToastRefresh();
+    }
     activeSelection = { model: model, li: li };
     clearError();
     modelList.classList.add("is-confirming");
@@ -870,6 +949,7 @@
   // Ok on success: drop the veneer and denoise-reveal the (until now
   // hidden) model description; the row is then selectable.
   function completeDownload(model, li) {
+    ackDownload();
     li.classList.remove("needs-download");
     li._needsDownload = false;
     model.downloaded = true;
@@ -898,22 +978,244 @@
       "Download attempt unsuccessful. Error: " + message,
       true,
       function () {
+        ackDownload();
         resetDownload(li);
       }
     );
   }
 
-  function cancelDownload() {
-    if (!downloadRow) {
+  // ---- Cross-page download navigation ----
+
+  function ackDownload() {
+    if (typeof downloadToastAck === "function") {
+      downloadToastAck();
+    }
+  }
+
+  function modelIndexById(id) {
+    for (var i = 0; i < pagedModels.length; i++) {
+      if (pagedModels[i].id === id) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  function modelById(id) {
+    var idx = modelIndexById(id);
+    return idx >= 0 ? pagedModels[idx] : null;
+  }
+
+  function rowById(id) {
+    if (!modelList || !id) {
+      return null;
+    }
+    var rows = modelList.querySelectorAll(".menu-model-row");
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].getAttribute("data-id") === id) {
+        return rows[i];
+      }
+    }
+    return null;
+  }
+
+  function ensureVeneer(li) {
+    var veneer = li.querySelector(".menu-model-veneer");
+    if (!veneer) {
+      veneer = buildDownloadVeneer();
+      li.appendChild(veneer);
+    }
+    return veneer;
+  }
+
+  // Bind the target row's veneer and resume progress polling (used when a
+  // menu load or a page-back lands on the downloading model's row).
+  function bindDownloadingRow(model, li) {
+    ensureVeneer(li);
+    stopPolling();
+    downloadRow = li;
+    li.classList.add("is-downloading");
+    var parts = veneerParts(li);
+    if (parts.label) {
+      parts.label.hidden = true;
+    }
+    if (parts.prog) {
+      parts.prog.hidden = false;
+    }
+    var frac = lastDownloadStatus && lastDownloadStatus.progress
+      && typeof lastDownloadStatus.progress.fraction === "number"
+      ? lastDownloadStatus.progress.fraction
+      : 0;
+    var pct = Math.max(0, Math.min(100, Math.round(frac * 100)));
+    if (parts.pct) {
+      parts.pct.textContent = "Downloading " + pct + "%";
+    }
+    if (parts.fill) {
+      parts.fill.style.width = pct + "%";
+    }
+    pollDownload(model, li);
+  }
+
+  // Show the terminal (done/error) veneer on the target row when the menu
+  // was not bound as the download finished (i.e. the user was away). The
+  // bound-row case is handled by the in-page poll's finish/fail handlers.
+  function showDownloadResult(model, li, isError, message) {
+    if (downloadRow === li) {
       return;
     }
-    var li = downloadRow;
-    fetch(
-      "/api/models/download/cancel", { method: "POST" }
-    ).catch(function () {
-      // Best-effort; the UI resets regardless.
-    });
-    resetDownload(li);
+    var veneer = ensureVeneer(li);
+    var msg = veneer.querySelector(".menu-model-veneer-message");
+    if (msg && !msg.hidden) {
+      return;
+    }
+    li.classList.remove("is-downloading");
+    if (isError) {
+      showVeneerMessage(
+        li,
+        "Download attempt unsuccessful. Error: " + (message || ""),
+        true,
+        function () {
+          ackDownload();
+          resetDownload(li);
+        }
+      );
+    } else {
+      showVeneerMessage(
+        li,
+        "Download successful for "
+        + (model.display_name || model.id) + "!",
+        false,
+        function () {
+          completeDownload(model, li);
+        }
+      );
+    }
+  }
+
+  // Bind/unbind the veneer for the current page against the latest known
+  // download status. Does not touch the row fence (onDownloadStatus owns
+  // menu-busy) or the current page (that is user/re-attach driven).
+  function syncDownloadBinding() {
+    var status = lastDownloadStatus;
+    var state = status ? status.state : "idle";
+    var target = status ? status.target : null;
+    var active = state === "downloading"
+      || state === "done" || state === "error";
+    var row = (active && target) ? rowById(target) : null;
+    if (!row) {
+      if (downloadRow) {
+        stopPolling();
+        downloadRow = null;
+      }
+      return;
+    }
+    var model = modelById(target);
+    if (!model) {
+      return;
+    }
+    if (state === "downloading") {
+      if (downloadRow !== row) {
+        bindDownloadingRow(model, row);
+      }
+    } else if (state === "done") {
+      showDownloadResult(model, row, false, null);
+    } else if (state === "error") {
+      showDownloadResult(model, row, true, status.message);
+    }
+  }
+
+  // Toast subscriber: keeps the row fence and (once re-attached) the veneer
+  // binding in sync with the global download as it progresses/finishes,
+  // even when the menu is paged away from the row.
+  function onDownloadStatus(status) {
+    lastDownloadStatus = status;
+    var state = status ? status.state : "idle";
+    if (state === "downloading") {
+      document.body.classList.add("menu-busy");
+    } else if (
+      prevDownloadState === "downloading"
+      && !selecting && !confirming
+    ) {
+      // Download just ended: lift the fence, unless an activation holds it.
+      document.body.classList.remove("menu-busy");
+    }
+    prevDownloadState = state;
+    if (reattachSettled) {
+      syncDownloadBinding();
+    }
+  }
+
+  // The toast is suppressed on the menu while the inline veneer is visible:
+  // the target row is bound on the current page and not confirm-collapsed.
+  // Suppressed until re-attach settles so it does not flash on load.
+  function menuDownloadInlineVisible() {
+    if (!reattachSettled) {
+      return true;
+    }
+    return !!downloadRow && !confirming;
+  }
+
+  // Toast click on the menu: exit any confirm, page to the download's row,
+  // and bind it (no full reload).
+  function pageToDownloadTarget() {
+    var target = lastDownloadStatus ? lastDownloadStatus.target : null;
+    if (!target) {
+      return;
+    }
+    if (selecting || confirming) {
+      finishSelecting();
+    }
+    var idx = modelIndexById(target);
+    if (idx >= 0) {
+      currentPage = Math.floor(idx / MODELS_PER_PAGE);
+      renderCurrentPage();
+    }
+    syncDownloadBinding();
+    if (typeof downloadToastRefresh === "function") {
+      downloadToastRefresh();
+    }
+  }
+
+  // On menu load: if a download is in flight or freshly finished, page to
+  // its row so the veneer is visible, apply the fence, and bind it.
+  function reattachDownload() {
+    fetch("/api/models/download-status")
+      .then(function (response) {
+        return response.json();
+      })
+      .then(function (status) {
+        lastDownloadStatus = status;
+        prevDownloadState = status.state;
+        var state = status.state;
+        var active = state === "downloading"
+          || state === "done" || state === "error";
+        if (active && status.target) {
+          var idx = modelIndexById(status.target);
+          if (idx >= 0) {
+            // Only re-render if the target is on a different page (avoid a
+            // redundant innerHTML clear/rebuild that flickers on load).
+            var targetPage = Math.floor(idx / MODELS_PER_PAGE);
+            if (targetPage !== currentPage) {
+              currentPage = targetPage;
+              renderCurrentPage();
+            }
+          }
+          if (state === "downloading") {
+            document.body.classList.add("menu-busy");
+          }
+        }
+        reattachSettled = true;
+        syncDownloadBinding();
+        if (typeof downloadToastRefresh === "function") {
+          downloadToastRefresh();
+        }
+      })
+      .catch(function () {
+        reattachSettled = true;
+        if (typeof downloadToastRefresh === "function") {
+          downloadToastRefresh();
+        }
+      });
   }
 
   // Show the download progress bar (only while downloading weights).
@@ -1076,6 +1378,7 @@
       .then(function (info) {
         renderSystem(info);
         renderModels(info.models || [], !!info.gpu_name);
+        reattachDownload();
       })
       .catch(function (err) {
         showSystemError("Could not reach the server.");
@@ -1087,6 +1390,26 @@
 
   if (activationCancel) {
     activationCancel.addEventListener("click", cancelSelection);
+  }
+
+  if (modelPagePrev) {
+    modelPagePrev.addEventListener("click", function () {
+      goToPage(-1);
+    });
+  }
+  if (modelPageNext) {
+    modelPageNext.addEventListener("click", function () {
+      goToPage(1);
+    });
+  }
+
+  // Wire the cross-page download toast (download_toast.js): the menu
+  // suppresses it while the inline veneer shows, overrides its click to
+  // page to the row, and reacts to the global download status.
+  if (typeof downloadToastRegisterInlineCheck === "function") {
+    downloadToastRegisterInlineCheck(menuDownloadInlineVisible);
+    downloadToastRegisterNavigate(pageToDownloadTarget);
+    downloadToastOnStatus(onDownloadStatus);
   }
 
   spawnFloaters();

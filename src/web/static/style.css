@@ -167,6 +167,74 @@ body {
   color: var(--accent);
 }
 
+/* Icon-only header link (the Settings gear): center the glyph so it
+   aligns with the text links; it inherits color/hover from .header-link
+   via the SVG's stroke="currentColor". */
+.header-link-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Active in-page link: accent-colored and non-interactive (e.g. the
+   Analytics label on the Analytics page, or the Settings gear on the
+   Settings page). Shared here so every page's header shows it. */
+.header-link-active {
+  color: var(--accent);
+  cursor: default;
+}
+
+/* Cross-page download toast (created by download_toast.js). Fixed
+   upper-right; shows while a model download runs but its inline progress
+   veneer is not visible, and is clickable to return to the download. */
+.download-toast {
+  position: fixed;
+  bottom: 20px;
+  left: 24px;
+  z-index: 300;
+  max-width: min(70vw, 420px);
+  padding: 10px 16px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+  touch-action: none;
+  user-select: none;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.download-toast.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+/* While dragging, kill the transition so the toast tracks the pointer
+   1:1; it snaps to the released quadrant's corner on release. */
+.download-toast.is-dragging {
+  transition: none;
+  cursor: grabbing;
+}
+
+.download-toast:hover {
+  border-color: var(--border-focus);
+}
+
+.download-toast.is-error {
+  color: var(--danger);
+  border-color: rgba(255, 68, 68, 0.35);
+}
+
 /* "New run saved" cue on the Analytics link. */
 #link-analytics {
   position: relative;
@@ -329,6 +397,11 @@ body {
 .prompt-hist-icon:hover {
   color: var(--text-primary);
   border-color: var(--text-dim);
+}
+
+.prompt-hist-nav-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 .prompt-hist-btn.is-active {
@@ -2375,6 +2448,7 @@ body.menu-video-off .menu-video {
 }
 
 .menu-panel {
+  position: relative;
   width: 100%;
   max-width: 560px;
   background: rgba(10, 10, 10, 0.72);
@@ -2833,6 +2907,39 @@ body.menu-video-off .menu-video {
   padding-top: 16px;
 }
 
+/* Settings gear pinned to the panel's bottom-right corner (offsets match
+   the panel's right/bottom padding), sitting on the Analytics link's
+   line while that link stays centered. */
+.menu-settings-link {
+  position: absolute;
+  right: 32px;
+  bottom: 24px;
+}
+
+/* Model pagination, pinned to the panel's bottom-left corner (mirrors
+   the gear on the right), on the Analytics link's row. Arrows reuse the
+   prompt-history nav-button styling. */
+.menu-pager {
+  position: absolute;
+  left: 32px;
+  bottom: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.menu-pager[hidden] {
+  display: none;
+}
+
+#menu-page-counter {
+  font-size: 10px;
+  color: var(--text-secondary);
+  min-width: 30px;
+  text-align: center;
+  white-space: nowrap;
+}
+
 /* The menu's Analytics "new run" cue reuses the generator's pill badge
    (.analytics-new-dot): a green count chip beside the Analytics link. */
 
@@ -2901,26 +3008,6 @@ body.menu-busy
   width: 0;
   background: var(--accent);
   transition: width 0.2s ease;
-}
-
-.menu-model-veneer-cancel {
-  padding: 4px 14px;
-  font-family: inherit;
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  /* High contrast so it reads clearly over the translucent veneer. */
-  color: var(--text-primary);
-  background: rgba(0, 0, 0, 0.4);
-  border: 1px solid var(--danger);
-  border-radius: var(--radius);
-  cursor: pointer;
-  transition: color 0.15s, background 0.15s;
-}
-
-.menu-model-veneer-cancel:hover {
-  color: var(--bg-primary);
-  background: var(--danger);
 }
 
 /* While veneered, hide the description so the "Click to Download"

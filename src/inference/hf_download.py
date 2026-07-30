@@ -69,6 +69,37 @@ def _repo_blobs_dir(repo_id: str) -> Path:
     return Path(HF_HUB_CACHE) / folder / "blobs"
 
 
+def _has_incomplete(blobs_dir: Path) -> bool:
+    """Whether the blobs dir has any in-progress ``*.incomplete`` part."""
+    if not blobs_dir.is_dir():
+        return False
+    for entry in blobs_dir.iterdir():
+        if entry.name.endswith(".incomplete"):
+            return True
+    return False
+
+
+def is_repo_cached(repo_id: str) -> bool:
+    """Whether ``repo_id`` is *fully* cached, with no partial parts.
+
+    Both the fast path here and the supervisor's ``_is_downloaded`` use
+    this so an interrupted download (leaving ``*.incomplete`` blobs) is
+    treated as not-downloaded rather than complete. Re-downloading then
+    resumes the remaining parts instead of the cache being misread as
+    ready and the model hanging on load.
+    """
+    assert isinstance(repo_id, str) and repo_id, "repo_id required"
+    from huggingface_hub import snapshot_download
+
+    if _has_incomplete(_repo_blobs_dir(repo_id)):
+        return False
+    try:
+        snapshot_download(repo_id, local_files_only=True)
+        return True
+    except Exception:  # noqa: BLE001 - not (fully) cached.
+        return False
+
+
 def _downloaded_bytes(blobs_dir: Path) -> int:
     """Bytes on disk in ``blobs_dir`` (incl. ``*.incomplete`` parts)."""
     if not blobs_dir.is_dir():
@@ -115,11 +146,11 @@ def download_with_progress(
     assert isinstance(repo_id, str) and repo_id, "repo_id required"
     from huggingface_hub import snapshot_download
 
-    # Fast path: everything is already cached locally.
-    try:
+    # Fast path: fully cached (and not partial) already. A partial cache
+    # falls through so the fetch below resumes the ``*.incomplete`` parts
+    # and the poller continues from the on-disk size.
+    if is_repo_cached(repo_id):
         return snapshot_download(repo_id, local_files_only=True)
-    except Exception:  # noqa: BLE001 - not cached; fall through to fetch.
-        pass
 
     total_bytes = _repo_total_bytes(repo_id)
     blobs_dir = _repo_blobs_dir(repo_id)

@@ -35,6 +35,7 @@ UI_STATE_KEYS: Dict[str, int] = {
     "diffusion_new_runs": 262_144,
     "diffusion_prompt_history": 262_144,
     "diffusion_generate_teased": 64,
+    "diffusion_download_toast_corner": 32,
 }
 
 # Serialize read-modify-write so concurrent PUTs cannot clobber each

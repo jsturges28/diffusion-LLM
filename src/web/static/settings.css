@@ -1,0 +1,86 @@
+/* Settings page: a left tab rail + right pane below the shared header.
+   The rows, toggles, labels, and footer buttons reuse the shared styles
+   in style.css; only the page layout lives here. */
+
+#settings-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding-top: 20px;
+}
+
+#settings-layout {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 28px;
+}
+
+/* Left tab rail. */
+#settings-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+  min-width: 150px;
+  padding-right: 16px;
+  border-right: 1px solid var(--border);
+}
+
+.settings-tab {
+  background: none;
+  border: none;
+  text-align: left;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.settings-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-surface);
+}
+
+.settings-tab.is-active {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+/* Right pane holds one panel per tab. */
+#settings-pane {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.settings-panel[hidden] {
+  display: none;
+}
+
+/* Row separators mirror the old modal body. */
+.settings-panel .settings-row {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-panel .settings-row:first-child {
+  padding-top: 4px;
+}
+
+.settings-panel .settings-row:last-child {
+  border-bottom: none;
+}
+
+/* Footer (Save/Reset) reuses .modal-footer; keep it out of the scroll. */
+#settings-footer {
+  flex-shrink: 0;
+}

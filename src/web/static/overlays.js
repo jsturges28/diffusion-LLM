@@ -236,6 +236,7 @@ var PERSIST_KEYS = [
   "diffusion_new_runs",
   "diffusion_prompt_history",
   "diffusion_generate_teased",
+  "diffusion_download_toast_corner",
 ];
 
 // Debounce PUTs per key so rapid writes (e.g. successive settings
@@ -321,6 +322,63 @@ function persistApplyHydrated(state) {
       // Non-fatal: this key just will not hydrate this session.
     }
   }
+}
+
+// ---- Shared settings model (generator + settings page) ----
+//
+// Durable user preferences, persisted under SETTINGS_KEY (see
+// persistSet / PERSIST_KEYS). app.js applies the live effects; the
+// Settings page (settings.js) edits them. Both source their defaults
+// and parsing here so the schema lives in exactly one place. Commit
+// Order is intentionally not here: it is a per-view overlay option now,
+// not a saved preference.
+
+var SETTINGS_KEY = "diffusion_settings";
+
+var SETTINGS_DEFAULTS = {
+  highlightTokens: false,
+  diffusionText: false,
+  diffusionTextMode: "default",
+  gpuTicker: true,
+};
+
+// Parse a stored settings JSON string into a complete settings object,
+// falling back to the defaults for any missing or invalid field. Never
+// throws; corrupt storage yields the defaults.
+function parseSettings(raw) {
+  var settings = {
+    highlightTokens: SETTINGS_DEFAULTS.highlightTokens,
+    diffusionText: SETTINGS_DEFAULTS.diffusionText,
+    diffusionTextMode: SETTINGS_DEFAULTS.diffusionTextMode,
+    gpuTicker: SETTINGS_DEFAULTS.gpuTicker,
+  };
+  if (!raw) {
+    return settings;
+  }
+  try {
+    var parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      settings.highlightTokens = !!parsed.highlightTokens;
+      settings.diffusionText = !!parsed.diffusionText;
+      settings.diffusionTextMode =
+        parsed.diffusionTextMode === "cycle" ? "cycle" : "default";
+      // Default on when the key is absent (older saved state).
+      settings.gpuTicker = parsed.gpuTicker !== false;
+    }
+  } catch (_e) {
+    // Corrupt storage: keep the defaults.
+  }
+  return settings;
+}
+
+// Field-wise equality, driving the Settings page Save/Reset enablement.
+function settingsEqual(a, b) {
+  return (
+    a.highlightTokens === b.highlightTokens
+    && a.diffusionText === b.diffusionText
+    && a.diffusionTextMode === b.diffusionTextMode
+    && a.gpuTicker === b.gpuTicker
+  );
 }
 
 // ---- "New runs" registry (shared across generator + analytics) ----

@@ -111,11 +111,6 @@ html, body {
   align-items: center;
 }
 
-.header-link-active {
-  color: var(--accent);
-  cursor: default;
-}
-
 /* ---- Main split layout ---- */
 
 #main-split {

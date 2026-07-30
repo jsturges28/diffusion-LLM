@@ -290,15 +290,15 @@ A single edit followed by **Resume to End** is the simple case; you can also cha
 A collapsible **Overlay** drawer in the top-right of the output area recolors the frame you are viewing. It defaults to **None** and offers:
 
 - **Heatmap:** recolor resolved tokens by confidence (dim, desaturated tones for low, bright green for high).
+- **Commit Order:** tint resolved tokens by the step at which they settled, from light green (early) to red-orange (late), with a matching gradient legend in the status bar (diffusion runs only, like Diff).
 - **Diff vs Original:** compare an edited run against the original. It is listed but disabled until you have edited and resumed a run. When active, a slim control row below the scrubber provides independent **Original** / **Edited** opacity sliders and a **Difference blend** toggle, alongside a `Diverged N/total` readout.
 
-Persistent preferences live in **Settings** (in the header) and are saved per-browser; the modal stages changes behind **Save** / **Reset** with inline status feedback:
+Persistent preferences live on a shared **Settings page** (`/settings.html`), reached from a **gear icon** in the header of the generator, the Main Menu, and Analytics. It has a left tab rail and stages changes behind **Save** / **Reset**; all settings are server-persisted and shared across pages:
 
-- **Show Commit Order:** tint resolved tokens by the step at which they settled, from light green (early) to red-orange (late), with a matching gradient legend in the status bar.
-- **Highlight tokens:** add a light hover highlight so the full span of the hovered token is easy to see.
-- **Render diffusion-style text:** dynamic status messages resolve from scrambled block-glyph noise, like a denoising pass, in the green palette (skipped automatically under `prefers-reduced-motion`). A **Mode** sub-setting picks **Default** (resolve once) or **Cycle** (keep re-diffusing while the status is active). The same effect drives small button interactions (Shuffle, the Generate/New Run idle cycle, and Lock In dissolving into mask glyphs).
+- **Appearance** tab: **Render diffusion-style text** (dynamic status messages resolve from scrambled block-glyph noise, like a denoising pass, in the green palette, skipped automatically under `prefers-reduced-motion`; a **Mode** sub-setting picks **Default** to resolve once or **Cycle** to keep re-diffusing while the status is active, and the same effect drives small button interactions) and **Highlight tokens** (a light hover highlight so the full span of the hovered token is easy to see).
+- **Interface** tab: **Device tag ticker** (the scrolling GPU/device readout).
 
-The status bar reflects both (`Highlighted Tokens: On/Off`, `Show Commit Order: On/Off`). An explicit overlay selection (Heatmap or Diff) takes precedence; otherwise Commit Order, when enabled, is the ambient tint. Hovering any token still shows its position (`Token X/total` for LLaDA, `Token: X` for DiffusionGemma) and confidence for that frame (masked tokens report 0).
+The status bar reflects the highlight toggle (`Highlighted Tokens: On/Off`). Hovering any token still shows its position (`Token X/total` for LLaDA, `Token: X` for DiffusionGemma) and confidence for that frame (masked tokens report 0).
 
 #### Analytics Suite
 
@@ -331,13 +331,13 @@ Clicking **Save** writes a timestamped folder under `Results/` containing `metad
 - [x] Interactive remasking and resume: frame scrubber, click-to-remask, resume from any frame (LLaDA and single-canvas DiffusionGemma via seed-canvas re-entry)
 - [x] Guided multi-frame editing with faded original-run previews and partial resumes
 - [x] Per-token confidence: softmax at reveal (LLaDA), stability proxy or true entropy (DiffusionGemma)
-- [x] Grouped overlay picker (None / Heatmap / Diff vs Original), per-token hover tooltips, and token-hover highlight option
+- [x] Grouped overlay picker (None / Heatmap / Commit Order / Diff vs Original, the latter two diffusion-only), per-token hover tooltips, and token-hover highlight option
 - [x] Commit-order (resolution-step) token coloring; counterfactual "Diff vs Original" overlay with opacity sliders and difference blend
 - [x] Durable overlays: per-token records (text, mask, id, confidence) plus the pre-edit snapshot persisted per run, and a static commit-order / Diff-vs-Original viewer in the Analytics Suite
 - [x] Analytics run detail as a wide fade-in modal with a corner overlay drawer, a sortable Edited column, and streamlined grouping
 - [x] Analytics per-frame token scrubber and durable Heatmap: the detail modal's overlay replays every saved frame (None / Heatmap / Commit Order / Diff), Heatmap recoloring by persisted confidence, with Commit Order and Diff gated to diffusion runs (autoregressive runs get None + Heatmap)
 - [x] Guided-edit confirm/retry review step and Edit-Frames lock after an edited run is saved
-- [x] Persistent Settings (highlight tokens, commit order, diffusion text) with staged Save/Reset and status-bar readouts
+- [x] Shared tabbed Settings page (`/settings.html`) reached from a gear icon in the generator, Main Menu, and Analytics headers (Appearance: diffusion-style text + Mode, highlight tokens; Interface: device-tag ticker) with staged Save/Reset, server-persisted and shared across pages; Commit Order moved from a Settings toggle to the overlay picker
 - [x] Analytics Suite: model-aware run browser, convergence, timing, confidence, canvas-boundary markers
 - [x] Analytics run deletion (confirmation modal + toast) and contained, toggleable chart tooltips with line burn-through
 - [x] Reproducibility metadata (seed, GPU, git commit, library versions) and deterministic seeding
@@ -364,6 +364,9 @@ Clicking **Save** writes a timestamped folder under `Results/` containing `metad
 - [x] Model dropdown polish: fixed-width device pill (the signed headroom is shrunk to fit), a collapsed-width option list with ellipsized names, and a hover VRAM side-popup whose trailing +/-X is tinted green (fits) or red (short)
 - [x] Loaded model highlighted (and inert) in the dropdown with its loaded device locked while the other device stays switchable; the device-tag ticker is gated off on CPU (headroom is GPU-only)
 - [x] Autoregressive step counter is 1-based, so a full N-token run reads "Step N/N" (matching the diffusion convention)
+- [x] Main Menu model list paginated (prev/next + `i/N` indicator, styled like prompt history) instead of scrolling, with the Settings gear pinned to the panel corner
+- [x] Cross-page download navigation: a model download keeps running server-side while the user browses pagination, Analytics, and Settings; a shared draggable toast (snap-to-corner, persisted) surfaces progress/completion when the inline veneer is off-screen and returns to it on click
+- [x] Partial-cache resume: a download interrupted with `*.incomplete` parts is detected as not-downloaded, so the veneer reappears and `snapshot_download` resumes instead of the model bricking on load
 
 
 ## Roadmap
@@ -378,8 +381,8 @@ Detailed, living notes for each item (technical hooks, files to touch, open ques
 
 ### Possible extensions
 
-- [ ] Shared tabbed **Settings page** (`/settings.html`) reached from a gear icon in the header and on the Main Menu
 - [ ] Autoregressive analysis tools for SmolLM3: top-k alternatives on hover, "change the last token" resume, per-position entropy sparkline
+- [ ] Real download cancellation (killable subprocess fetch + cache cleanup); today the `.incomplete`/resume path makes an interrupted download recoverable instead
 - [ ] Side-by-side comparison with autoregressive generation
 - [ ] Alignment experiments (RLHF / DPO) or fine-tuning on custom instruction data
 

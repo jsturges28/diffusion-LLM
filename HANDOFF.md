@@ -67,10 +67,52 @@ analytics suite.
 
 ## Recently shipped (this session)
 
-**Validated this session**: the maintainer confirmed the analytics scrubber +
-Heatmap clean, and iterated on then approved the icon design. In-sandbox checks
-(`py_compile`, `node --check`, `pytest` 18/18, ReadLints) pass. The desktop
-window/dock icon render is the one GUI item to eyeball on hardware.
+**Validated on hardware this session** (the maintainer confirmed the analytics
+scrubber + Heatmap, the icon, the Settings page + Commit Order overlay + menu
+pagination, and the download navigation + draggable toast + partial-cache fix).
+In-sandbox checks (`py_compile`, `node --check`, `pytest` 18/18, ReadLints) pass.
+
+**Settings page + Commit Order overlay.**
+
+- **Commit Order is now an overlay-picker option on the generator** (`app.js`),
+  matching analytics: added to `buildOverlaySelect` (diffusion-only, like Diff),
+  `effectiveColorMode` returns `overlayMode`, the legend follows the selection,
+  and the persistent "Show Commit Order" setting is gone (a stale commit
+  selection is reset for AR runs).
+- **Shared Settings page** (`settings.html` / `settings.js` / `settings.css`,
+  new; route in `server.py`): the generator's Settings modal is replaced by a
+  `/settings.html` page with a left tab rail (Appearance / Interface) over the
+  four remaining settings (highlight tokens, diffusion-style text + Mode, device
+  ticker). The schema/parse/equality moved to `overlays.js` (`SETTINGS_DEFAULTS`
+  / `parseSettings` / `settingsEqual`), shared by `app.js` and `settings.js`;
+  hydrate-on-navigate (edits persist server-side, the generator applies on next
+  load). A gear icon (shared `.header-link-icon` / `.header-link-active`, moved
+  from `analytics.css` to `style.css`) links to it from the generator, Main
+  Menu, and Analytics.
+
+**Menu model pagination.** The Main Menu model list is paginated
+(`MODELS_PER_PAGE = 3`, `menu.js`) with a `< i/N >` pager (styled like the
+prompt-history control) pinned to the panel's bottom-left and the Settings gear
+bottom-right; the pager hides during confirm/selecting.
+
+**Cross-page download navigation + draggable toast.**
+
+- A model download is a global server task, so the user can now freely navigate
+  (pagination, Analytics, Settings, Generation) while it runs. A shared
+  `download_toast.js` (on every page) polls `/api/models/download-status` and
+  shows a toast whenever the inline veneer is not visible; clicking it returns
+  to the download. The menu re-attaches the veneer on load / page-back
+  (`reattachDownload` / `syncDownloadBinding`), and `menu-busy` fences model-row
+  activation for the download's duration (concurrent activation deferred).
+- **Ack + label**: `POST /api/models/download/ack` clears `done`/`error` -> idle
+  so completion fires once; `download-status` returns `target_name`.
+- **Toast is draggable** with snap-to-quadrant, persisting the corner via the
+  UI-state layer (`diffusion_download_toast_corner`); default lower-left.
+- **Partial-cache fix**: `is_repo_cached` / `_has_incomplete` (`hf_download.py`)
+  treat a cache with `*.incomplete` parts as not-downloaded (used in the fetch
+  fast path and `_is_downloaded`), so an interrupted download shows the veneer
+  again and resumes instead of bricking on load. The non-functional Cancel
+  button + all its wiring (endpoint, method, `_download_cancelled`) were removed.
 
 **Analytics per-frame scrubber + durable Heatmap** (frontend-only; the frames
 endpoint `/api/analytics/runs/{id}/frames` already shipped every frame, so no
@@ -244,26 +286,13 @@ end to end, reusing the frame/token contract.
 
 ## Where to pick up
 
-This session shipped and validated the **analytics per-frame scrubber + durable
-Heatmap** and the **app icon redesign** (see "Recently shipped"). The next
-candidates, agreed with the maintainer, are below. Deliberate each in Ask mode
-before Plan.
+This session shipped and validated a large batch (see "Recently shipped"): the
+analytics scrubber + Heatmap, the app icon redesign, the Settings page + Commit
+Order overlay + menu pagination, and cross-page download navigation with a
+draggable toast + partial-cache fix. The next candidate, agreed with the
+maintainer, is below. Deliberate in Ask mode before Plan.
 
-**1. Shared Settings page + gear icon (one coupled feature).** Promote
-Settings from the generator-only modal (`index.html:371-429`, logic in `app.js`)
-to a **shared `/settings.html` page** with a **left tab rail + right pane** (the
-list is growing: 5 rows + a conditional "Mode" sub-row). Both entry points link
-to it: replace the header "Settings" text (`index.html:40`, `#link-settings`)
-with a **gear icon**, and add a matching gear entry to the Main Menu nav
-(`menu.html:66-68`, which today only links to Analytics). All settings are
-already global and server-persisted (`ui_state.py`), so a page (not a duplicated
-modal) is the clean fit. Tab grouping to settle in Plan; a first cut: Appearance
-(diffusion-style text + its Mode sub-row, highlight tokens), Overlays (commit
-order), Interface (device-tag ticker), with room for future Models/Analytics
-tabs. Keep the staged Save/Reset shared across tabs; new gear glyph in the
-family-icon style.
-
-**2. Autoregressive analysis tools (Phase C).** SmolLM3 has no Edit Frames (it
+**1. Autoregressive analysis tools (Phase C).** SmolLM3 has no Edit Frames (it
 is left-to-right), so add AR-native xAI. Suggested order: (a) **top-k
 alternatives on hover** (competing tokens + probabilities per position; opt-in
 logit capture in `ar_sampler.py`, mirroring DiffusionGemma's `entropy_signal`);
@@ -278,7 +307,11 @@ DiffusionGemma; integrate Phi-4-mini-instruct / Gemma-3n-E2B-it (share
 `ar_sampler.py` + `.venv-ar`); download-from-menu for a curated candidate
 allowlist (needs a dynamic registry layer); cross-model comparison on identical
 prompt/seed; aggregate analytics across runs; the deferred Randomize-Prompt
-utility worker.
+utility worker; **real download cancellation** (run the fetch in a killable
+subprocess, then terminate it and `rmtree` the model's HF cache dir on Cancel,
+deferred because the current thread-based fetch cannot be killed, the
+`.incomplete`/resume fix makes an interrupted download recoverable in the
+meantime).
 
 **Remaining AR nice-to-haves (from the SmolLM3 session):** confirm SmolLM3's
 thinking delimiter on a real thinking-on run (`ar_sampler.py` splits on

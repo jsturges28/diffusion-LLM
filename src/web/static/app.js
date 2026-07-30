@@ -81,64 +81,19 @@ var thinkingPanel =
 var thinkingContent =
   document.getElementById("thinking-content");
 
-// Settings DOM refs.
-var linkSettings =
-  document.getElementById("link-settings");
-var modalSettings =
-  document.getElementById("modal-settings");
-var settingHighlightCb =
-  document.getElementById("setting-highlight-tokens");
-var settingCommitCb =
-  document.getElementById("setting-commit-order");
-var settingDiffusionCb =
-  document.getElementById("setting-diffusion-text");
-var settingGpuTickerCb =
-  document.getElementById("setting-gpu-ticker");
-var diffusionModeRow =
-  document.getElementById("diffusion-mode-row");
-var diffusionModeMount =
-  document.getElementById("diffusion-mode-mount");
-var selectDiffusionMode = null;
-var btnSettingsSave =
-  document.getElementById("btn-settings-save");
-var btnSettingsReset =
-  document.getElementById("btn-settings-reset");
-var settingsStatus =
-  document.getElementById("settings-status");
-var settingsStatusTimer = null;
+// Settings are edited on the shared /settings.html page; the generator
+// only applies the persisted preferences (loadSettings/applySettings).
 var statusHighlight =
   document.getElementById("status-highlight");
-var statusCommitText =
-  document.getElementById("status-commit-text");
 // Header "new run saved" cue on the Analytics link.
 var linkAnalytics =
   document.getElementById("link-analytics");
 var analyticsNewDot =
   document.getElementById("analytics-new-dot");
-// Persistent UI preferences (localStorage-backed). appSettings is
-// the applied/saved state; stagedSettings is the modal's working
-// copy, committed to appSettings only via the Save button.
-var DEFAULT_SETTINGS = {
-  highlightTokens: false,
-  commitOrder: false,
-  diffusionText: false,
-  diffusionTextMode: "default",
-  gpuTicker: true,
-};
-var appSettings = {
-  highlightTokens: false,
-  commitOrder: false,
-  diffusionText: false,
-  diffusionTextMode: "default",
-  gpuTicker: true,
-};
-var stagedSettings = {
-  highlightTokens: false,
-  commitOrder: false,
-  diffusionText: false,
-  diffusionTextMode: "default",
-  gpuTicker: true,
-};
+// Persistent UI preferences, applied live on the generator. The schema,
+// defaults, and parsing live in overlays.js (SETTINGS_DEFAULTS /
+// parseSettings), shared with the Settings page which edits them.
+var appSettings = parseSettings(null);
 
 // Scrubber DOM refs.
 var scrubberSection =
@@ -1580,19 +1535,15 @@ function renderDiffOverlay(frameIndex) {
   );
 }
 
-// Which coloring actually paints tokens: an explicit overlay
-// selection (heatmap/diff) wins; otherwise the Commit Order
-// preference applies as an ambient tint; otherwise none.
+// Which coloring paints tokens: the overlay picker's selection
+// (Heatmap/Commit Order/Diff), or none. Commit Order and Diff are
+// diffusion-only and omitted from the picker for AR runs; the guard
+// keeps a stale selection from tinting them.
 function effectiveColorMode() {
-  if (overlayMode === "conf" || overlayMode === "diff") {
-    return overlayMode;
+  if (overlayMode === "commit" && isAutoregressive()) {
+    return "none";
   }
-  // Commit order is meaningless for autoregressive runs (tokens
-  // resolve strictly left to right), so it never tints them.
-  if (appSettings.commitOrder && !isAutoregressive()) {
-    return "commit";
-  }
-  return "none";
+  return overlayMode;
 }
 
 // Apply the effective color mode to one resolved-token span,
@@ -1671,8 +1622,17 @@ function setOverlayMode(mode) {
   overlayMode = mode;
   updateDiffSummary();
   updateDiffOverlayControls();
+  updateCommitLegend();
   if (scrubberActive) {
     renderFrameWithTokens(currentScrubFrame);
+  }
+}
+
+// The commit-order legend (early -> late gradient) shows only while
+// the Commit Order overlay is the active selection.
+function updateCommitLegend() {
+  if (commitLegend) {
+    commitLegend.hidden = overlayMode !== "commit";
   }
 }
 
@@ -1762,6 +1722,13 @@ function buildOverlaySelect() {
   if (overlayMode === "diff" && !hasDiff) {
     overlayMode = "none";
   }
+  // Commit Order is diffusion-only; drop a stale selection for AR runs.
+  if (overlayMode === "commit" && isAutoregressive()) {
+    overlayMode = "none";
+  }
+  // Keep the commit legend in sync with the (possibly reset) mode on
+  // every (re)build or reuse, not just on an explicit picker change.
+  updateCommitLegend();
   // Option set unchanged: just reset the collapsed selection.
   if (overlaySelectBuilt && hasDiff === overlaySelectHasDiff) {
     if (overlaySelect) {
@@ -1773,10 +1740,12 @@ function buildOverlaySelect() {
     { value: "none", label: "None" },
     { value: "conf", label: "Heatmap" },
   ];
-  // Diff vs Original needs an edit-and-resume branch, which
-  // autoregressive models do not support, so it is omitted for them
-  // (Heatmap, the natural per-token confidence view, stays).
+  // Commit Order and Diff vs Original are diffusion-only. Commit Order
+  // tints by resolution step; Diff needs an edit-and-resume branch,
+  // which autoregressive models do not support, so both are omitted for
+  // them (Heatmap, the natural per-token confidence view, stays).
   if (!isAutoregressive()) {
+    options.push({ value: "commit", label: "Commit Order" });
     options.push({
       value: "diff",
       label: "Diff vs Original",
@@ -1921,63 +1890,19 @@ function cancelPromptHistory() {
 
 // ---- Persistent UI settings (localStorage) ----
 
-var SETTINGS_KEY = "diffusion_settings";
-
+// Load persisted preferences into appSettings. The schema, key, and
+// parsing live in overlays.js (shared with the Settings page); edits
+// happen there and are picked up here on the next load (hydrate).
 function loadSettings() {
-  try {
-    var raw = localStorage.getItem(SETTINGS_KEY);
-    if (!raw) {
-      return;
-    }
-    var parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object") {
-      appSettings.highlightTokens = !!parsed.highlightTokens;
-      appSettings.commitOrder = !!parsed.commitOrder;
-      appSettings.diffusionText = !!parsed.diffusionText;
-      appSettings.diffusionTextMode =
-        parsed.diffusionTextMode === "cycle"
-          ? "cycle" : "default";
-      // Default on when the key is absent (older saved state).
-      appSettings.gpuTicker = parsed.gpuTicker !== false;
-    }
-  } catch (_e) {
-    // Unavailable or corrupt storage: keep defaults. Note that
-    // clearing browser site data removes this key, reverting to
-    // the defaults on next load.
-  }
+  appSettings = parseSettings(localStorage.getItem(SETTINGS_KEY));
 }
 
-function saveSettings() {
-  // persistSet mirrors to the server so settings survive desktop-app
-  // restarts (localStorage alone is keyed by the window's origin/port).
-  persistSet(SETTINGS_KEY, JSON.stringify(appSettings));
-}
-
-function settingsEqual(a, b) {
-  return (
-    a.highlightTokens === b.highlightTokens
-    && a.commitOrder === b.commitOrder
-    && a.diffusionText === b.diffusionText
-    && a.diffusionTextMode === b.diffusionTextMode
-    && a.gpuTicker === b.gpuTicker
-  );
-}
-
-// Reflect the applied settings in the status bar and legend.
+// Reflect the applied settings in the status bar.
 function updateStatusPrefs() {
   if (statusHighlight) {
     statusHighlight.textContent =
       "Highlighted Tokens: "
       + (appSettings.highlightTokens ? "On" : "Off");
-  }
-  var commitOn = appSettings.commitOrder && !isAutoregressive();
-  if (statusCommitText) {
-    statusCommitText.textContent =
-      "Show Commit Order: "
-      + (commitOn ? "On" : "Off");
-  }
-  if (commitLegend) {
-    commitLegend.hidden = !commitOn;
   }
 }
 
@@ -1994,82 +1919,6 @@ function applySettings() {
   if (scrubberActive) {
     renderFrameWithTokens(currentScrubFrame);
   }
-}
-
-// Commit Order does not apply to autoregressive models (tokens
-// resolve strictly left to right), so its toggle is disabled and
-// forced Off, and its settings row is dimmed, when one is active.
-function updateCommitSettingAvailability() {
-  var disabled = isAutoregressive();
-  if (disabled) {
-    stagedSettings.commitOrder = false;
-  }
-  if (settingCommitCb) {
-    settingCommitCb.disabled = disabled;
-    settingCommitCb.checked = stagedSettings.commitOrder;
-    var row = settingCommitCb.closest(".settings-row");
-    if (row) {
-      row.classList.toggle(
-        "settings-row-disabled", disabled
-      );
-    }
-  }
-}
-
-// Mirror the staged (in-modal) settings into the modal controls.
-function syncSettingsControls() {
-  if (settingHighlightCb) {
-    settingHighlightCb.checked = stagedSettings.highlightTokens;
-  }
-  updateCommitSettingAvailability();
-  if (settingDiffusionCb) {
-    settingDiffusionCb.checked = stagedSettings.diffusionText;
-  }
-  if (settingGpuTickerCb) {
-    settingGpuTickerCb.checked = stagedSettings.gpuTicker;
-  }
-  if (selectDiffusionMode) {
-    selectDiffusionMode.value = stagedSettings.diffusionTextMode;
-  }
-  // The Mode sub-setting only applies when the effect is on.
-  if (diffusionModeRow) {
-    diffusionModeRow.hidden = !stagedSettings.diffusionText;
-  }
-}
-
-// Save is enabled only when there are pending changes; Reset only
-// when the staged settings differ from the fresh defaults.
-function updateSettingsButtons() {
-  if (btnSettingsSave) {
-    btnSettingsSave.disabled = settingsEqual(
-      stagedSettings, appSettings
-    );
-  }
-  if (btnSettingsReset) {
-    btnSettingsReset.disabled = settingsEqual(
-      stagedSettings, DEFAULT_SETTINGS
-    );
-  }
-}
-
-// Small save-feedback line in the settings footer. Pass "" to hide.
-function setSettingsStatus(text, saved) {
-  if (!settingsStatus) {
-    return;
-  }
-  if (settingsStatusTimer !== null) {
-    clearTimeout(settingsStatusTimer);
-    settingsStatusTimer = null;
-  }
-  if (!text) {
-    settingsStatus.hidden = true;
-    settingsStatus.textContent = "";
-    settingsStatus.classList.remove("is-saved");
-    return;
-  }
-  settingsStatus.textContent = text;
-  settingsStatus.classList.toggle("is-saved", !!saved);
-  settingsStatus.hidden = false;
 }
 
 // Token-level rendering for scrubber mode.
@@ -3838,95 +3687,6 @@ if (diffBlendToggle) {
   });
 }
 
-// Settings toggles only stage changes; nothing applies until Save.
-if (settingHighlightCb) {
-  settingHighlightCb.addEventListener("change", function () {
-    stagedSettings.highlightTokens = settingHighlightCb.checked;
-    updateSettingsButtons();
-  });
-}
-
-if (settingCommitCb) {
-  settingCommitCb.addEventListener("change", function () {
-    stagedSettings.commitOrder = settingCommitCb.checked;
-    updateSettingsButtons();
-  });
-}
-
-if (settingDiffusionCb) {
-  settingDiffusionCb.addEventListener("change", function () {
-    stagedSettings.diffusionText = settingDiffusionCb.checked;
-    if (diffusionModeRow) {
-      diffusionModeRow.hidden = !settingDiffusionCb.checked;
-    }
-    updateSettingsButtons();
-  });
-}
-
-if (settingGpuTickerCb) {
-  settingGpuTickerCb.addEventListener("change", function () {
-    stagedSettings.gpuTicker = settingGpuTickerCb.checked;
-    updateSettingsButtons();
-  });
-}
-
-if (diffusionModeMount) {
-  selectDiffusionMode = createCustomSelect(
-    [
-      { value: "default", label: "Default" },
-      { value: "cycle", label: "Cycle" },
-    ],
-    appSettings.diffusionTextMode
-  );
-  diffusionModeMount.appendChild(selectDiffusionMode);
-  sizeCustomSelect(selectDiffusionMode);
-  selectDiffusionMode.addEventListener("change", function () {
-    // Stage only; applied on Save like the other preferences.
-    stagedSettings.diffusionTextMode = selectDiffusionMode.value;
-    updateSettingsButtons();
-  });
-}
-
-if (btnSettingsSave) {
-  btnSettingsSave.addEventListener("click", function () {
-    if (settingsEqual(stagedSettings, appSettings)) {
-      return;
-    }
-    setSettingsStatus("Saving\u2026", false);
-    appSettings.highlightTokens = stagedSettings.highlightTokens;
-    appSettings.commitOrder = stagedSettings.commitOrder;
-    appSettings.diffusionText = stagedSettings.diffusionText;
-    appSettings.diffusionTextMode = stagedSettings.diffusionTextMode;
-    appSettings.gpuTicker = stagedSettings.gpuTicker;
-    saveSettings();
-    applySettings();
-    // Disable + blur the button so it visibly de-presses.
-    updateSettingsButtons();
-    btnSettingsSave.blur();
-    settingsStatusTimer = setTimeout(function () {
-      setSettingsStatus("Changes saved!", true);
-      settingsStatusTimer = setTimeout(function () {
-        setSettingsStatus("", false);
-      }, 2400);
-    }, 300);
-  });
-}
-
-if (btnSettingsReset) {
-  btnSettingsReset.addEventListener("click", function () {
-    stagedSettings.highlightTokens =
-      DEFAULT_SETTINGS.highlightTokens;
-    stagedSettings.commitOrder = DEFAULT_SETTINGS.commitOrder;
-    stagedSettings.diffusionText = DEFAULT_SETTINGS.diffusionText;
-    stagedSettings.diffusionTextMode =
-      DEFAULT_SETTINGS.diffusionTextMode;
-    stagedSettings.gpuTicker = DEFAULT_SETTINGS.gpuTicker;
-    syncSettingsControls();
-    updateSettingsButtons();
-    setSettingsStatus("", false);
-  });
-}
-
 // Guided edit mode event listeners.
 btnEditFrames.addEventListener(
   "click", enterRemaskMode
@@ -4120,7 +3880,7 @@ var modalHelp =
   document.getElementById("modal-help");
 
 var allModals = [
-  modalAbout, modalHelp, modalSettings,
+  modalAbout, modalHelp,
 ];
 
 function openModal(modal) {
@@ -4144,23 +3904,6 @@ linkHelp.addEventListener(
   function (e) {
     e.preventDefault();
     openModal(modalHelp);
-  }
-);
-
-linkSettings.addEventListener(
-  "click",
-  function (e) {
-    e.preventDefault();
-    // Start editing from a fresh copy of the applied settings.
-    stagedSettings.highlightTokens = appSettings.highlightTokens;
-    stagedSettings.commitOrder = appSettings.commitOrder;
-    stagedSettings.diffusionText = appSettings.diffusionText;
-    stagedSettings.diffusionTextMode = appSettings.diffusionTextMode;
-    stagedSettings.gpuTicker = appSettings.gpuTicker;
-    syncSettingsControls();
-    updateSettingsButtons();
-    setSettingsStatus("", false);
-    openModal(modalSettings);
   }
 );
 

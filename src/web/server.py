@@ -309,14 +309,19 @@ def _is_repo_checkpoint(checkpoint: str) -> bool:
 
 
 def _is_downloaded(checkpoint: str) -> bool:
-    """Whether the checkpoint's files are present locally."""
+    """Whether the checkpoint's files are fully present locally.
+
+    A partial cache (an interrupted download leaving ``*.incomplete``
+    parts) counts as not-downloaded so the menu keeps the "Click to
+    Download" veneer and a re-click resumes, rather than the model being
+    marked ready and hanging on load.
+    """
     if _is_repo_checkpoint(checkpoint):
         try:
-            from huggingface_hub import snapshot_download
+            from src.inference.hf_download import is_repo_cached
 
-            snapshot_download(checkpoint, local_files_only=True)
-            return True
-        except Exception:  # noqa: BLE001 - not (fully) cached
+            return is_repo_cached(checkpoint)
+        except Exception:  # noqa: BLE001 - probe failure: treat as not cached
             return False
     return Path(checkpoint).expanduser().is_dir()
 
@@ -417,8 +422,8 @@ class ModelManager:
         self.download_target: Optional[str] = None
         self.download_progress: Optional[Dict[str, Any]] = None
         self.download_error: Optional[str] = None
+        # Held so the fire-and-forget download task is not GC'd mid-run.
         self._download_task: Optional[asyncio.Task] = None
-        self._download_cancelled = False
 
     @staticmethod
     def _free_port() -> int:
@@ -634,7 +639,6 @@ class ModelManager:
             )
         if self.download_state == "downloading":
             raise RuntimeError("a download is already running")
-        self._download_cancelled = False
         self.download_target = model_id
         self.download_state = "downloading"
         self.download_progress = None
@@ -651,8 +655,7 @@ class ModelManager:
         )
 
         def _sink(progress: Dict[str, Any]) -> None:
-            if not self._download_cancelled:
-                self.download_progress = progress
+            self.download_progress = progress
 
         try:
             await asyncio.to_thread(
@@ -660,35 +663,27 @@ class ModelManager:
                 checkpoint,
                 sink=_sink,
             )
-        except asyncio.CancelledError:
-            raise
         except Exception as exc:  # noqa: BLE001
             self.download_state = "error"
             self.download_error = str(exc)
             logger.exception("download failed for %s", model_id)
             return
-        if not self._download_cancelled:
-            self.download_progress = None
-            self.download_state = "done"
-
-    async def cancel_download(self) -> None:
-        """Best-effort cancel of the pre-fetch (UI stops tracking).
-
-        The underlying HF download thread may run to completion, but
-        the UI state resets so the row is usable again.
-        """
-        self._download_cancelled = True
-        if self._download_task is not None:
-            self._download_task.cancel()
-            try:
-                await self._download_task
-            except (asyncio.CancelledError, Exception):
-                pass
-            self._download_task = None
-        self.download_state = "idle"
-        self.download_target = None
         self.download_progress = None
-        self.download_error = None
+        self.download_state = "done"
+
+    def ack_download(self) -> None:
+        """Clear a finished pre-fetch so its completion notice fires once.
+
+        Resets only a terminal state (done/error) back to idle; a no-op
+        while a download is still running. Called when the user
+        acknowledges the veneer's "Ok" (or dismisses the toast), so the
+        cross-page download toast and re-attach do not keep re-firing.
+        """
+        if self.download_state in ("done", "error"):
+            self.download_state = "idle"
+            self.download_target = None
+            self.download_progress = None
+            self.download_error = None
 
     async def _preflight_vram(self, info: ModelInfo) -> None:
         """Refuse activation if the model cannot fit in VRAM.
@@ -977,9 +972,14 @@ async def download_model(model_id: str) -> JSONResponse:
 @app.get("/api/models/download-status")
 async def download_status() -> JSONResponse:
     """Current pre-fetch progress for the download veneer's poll."""
+    target = manager.download_target
+    target_name: Optional[str] = None
+    if target is not None and target in REGISTRY:
+        target_name = REGISTRY[target].display_name
     return JSONResponse(
         {
-            "target": manager.download_target,
+            "target": target,
+            "target_name": target_name,
             "state": manager.download_state,
             "progress": manager.download_progress,
             "message": manager.download_error,
@@ -987,10 +987,11 @@ async def download_status() -> JSONResponse:
     )
 
 
-@app.post("/api/models/download/cancel")
-async def cancel_download() -> JSONResponse:
-    """Best-effort cancel of an in-flight pre-fetch."""
-    await manager.cancel_download()
+@app.post("/api/models/download/ack")
+async def ack_download() -> JSONResponse:
+    """Clear a finished pre-fetch (done/error -> idle) so the completion
+    toast and menu re-attach fire exactly once."""
+    manager.ack_download()
     return JSONResponse({"ok": True})
 
 
@@ -1625,6 +1626,12 @@ async def serve_index_html() -> RedirectResponse:
 @app.get("/analytics.html")
 async def serve_analytics_page() -> HTMLResponse:
     return _serve_stamped_page("analytics.html")
+
+
+@app.get("/settings.html")
+async def serve_settings_page() -> HTMLResponse:
+    """Shared, model-agnostic Settings page (always available)."""
+    return _serve_stamped_page("settings.html")
 
 
 class _NoCacheStaticFiles(StaticFiles):
