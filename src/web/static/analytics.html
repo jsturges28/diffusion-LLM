@@ -273,6 +273,33 @@
                   <canvas id="chart-confidence"></canvas>
                 </div>
               </div>
+
+              <!-- Per-position entropy, not per frame like the
+                   three charts above: an autoregressive model
+                   decides each position exactly once. Shown for
+                   runs saved with the signal. -->
+              <div class="chart-section" id="entropy-section"
+                hidden>
+                <div class="chart-header-row">
+                  <h3>Entropy by Position</h3>
+                  <div class="zoom-controls">
+                    <button class="zoom-btn tooltip-toggle-btn" data-chart="entropy"
+                      title="Toggle tooltip box" aria-label="Toggle tooltip box">
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" /><circle cx="12" cy="12" r="3" /><line class="eye-slash" x1="3" y1="3" x2="21" y2="21" /></svg>
+                    </button>
+                    <button class="zoom-btn" data-chart="entropy"
+                      data-action="in" title="Zoom in">+</button>
+                    <button class="zoom-btn" data-chart="entropy"
+                      data-action="out" title="Zoom out">&minus;</button>
+                    <button class="zoom-btn" data-chart="entropy"
+                      data-action="reset"
+                      title="Reset zoom">&#8634;</button>
+                  </div>
+                </div>
+                <div class="chart-wrap">
+                  <canvas id="chart-entropy"></canvas>
+                </div>
+              </div>
             </div>
 
           </div>
@@ -301,13 +328,18 @@
     <footer id="analytics-footer">
       <span>
         Metrics computed from saved
-        <code>Results/</code> data.
+        <code>results/</code> data.
       </span>
     </footer>
   </div>
 
   <!-- Bottom-right toast for transient confirmations. -->
   <div id="toast" class="toast"></div>
+
+  <!-- Competing-candidate popover for the token overlay, shown on
+       hover for runs saved with the Alternatives capture. Body level
+       so the detail modal never clips it. -->
+  <div id="token-alts-popover" hidden></div>
 
   <!-- Delete confirmation modal -->
   <div id="modal-delete" class="modal-overlay hidden">
@@ -318,7 +350,7 @@
       <div class="modal-body">
         <p id="delete-run-label"></p>
         <p id="delete-modal-note">This permanently removes the saved
-          run from <code>Results/</code>. This cannot be undone.</p>
+          run from <code>results/</code>. This cannot be undone.</p>
       </div>
       <div class="modal-footer">
         <button id="btn-delete-cancel"

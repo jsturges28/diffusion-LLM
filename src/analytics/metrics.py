@@ -1,6 +1,6 @@
 """Compute intrinsic diffusion metrics from saved runs.
 
-Reads history.txt and metadata.json from Results/ directories
+Reads history.txt and metadata.json from results/ directories
 and produces convergence and timing statistics for the
 Analytics Suite frontend.
 """
@@ -132,13 +132,17 @@ def load_run_frames(
 ) -> Dict[str, Any]:
     """Load persisted per-token frame streams for a run.
 
-    Reads ``tokens.json`` (primary / possibly edited run) and the
-    optional ``original_tokens.json`` (pre-edit snapshot). Tolerates
-    legacy files that stored only integer ids: those cannot drive the
-    token overlays, so ``records_available`` is False.
+    Reads ``tokens.json`` (primary / possibly edited run), the
+    optional ``original_tokens.json`` (pre-edit snapshot), and the
+    optional ``alternatives.json`` (per-position candidate sets, only
+    written when the capture was enabled). Tolerates legacy files
+    that stored only integer ids: those cannot drive the token
+    overlays, so ``records_available`` is False.
 
-    Returns a dict with ``frames``, ``original_frames`` (or None), and
-    ``records_available``. Raises ``ValueError`` on malformed files.
+    Returns a dict with ``frames``, ``original_frames`` (or None),
+    ``records_available``, ``alternatives`` (or None), and
+    ``alternatives_available``. Raises ``ValueError`` on malformed
+    files.
     """
     assert run_dir.is_dir(), f"run dir not found: {run_dir}"
 
@@ -146,6 +150,8 @@ def load_run_frames(
         "frames": None,
         "original_frames": None,
         "records_available": False,
+        "alternatives": None,
+        "alternatives_available": False,
     }
 
     tokens_path = run_dir / "tokens.json"
@@ -170,6 +176,24 @@ def load_run_frames(
                 f" {run_dir}"
             )
         result["original_frames"] = original
+
+    # Position-indexed, not per-frame: a position's candidate set is
+    # fixed when it is sampled, so one entry per position covers the
+    # whole run (see ar_sampler._build_frame).
+    alternatives_path = run_dir / "alternatives.json"
+    if alternatives_path.is_file():
+        alternatives = json.loads(
+            alternatives_path.read_text(encoding="utf-8")
+        )
+        if not isinstance(alternatives, list):
+            raise ValueError(
+                f"alternatives.json is malformed in {run_dir}"
+            )
+        result["alternatives"] = alternatives
+        result["alternatives_available"] = any(
+            isinstance(entry, list) and len(entry) > 0
+            for entry in alternatives
+        )
 
     return result
 
@@ -196,7 +220,7 @@ def load_run_metadata(
 def list_runs(
     results_dir: Path,
 ) -> List[Dict[str, Any]]:
-    """Scan Results/ for all saved runs.
+    """Scan results/ for all saved runs.
 
     Returns a list of metadata dicts sorted by
     created_at (newest first), falling back to

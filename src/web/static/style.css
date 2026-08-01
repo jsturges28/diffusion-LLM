@@ -1731,6 +1731,22 @@ input[type="checkbox"].app-checkbox:checked::after {
   outline-offset: 0;
 }
 
+/* What If mode: positions that captured candidates invite a hover.
+   Underlined rather than filled so the active overlay's coloring
+   stays readable underneath. */
+.token-substitutable {
+  cursor: help;
+  border-radius: 2px;
+  text-decoration: underline dotted
+    rgba(0, 255, 65, 0.45);
+  text-underline-offset: 2px;
+}
+
+.token-substitutable:hover {
+  background: rgba(0, 255, 65, 0.1);
+  text-decoration-color: rgba(0, 255, 65, 0.9);
+}
+
 .token-remasked {
   color: #ff9f1c;
   background: rgba(255, 159, 28, 0.15);
@@ -2338,6 +2354,141 @@ input[type="checkbox"].app-checkbox:checked::after {
   grid-area: 1 / 1;
   min-width: 0;
   white-space: pre-wrap;
+}
+
+/* Per-position entropy profile, under the scrubber. */
+#entropy-profile-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+#entropy-profile-row[hidden] {
+  display: none;
+}
+
+.entropy-profile-label {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+#entropy-profile {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  border-bottom: 1px solid var(--border);
+}
+
+#entropy-profile-readout {
+  min-width: 62px;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+/* Top-k candidate popover on token hover. Fixed at body level, so it
+   is never clipped by the output area's scroll box. */
+#token-alts-popover {
+  position: fixed;
+  z-index: 60;
+  min-width: 190px;
+  max-width: 320px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: rgba(10, 14, 12, 0.96);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  pointer-events: auto;
+}
+
+#token-alts-popover[hidden] {
+  display: none;
+}
+
+.alt-heading {
+  margin-bottom: 5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 9px;
+  color: var(--text-secondary);
+}
+
+.alt-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 3px;
+  border-radius: 2px;
+}
+
+.alt-text {
+  flex: 0 0 auto;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.alt-bar {
+  position: relative;
+  flex: 1;
+  min-width: 30px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.alt-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  opacity: 0.75;
+}
+
+.alt-prob {
+  flex: 0 0 auto;
+  min-width: 42px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.alt-row-chosen .alt-text {
+  color: var(--accent);
+}
+
+.alt-row-chosen .alt-bar-fill {
+  opacity: 1;
+}
+
+.alt-hint {
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px solid var(--border);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+}
+
+/* Substitution mode: candidates become actionable. */
+#token-alts-popover.alt-pickable .alt-row {
+  cursor: pointer;
+}
+
+#token-alts-popover.alt-pickable .alt-row:hover {
+  background: rgba(0, 255, 65, 0.12);
+}
+
+#token-alts-popover.alt-pickable .alt-row:hover .alt-text {
+  color: var(--accent);
 }
 
 /* "Diverged N/total" readout, shown beside the picker in diff mode. */

@@ -71,7 +71,7 @@ logger = logging.getLogger("diffusion_supervisor")
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RESULTS_DIR = Path("Results")
+RESULTS_DIR = Path("results")
 
 WORKER_START_TIMEOUT_S = 180.0
 WORKER_STOP_TIMEOUT_S = 30.0
@@ -1074,16 +1074,33 @@ class RemaskEdit(BaseModel):
 class TokenRecord(BaseModel):
     """One persisted per-token record for durable overlays.
 
-    Mirrors the live protocol shape ``{t, m, id, c?}``: ``t`` is the
-    display text, ``m`` marks an unresolved position, ``id`` is the
-    vocab id, and ``c`` is the reveal confidence (absent for masked
-    positions).
+    Mirrors the live protocol shape ``{t, m, id, c?, e?}``: ``t`` is
+    the display text, ``m`` marks an unresolved position, ``id`` is
+    the vocab id, ``c`` is the reveal confidence (absent for masked
+    positions), and ``e`` is the sampling-time entropy in nats
+    (autoregressive runs only, so absent elsewhere).
+
+    Unlisted keys are dropped by pydantic, so a new signal must be
+    declared here or it silently never reaches ``tokens.json``.
     """
 
     t: str
     m: bool
     id: int
     c: Optional[float] = None
+    e: Optional[float] = None
+
+
+class TokenAlternative(BaseModel):
+    """One competing candidate token at a single position.
+
+    ``p`` is the candidate's probability under the untempered
+    softmax at the step that position was sampled.
+    """
+
+    id: int
+    t: str
+    p: float
 
 
 # Per-frame, per-token stream. A frame may be ``None`` when a model
@@ -1105,6 +1122,12 @@ class SaveRunRequest(BaseModel):
     # sent only for edited runs so the counterfactual diff survives.
     frame_tokens: Optional[FrameTokens] = None
     original_frame_tokens: Optional[FrameTokens] = None
+    # Per-position candidate sets (index = token position, not frame),
+    # sent only when the opt-in capture ran. A position with no
+    # capture is None, so the list stays aligned with positions.
+    alternatives: Optional[
+        List[Optional[List[TokenAlternative]]]
+    ] = None
     canvas_index: Optional[List[int]] = None
     mean_conf: Optional[List[Optional[float]]] = None
     remask_edits: Optional[List[RemaskEdit]] = None
@@ -1156,6 +1179,25 @@ def _dump_frame_tokens(
                 record.model_dump(exclude_none=True)
                 for record in frame
             ]
+        )
+    return dumped
+
+
+def _dump_alternatives(
+    positions: List[Optional[List[TokenAlternative]]],
+) -> List[Optional[List[Dict[str, Any]]]]:
+    """Serialize per-position candidate sets for persistence.
+
+    Keeps the index alignment with token positions: a position that
+    captured nothing stays None rather than collapsing the list.
+    """
+    dumped: List[Optional[List[Dict[str, Any]]]] = []
+    for entry in positions:
+        if entry is None:
+            dumped.append(None)
+            continue
+        dumped.append(
+            [candidate.model_dump() for candidate in entry]
         )
     return dumped
 
@@ -1257,6 +1299,14 @@ def _save_run_blocking(body: SaveRunRequest) -> str:
                 _dump_frame_tokens(
                     body.original_frame_tokens
                 ),
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+    if body.alternatives is not None:
+        (run_dir / "alternatives.json").write_text(
+            json.dumps(
+                _dump_alternatives(body.alternatives),
                 ensure_ascii=False,
             ),
             encoding="utf-8",
@@ -1366,6 +1416,10 @@ def _compute_run_frames(run_id: str) -> Dict[str, Any]:
         "frames": data["frames"],
         "original_frames": data["original_frames"],
         "records_available": data["records_available"],
+        "alternatives": data["alternatives"],
+        "alternatives_available": data[
+            "alternatives_available"
+        ],
         "remask_edits": meta.get("remask_edits", []),
         "canvas_index": meta.get("canvas_index"),
     }
@@ -1422,7 +1476,7 @@ async def analytics_system_info() -> JSONResponse:
 
 
 def _delete_run_blocking(run_id: str) -> None:
-    """Delete one saved run directory under Results/.
+    """Delete one saved run directory under results/.
 
     Guards against path traversal: the resolved directory must be a
     direct child of RESULTS_DIR.

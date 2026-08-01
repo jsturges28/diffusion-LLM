@@ -67,6 +67,12 @@ class ModelCapabilities(BaseModel):
     # left-to-right sequence rather than denoising a masked canvas.
     model_type: Literal["diffusion", "autoregressive"] = "diffusion"
     supports_resume: bool = False
+    # Autoregressive counterfactual: replace the token at one
+    # position with a captured alternative and regenerate forward
+    # ("What If"). Kept separate from ``supports_resume`` because
+    # that flag unlocks the diffusion remask/resume UI, whose frame
+    # selection and remask controls do not apply here.
+    supports_substitution: bool = False
     supports_cfg: bool = False
     # Character shown for an unresolved token in the UI.
     unresolved_char: str = "\u2591"
@@ -99,4 +105,5 @@ MSG_DONE = "done"
 MSG_ERROR = "error"
 MSG_GENERATE = "generate"
 MSG_RESUME = "resume"
+MSG_SUBSTITUTE = "substitute"
 MSG_CANCEL = "cancel"

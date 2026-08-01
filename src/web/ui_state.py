@@ -5,7 +5,7 @@ origin (``scheme://host:port``). Because the launcher's port can vary
 between runs, localStorage-backed UI state (Settings, the analytics
 "new run" cue, prompt history, the generate teaser) appeared to reset
 across restarts. This module persists those values server-side in a
-single JSON file under ``Results/``, so they survive regardless of the
+single JSON file under ``results/``, so they survive regardless of the
 window origin and are shared between the browser and desktop entry
 points.
 

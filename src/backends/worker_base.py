@@ -22,6 +22,7 @@ from src.backends.protocol import (
     MSG_CANCEL,
     MSG_GENERATE,
     MSG_RESUME,
+    MSG_SUBSTITUTE,
     ModelInfo,
 )
 
@@ -101,6 +102,23 @@ class Backend(ABC):
     ) -> None:
         """Resume from a saved frame (override if supported)."""
         raise NotImplementedError("resume not supported")
+
+    async def handle_substitute(
+        self,
+        ws: WebSocket,
+        data: Dict[str, Any],
+        cancel_event: asyncio.Event,
+        stream: FrameStreamer,
+    ) -> None:
+        """Force one position to an alternative, then regenerate.
+
+        The autoregressive counterfactual: truncate at a position,
+        substitute a captured candidate there, and continue forward
+        (override if supported).
+        """
+        raise NotImplementedError(
+            "substitution not supported"
+        )
 
 
 async def _send_busy(ws: WebSocket) -> None:
@@ -266,6 +284,17 @@ def create_worker_app(
                     async with gen_lock:
                         cancel_event.clear()
                         await backend.handle_resume(
+                            ws, data, cancel_event, stream
+                        )
+                    continue
+
+                if mtype == MSG_SUBSTITUTE:
+                    if gen_lock.locked():
+                        await _send_busy(ws)
+                        continue
+                    async with gen_lock:
+                        cancel_event.clear()
+                        await backend.handle_substitute(
                             ws, data, cancel_event, stream
                         )
                     continue

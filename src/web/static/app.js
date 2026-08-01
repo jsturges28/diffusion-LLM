@@ -114,6 +114,8 @@ var btnScrubEnd =
   document.getElementById("btn-scrub-end");
 var btnEditFrames =
   document.getElementById("btn-edit-frames");
+var btnWhatIf =
+  document.getElementById("btn-what-if");
 var overlaySelectGroup =
   document.getElementById("overlay-select-group");
 var overlayDrawerHandle =
@@ -126,10 +128,19 @@ var overlaySelect = null;
 // a resume), avoiding leaked listeners from createCustomSelect.
 var overlaySelectBuilt = false;
 var overlaySelectHasDiff = false;
+var overlaySelectHasEntropy = false;
 var diffSummary =
   document.getElementById("diff-summary");
 var commitLegend =
   document.getElementById("commit-legend");
+var altsPopover =
+  document.getElementById("token-alts-popover");
+var entropyProfileRow =
+  document.getElementById("entropy-profile-row");
+var entropyProfileCanvas =
+  document.getElementById("entropy-profile");
+var entropyProfileReadout =
+  document.getElementById("entropy-profile-readout");
 var diffOverlayControls =
   document.getElementById("diff-overlay-controls");
 var diffOriginalSlider =
@@ -214,6 +225,21 @@ var lastFinalText = null;
 var originalTotalFrames = 0;
 var originalFrameHistory = [];
 var originalFrameTokens = [];
+
+// Per-position competing candidates, indexed by token position (not
+// by frame): a position's candidate set is fixed the moment it is
+// sampled, so each arrives once, on the frame that introduces it.
+// Empty unless the model's Alternatives capture was enabled.
+var positionAlts = [];
+// Position whose candidate popover is open, or null when closed.
+var altsPopoverPos = null;
+// Token position under the pointer, or null. Drives the glowing
+// column in the entropy profile, so it is tracked for every token,
+// independent of whether that position captured alternatives.
+var entropyHoverPos = null;
+// True while "What If" substitution is armed: the popover's
+// candidates become clickable instead of read-only.
+var substitutionMode = false;
 
 // Scrubber and remasking state.
 var scrubberActive = false;
@@ -1338,6 +1364,12 @@ function handleFrame(data) {
     frameTokens.push(null);
   }
 
+  // Candidate sets ride only the frame that introduces their
+  // position (the frame's last token), so accumulate by position.
+  if (data.alts && data.tokens && data.tokens.length > 0) {
+    positionAlts[data.tokens.length - 1] = data.alts;
+  }
+
   if (typeof data.elapsed === "number") {
     perFrameElapsed.push(data.elapsed);
   }
@@ -1421,6 +1453,10 @@ function handleError(data) {
   isResuming = false;
   stopStatusDots();
   if (remaskMode !== null) {
+    // A resume or substitution truncates the run before the worker
+    // answers, so a rejected request would otherwise strand the user
+    // with a half-run. Roll back to the pre-session snapshot.
+    restoreEditSnapshot();
     resetGuidedMode();
   }
   statusMessage.textContent =
@@ -1546,6 +1582,20 @@ function effectiveColorMode() {
   return overlayMode;
 }
 
+// Trailing tooltip lines for one token: entropy when captured, plus
+// a nudge that the position carries competing candidates.
+function tokenExtraLabel(index, tok) {
+  var extra = "";
+  if (typeof tok.e === "number") {
+    extra += "\nEntropy: " + String(+tok.e.toFixed(3))
+      + " nats";
+  }
+  if (positionAlts[index]) {
+    extra += "\nHover for alternatives";
+  }
+  return extra;
+}
+
 // Apply the effective color mode to one resolved-token span,
 // mutating its inline color and (where useful) its tooltip. Mask
 // and user-remasked tokens never reach here.
@@ -1554,6 +1604,12 @@ function applyTokenColor(span, index, tok) {
   if (mode === "conf") {
     if (typeof tok.c === "number") {
       span.style.color = heatColor(tok.c);
+    }
+    return;
+  }
+  if (mode === "entropy") {
+    if (typeof tok.e === "number") {
+      span.style.color = entropyColor(tok.e);
     }
     return;
   }
@@ -1623,6 +1679,7 @@ function setOverlayMode(mode) {
   updateDiffSummary();
   updateDiffOverlayControls();
   updateCommitLegend();
+  hideAltsPopover();
   if (scrubberActive) {
     renderFrameWithTokens(currentScrubFrame);
   }
@@ -1696,6 +1753,282 @@ function diffAvailable() {
   );
 }
 
+// Whether the run carries per-token entropy. Gated on the data
+// rather than on model_type, so the overlay appears for any model
+// that starts emitting `e` (autoregressive runs are just the first).
+function entropyAvailable() {
+  var tokens = frameTokens[frameTokens.length - 1];
+  if (!tokens) {
+    return false;
+  }
+  for (var i = 0; i < tokens.length; i++) {
+    if (typeof tokens[i].e === "number") {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Whether any position captured competing candidates for the hover
+// popover (and, for models that support it, What If substitution).
+function alternativesAvailable() {
+  for (var i = 0; i < positionAlts.length; i++) {
+    var alts = positionAlts[i];
+    if (alts && alts.length > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// ---- Top-k alternatives popover ----
+
+function hideAltsPopover() {
+  if (!altsPopover) {
+    return;
+  }
+  altsPopover.hidden = true;
+  altsPopover.textContent = "";
+  altsPopoverPos = null;
+}
+
+// Build one row per candidate: the token text, a proportional bar,
+// and its probability. The chosen token is marked so the popover
+// reads as "what it picked, and what it nearly picked instead".
+function buildAltsRows(alts, chosenId) {
+  var fragment = document.createDocumentFragment();
+  for (var i = 0; i < alts.length; i++) {
+    var alt = alts[i];
+    var row = document.createElement("div");
+    row.className = "alt-row";
+    if (alt.id === chosenId) {
+      row.classList.add("alt-row-chosen");
+    }
+    row.setAttribute("data-alt-id", String(alt.id));
+
+    var text = document.createElement("span");
+    text.className = "alt-text";
+    text.textContent = overlaysAltDisplay(alt.t);
+    row.appendChild(text);
+
+    var bar = document.createElement("span");
+    bar.className = "alt-bar";
+    var fill = document.createElement("span");
+    fill.className = "alt-bar-fill";
+    fill.style.width =
+      Math.round(Math.max(0, Math.min(1, alt.p)) * 100)
+      + "%";
+    bar.appendChild(fill);
+    row.appendChild(bar);
+
+    var prob = document.createElement("span");
+    prob.className = "alt-prob";
+    prob.textContent =
+      (Math.max(0, Math.min(1, alt.p)) * 100).toFixed(1)
+      + "%";
+    row.appendChild(prob);
+
+    fragment.appendChild(row);
+  }
+  return fragment;
+}
+
+// Show the candidate popover for a token position, anchored to its
+// span. Positioned in viewport coordinates (the popover is fixed at
+// body level) and flipped above the token when it would overflow.
+function showAltsPopover(pos, span) {
+  if (!altsPopover) {
+    return;
+  }
+  var alts = positionAlts[pos];
+  if (!alts || alts.length === 0) {
+    hideAltsPopover();
+    return;
+  }
+  var tokens = frameTokens[currentScrubFrame];
+  var chosen = tokens && tokens[pos] ? tokens[pos].id : null;
+
+  altsPopover.textContent = "";
+  var heading = document.createElement("div");
+  heading.className = "alt-heading";
+  heading.textContent =
+    "Position " + (pos + 1) + ": candidates";
+  altsPopover.appendChild(heading);
+  altsPopover.appendChild(buildAltsRows(alts, chosen));
+  if (substitutionMode) {
+    var hint = document.createElement("div");
+    hint.className = "alt-hint";
+    hint.textContent = "Click a candidate to substitute";
+    altsPopover.appendChild(hint);
+  }
+  altsPopover.classList.toggle(
+    "alt-pickable", substitutionMode
+  );
+
+  // Measure before placing: the popover must be visible for its
+  // height to be known, so unhide first, then correct the position.
+  altsPopover.hidden = false;
+  var rect = span.getBoundingClientRect();
+  var box = altsPopover.getBoundingClientRect();
+  altsPopover.style.left = overlaysPopoverLeft(rect, box) + "px";
+  altsPopover.style.top = overlaysPopoverTop(rect, box) + "px";
+  altsPopoverPos = pos;
+}
+
+// ---- Per-position entropy profile ----
+
+// Entropy per position, read off the final frame's token records
+// (each position is sampled once, so its entropy never changes).
+function entropyProfileValues() {
+  var tokens = frameTokens[frameTokens.length - 1];
+  if (!tokens) {
+    return [];
+  }
+  var values = [];
+  for (var i = 0; i < tokens.length; i++) {
+    var tok = tokens[i];
+    values.push(
+      typeof tok.e === "number" ? tok.e : 0
+    );
+  }
+  return values;
+}
+
+// Draw the profile: one column per position, height proportional to
+// normalized entropy, colored by the same ramp as the overlay. The
+// column for the frame under the scrubber is highlighted so the
+// profile and the canvas stay tied together.
+function drawEntropyProfile() {
+  if (!entropyProfileCanvas || !entropyProfileRow) {
+    return;
+  }
+  var values = entropyProfileValues();
+  if (values.length === 0) {
+    entropyProfileRow.hidden = true;
+    return;
+  }
+  entropyProfileRow.hidden = false;
+
+  // Match the backing store to the CSS box so columns stay crisp on
+  // HiDPI displays and after a window resize.
+  var ratio = window.devicePixelRatio || 1;
+  var cssWidth = entropyProfileCanvas.clientWidth || 1;
+  var cssHeight = entropyProfileCanvas.clientHeight || 34;
+  entropyProfileCanvas.width = Math.round(cssWidth * ratio);
+  entropyProfileCanvas.height = Math.round(
+    cssHeight * ratio
+  );
+  var ctx = entropyProfileCanvas.getContext("2d");
+  if (!ctx) {
+    return;
+  }
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.clearRect(0, 0, cssWidth, cssHeight);
+
+  var current = currentScrubFrame - 1;
+  var step = cssWidth / values.length;
+  var barWidth = Math.max(1, step - 0.5);
+  for (var i = 0; i < values.length; i++) {
+    var frac = overlaysEntropyFraction(values[i]);
+    var height = Math.max(1, frac * (cssHeight - 2));
+    ctx.globalAlpha = i === current ? 1 : 0.68;
+    ctx.fillStyle = entropyColor(values[i]);
+    ctx.fillRect(
+      i * step,
+      cssHeight - height,
+      barWidth,
+      height
+    );
+  }
+  ctx.globalAlpha = 1;
+  if (current >= 0 && current < values.length) {
+    ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+    ctx.fillRect(current * step, 0, Math.max(1, barWidth), 2);
+  }
+  drawEntropyProfileGlow(ctx, {
+    values: values,
+    step: step,
+    barWidth: barWidth,
+    cssHeight: cssHeight
+  });
+  updateEntropyReadout(
+    values, entropyHoverPos === null ? current : entropyHoverPos
+  );
+}
+
+// Light up the column for the token under the pointer: a faint
+// full-height guide so a column a few pixels wide is findable at a
+// glance, then the bar redrawn brighter with a halo of its own hue.
+function drawEntropyProfileGlow(ctx, layout) {
+  var pos = entropyHoverPos;
+  if (pos === null || pos < 0 || pos >= layout.values.length) {
+    return;
+  }
+  var value = layout.values[pos];
+  var left = pos * layout.step;
+  ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
+  ctx.fillRect(
+    left, 0, Math.max(2, layout.barWidth), layout.cssHeight
+  );
+
+  var frac = overlaysEntropyFraction(value);
+  var height = Math.max(2, frac * (layout.cssHeight - 2));
+  var top = layout.cssHeight - height;
+  ctx.shadowColor = entropyColor(value);
+  ctx.shadowBlur = 8;
+  ctx.fillStyle = entropyGlowColor(value);
+  // Twice, so the halo builds to something visible against the
+  // neighboring columns without washing the bar itself out.
+  ctx.fillRect(left, top, layout.barWidth, height);
+  ctx.fillRect(left, top, layout.barWidth, height);
+  ctx.shadowBlur = 0;
+  ctx.shadowColor = "transparent";
+}
+
+function updateEntropyReadout(values, index) {
+  if (!entropyProfileReadout) {
+    return;
+  }
+  if (index < 0 || index >= values.length) {
+    entropyProfileReadout.textContent = "";
+    return;
+  }
+  entropyProfileReadout.textContent =
+    String(+values[index].toFixed(2)) + " nats";
+}
+
+// Track the hovered token and repaint the profile when it changes.
+// Cheap: the profile is one canvas of a few hundred rects, and the
+// early return keeps mouseover from redrawing on every pixel of
+// movement within a single token.
+function setEntropyHoverPosition(pos) {
+  // Hover state only exists while the profile is on screen, so a
+  // token hovered mid-generation cannot leave a stale column lit when
+  // the scrubber later appears.
+  var visible = entropyProfileRow && !entropyProfileRow.hidden;
+  var next = visible ? pos : null;
+  if (entropyHoverPos === next) {
+    return;
+  }
+  entropyHoverPos = next;
+  if (visible) {
+    drawEntropyProfile();
+  }
+}
+
+// Show the profile only when the run carries entropy and the
+// scrubber is driving a token view.
+function updateEntropyProfileVisibility() {
+  if (!entropyProfileRow) {
+    return;
+  }
+  if (!scrubberActive || !entropyAvailable()) {
+    entropyProfileRow.hidden = true;
+    return;
+  }
+  drawEntropyProfile();
+}
+
 // Slide the overlay drawer open or closed and flip the handle glyph
 // (pointing left to invite opening, right to push it back in).
 function setOverlayDrawerOpen(open) {
@@ -1719,7 +2052,11 @@ function buildOverlaySelect() {
     return;
   }
   var hasDiff = diffAvailable();
+  var hasEntropy = entropyAvailable();
   if (overlayMode === "diff" && !hasDiff) {
+    overlayMode = "none";
+  }
+  if (overlayMode === "entropy" && !hasEntropy) {
     overlayMode = "none";
   }
   // Commit Order is diffusion-only; drop a stale selection for AR runs.
@@ -1730,7 +2067,11 @@ function buildOverlaySelect() {
   // every (re)build or reuse, not just on an explicit picker change.
   updateCommitLegend();
   // Option set unchanged: just reset the collapsed selection.
-  if (overlaySelectBuilt && hasDiff === overlaySelectHasDiff) {
+  if (
+    overlaySelectBuilt
+    && hasDiff === overlaySelectHasDiff
+    && hasEntropy === overlaySelectHasEntropy
+  ) {
     if (overlaySelect) {
       overlaySelect.value = overlayMode;
     }
@@ -1740,12 +2081,23 @@ function buildOverlaySelect() {
     { value: "none", label: "None" },
     { value: "conf", label: "Heatmap" },
   ];
-  // Commit Order and Diff vs Original are diffusion-only. Commit Order
-  // tints by resolution step; Diff needs an edit-and-resume branch,
-  // which autoregressive models do not support, so both are omitted for
-  // them (Heatmap, the natural per-token confidence view, stays).
+  // Entropy answers a different question than the confidence
+  // Heatmap: how undecided the model was over the whole vocabulary,
+  // not how likely the token it chose was.
+  if (hasEntropy) {
+    options.push({ value: "entropy", label: "Entropy" });
+  }
+  // Commit Order tints by resolution step, which a left-to-right model
+  // does not have (its commit order is just position order), so it
+  // stays diffusion-only.
   if (!isAutoregressive()) {
     options.push({ value: "commit", label: "Commit Order" });
+  }
+  // Diff needs a branch to compare against. Diffusion runs list it
+  // up front (disabled until Edit Frames produces one); autoregressive
+  // runs list it only once a What If substitution has, since there is
+  // no equivalent standing invitation for them.
+  if (!isAutoregressive() || hasDiff) {
     options.push({
       value: "diff",
       label: "Diff vs Original",
@@ -1765,6 +2117,7 @@ function buildOverlaySelect() {
   });
   overlaySelectBuilt = true;
   overlaySelectHasDiff = hasDiff;
+  overlaySelectHasEntropy = hasEntropy;
 }
 
 // ---- Prompt history (localStorage) ----
@@ -1987,9 +2340,15 @@ function renderFrameWithTokens(frameIndex) {
     } else {
       span.className =
         "token-span token-resolved"
-        + (allowClick ? " token-clickable" : "");
+        + (allowClick ? " token-clickable" : "")
+        + (
+          substitutionMode && positionAlts[i]
+            ? " token-substitutable"
+            : ""
+        );
       span.textContent = tok.t;
-      span.title = tline + "Confidence: " + confLabel(tok.c);
+      span.title = tline + "Confidence: " + confLabel(tok.c)
+        + tokenExtraLabel(i, tok);
       applyTokenColor(span, i, tok);
     }
     fragment.appendChild(span);
@@ -2097,8 +2456,9 @@ function runIsMultiCanvas() {
 }
 
 // Reflect the "already saved an edit" lock on the Edit Frames button:
-// greyed out and non-interactive with an explanatory tooltip, until
-// the next Generate clears the lock.
+// greyed out and non-interactive until the next Generate clears the
+// lock. Either way the button carries a tooltip, explaining the lock
+// when locked and what the mode does when not, matching What If.
 function updateEditFramesLock() {
   if (editedRunSaved) {
     btnEditFrames.classList.add("is-locked");
@@ -2107,7 +2467,25 @@ function updateEditFramesLock() {
       + " Generate again to edit a new run.";
   } else {
     btnEditFrames.classList.remove("is-locked");
-    btnEditFrames.removeAttribute("title");
+    btnEditFrames.title =
+      "Remask tokens at any frame, then resume the run"
+      + " from there";
+  }
+  if (!btnWhatIf) {
+    return;
+  }
+  // What If writes the same single saved edit per generation, so it
+  // locks on the same condition as Edit Frames.
+  if (editedRunSaved) {
+    btnWhatIf.classList.add("is-locked");
+    btnWhatIf.title =
+      "This run already has a saved edit."
+      + " Generate again to try another branch.";
+  } else {
+    btnWhatIf.classList.remove("is-locked");
+    btnWhatIf.title =
+      "Replace a token with one the model nearly"
+      + " chose, then regenerate";
   }
 }
 
@@ -2246,6 +2624,13 @@ function activateScrubber() {
     && activeModel.capabilities.supports_resume
     && !runIsMultiCanvas()
   );
+  // What If needs captured candidates to substitute from, so it stays
+  // hidden when the run was generated with Alternatives off.
+  if (btnWhatIf) {
+    btnWhatIf.hidden = !(
+      supportsSubstitution() && alternativesAvailable()
+    );
+  }
   updateEditFramesLock();
   overlayMode = "none";
   resetDiffOverlay();
@@ -2261,6 +2646,7 @@ function activateScrubber() {
   unlockScrubberNav();
 
   navigateToFrame(currentScrubFrame);
+  updateEntropyProfileVisibility();
 }
 
 function deactivateScrubber() {
@@ -2270,6 +2656,11 @@ function deactivateScrubber() {
   if (overlaySelectGroup) {
     overlaySelectGroup.hidden = true;
   }
+  if (entropyProfileRow) {
+    entropyProfileRow.hidden = true;
+  }
+  entropyHoverPos = null;
+  hideAltsPopover();
   clearRemaskedPositions();
 }
 
@@ -2312,6 +2703,12 @@ function navigateToFrame(index) {
     renderFrameWithTokens(index);
   } else {
     renderTargetPlaceholder(index);
+  }
+  // The token spans were just replaced, so any open popover now
+  // points at a detached element.
+  hideAltsPopover();
+  if (scrubberActive) {
+    updateEntropyProfileVisibility();
   }
   updateGuidedUI();
 }
@@ -2479,6 +2876,8 @@ function playShuffleDiffusion() {
 
 function resetGuidedMode() {
   remaskMode = null;
+  substitutionMode = false;
+  hideAltsPopover();
   guidedResumeAction = null;
   guidedTargetFrame = null;
   remaskModeEdits = [];
@@ -2498,6 +2897,7 @@ function captureEditSnapshot() {
     frameCanvasIndex: frameCanvasIndex.slice(),
     frameMeanConf: frameMeanConf.slice(),
     perFrameElapsed: perFrameElapsed.slice(),
+    positionAlts: positionAlts.slice(),
     finalText: lastFinalText,
     remaskEditsLen: remaskEdits.length,
   };
@@ -2514,6 +2914,7 @@ function restoreEditSnapshot() {
   frameCanvasIndex = preEditSnapshot.frameCanvasIndex.slice();
   frameMeanConf = preEditSnapshot.frameMeanConf.slice();
   perFrameElapsed = preEditSnapshot.perFrameElapsed.slice();
+  positionAlts = preEditSnapshot.positionAlts.slice();
   lastFinalText = preEditSnapshot.finalText;
   // Drop any edits committed during this (now-cancelled) session.
   remaskEdits.length = Math.min(
@@ -2577,6 +2978,109 @@ function setSavingControls(saving) {
   // Reflect the saving state on the primary button too (so Generate is
   // greyed out during a save, then becomes New Run once finalized).
   updateGenerateButton();
+}
+
+// ---- What If: top-k substitution (autoregressive) ----
+
+function supportsSubstitution() {
+  return !!(
+    activeModel
+    && activeModel.capabilities
+    && activeModel.capabilities.supports_substitution
+  );
+}
+
+// Arm substitution on the completed run. Mirrors Edit Frames: the
+// current run becomes the "original", auto-saved if unsaved so it
+// survives the branch that replaces it.
+function enterSubstitutionMode() {
+  if (btnWhatIf && btnWhatIf.classList.contains("is-locked")) {
+    return;
+  }
+  beginSubstitutionSession();
+  if (!runSaved) {
+    saveRun();
+  }
+}
+
+// Frame index and token position are the same choice for a
+// left-to-right model, so there is no frame-selection phase: the run
+// opens at its final frame and every captured position is clickable.
+function beginSubstitutionSession() {
+  captureEditSnapshot();
+  remaskMode = "substitute";
+  substitutionMode = true;
+  scrubberMinFrame = 0;
+  remaskModeEdits = [];
+  guidedResumeAction = null;
+  clearRemaskedPositions();
+
+  scrubberSlider.min = "0";
+  scrubberSlider.max = String(frameHistory.length - 1);
+  btnEditFrames.hidden = true;
+  if (btnWhatIf) {
+    btnWhatIf.hidden = true;
+  }
+  guidedEditControls.hidden = false;
+  if (overlaySelectGroup) {
+    overlaySelectGroup.hidden = true;
+  }
+
+  navigateToFrame(frameHistory.length - 1);
+  updateGuidedUI();
+}
+
+// Commit a substitution: truncate the run at the position, then let
+// the worker regenerate from the forced token. Reuses the diffusion
+// resume splice path (resumeFrameOffset + isResuming), so handleFrame
+// appends the branch onto the truncation unchanged.
+function doSubstitute(position, tokenId) {
+  if (!substitutionMode || remaskMode !== "substitute") {
+    return;
+  }
+  if (position < 0 || position >= frameHistory.length) {
+    return;
+  }
+  hideAltsPopover();
+  substitutionMode = false;
+
+  // Recorded as an ordinary remask edit so the analytics Edited
+  // column, the durable diff, and the saved metadata all work with
+  // no schema change. For a left-to-right model the edited frame and
+  // the edited position are the same index.
+  remaskEdits.push({
+    frame_index: position,
+    token_positions: [position],
+  });
+
+  perFrameRemasked = {};
+  remaskedPositions = {};
+
+  resumeFrameOffset = position;
+  frameHistory.length = resumeFrameOffset;
+  frameTokens.length = resumeFrameOffset;
+  frameCanvasIndex.length = resumeFrameOffset;
+  frameMeanConf.length = resumeFrameOffset;
+  // Positions from the substituted one onward are about to be
+  // resampled, so their captured candidates no longer apply.
+  positionAlts.length = position;
+  commitSteps = null;
+  diffData = null;
+  isResuming = true;
+
+  remaskMode = "generating";
+  updateGuidedUI();
+
+  setSaveAvailable(false);
+  resetStatus();
+  setGenerating(true);
+  startStatusDots("Resuming");
+
+  ws.send(JSON.stringify({
+    type: "substitute",
+    position: position,
+    token_id: tokenId,
+  }));
 }
 
 // Edit Frames entry point. The current run is the "original": if it
@@ -2737,6 +3241,15 @@ function updateGuidedUI() {
           : frameHistory.length - 1
       );
       unlockScrubberNav();
+      break;
+
+    case "substitute":
+      guidedEditStatus.textContent =
+        "Hover a token to see what the model nearly"
+        + " chose, then click a candidate to"
+        + " regenerate from it.";
+      btnClearGuided.hidden = true;
+      lockScrubberNav();
       break;
 
     case "generating":
@@ -2921,13 +3434,20 @@ function confirmGuidedEdit() {
   activateScrubber();
 }
 
-// Retry: discard this session's edits and restart editing from frame
-// 0. Reuses the already-saved original, so (unlike Edit Frames) it
-// does not trigger another save.
+// Retry: discard this session's edits and restart editing from the
+// beginning. Reuses the already-saved original, so (unlike Edit
+// Frames / What If) it does not trigger another save. Autoregressive
+// runs re-enter substitution, whose session has no frame-selection
+// phase to restart into.
 function retryGuidedEdit() {
+  var wasSubstitution = supportsSubstitution();
   restoreEditSnapshot();
   resetGuidedMode();
-  beginEditSession();
+  if (wasSubstitution) {
+    beginSubstitutionSession();
+  } else {
+    beginEditSession();
+  }
 }
 
 // ---- UI state helpers ----
@@ -3173,6 +3693,9 @@ function resetRunState() {
   originalTotalFrames = 0;
   originalFrameHistory = [];
   originalFrameTokens = [];
+  positionAlts = [];
+  entropyHoverPos = null;
+  hideAltsPopover();
   remaskEdits = [];
   editedRunSaved = false;
   runSaved = false;
@@ -3285,7 +3808,37 @@ function tokenRecordsFrom(frames) {
       if (typeof tok.c === "number") {
         record.c = tok.c;
       }
+      if (typeof tok.e === "number") {
+        record.e = tok.e;
+      }
       records.push(record);
+    }
+    out.push(records);
+  }
+  return out;
+}
+
+// Project accumulated candidate sets into the persisted shape, one
+// entry per token position. Returns null when nothing was captured,
+// so the run simply omits alternatives.json.
+function alternativeRecordsFrom(positions) {
+  if (!alternativesAvailable()) {
+    return null;
+  }
+  var out = [];
+  for (var i = 0; i < positions.length; i++) {
+    var alts = positions[i];
+    if (!alts || alts.length === 0) {
+      out.push(null);
+      continue;
+    }
+    var records = [];
+    for (var k = 0; k < alts.length; k++) {
+      records.push({
+        id: alts[k].id,
+        t: alts[k].t,
+        p: alts[k].p,
+      });
     }
     out.push(records);
   }
@@ -3395,6 +3948,11 @@ function saveRun() {
   );
   if (canvasIndexClean !== null) {
     payload.canvas_index = canvasIndexClean;
+  }
+
+  var altRecords = alternativeRecordsFrom(positionAlts);
+  if (altRecords !== null) {
+    payload.alternatives = altRecords;
   }
 
   if (remaskEdits.length > 0) {
@@ -3692,6 +4250,12 @@ btnEditFrames.addEventListener(
   "click", enterRemaskMode
 );
 
+if (btnWhatIf) {
+  btnWhatIf.addEventListener(
+    "click", enterSubstitutionMode
+  );
+}
+
 btnSelectFrame.addEventListener(
   "click", selectCurrentFrame
 );
@@ -3824,6 +4388,97 @@ outputArea.addEventListener(
   }
 );
 
+// Token hover, delegated like the click handler above. Drives two
+// things: the entropy profile's glowing column, which follows every
+// token, and the candidate popover, which is suppressed during guided
+// remask editing so it never covers the tokens being selected.
+outputArea.addEventListener(
+  "mouseover",
+  function (e) {
+    var target = e.target;
+    var pos = hoveredTokenPosition(target);
+    setEntropyHoverPosition(pos);
+    if (pos === null || !scrubberActive || !altsPopover) {
+      return;
+    }
+    if (remaskMode !== null && !substitutionMode) {
+      return;
+    }
+    if (pos === altsPopoverPos) {
+      return;
+    }
+    showAltsPopover(pos, target);
+  }
+);
+
+// The token position an event target represents, or null when the
+// pointer is over the output area's padding rather than a token.
+function hoveredTokenPosition(target) {
+  if (!target.classList || !target.classList.contains("token-span")) {
+    return null;
+  }
+  var raw = target.getAttribute("data-pos");
+  if (raw === null) {
+    return null;
+  }
+  return parseInt(raw, 10);
+}
+
+outputArea.addEventListener(
+  "mouseleave",
+  function () {
+    // Keep the popover open, and its position glowing, while the
+    // pointer is inside the popover itself: it sits above the token,
+    // so reaching a candidate to click means leaving the output area.
+    if (altsPopover && altsPopover.matches(":hover")) {
+      return;
+    }
+    setEntropyHoverPosition(null);
+    hideAltsPopover();
+  }
+);
+
+if (altsPopover) {
+  altsPopover.addEventListener("mouseleave", function () {
+    setEntropyHoverPosition(null);
+    hideAltsPopover();
+  });
+  // Picking a candidate commits the substitution. Only armed in What
+  // If mode; the popover is read-only otherwise.
+  altsPopover.addEventListener("click", function (e) {
+    if (!substitutionMode || altsPopoverPos === null) {
+      return;
+    }
+    var row = e.target.closest(".alt-row");
+    if (!row) {
+      return;
+    }
+    var raw = row.getAttribute("data-alt-id");
+    if (raw === null) {
+      return;
+    }
+    doSubstitute(altsPopoverPos, parseInt(raw, 10));
+  });
+}
+
+// A scroll moves the anchoring token out from under a fixed popover.
+window.addEventListener(
+  "scroll",
+  function () {
+    if (altsPopoverPos !== null) {
+      hideAltsPopover();
+    }
+  },
+  true
+);
+
+window.addEventListener("resize", function () {
+  hideAltsPopover();
+  if (scrubberActive) {
+    updateEntropyProfileVisibility();
+  }
+});
+
 // Keyboard shortcuts for scrubber navigation.
 document.addEventListener(
   "keydown",
@@ -3835,6 +4490,7 @@ document.addEventListener(
       remaskMode === "edit"
       || remaskMode === "choice"
       || remaskMode === "generating"
+      || remaskMode === "substitute"
     ) {
       return;
     }
@@ -3991,6 +4647,7 @@ function saveSessionState() {
     frameMeanConf: frameMeanConf,
     originalFrameHistory: originalFrameHistory,
     originalFrameTokens: originalFrameTokens,
+    positionAlts: positionAlts,
   });
   // Prefer the token-rich payload; fall back to a lighter one
   // if it exceeds the sessionStorage quota (long runs).
@@ -4063,6 +4720,7 @@ function restoreSessionState() {
     s.originalTotalFrames || frameHistory.length;
   originalFrameHistory = s.originalFrameHistory || [];
   originalFrameTokens = s.originalFrameTokens || [];
+  positionAlts = s.positionAlts || [];
   editedRunSaved = !!s.editedRunSaved;
   runSaved = !!s.runSaved;
   lastSavedRunId = s.lastSavedRunId || null;

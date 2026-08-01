@@ -10,9 +10,10 @@ first, then deliberate the work below with the maintainer before Plan mode
 A local FastAPI + WebSocket visual playground and analytics suite for discrete
 diffusion LLMs, oriented toward explainability (xAI). Runs in the browser
 (localhost) and as an optional native desktop app. Watch models denoise live:
-scrub frame history, remask tokens and resume, color tokens by confidence or
-commit order, diff an edited run against the original, and compare runs in an
-analytics suite.
+scrub frame history, remask tokens and resume, color tokens by confidence,
+entropy, or commit order, inspect the candidates a model nearly chose, diff an
+edited run (or an autoregressive What If branch) against the original, and
+compare runs in an analytics suite.
 
 ## Models (one resident at a time)
 
@@ -24,9 +25,11 @@ analytics suite.
   resume is NOT done** (Edit Frames disabled for multi-canvas runs, deferred).
 - **SmolLM3-3B**: autoregressive baseline, decoder-only, bf16 (~6GB), in
   `.venv-ar`. Streams token-by-token (one full-snapshot frame per token) with
-  per-token sampling confidence; optional thinking channel. Runs on GPU or CPU
+  per-token sampling confidence and always-on entropy; optional thinking channel
+  and an opt-in top-5 **Alternatives** capture. Runs on GPU or CPU
   (per-activation toggle on the menu), so it is the model a GPU-less host can
-  run. No resume; diffusion-only UI is gated off (see below).
+  run. No diffusion remask/resume; its counterfactual is **What If?**
+  substitution instead (`supports_substitution`).
 
 ## Architecture (process isolation; incompatible transformers versions)
 
@@ -37,7 +40,7 @@ analytics suite.
   and closes if no worker is active); serves analytics + save + run-delete;
   auto-stamps HTML asset URLs. `/api/models` also returns `gpu_name` +
   `free_vram_gib` + per-model `fits` for the menu. Durable UI state
-  (`src/web/ui_state.py`, stored in `Results/ui_state.json`) is served via
+  (`src/web/ui_state.py`, stored in `results/ui_state.json`) is served via
   `GET`/`PUT /api/ui-state`; the GET reconciles the "new run" cue against
   existing run folders so deleted runs cannot inflate the count.
 - **Workers**: `src/backends/{llada_worker,dgemma_worker,smollm3_worker}.py` via
@@ -51,8 +54,9 @@ analytics suite.
 - **Frontend** (shared, schema-driven): `src/web/static/{menu.html, menu.js,
   index.html, app.js, overlays.js, analytics.html, analytics.js, analytics.css,
   style.css, custom_select.js}` + `assets/title-screen.{webm,mp4}`. `overlays.js`
-  holds the shared layered-diff builder (`overlaysBuildDiffLayers`), the "new run"
-  registry, and the durable-UI-state layer (`persistHydrate` on boot +
+  holds the shared color ramps (`heatColor`, `commitColor`, `diffColor`,
+  `entropyColor`), the layered-diff builder (`overlaysBuildDiffLayers`), the "new
+  run" registry, and the durable-UI-state layer (`persistHydrate` on boot +
   `persistSet` write-through to `/api/ui-state`); the old `ascii_scene.js` idle
   animation was removed.
 - **Desktop**: `desktop.py` (pywebview; owns the server lifecycle: uvicorn on a
@@ -67,12 +71,132 @@ analytics suite.
 
 ## Recently shipped (this session)
 
-**Validated on hardware this session** (the maintainer confirmed the analytics
-scrubber + Heatmap, the icon, the Settings page + Commit Order overlay + menu
-pagination, and the download navigation + draggable toast + partial-cache fix).
-In-sandbox checks (`py_compile`, `node --check`, `pytest` 18/18, ReadLints) pass.
+**NOT yet validated on hardware.** This session landed the `results/` rename,
+all of **AR Phase C** (entropy, top-k alternatives, What If substitution), and an
+Analytics **Entropy by Position** chart on top of it. In-sandbox checks pass
+(`pytest` 54/54, `py_compile` under both `.venv` and `.venv-ar`, `node --check`,
+ReadLints clean), and the sampler plus substitution path are covered by new unit
+tests against a stub model, but nothing that needs CUDA or a display was
+exercised. **See the manual-verification checklist at the bottom.**
 
-**Settings page + Commit Order overlay.**
+**One thing to know before testing:** a SmolLM3 run needs the new **Alternatives**
+toggle on for the popover and What If to appear. The `Results/` to `results/`
+folder move is already done, history included (see step 0 under "Where to pick
+up" for why it was a merge rather than a rename).
+
+**`results/` rename.** One functional line, `RESULTS_DIR = Path("results")`
+(`src/web/server.py:74`); everything else routes through that constant. Plus
+`.gitignore` and copy in `analytics.js` / `analytics.html` / `index.html` (Help) /
+`metrics.py` / `ui_state.py` / `desktop.py` / the docs.
+
+**AR entropy (always on).** `_entropy_nats` in `src/inference/ar_sampler.py`
+computes `-(p log p)` over the untempered softmax `_sample_next` already builds,
+via `torch.special.entr` so a zero probability contributes 0 instead of a NaN.
+Stored raw in nats: normalizing by `log(vocab)` was rejected because a ~128k
+vocabulary collapses every realistic value into the bottom of a [0,1] scale, so
+the display side normalizes against `OVERLAYS_ENTROPY_REF_NATS = 5.0`
+(`overlays.js`) instead. It reaches the UI as a new token field `e` and needed an
+explicit `TokenRecord.e` in `server.py`, since that model is strict pydantic and
+would otherwise have dropped it silently (a test pins this).
+
+- **Entropy overlay**: `entropyColor` (`overlays.js`) on a cool-blue-to-hot-amber
+  ramp, deliberately off the green Heatmap and magenta diff. Offered by both
+  `buildOverlaySelect` sites gated on data presence (`entropyAvailable()` /
+  `overlayEntropyAvailable(data)`), not on `model_type`, so it lights up for any
+  future model that emits `e`.
+- **Entropy profile**: `#entropy-profile` canvas in `#scrubber-section`
+  (`drawEntropyProfile` in `app.js`), one column per position with the current
+  frame's column highlighted and a nats readout. This is the **sequence
+  profile**, not a per-position trajectory: an AR model decides each position
+  once. (Earlier roadmap notes said "trajectory"; corrected in `ROADMAP.md`.)
+  Hovering a token lights its column (`entropyHoverPos` /
+  `setEntropyHoverPosition` / `drawEntropyProfileGlow`, with `entropyGlowColor`
+  in `overlays.js`) and swings the readout to that position. Hover is tracked for
+  every token, not just ones with captured alternatives, and is cleared whenever
+  the profile is off screen so it cannot leave a stale column lit.
+- **Entropy by Position chart** (Analytics): `#entropy-section` /
+  `#chart-entropy` in `analytics.html` with `renderEntropyChart` and friends in
+  `analytics.js`. The suite's first chart indexed by **position** rather than
+  frame, and drawn as **bars** for that reason. The per-frame axis is a dead end
+  for AR: `mean_conf` is a cumulative mean (`conf_sum / count` in
+  `ar_sampler.py`), so it flattens by construction and a per-frame mean-entropy
+  chart would just be a second flat curve. Also restores a third chart for AR
+  runs, which hide Convergence (a fully resolved frame flatlines at 100%).
+  Details worth keeping in mind:
+  - It is built in `loadRunOverlays`, not `loadRunCharts`, because the
+    per-position `e` lives in the **frames** payload rather than the metrics
+    payload, and that function already fetches it. `loadRunCharts` carries a
+    comment pointing at this. Torn down by `clearEntropyChart` before the fetch,
+    so switching runs cannot leave a stale chart up mid-flight.
+  - Gated on `overlayEntropyAvailable(data)`, matching the overlay: data
+    presence, not `model_type`.
+  - y axis uses `suggestedMax: OVERLAYS_ENTROPY_REF_NATS`, not a hard `max`, so
+    runs stay comparable without clipping an unusually torn position.
+  - `substitutionMarkerPlugin` (modeled on `canvasBoundaryPlugin`) draws dashed
+    markers at the union of `token_positions` across `remask_edits`, which for a
+    What If branch is the substituted position and therefore the end of the
+    shared prefix. Reading `token_positions` rather than `frame_index` is what
+    makes it generalize to diffusion remasks.
+  - Deliberately **not** given `burnThroughPlugin`: that plugin redraws a
+    dataset's line through the tooltip box, which a bar chart has none of, and
+    would stroke a stray polyline across the bar tops.
+
+**AR top-k alternatives (opt-in).** `alternatives` BOOL `ParamSpec` on `SMOLLM3`
+(`registry.py`), k fixed at `TOP_K_ALTERNATIVES = 5`. Key payload decision: a
+position's candidate set is fixed the moment it is sampled, so `_build_frame`
+attaches `alts` only to the frame that introduces that position (its last token)
+and `handleFrame` accumulates into `positionAlts` by position. O(n·k) on the wire
+instead of O(n²·k). Persisted as `alternatives.json`, position-indexed with
+`null` gaps, read back by `load_run_frames` (`alternatives_available`) and served
+by `/api/analytics/runs/{id}/frames`. Candidate text is the **raw** decode
+(control tokens intact); `overlaysAltDisplay` makes whitespace visible at render
+time. Hover popover: `#token-alts-popover` (body-level fixed, so the output
+area's scroll box and the analytics modal cannot clip it), mirrored read-only in
+`analytics.js`. It is placed **above** the token by
+`overlaysPopoverLeft` / `overlaysPopoverTop` (shared by both pages): the browser
+draws the native `title` tooltip below the cursor and that cannot be moved, so a
+popover below would land underneath it. Flips below only for tokens near the top
+of the viewport.
+
+**AR What If substitution.**
+
+- **Protocol**: `supports_substitution` on `ModelCapabilities` + `MSG_SUBSTITUTE`
+  (`protocol.py`), `Backend.handle_substitute` + a dispatch branch
+  (`worker_base.py`). Deliberately NOT `supports_resume`: that flag unhides Edit
+  Frames with its frame-selection phase and randomize-remasks slider, neither of
+  which means anything for a left-to-right model.
+- **Sampler**: `_decode_loop` was refactored onto a shared `_stream_tokens` +
+  `_Trace` core, so `streaming_substitute` reuses it. It prefills prompt + kept
+  prefix + the forced token in one pass, emits a **seed frame** covering
+  positions `0..position`, then continues. **Greedy** (temperature 0) so the
+  downstream divergence is the intervention rather than fresh RNG in a shifted
+  context. The forced position keeps its originally captured confidence,
+  entropy, and candidate set.
+- **Worker**: `Smollm3Backend.last_run_state` holds the per-position trace,
+  published through a `state_sink` dict rather than the `done` frame so it never
+  hits the wire. `_validate_substitute` rejects an out-of-range position and any
+  token that was not in that position's captured top-k, keeping the branch a real
+  counterfactual. Substitutions chain (the branch becomes the next re-entry
+  point). Note the trace key `alternatives` vs the param `alternatives_enabled`:
+  they collide if you ever `state.update(params)`.
+- **Frontend**: `#btn-what-if` (shown when `supports_substitution &&
+  alternativesAvailable()`), `beginSubstitutionSession` / `doSubstitute` reusing
+  the diffusion `resumeFrameOffset` / `isResuming` splice path and the existing
+  Confirm/Retry review (`retryGuidedEdit` branches back into substitution). The
+  branch is recorded as an ordinary `RemaskEdit` (`frame_index == position`), so
+  the Analytics Edited column, saved metadata, and the durable diff all work with
+  **no server schema change**.
+- **Diff un-gated**: both `buildOverlaySelect` sites now list Diff vs Original
+  for AR runs once `hasDiff` / `canDiff` (diffusion still lists it up front,
+  disabled). `overlaysComputeDiff` already clamps to `min(cur, orig)`, so the
+  differing lengths a substitution can produce are handled.
+- **Rollback hardening**: `handleError` now calls `restoreEditSnapshot()` before
+  `resetGuidedMode()`. A resume or substitution truncates the run before the
+  worker answers, so a rejected request (e.g. a worker that lost
+  `last_run_state`) previously stranded the user with a half-run. `positionAlts`
+  joined the edit snapshot and the session-state payload.
+
+**Earlier session: Settings page + Commit Order overlay.**
 
 - **Commit Order is now an overlay-picker option on the generator** (`app.js`),
   matching analytics: added to `buildOverlaySelect` (diffusion-only, like Diff),
@@ -114,13 +238,19 @@ bottom-right; the pager hides during confirm/selecting.
   again and resumes instead of bricking on load. The non-functional Cancel
   button + all its wiring (endpoint, method, `_download_cancelled`) were removed.
 
-**In-app docs refresh.** The About / Help modals (`index.html`, `#modal-about` /
-`#modal-help`) were brought current: SmolLM3-3B added to both (model blurb,
-hyperparameters, confidence semantics, AR gating), the overlays/settings section
-rewritten for the Commit Order overlay + shared Settings page, the analytics
-token-overlay section updated for the per-frame scrubber + Heatmap + AR gating,
-and a menu download / pagination note added to Quick start. `AGENTS.md` now asks
-each session to check About/Help whenever `HANDOFF.md` is touched.
+**In-app docs.** The About / Help modals (`index.html`, `#modal-about` /
+`#modal-help`) gained an **Entropy &amp; alternatives** section (what entropy
+means next to confidence, the nats scale, the sequence-profile framing) and a
+**What If?** section (the one-step flow, why it is greedy, why only captured
+candidates are allowed), plus the new Alternatives hyperparameter, the Entropy
+overlay, the re-scoped Diff copy, an **Entropy chart** entry in the Analytics
+chart list (why it is per position and drawn as bars, and what the dashed marker
+means), and `tokens.json` / `alternatives.json` in the saved-files list. Earlier
+session: SmolLM3-3B added throughout, the
+overlays/settings section rewritten for the Commit Order overlay + shared
+Settings page, and the analytics token-overlay section updated for the per-frame
+scrubber + Heatmap. `AGENTS.md` asks each session to check About/Help whenever
+`HANDOFF.md` is touched.
 
 **Analytics per-frame scrubber + durable Heatmap** (frontend-only; the frames
 endpoint `/api/analytics/runs/{id}/frames` already shipped every frame, so no
@@ -264,7 +394,7 @@ end to end, reusing the frame/token contract.
 
 ## Previously shipped (recent sessions; now in git + README)
 
-- Durable server-side UI state (`Results/ui_state.json` via `/api/ui-state`,
+- Durable server-side UI state (`results/ui_state.json` via `/api/ui-state`,
   `src/web/ui_state.py`): Settings, the "new run" cue, prompt history, and the
   generate teaser survive restarts and are shared across browser + desktop,
   independent of window origin; the cue self-heals against deleted runs. Plus an
@@ -294,36 +424,64 @@ end to end, reusing the frame/token contract.
 
 ## Where to pick up
 
-This session shipped and validated a large batch (see "Recently shipped"): the
-analytics scrubber + Heatmap, the app icon redesign, the Settings page + Commit
-Order overlay + menu pagination, and cross-page download navigation with a
-draggable toast + partial-cache fix. The next candidates, agreed with the
-maintainer, are below (sequence: the `results/` rename as a warm-up, then AR
-Phase C, then Mamba-3). Deliberate each in Ask mode before Plan.
+This session shipped the `results/` rename and all of **AR Phase C** (see
+"Recently shipped"), but **none of it has been validated on hardware**, so the
+first task is the checklist below. After that, the agreed next candidates are
+Mamba-3, then extending entropy / top-k to the diffusion models. Deliberate each
+in Ask mode before Plan.
 
-**1. Rename `Results/` -> `results/` (small mechanical warm-up, its own
-commit).** Almost everything routes through one constant,
-`RESULTS_DIR = Path("Results")` (`src/web/server.py:74`); also update
-`.gitignore` (`Results/`) and the doc/comment references (`src/web/ui_state.py`,
-`src/web/static/overlays.js`, `analytics.html`, `desktop.py`, the Help copy in
-`index.html`, and `README` / `ROADMAP` / `HANDOFF`). `Results/` is gitignored,
-so saved runs + `ui_state.json` are untracked: there is no `git mv`, just a
-local `mv Results results` so existing analytics history carries over. Settle in
-Plan: the name (`results/` vs the code-native `runs/`, cf. `run_dir` / `run_id`
-/ `list_runs`) and the location (repo root vs a nested ignored parent like
-`data/results/`).
+**0. Validate AR Phase C on hardware (do this first).** Nothing here could be
+exercised in-sandbox (no CUDA, no display).
 
-**2. Autoregressive analysis tools (Phase C).** SmolLM3 has no Edit Frames (it
-is left-to-right), so add AR-native xAI, leading with the standout: (a) **top-k
-"change the last token" resume** (truncate-force-continue: set
-`supports_resume=True` and add `handle_resume` in `smollm3_worker.py`, reusing
-the resume path + scrubber; opt-in top-k logit capture in `ar_sampler.py`,
-mirroring DiffusionGemma's `entropy_signal`); (b) **top-k alternatives on hover**
-(competing tokens + probabilities per position, sharing that same capture
-plumbing); (c) a **per-position entropy sparkline**. Mind the documented O(n^2)
-AR frame-payload caveat for long runs. See `ROADMAP.md` Phase C.
+The folder move is **already done**: `results/` now holds all 103 runs (184 MB)
+and `Results/` is gone. Worth knowing why it was not a plain rename. `RESULTS_DIR`
+is relative to the process CWD, so the server created a fresh lowercase `results/`
+on its next run and both directories coexisted; `mv Results results` would then
+have nested the history as `results/Results/`, invisible to Analytics. The two
+`ui_state.json` files were merged in favor of the older one, since the new one was
+written from a partial in-memory state and had lost `diffusion_settings` and
+`diffusion_download_toast_corner`. Only the lowercase name is gitignored, so if a
+stray `Results/` ever reappears it will show up as untracked and is easy to stage
+by accident. Then:
 
-**3. State-space models: Mamba-3 (new model class).** A genuinely new xAI
+1. **Alternatives off** (the default): a SmolLM3 run still streams normally, the
+   **Entropy** overlay appears and recolors tokens, the entropy profile draws
+   under the scrubber and tracks the scrubber's frame, tooltips show an `Entropy`
+   line, hovering a token makes its profile column glow and swings the nats
+   readout to it, and **no** What If button or hover popover appears.
+2. **Alternatives on**: hovering a token opens the candidate popover with five
+   rows, sane probabilities, the chosen token highlighted, and readable
+   whitespace/control candidates. It should sit **above** the token, clear of the
+   native tooltip below the cursor, and flip below only for tokens near the top of
+   the viewport. Reaching into the popover to click a candidate should keep it
+   open and keep the column glowing.
+3. **What If**: the button appears; clicking it underlines the captured positions;
+   clicking a candidate truncates and regenerates from there; the run lands in
+   the Confirm/Retry review; **Retry** re-enters substitution (not the diffusion
+   edit session); **Confirm** saves.
+4. **Diff vs Original** is offered for the confirmed AR branch and renders both
+   layers (worth checking with a substitution near the end, where the branch and
+   original differ in length).
+5. **Analytics**: open the saved branch. Entropy overlay, the hover popover, the
+   Edited column, and Diff vs Original should all work post-hoc. Confirm
+   `alternatives.json` is present and position-indexed.
+6. **Entropy chart**: the detail modal shows a third chart for AR runs (Timing,
+   Confidence, Entropy by Position) whose bars match the shape of the generator's
+   profile for the same run. Hover names the token and reads nats; zoom, pan,
+   Reset, and the eye toggle all behave; the What If branch shows a dashed green
+   marker at the substituted position. Then open an AR run saved **before** this
+   session: the section should stay hidden rather than drawing an empty chart.
+   Switch between two runs without closing the modal to confirm no stale chart
+   survives.
+7. **Error path**: substitute after switching models and back (which clears
+   `last_run_state`). Expect a clean error message and the **original run
+   restored**, not a truncated one.
+8. **Regressions**: one LLaDA Edit Frames session still works end to end
+   (`_stream_tokens` refactor and the `handleError` rollback are the shared
+   surfaces), both models still save/load normally, and a diffusion run's detail
+   modal still shows exactly its three charts with no Entropy section.
+
+**1. State-space models: Mamba-3 (new model class).** A genuinely new xAI
 direction: SSMs compress all context into a fixed-size recurrent state, so they
 unlock overlays no other model here can show. Target the 1.5B SISO / MIMO
 checkpoints on the `state-spaces` HF org (Mamba-3, arXiv 2603.15569). **Key open
@@ -339,7 +497,25 @@ confidence, Heatmap); reserve a distinct `ssm` capability flag for later.
 **Phase-2 xAI payoff:** SSM-native overlays on the recurrent state, per-token
 Δ / state-write intensity, a state-norm evolution sparkline, and fixed-state
 forgetting / retrieval probes, all gated on capturing kernel intermediates
-(forward hooks or the reference path). Sequenced after (2).
+(forward hooks or the reference path). Its streaming baseline can lift the AR
+signal capture wholesale, since `ar_sampler.py` now separates the numeric core
+(`_sample_next`, `_entropy_nats`, `_top_alternatives`) from the decode loop, and
+an SSM is left-to-right too, so the position-indexed views (the profile and the
+Analytics Entropy chart) apply to it unchanged.
+
+**2. Entropy and top-k for the diffusion models.** The signals generalize but the
+shape does not: a diffusion position is re-decided every step, so entropy becomes
+a per-position **trajectory** over steps rather than the single value the AR case
+yields, and the same is true of its candidate set. Settle in Plan: the payload (a
+trajectory per position is O(n·steps), against the O(n) the AR profile costs),
+whether it rides DiffusionGemma's existing `entropy_signal` toggle, and what the
+position-indexed views become when a position has a history (both the profile and
+the Analytics Entropy chart read the final frame today, which for diffusion would
+show only each position's last value). The overlay plumbing is already
+model-agnostic: both `buildOverlaySelect` sites and the chart gate Entropy on the
+data (`entropyAvailable()` / `overlayEntropyAvailable(data)`), not on
+`model_type`, so a diffusion sampler that emits `e` lights them up with no
+frontend change, which is exactly why the shape question needs settling first.
 
 **Standing backlog (unchanged; see `ROADMAP.md`):** multi-canvas DiffusionGemma
 resume (the remaining Phase 2 milestone); mask confidence-opacity for
@@ -361,12 +537,11 @@ transitive pins.
 
 ## North star & backlog
 
-Generalize the backend contract to host open-source **autoregressive LLMs** and
-latent-space probes, reusing the diff/overlay tooling as a cross-model comparison
-lens. Standing backlog (`ROADMAP.md`): multi-canvas DiffusionGemma resume; a
-per-frame scrubber for the analytics overlays (the saved token stream already
-carries every frame); top-k alternatives on hover; per-position entropy sparkline;
-autoregressive baseline / random-prompt generator (a small CPU-only "utility"
-model in its own concurrent worker, since the supervisor stays torch-free and the
-main manager runs one worker at a time; model-agnostic, no GPU contention); in-app
+Host open-source models of every generation paradigm (diffusion, autoregressive,
+and next state-space) behind one contract, reusing the diff/overlay tooling as a
+cross-model explainability lens. Standing backlog (`ROADMAP.md`): multi-canvas
+DiffusionGemma resume; entropy + top-k for the diffusion models (a trajectory per
+position, not a single value); latent-space probes; a random-prompt generator (a
+small CPU-only "utility" model in its own concurrent worker, since the supervisor
+stays torch-free and the main manager runs one worker at a time); in-app
 camera/screenshot-to-Downloads button; aggregate analytics across saved runs.

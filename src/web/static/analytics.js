@@ -70,9 +70,13 @@ var overlayFrameIndex = 0;
 // set (neither depends on the scrubber frame).
 var overlayCommitSteps = null;
 var overlayDiffData = null;
-// Whether the open run is autoregressive; gates Commit Order + Diff
-// off (diffusion-only overlays for now), keeping None + Heatmap.
+// Whether the open run is autoregressive; gates Commit Order off
+// (diffusion-only for now), keeping None + Heatmap + Entropy.
 var overlayIsAutoregressive = false;
+// Candidate popover for the token overlay (mirrors the generator).
+var altsPopover =
+  document.getElementById("token-alts-popover");
+var altsPopoverPos = null;
 
 // Layered "Diff vs Original" controls (mirror the generator): two
 // opacity sliders plus a difference-blend toggle. State is kept here
@@ -251,6 +255,7 @@ var tooltipEnabled = {
   convergence: true,
   timing: true,
   confidence: true,
+  entropy: true,
 };
 
 // ---- State ----
@@ -265,6 +270,9 @@ var gpuName = null;
 var chartConvergence = null;
 var chartTiming = null;
 var chartConfidence = null;
+// Per-position, so it is built from the frames payload in
+// loadRunOverlays rather than the metrics payload in loadRunCharts.
+var chartEntropy = null;
 var chartCompareConv = null;
 
 // Map of chart name to Chart instance for zoom.
@@ -789,6 +797,35 @@ function canvasBoundaryPlugin(boundaries) {
   };
 }
 
+// Inline Chart.js plugin for the position-indexed entropy chart:
+// a dashed vertical marker at each edited position, so a What If
+// branch shows where the intervention happened and therefore where
+// the shared prefix ends. Empty list is a no-op, so unedited runs
+// draw nothing.
+function substitutionMarkerPlugin(positions) {
+  return {
+    id: "substitutionMarkers",
+    afterDatasetsDraw: function (chart) {
+      if (!positions || positions.length === 0) { return; }
+      var xScale = chart.scales.x;
+      var yScale = chart.scales.y;
+      var ctx = chart.ctx;
+      ctx.save();
+      ctx.strokeStyle = "rgba(0,255,65,0.55)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      for (var i = 0; i < positions.length; i++) {
+        var x = xScale.getPixelForValue(positions[i]);
+        ctx.beginPath();
+        ctx.moveTo(x, yScale.top);
+        ctx.lineTo(x, yScale.bottom);
+        ctx.stroke();
+      }
+      ctx.restore();
+    },
+  };
+}
+
 // Show/hide the eye's diagonal slash. Driven via inline style (not
 // only CSS) so it is robust to any stale-stylesheet caching.
 function setEyeSlash(btn, show) {
@@ -804,6 +841,7 @@ function resetTooltipToggles() {
   tooltipEnabled.convergence = true;
   tooltipEnabled.timing = true;
   tooltipEnabled.confidence = true;
+  tooltipEnabled.entropy = true;
   var btns = document.querySelectorAll(
     ".tooltip-toggle-btn"
   );
@@ -815,7 +853,8 @@ function resetTooltipToggles() {
 
 // Autoregressive runs have no masked canvas, so the convergence chart
 // (percent resolved per frame) would flatline at 100%; it is hidden
-// for them while timing and confidence stay.
+// for them while timing and confidence stay, and Entropy by Position
+// takes its slot.
 function runIsAutoregressive(run) {
   return !!(run && run.model_type === "autoregressive");
 }
@@ -863,6 +902,9 @@ function loadRunCharts(runId, run) {
     }
     renderTimingChart(data, remaskSet, run);
     renderConfidenceChart(data);
+    // The fourth chart, Entropy by Position, is built in
+    // loadRunOverlays instead: it needs per-token records from the
+    // frames payload, which that function already fetches.
   });
 }
 
@@ -927,11 +969,123 @@ function overlayConfText(c) {
   return String(+c.toFixed(3));
 }
 
+// Whether the saved run carries per-token entropy. Checked on the
+// final frame, which is the run's ground truth.
+function overlayEntropyAvailable(data) {
+  var frames = data && data.frames ? data.frames : [];
+  var final = frames[overlayFinalFrameIndex(frames)];
+  if (!final) {
+    return false;
+  }
+  for (var i = 0; i < final.length; i++) {
+    if (final[i] && typeof final[i].e === "number") {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Per-position candidate sets for the open run, or an empty list.
+function overlayAlternatives() {
+  if (!overlayData || !overlayData.alternatives) {
+    return [];
+  }
+  return overlayData.alternatives;
+}
+
+// Trailing tooltip lines: entropy when saved, plus a hover nudge for
+// positions that carry competing candidates.
+function overlayEntropyText(tok) {
+  var extra = "";
+  if (tok && typeof tok.e === "number") {
+    extra += "\nEntropy: " + String(+tok.e.toFixed(3))
+      + " nats";
+  }
+  return extra;
+}
+
+// ---- Candidate popover (read-only mirror of the generator's) ----
+
+function hideAltsPopover() {
+  if (!altsPopover) {
+    return;
+  }
+  altsPopover.hidden = true;
+  altsPopover.textContent = "";
+  altsPopoverPos = null;
+}
+
+function showAltsPopover(pos, span) {
+  if (!altsPopover) {
+    return;
+  }
+  var alts = overlayAlternatives()[pos];
+  if (!alts || alts.length === 0) {
+    hideAltsPopover();
+    return;
+  }
+  var frame = overlayFrameAt(overlayFrameIndex);
+  var chosen = frame && frame[pos] ? frame[pos].id : null;
+
+  altsPopover.textContent = "";
+  var heading = document.createElement("div");
+  heading.className = "alt-heading";
+  heading.textContent =
+    "Position " + (pos + 1) + ": candidates";
+  altsPopover.appendChild(heading);
+
+  for (var i = 0; i < alts.length; i++) {
+    altsPopover.appendChild(buildAltRow(alts[i], chosen));
+  }
+  altsPopover.classList.remove("alt-pickable");
+
+  // Unhide before measuring: the height is unknown while hidden.
+  altsPopover.hidden = false;
+  var rect = span.getBoundingClientRect();
+  var box = altsPopover.getBoundingClientRect();
+  altsPopover.style.left = overlaysPopoverLeft(rect, box) + "px";
+  altsPopover.style.top = overlaysPopoverTop(rect, box) + "px";
+  altsPopoverPos = pos;
+}
+
+// One candidate row: token text, proportional bar, probability.
+function buildAltRow(alt, chosenId) {
+  var row = document.createElement("div");
+  row.className = "alt-row";
+  if (alt.id === chosenId) {
+    row.classList.add("alt-row-chosen");
+  }
+  var text = document.createElement("span");
+  text.className = "alt-text";
+  text.textContent = overlaysAltDisplay(alt.t);
+  row.appendChild(text);
+
+  var bar = document.createElement("span");
+  bar.className = "alt-bar";
+  var fill = document.createElement("span");
+  fill.className = "alt-bar-fill";
+  var clamped = Math.max(0, Math.min(1, alt.p));
+  fill.style.width = Math.round(clamped * 100) + "%";
+  bar.appendChild(fill);
+  row.appendChild(bar);
+
+  var prob = document.createElement("span");
+  prob.className = "alt-prob";
+  prob.textContent = (clamped * 100).toFixed(1) + "%";
+  row.appendChild(prob);
+  return row;
+}
+
 function loadRunOverlays(runId, run) {
   overlayData = null;
   overlayCommitSteps = null;
   overlayDiffData = null;
   overlayIsAutoregressive = runIsAutoregressive(run);
+  hideAltsPopover();
+  // Torn down before the fetch, not inside it, so switching runs can
+  // never leave the previous run's chart on screen while the new
+  // payload is in flight.
+  clearEntropyChart();
   fetchFrames(runId).then(function (data) {
     if (!data || data.error) {
       showOverlayUnavailable();
@@ -955,6 +1109,7 @@ function loadRunOverlays(runId, run) {
     buildOverlaySelect(data);
     setupOverlayScrubber(data);
     setOverlayMode("none");
+    renderEntropyChart(data);
   });
 }
 
@@ -992,6 +1147,9 @@ function setOverlayFrame(index) {
     overlayScrubSlider.value = String(clamped);
   }
   updateOverlayScrubLabel();
+  // The spans are about to be replaced, so an open popover would be
+  // anchored to a detached element.
+  hideAltsPopover();
   renderCurrentOverlay();
 }
 
@@ -1060,10 +1218,10 @@ function setOverlayDrawerOpen(open) {
 }
 
 // Build the overlay custom-select mirroring the generator: None /
-// Heatmap for every record run, plus Commit Order / Diff vs Original
-// for diffusion runs, each gated on data availability. Autoregressive
-// runs omit Commit Order and Diff (diffusion-only overlays for now;
-// their own xAI tools come later).
+// Heatmap for every record run, Entropy for runs that saved it, plus
+// Commit Order (diffusion only) and Diff vs Original (any model with
+// an edited run and its original snapshot), each gated on data
+// availability.
 function buildOverlaySelect(data) {
   var canDiff = overlayDiffAvailable(data);
   var options = [
@@ -1074,12 +1232,24 @@ function buildOverlaySelect(data) {
       disabled: !data.records_available,
     },
   ];
+  // Entropy is gated on the saved data, not the model type: it shows
+  // how undecided the model was over the whole vocabulary, which is a
+  // different question than the confidence Heatmap answers.
+  if (overlayEntropyAvailable(data)) {
+    options.push({ value: "entropy", label: "Entropy" });
+  }
+  // Commit Order tints by resolution step, which a left-to-right run
+  // does not have (its commit order is just position order).
   if (!overlayIsAutoregressive) {
     options.push({
       value: "commit",
       label: "Commit Order",
       disabled: !data.records_available,
     });
+  }
+  // A What If substitution gives autoregressive runs a real branch to
+  // diff, so list it for them too once the data is there.
+  if (!overlayIsAutoregressive || canDiff) {
     options.push({
       value: "diff",
       label: "Diff vs Original",
@@ -1113,6 +1283,7 @@ function setOverlayMode(mode) {
   if (mode !== "diff") {
     overlayOutput.classList.remove("diff-overlay-mode");
   }
+  hideAltsPopover();
   renderCurrentOverlay();
 }
 
@@ -1125,6 +1296,8 @@ function renderCurrentOverlay() {
     renderCommitOverlay();
   } else if (overlayMode === "heatmap") {
     renderHeatmapOverlay();
+  } else if (overlayMode === "entropy") {
+    renderEntropyOverlay();
   } else {
     renderNoneOverlay();
   }
@@ -1191,10 +1364,32 @@ function renderOverlayTokens(frame, colorFn, titleFn) {
     }
     span.title = "Token: " + (i + 1)
       + "\nConfidence: " + overlayConfText(tok.c)
+      + overlayEntropyText(tok)
       + titleFn(i);
     fragment.appendChild(span);
   }
   overlayOutput.appendChild(fragment);
+}
+
+// Entropy profile: recolor resolved tokens at the current frame by
+// the sampling-time entropy persisted with each token, on a
+// decisive (cool) to torn (hot) ramp. Autoregressive runs sample each
+// position once, so a position's entropy never changes across frames.
+function renderEntropyOverlay() {
+  overlayReadout.hidden = true;
+  overlayReadout.textContent = "";
+  var frame = overlayFrameAt(overlayFrameIndex);
+  renderOverlayTokens(
+    frame,
+    function (i) {
+      var tok = frame ? frame[i] : null;
+      if (tok && typeof tok.e === "number") {
+        return entropyColor(tok.e);
+      }
+      return null;
+    },
+    function () { return ""; }
+  );
 }
 
 function renderCommitOverlay() {
@@ -1326,6 +1521,45 @@ function wireOverlayScrubber() {
       setOverlayFrame(overlayFrameIndex + 1);
     });
   }
+
+  // Candidate popover on token hover, for runs saved with the
+  // Alternatives capture. Read-only here (substitution lives on the
+  // generator, which still holds the worker's run state).
+  if (overlayOutput) {
+    overlayOutput.addEventListener(
+      "mouseover",
+      function (e) {
+        var target = e.target;
+        if (!target.classList.contains("token-span")) {
+          return;
+        }
+        var raw = target.getAttribute("data-pos");
+        if (raw === null) {
+          return;
+        }
+        var pos = parseInt(raw, 10);
+        if (pos === altsPopoverPos) {
+          return;
+        }
+        showAltsPopover(pos, target);
+      }
+    );
+    overlayOutput.addEventListener(
+      "mouseleave",
+      function () {
+        hideAltsPopover();
+      }
+    );
+  }
+  window.addEventListener(
+    "scroll",
+    function () {
+      if (altsPopoverPos !== null) {
+        hideAltsPopover();
+      }
+    },
+    true
+  );
 }
 
 function renderConvergenceChart(data, remaskSet) {
@@ -1690,6 +1924,181 @@ function confidenceOptions() {
   };
 }
 
+// ---- Entropy by position ----
+
+// Tear the chart down and hide its section. Called before a new run's
+// frames are fetched, and on the paths where a run turns out to carry
+// no usable records at all.
+function clearEntropyChart() {
+  chartEntropy = destroyChart(chartEntropy);
+  chartInstances.entropy = null;
+  var section = document.getElementById("entropy-section");
+  if (section) {
+    section.hidden = true;
+  }
+}
+
+// Per-position entropy for the open run, read off the final frame:
+// every position is sampled once in an autoregressive run, so its
+// entropy never changes after the frame that introduced it. Mirrors
+// the generator's entropyProfileValues.
+function entropyChartValues(data) {
+  var frames = data.frames || [];
+  var final = frames[overlayFinalFrameIndex(frames)] || [];
+  var values = [];
+  var texts = [];
+  for (var i = 0; i < final.length; i++) {
+    var tok = final[i] || {};
+    values.push(
+      typeof tok.e === "number" ? +tok.e.toFixed(3) : null
+    );
+    texts.push(
+      typeof tok.t === "string" ? overlaysAltDisplay(tok.t) : ""
+    );
+  }
+  return { values: values, texts: texts };
+}
+
+// Every position touched by a saved edit. For an autoregressive What
+// If branch that is the single substituted position; for a diffusion
+// run it is the remasked set, so the marker generalizes.
+function editedPositions(data) {
+  var edits = data.remask_edits || [];
+  var seen = {};
+  var positions = [];
+  for (var i = 0; i < edits.length; i++) {
+    var group = edits[i].token_positions || [];
+    for (var j = 0; j < group.length; j++) {
+      var pos = group[j];
+      if (seen[pos] !== true) {
+        seen[pos] = true;
+        positions.push(pos);
+      }
+    }
+  }
+  return positions;
+}
+
+// One bar per generated position, tall and hot where the model was
+// torn. Unlike the three charts above it is indexed by position
+// rather than frame, which is also why it is drawn as bars: an
+// autoregressive position is an independent decision, not a point in
+// a time series. Hidden for runs saved without the entropy signal.
+function renderEntropyChart(data) {
+  var section = document.getElementById("entropy-section");
+  if (!overlayEntropyAvailable(data)) {
+    clearEntropyChart();
+    return;
+  }
+  if (section) {
+    section.hidden = false;
+  }
+
+  var profile = entropyChartValues(data);
+  var labels = [];
+  var colors = [];
+  for (var i = 0; i < profile.values.length; i++) {
+    labels.push(i);
+    colors.push(entropyColor(profile.values[i]));
+  }
+
+  var canvas = document.getElementById("chart-entropy");
+  chartEntropy = new Chart(
+    canvas.getContext("2d"),
+    {
+      type: "bar",
+      data: {
+        labels: labels,
+        datasets: [{
+          label: "Entropy",
+          data: profile.values,
+          backgroundColor: colors,
+          borderWidth: 0,
+          barPercentage: 1,
+          categoryPercentage: 1,
+        }],
+      },
+      options: entropyChartOptions(profile.texts),
+      // Deliberately without burnThroughPlugin: it redraws a
+      // dataset's *line* through the tooltip box, which a bar chart
+      // has none of, and would stroke a stray polyline across the bar
+      // tops instead. The eye toggle covers hiding the box.
+      plugins: [
+        substitutionMarkerPlugin(editedPositions(data)),
+      ],
+    }
+  );
+  chartInstances.entropy = chartEntropy;
+}
+
+function entropyChartOptions(texts) {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: {
+      mode: "index",
+      intersect: false,
+    },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        position: "smart",
+        caretSize: 0,
+        xAlign: "left",
+        yAlign: "top",
+        callbacks: {
+          title: positionTooltipTitle,
+          label: function (ctx) {
+            return entropyTooltipLabel(ctx, texts);
+          },
+        },
+      },
+      zoom: zoomPluginOptions(),
+    },
+    scales: {
+      x: {
+        title: {
+          display: true,
+          text: "Position",
+        },
+        ticks: { maxTicksLimit: 12 },
+        grid: { display: false },
+      },
+      y: {
+        title: {
+          display: true,
+          text: "Entropy (nats)",
+        },
+        beginAtZero: true,
+        // Suggested, not fixed: keeps the scale comparable across
+        // runs at the overlay's reference maximum while still letting
+        // an unusually torn position through instead of clipping it.
+        suggestedMax: OVERLAYS_ENTROPY_REF_NATS,
+      },
+    },
+  };
+}
+
+// The shared tooltipTitle prefixes "Frame", which would misread this
+// chart's x axis.
+function positionTooltipTitle(items) {
+  if (items.length === 0) {
+    return "";
+  }
+  return "Position " + items[0].label;
+}
+
+// Naming the token is the thing the generator's compact profile
+// cannot do, so the tooltip carries it alongside the value.
+function entropyTooltipLabel(ctx, texts) {
+  var value = ctx.formattedValue + " nats";
+  var text = texts[ctx.dataIndex];
+  if (!text) {
+    return value;
+  }
+  return value + "  \u2022  " + text;
+}
+
 // ---- Comparison mode ----
 
 function showComparison(ids) {
@@ -1939,7 +2348,7 @@ function loadAndRender() {
 // ---- Delete a run ----
 
 function runPath(runId) {
-  return "Results/" + runId;
+  return "results/" + runId;
 }
 
 // Update the confirmation modal copy for the staged deletion, then
@@ -1952,7 +2361,7 @@ function showDeleteModal() {
     deleteRunLabel.textContent = runPath(pendingDeleteIds[0]);
     deleteModalNote.innerHTML =
       "This permanently removes the saved run from "
-      + "<code>Results/</code>. This cannot be undone.";
+      + "<code>results/</code>. This cannot be undone.";
   } else {
     deleteModalTitle.textContent =
       "Delete " + count + " runs?";
@@ -1960,7 +2369,7 @@ function showDeleteModal() {
       count + " selected runs will be removed.";
     deleteModalNote.innerHTML =
       "This permanently removes the saved runs from "
-      + "<code>Results/</code>. This cannot be undone.";
+      + "<code>results/</code>. This cannot be undone.";
   }
   btnDeleteConfirm.disabled = false;
   modalDelete.classList.remove("hidden");

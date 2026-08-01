@@ -8,7 +8,7 @@ The suite hosts two diffusion models plus a first **autoregressive baseline**, a
 
 - **[LLaDA-8B-Instruct](https://huggingface.co/GSAI-ML/LLaDA-8B-Instruct):** the first competitive large-scale discrete diffusion language model, pre-trained on 2.3T tokens and instruction-tuned to roughly LLaMA 3 8B quality ([paper](https://arxiv.org/abs/2502.09992)). Masked diffusion over a single canvas, run in bfloat16 (~17 GB VRAM). Supports interactive remasking and resume.
 - **DiffusionGemma-26B-A4B:** Google's block-autoregressive text-diffusion model, a 26B-parameter Mixture-of-Experts (\~4B active) built on Gemma. Run here as a self-quantized 4-bit NF4 checkpoint (\~18 GB VRAM). Denoises 256-token canvases with adaptive stopping and an optional reasoning (thinking) channel. Single-canvas runs now also support interactive remasking and resume (via seed-canvas re-entry); multi-canvas resume is still on the roadmap.
-- **[SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B) (autoregressive baseline):** a 3B decoder-only transformer that generates the ordinary way, left to right. Added as a contrast to the diffusion models: it streams token-by-token, one frame per new token, with per-token sampling confidence, reusing the same scrubber/save/analytics tooling as a left-to-right replay. It has an optional extended-reasoning (thinking) channel and runs in bfloat16 on GPU or CPU (chosen per activation). Diffusion-only affordances (Edit Frames, the Diff overlay, Commit Order, the convergence chart) are hidden for it, while timing, confidence, and the Heatmap remain.
+- **[SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B) (autoregressive baseline):** a 3B decoder-only transformer that generates the ordinary way, left to right. Added as a contrast to the diffusion models: it streams token-by-token, one frame per new token, with per-token sampling confidence, reusing the same scrubber/save/analytics tooling as a left-to-right replay. It has an optional extended-reasoning (thinking) channel and runs in bfloat16 on GPU or CPU (chosen per activation). It carries its own xAI tools rather than the diffusion ones: per-token **entropy** with an Entropy overlay and an entropy profile, an optional top-5 **Alternatives** capture surfaced in a hover popover, and **What If?** substitution (force a position to a token the model nearly chose, then regenerate from there and diff the branch against the original). Diffusion-only affordances (Edit Frames, Commit Order, the convergence chart) stay hidden for it.
 
 Because these models depend on incompatible `transformers` versions and a single large model already saturates 24 GB, the app uses a **supervisor plus per-model worker** architecture: a lightweight server spawns exactly one model worker at a time, each in its own virtual environment, and proxies the browser WebSocket to it.
 
@@ -82,6 +82,17 @@ Both overlays are derived from the recorded per-token frames. In the live genera
 | Thinking | Enables the step-by-step reasoning channel, shown in a separate panel. |
 | Entropy signal | Computes true per-token confidence from logits for the heatmap (slower, off by default). |
 
+**SmolLM3**
+
+| Parameter | Description |
+|---|---|
+| Max Tokens | Number of tokens to generate. The recommended ceiling is lower on CPU, where decoding is slower. |
+| Temperature | Sampling temperature. 0 is greedy (argmax). |
+| Top-p | Nucleus sampling probability mass. |
+| Seed | Random seed for reproducibility; -1 is nondeterministic. |
+| Thinking | Enables the extended reasoning channel, shown in a separate panel. |
+| Alternatives | Captures the top five competing tokens at each position. Powers the hover popover and is required for **What If?** substitution (slightly slower, off by default). |
+
 All parameters are configurable in the web UI with recommended bounds enforced by default. An **Experimental** toggle lifts the bounds for exploratory use.
 
 
@@ -144,7 +155,7 @@ The contract lives in `src/backends/`:
 │   │   ├── streaming_sampler.py      # LLaDA live streaming + per-token confidence
 │   │   ├── dgemma_sampler.py         # DiffusionGemma live streaming + confidence
 │   │   ├── dgemma_nf4.py             # NF4 (4-bit) MoE-expert quantization
-│   │   ├── ar_sampler.py             # Autoregressive token-by-token streaming + confidence
+│   │   ├── ar_sampler.py             # Autoregressive streaming: confidence, entropy, top-k, substitution
 │   │   └── render_gif.py             # Render diffusion history frames to GIF
 │   ├── analytics/
 │   │   └── metrics.py                # Run parsing, convergence + canvas boundaries
@@ -172,7 +183,7 @@ The contract lives in `src/backends/`:
 │   ├── render_icon.py                # Render assets/icon.png from the icon geometry
 │   ├── spike_diffusiongemma.py       # Standalone load + generate probe
 │   └── ws_smoke_test.py              # End-to-end supervisor/worker smoke test
-├── Results/                          # Saved runs from the web UI (Save button)
+├── results/                          # Saved runs from the web UI (Save button)
 │   ├── ui_state.json                 # Durable UI state (Settings, "new run" cue, prompt history)
 │   └── <timestamp>_<model>/
 │       ├── metadata.json
@@ -180,6 +191,7 @@ The contract lives in `src/backends/`:
 │       ├── history.txt
 │       ├── tokens.json               # Per-frame token records (durable overlays)
 │       ├── original_tokens.json      # Pre-edit snapshot (edited runs only)
+│       ├── alternatives.json         # Per-position top-k candidates (when captured)
 │       └── diffusion.gif
 └── archive/                          # Old reference files and notes
 ```
@@ -285,13 +297,18 @@ A single edit followed by **Resume to End** is the simple case; you can also cha
 
 **Confirming an edit.** Clicking **Edit Frames** first auto-saves the current (original) run if you have not saved it yet, so the pre-edit run is always preserved as its own entry. After **Resume to End** completes, the editor stays open on the final frame and offers two choices in place of **Select Frame**: a green **Confirm** (checkmark), which saves the edited run, and a blue **Retry** (counter-clockwise arrow), which discards the edits and restarts editing from frame 0 (reusing the already-saved original, so it does not re-save). Once an edited run has been saved, **Edit Frames** is disabled for that run (with a "this run already has a saved edit" tooltip) until you **Generate** again, so a single run cannot accrue two conflicting saved edits.
 
+**What If? (autoregressive counterfactuals).** Left-to-right models get a different intervention in place of Edit Frames. After a SmolLM3 run generated with **Alternatives** on, a **What If?** button appears beside the scrubber. Clicking it arms substitution: every position that captured candidates gets a dotted underline, hovering one opens the candidate popover, and clicking a candidate replaces the token there and regenerates the rest of the run from that point. There is no frame-selection step, because for a left-to-right model the frame and the position are the same choice. The continuation is decoded greedily so the divergence you see is the intervention's effect rather than fresh sampling noise, and only a token the model actually weighed at that position can be forced, so the branch stays a real counterfactual. Entry auto-saves the original and the result lands in the same **Confirm** / **Retry** review as a diffusion edit, after which **Diff vs Original** becomes available for the branch.
+
 #### Visual overlays and settings
 
 A collapsible **Overlay** drawer in the top-right of the output area recolors the frame you are viewing. It defaults to **None** and offers:
 
 - **Heatmap:** recolor resolved tokens by confidence (dim, desaturated tones for low, bright green for high).
-- **Commit Order:** tint resolved tokens by the step at which they settled, from light green (early) to red-orange (late), with a matching gradient legend in the status bar (diffusion runs only, like Diff).
-- **Diff vs Original:** compare an edited run against the original. It is listed but disabled until you have edited and resumed a run. When active, a slim control row below the scrubber provides independent **Original** / **Edited** opacity sliders and a **Difference blend** toggle, alongside a `Diverged N/total` readout.
+- **Entropy:** recolor resolved tokens by the entropy of the distribution they were sampled from, on a cool blue (decisive) to hot amber (torn) ramp. This answers a different question than the Heatmap: confidence is how likely the chosen token was, entropy is how spread the model's whole distribution was. Listed for any run that carries the signal (autoregressive runs today, where it is always captured).
+- **Commit Order:** tint resolved tokens by the step at which they settled, from light green (early) to red-orange (late), with a matching gradient legend in the status bar (diffusion runs only).
+- **Diff vs Original:** compare an edited run against the original. Diffusion runs list it up front (disabled until you have edited and resumed a run); autoregressive runs list it once a **What If?** substitution has produced a branch. When active, a slim control row below the scrubber provides independent **Original** / **Edited** opacity sliders and a **Difference blend** toggle, alongside a `Diverged N/total` readout.
+
+Runs that captured **Alternatives** also get two xAI affordances. Hovering any token opens a **candidate popover** listing the top five tokens the model weighed at that position, with a proportional bar and probability each, and the one it actually chose marked. Below the scrubber, an **entropy profile** draws one column per position, tall and hot where the model was torn, with the column for the frame under the scrubber highlighted and its value read out in nats. Because an autoregressive model samples each position exactly once, this is a profile across the sequence, not a trajectory of one position over time.
 
 Persistent preferences live on a shared **Settings page** (`/settings.html`), reached from a **gear icon** in the header of the generator, the Main Menu, and Analytics. It has a left tab rail and stages changes behind **Save** / **Reset**; all settings are server-persisted and shared across pages:
 
@@ -302,20 +319,21 @@ The status bar reflects the highlight toggle (`Highlighted Tokens: On/Off`). Hov
 
 #### Analytics Suite
 
-Click **Analytics** in the header (or navigate to `/analytics.html`) to open the Analytics Suite. It reads saved runs from `Results/` and provides interactive charts for comparing behavior across configurations and models.
+Click **Analytics** in the header (or navigate to `/analytics.html`) to open the Analytics Suite. It reads saved runs from `results/` and provides interactive charts for comparing behavior across configurations and models.
 
-- **Run browser:** group runs by date, model, prompt, or whether a run was edited. Columns are shared across models and ordered Date, Model, Prompt, Time, and a sortable **Edited** column (a checkmark, textured from the diffusion mask glyph, marks runs that carry a pre-edit snapshot for a Diff vs Original; blank otherwise). The leading Date column carries the pulsing green "new run" dot. Clicking a row opens a wide **detail modal** (fades in like About/Help; close with the X or by clicking outside) laid out with the token overlay canvas as the centerpiece on the left and the run's info plus the convergence, timing, and confidence charts stacked on the right.
+- **Run browser:** group runs by date, model, prompt, or whether a run was edited. Columns are shared across models and ordered Date, Model, Prompt, Time, and a sortable **Edited** column (a checkmark, textured from the diffusion mask glyph, marks runs that carry a pre-edit snapshot for a Diff vs Original; blank otherwise). The leading Date column carries the pulsing green "new run" dot. Clicking a row opens a wide **detail modal** (fades in like About/Help; close with the X or by clicking outside) laid out with the token overlay canvas as the centerpiece on the left and the run's info plus the convergence, timing, confidence, and entropy charts stacked on the right.
 - **Manage runs:** delete a saved run with the row's red trashcan action. Select rows with the checkboxes to enable **bulk delete** (a trashcan with the selected count appears in the actions header) and highlight the selected rows. Either path opens a confirmation modal ("Delete this run?" / "Delete N runs?") showing the folder path or count, and a toast confirms the deletion.
 - **Convergence chart:** percentage of resolved tokens per frame. User remask edits are highlighted as blue segments with hover details.
 - **Timing chart:** cumulative elapsed time per frame (accumulates across resumes). Remask transitions are highlighted in green; the detected GPU is shown in the header.
 - **Confidence chart:** mean per-token confidence per frame, which climbs as a canvas converges. Shown for runs saved with confidence data.
+- **Entropy chart:** per-token entropy, indexed by **position** rather than by frame (and drawn as bars for that reason: an autoregressive model decides each position once, so entropy is a property of the position, not a point in a time series). One bar per generated token on the Entropy overlay's cool-blue to hot-amber ramp, hover naming the token alongside its value in nats, and a dashed green marker at each edited position so a What If branch shows where the shared prefix ends. Shown for runs saved with the entropy signal.
 - **Canvas boundaries:** for multi-canvas DiffusionGemma runs, dashed amber markers on the charts mark where one canvas commits and the next begins. Single-canvas runs show none.
-- **Token overlay + per-frame scrubber:** a scrubbable view of the run's tokens inside the detail modal, with a corner **Overlay** drawer mirroring the generator's. A frame scrubber (prev / slider / next, `Frame i / N`) replays every saved frame through the active overlay, opening on the final frame. The drawer offers **None** and **Heatmap** for every run with token records (Heatmap recolors resolved tokens by their persisted confidence), plus **Commit Order** and **Diff vs Original** for diffusion runs. Commit Order tints each token by when it settled (early-to-late gradient legend); Diff vs Original (available only for edited runs with a saved snapshot) stacks the original and edited runs with independent **Original** / **Edited** opacity sliders and a **Difference blend** toggle, plus a `Diverged N/total` readout, matching the generator's layered diff (the original layer clamps to its final frame past its end). Autoregressive runs, which have no masked canvas, show only None + Heatmap. Hovering a token shows its position and persisted confidence. This makes the generator's explainability overlays durable and scrubbable post-hoc; runs saved before durable overlays (or without token data) show a short unavailable note.
+- **Token overlay + per-frame scrubber:** a scrubbable view of the run's tokens inside the detail modal, with a corner **Overlay** drawer mirroring the generator's. A frame scrubber (prev / slider / next, `Frame i / N`) replays every saved frame through the active overlay, opening on the final frame. The drawer offers **None** and **Heatmap** for every run with token records (Heatmap recolors resolved tokens by their persisted confidence), plus **Commit Order** and **Diff vs Original** for diffusion runs. Commit Order tints each token by when it settled (early-to-late gradient legend); Diff vs Original (available only for edited runs with a saved snapshot) stacks the original and edited runs with independent **Original** / **Edited** opacity sliders and a **Difference blend** toggle, plus a `Diverged N/total` readout, matching the generator's layered diff (the original layer clamps to its final frame past its end). Runs saved with entropy add the **Entropy** overlay, and runs saved with captured candidates get the same hover popover as the generator, so a What If branch and the decision behind it are both replayable post-hoc. Autoregressive runs, which have no masked canvas, omit Commit Order. Hovering a token shows its position, persisted confidence, and entropy where saved. This makes the generator's explainability overlays durable and scrubbable post-hoc; runs saved before durable overlays (or without token data) show a short unavailable note.
 - **Chart controls:** scroll-wheel zoom and +/-/Reset on every chart. Tooltips are kept fully inside the plot area (never spilling onto the axes) and each chart has a toggle to hide/show its tooltip box; when the box would cover a line, the covered segment and the hovered point glow through it.
 
 #### Saving and reproducibility
 
-Clicking **Save** writes a timestamped folder under `Results/` containing `metadata.json`, `final.txt`, `history.txt` (frame-by-frame snapshots), `tokens.json` (per-frame, per-token records: display text, mask flag, vocab id, and confidence), and `diffusion.gif`. Edited runs also write `original_tokens.json`, the pre-edit snapshot that powers the durable Diff vs Original overlay. The metadata captures the model, prompt, hyperparameters, any remask edits, per-frame timing, canvas indices, mean confidence, and reproducibility info: seed, GPU name, git commit, and the worker's torch/transformers versions.
+Clicking **Save** writes a timestamped folder under `results/` containing `metadata.json`, `final.txt`, `history.txt` (frame-by-frame snapshots), `tokens.json` (per-frame, per-token records: display text, mask flag, vocab id, confidence, and entropy where captured), and `diffusion.gif`. Edited runs also write `original_tokens.json`, the pre-edit snapshot that powers the durable Diff vs Original overlay. Runs that captured competing candidates write `alternatives.json`, indexed by token position rather than by frame, since a position's candidate set is fixed the moment it is sampled. The metadata captures the model, prompt, hyperparameters, any remask edits, per-frame timing, canvas indices, mean confidence, and reproducibility info: seed, GPU name, git commit, and the worker's torch/transformers versions.
 
 
 ## Implementation Status
@@ -353,7 +371,7 @@ Clicking **Save** writes a timestamped folder under `Results/` containing `metad
 - [x] Analytics "new run" cue: an unseen-run count badge on the Analytics link and Main Menu plus per-row green dots cleared when a run is opened; deleting a run decrements it, and the cue self-heals against runs that no longer exist
 - [x] In-place edited-run save: an edited/bundled run updates its pre-edit folder so it is a single Analytics row rather than a duplicate
 - [x] Robust GPU detection (resolves nvidia-smi across launch environments, with a driver/library-mismatch message)
-- [x] Durable server-side UI state (`Results/ui_state.json` via `/api/ui-state`): Settings, the "new run" cue, prompt history, and the generate teaser survive restarts and are shared across the browser and desktop app, independent of the window origin
+- [x] Durable server-side UI state (`results/ui_state.json` via `/api/ui-state`): Settings, the "new run" cue, prompt history, and the generate teaser survive restarts and are shared across the browser and desktop app, independent of the window origin
 - [x] Analytics table rework: reordered columns (Date, Model, Prompt, Time, Edited), a diffusion-textured Edited checkmark, checkbox row highlighting, and multi-select bulk delete
 - [x] Desktop launcher persistence: a stable window port (with ephemeral fallback) and a persistent web-storage profile
 - [x] First autoregressive model (SmolLM3-3B) in a dedicated `.venv-ar`: token-by-token streaming with per-token confidence, per-activation CPU/GPU device selection (CPU-capable for GPU-less hosts), and a `model_type` gate that hides diffusion-only UI (Edit Frames, Diff, Commit Order, convergence) while keeping timing, confidence, and the Heatmap
@@ -367,6 +385,11 @@ Clicking **Save** writes a timestamped folder under `Results/` containing `metad
 - [x] Main Menu model list paginated (prev/next + `i/N` indicator, styled like prompt history) instead of scrolling, with the Settings gear pinned to the panel corner
 - [x] Cross-page download navigation: a model download keeps running server-side while the user browses pagination, Analytics, and Settings; a shared draggable toast (snap-to-corner, persisted) surfaces progress/completion when the inline veneer is off-screen and returns to it on click
 - [x] Partial-cache resume: a download interrupted with `*.incomplete` parts is detected as not-downloaded, so the veneer reappears and `snapshot_download` resumes instead of the model bricking on load
+- [x] Saved runs live in `results/` (lowercase), matching the rest of the repo's directory naming
+- [x] Autoregressive entropy signal: always captured per token, persisted as `tokens.json`'s `e` field, with an **Entropy** overlay (cool/decisive to hot/torn) and a per-position entropy profile under the scrubber, in both the generator and Analytics
+- [x] Autoregressive top-k alternatives: an opt-in **Alternatives** capture (top 5 per position) shown in a hover popover with per-candidate probability bars and the chosen token marked, sent once per position rather than on every snapshot, and persisted as `alternatives.json`
+- [x] Autoregressive **What If?** substitution: force a position to a captured candidate and greedily regenerate from there, via a `supports_substitution` capability and a `substitute` message that keeps the diffusion remask/resume UI out of the way; recorded as an ordinary remask edit so the Analytics Edited column and the durable **Diff vs Original** (now un-gated for edited autoregressive runs) work unchanged
+- [x] Analytics **Entropy by Position** chart: the first chart indexed by token position instead of frame (bars, on the Entropy overlay's ramp, hover naming the token), with dashed markers at edited positions; restores a meaningful third chart for autoregressive runs, whose per-frame mean is a cumulative average and therefore flat by construction
 
 
 ## Roadmap
@@ -377,11 +400,11 @@ Detailed, living notes for each item (technical hooks, files to touch, open ques
 
 **Phase 3: Multimodal image input.** Requires `AutoProcessor` plus torchvision and additional vision-tower VRAM, so it is deferred until the text foundations are solid.
 
-**Experimental and xAI ideas (open for deliberation).** The suite is shaping up as an explainability playground. Two candidate directions shipped this cycle as overlays: commit-order (resolution-step) coloring and the counterfactual "Diff vs Original" comparison. Future sessions can explore further analysis features, for example top-k alternatives on hover, per-position uncertainty trajectories, cross-model comparisons on identical prompts, or an autoregressive baseline for contrast. These are intentionally open and to be scoped together.
+**Experimental and xAI ideas (open for deliberation).** The suite is shaping up as an explainability playground. Shipped so far: commit-order (resolution-step) coloring, the counterfactual "Diff vs Original" comparison, and the autoregressive trio of entropy, top-k alternatives, and What If substitution. Future sessions can explore per-position uncertainty trajectories for diffusion runs (where a position is re-decided across steps, unlike the autoregressive case), cross-model comparisons on identical prompts, or attention-based attribution. These are intentionally open and to be scoped together.
 
 ### Possible extensions
 
-- [ ] Autoregressive analysis tools for SmolLM3: top-k alternatives on hover, "change the last token" resume, per-position entropy sparkline
+- [ ] Entropy and top-k alternatives for the diffusion models, where a position is re-decided each step and the signal becomes a trajectory rather than a single value
 - [ ] Real download cancellation (killable subprocess fetch + cache cleanup); today the `.incomplete`/resume path makes an interrupted download recoverable instead
 - [ ] Side-by-side comparison with autoregressive generation
 - [ ] Alignment experiments (RLHF / DPO) or fine-tuning on custom instruction data

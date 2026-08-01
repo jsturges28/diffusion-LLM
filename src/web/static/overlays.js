@@ -43,6 +43,88 @@ function diffColor(changed) {
   return "hsl(0, 0%, 45%)";
 }
 
+// Reference maximum for normalizing per-token entropy (nats) into a
+// display fraction. Entropy arrives raw from the sampler because
+// normalizing by log(vocab) over a ~128k vocabulary would squash
+// every realistic value into the bottom of a [0,1] scale. 5 nats is
+// roughly a uniform choice among ~150 tokens, about as torn as a
+// language model gets in practice.
+var OVERLAYS_ENTROPY_REF_NATS = 5.0;
+
+// Normalize raw entropy (nats) into [0,1] against the reference max.
+function overlaysEntropyFraction(e) {
+  if (typeof e !== "number" || !isFinite(e) || e < 0) {
+    return 0;
+  }
+  return Math.min(1, e / OVERLAYS_ENTROPY_REF_NATS);
+}
+
+// The one place the entropy ramp is defined: a decisive distribution
+// reads cool blue, a torn one reads hot amber. Kept off the green
+// confidence heatmap and the magenta diff so no two overlays read as
+// each other.
+function overlaysEntropyHue(e) {
+  return Math.round(205 - 160 * overlaysEntropyFraction(e));
+}
+
+// Map per-token entropy onto that ramp.
+function entropyColor(e) {
+  var frac = overlaysEntropyFraction(e);
+  var sat = Math.round(55 + 30 * frac);
+  var light = Math.round(52 + 8 * frac);
+  return "hsl(" + overlaysEntropyHue(e) + ", " + sat + "%, "
+    + light + "%)";
+}
+
+// Brighter twin of entropyColor, for the hovered column of the
+// entropy profile. Same hue so the ramp still reads; lifted
+// saturation and lightness so a column a few pixels wide stands out
+// from its neighbors.
+function entropyGlowColor(e) {
+  return "hsl(" + overlaysEntropyHue(e) + ", 100%, 74%)";
+}
+
+// Place the candidate popover horizontally: aligned to the token's
+// left edge, pulled back inside the viewport when the token sits near
+// the right margin. Both arguments are viewport-space rects (the
+// popover is fixed at body level).
+function overlaysPopoverLeft(tokenRect, popoverBox) {
+  return Math.min(
+    Math.max(8, tokenRect.left),
+    Math.max(8, window.innerWidth - popoverBox.width - 8)
+  );
+}
+
+// Place it vertically, preferring above the token. The browser draws
+// the native title tooltip below the cursor and we cannot move that,
+// so a popover below would sit underneath the tooltip. Falls back to
+// below when the token is too close to the top of the viewport.
+function overlaysPopoverTop(tokenRect, popoverBox) {
+  var above = tokenRect.top - popoverBox.height - 6;
+  if (above >= 8) {
+    return above;
+  }
+  var below = Math.min(
+    tokenRect.bottom + 6,
+    window.innerHeight - popoverBox.height - 8
+  );
+  return Math.max(8, below);
+}
+
+// Render a candidate token's raw text readably. Alternatives keep
+// control tokens and whitespace intact (the sampler deliberately
+// does not sanitize them), so make the invisible ones visible rather
+// than showing a blank row.
+function overlaysAltDisplay(text) {
+  if (typeof text !== "string" || text.length === 0) {
+    return "\u2205";
+  }
+  return text
+    .replace(/\n/g, "\u21B5")
+    .replace(/\t/g, "\u21E5")
+    .replace(/ /g, "\u00B7");
+}
+
 // Per-position commit step for a run: the step after which a position
 // last changed to its final value. Derived purely from the frame
 // token stream (the final frame is ground truth), so it is exact for
@@ -226,7 +308,7 @@ function overlaysComputeDiff(cur, orig, remaskEdits) {
 // between launches because the launcher's port varies, which partitions
 // localStorage and made Settings, prompt history, the analytics "new
 // run" cue, and the generate teaser reset across restarts. The server
-// persists these keys in Results/ui_state.json (see src/web/ui_state.py).
+// persists these keys in results/ui_state.json (see src/web/ui_state.py).
 // We hydrate localStorage from it once on boot and write through on
 // change, so the fast synchronous localStorage reads elsewhere keep
 // working unchanged.

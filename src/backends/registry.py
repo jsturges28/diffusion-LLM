@@ -219,7 +219,11 @@ SMOLLM3 = ModelInfo(
     checkpoint="HuggingFaceTB/SmolLM3-3B",
     capabilities=ModelCapabilities(
         model_type="autoregressive",
+        # Left-to-right, so no diffusion remask/resume. Substitution
+        # is the autoregressive counterfactual instead: it needs the
+        # Alternatives capture, which the frontend gates on.
         supports_resume=False,
+        supports_substitution=True,
         supports_cfg=False,
     ),
     param_specs=[
@@ -280,6 +284,15 @@ SMOLLM3 = ModelInfo(
             default=False,
             help="Enable the extended reasoning channel"
             " (shown in a separate panel).",
+        ),
+        ParamSpec(
+            name="alternatives",
+            label="Alternatives",
+            type=ParamType.BOOL,
+            default=False,
+            help="Capture the top competing tokens at each"
+            " position, shown on hover and required for"
+            " What If substitution (slightly slower).",
         ),
     ],
 )

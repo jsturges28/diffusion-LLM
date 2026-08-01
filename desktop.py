@@ -29,7 +29,7 @@ from typing import Optional
 
 REPO_ROOT = Path(__file__).resolve().parent
 
-# The supervisor resolves Results/ and the worker cwd relative to the
+# The supervisor resolves results/ and the worker cwd relative to the
 # process working directory, so pin it to the repo root. This lets the
 # launcher behave correctly when invoked from a .desktop entry with an
 # arbitrary working directory.

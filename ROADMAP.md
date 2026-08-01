@@ -86,7 +86,7 @@ analytics suite.
   documented `libxcb-cursor0` (Qt/X11) dependency.
 - Shipped (persistence + analytics polish): **durable server-side UI state**.
   Settings, the analytics "new run" cue, prompt history, and the generate
-  teaser now persist in `Results/ui_state.json` via `GET`/`PUT /api/ui-state`
+  teaser now persist in `results/ui_state.json` via `GET`/`PUT /api/ui-state`
   (`src/web/ui_state.py`), hydrated into localStorage on boot (`persistHydrate`
   / `persistSet` in `overlays.js`). This fixes desktop-app persistence, which
   the QtWebEngine profile keyed by the launcher's varying window origin/port; it
@@ -151,6 +151,37 @@ analytics suite.
   terminal state, and `is_repo_cached` / `_has_incomplete` (`hf_download.py`)
   make a partial (`*.incomplete`) cache resume instead of bricking. The
   non-functional Cancel button was removed (real cancellation deferred).
+- Shipped (this session): the **`results/` rename** and **autoregressive Phase
+  C** in full. Saved runs now live in lowercase `results/` (one functional line,
+  `RESULTS_DIR` in `src/web/server.py`, plus copy). Per-token **entropy** is
+  captured on every AR run (`_entropy_nats` in `src/inference/ar_sampler.py`,
+  off the untempered softmax the sampler already computes), persisted as
+  `TokenRecord.e`, and drawn by a new **Entropy** overlay (`entropyColor` in
+  `overlays.js`, on a cool-to-hot ramp normalized against
+  `OVERLAYS_ENTROPY_REF_NATS = 5.0` rather than `log(vocab)`), plus a
+  per-position **entropy profile** canvas under the scrubber. An opt-in
+  **Alternatives** capture (top 5 per position) feeds a hover popover in both
+  the generator and Analytics; each candidate set travels once, on the frame
+  that introduces its position, so the wire cost is O(n·k) instead of O(n²·k),
+  and it persists to `alternatives.json` indexed by position. **What If?**
+  substitution closes the loop: a `supports_substitution` capability plus a
+  `substitute` message (deliberately separate from `supports_resume`, which
+  unlocks the diffusion remask UI), `streaming_substitute` +
+  `Smollm3Backend.last_run_state` for a greedy re-decode from a forced position,
+  and the branch recorded as an ordinary `RemaskEdit` so the Analytics Edited
+  column and the durable **Diff vs Original** (now un-gated for edited AR runs)
+  work with no schema change.
+- Shipped (this session): the Analytics **Entropy by Position** chart, a
+  follow-on to Phase C. The first chart in the suite indexed by token position
+  rather than by frame, which is also why it is bars rather than a line: an AR
+  model decides each position once, so its entropy is a property of the position
+  and not a point in a time series. This is the chart the per-frame axis could
+  not give us, since AR `mean_conf` is a cumulative mean (`conf_sum / count` in
+  `ar_sampler.py`) and therefore flat by construction. Frontend only, off the
+  frames payload `loadRunOverlays` already fetches; per-bar color from
+  `entropyColor`, hover naming the token, and dashed markers at edited positions
+  so a What If branch shows where its shared prefix ends. It also restores a
+  third chart for AR runs, which hide Convergence.
 - For the feature overview and architecture, see `README.md`. For the build
   history, see `.cursor/plans/`.
 
@@ -158,22 +189,10 @@ analytics suite.
 
 ## Next session (accepted directions)
 
-Agreed with the maintainer (deliberate each in Ask mode before Plan). The AR
-items are detailed further in their own section below. (The analytics scrubber,
-app icon, Settings page + Commit Order overlay, menu pagination, and download
-navigation all shipped this session; see above.)
+Agreed with the maintainer (deliberate each in Ask mode before Plan). (The
+`results/` rename and all of AR Phase C shipped this session; see above.)
 
-1. **Rename `Results/` -> `results/` (mechanical warm-up).** Routes through the
-   single `RESULTS_DIR = Path("Results")` constant (`src/web/server.py`), plus
-   `.gitignore` and doc/comment references. `Results/` is gitignored, so saved
-   runs are untracked (no `git mv`; a local `mv` carries existing history over).
-   Open in Plan: the name (`results/` vs the code-native `runs/`) and whether to
-   nest it under an ignored parent (e.g. `data/results/`) or keep it at the root.
-2. **Autoregressive analysis tools (Phase C).** Leading with the standout, top-k
-   "change the last token" resume, then top-k alternatives on hover (shared
-   logit capture), then a per-position entropy sparkline for SmolLM3. (See Phase
-   C above.)
-3. **State-space models: Mamba-3 (new model class).** Integrate a 1.5B Mamba-3
+1. **State-space models: Mamba-3 (new model class).** Integrate a 1.5B Mamba-3
    SISO / MIMO checkpoint (`state-spaces` HF org, arXiv 2603.15569) as the first
    SSM, opening a distinct xAI lens: the fixed-size recurrent state. Key open
    decision, base vs instruct (the `state-spaces` weights are base LMs, not
@@ -182,11 +201,21 @@ navigation all shipped this session; see above.)
    baseline reuses the AR frame / token contract and `model_type` gating; the
    phase-2 payoff is SSM-native state overlays (per-token Δ / state-write
    intensity, state-norm sparkline, fixed-state forgetting probes), which need
-   kernel-intermediate capture. Sequenced after the AR tools.
+   kernel-intermediate capture. Now unblocked, since the AR tools have shipped.
+2. **Entropy and top-k for the diffusion models.** The AR signals generalize, but
+   the shape does not: a diffusion position is re-decided every step, so entropy
+   becomes a per-position trajectory over steps rather than the single value the
+   AR case yields. Needs a decision on payload (a trajectory per position is
+   O(n·steps)) and on whether it rides DiffusionGemma's existing
+   `entropy_signal` toggle. Also on what the position-indexed views become when
+   a position has a history: both the profile under the scrubber and the new
+   Analytics **Entropy by Position** chart read the final frame today, which for
+   diffusion would show only each position's last value, so they would want a
+   frame selector or a different shape entirely.
 
 ---
 
-## Autoregressive model support (Phase A shipped; Phase C next)
+## Autoregressive model support (Phases A and C shipped)
 
 The north-star direction: host open-source **autoregressive (AR) LLMs** alongside
 the diffusion models, reusing the frame/token contract, overlays, and analytics.
@@ -223,13 +252,44 @@ cleanly onto AR: frame N is the sequence after N generated tokens, every token
 - **Analytics**: convergence chart dropped for AR (would flatline); timing and
   confidence kept. `model_type` is persisted in each run's `metadata.json`.
 
-Remaining AR follow-ups now live under Phase C below.
+**Phase C (shipped this session).** The AR xAI trio, built in dependency order
+(read-only signals first, the intervention last):
+- **Entropy**, always on. `-(p log p)` over the untempered softmax
+  (`_entropy_nats`), in nats, stored raw. Normalizing by `log(vocab)` was
+  rejected: on a ~128k vocabulary every realistic value collapses into the
+  bottom tenth of a [0,1] scale, so the display side normalizes against
+  `OVERLAYS_ENTROPY_REF_NATS = 5.0` instead. Surfaced as an **Entropy** overlay
+  and a **per-position entropy profile** under the scrubber. Note the framing
+  correction: because an AR model samples each position exactly once, this is a
+  profile across the sequence, not the per-position trajectory the earlier notes
+  described (that shape belongs to diffusion, where a position is re-decided
+  each step).
+- **Top-k alternatives**, opt-in (`alternatives` BOOL `ParamSpec` on `SMOLLM3`,
+  mirroring DiffusionGemma's `entropy_signal`), k fixed at 5. A position's
+  candidate set is fixed the moment it is sampled, so it rides only the frame
+  that introduces that position and the client accumulates by position: O(n·k)
+  on the wire against the O(n²·k) of repeating it per snapshot. Shown in a hover
+  popover with probability bars, mirrored read-only in Analytics.
+- **What If? substitution.** `supports_substitution` + a `substitute` message
+  rather than reusing `supports_resume`, which would unhide Edit Frames with its
+  diffusion-only frame selection and randomize-remasks slider.
+  `streaming_substitute` prefills prompt + kept prefix + the forced token in one
+  pass, then continues **greedily** so the divergence is the intervention's
+  effect rather than fresh RNG in a shifted context. The worker's
+  `last_run_state` holds the per-position trace (published via a `state_sink`,
+  off the wire) and validates that the requested id was actually among that
+  position's captured candidates. The frontend reuses the diffusion resume
+  splice path (`resumeFrameOffset` / `isResuming`) and the Confirm/Retry review,
+  and records the branch as an ordinary `RemaskEdit`, so no server schema
+  changed.
+- **Entropy by Position chart** in the Analytics detail modal, the same signal
+  promoted from the generator's compact profile into an inspectable chart: axes,
+  zoom/pan, a tooltip naming the token, and a dashed marker at each edited
+  position. Built from the frames payload in `loadRunOverlays` rather than the
+  metrics payload in `loadRunCharts`, so it costs no extra request. Gated on the
+  data (`overlayEntropyAvailable`), not on `model_type`.
 
-**Phase C (if time).**
-- **Top-k "change the last token" resume**: the standout AR xAI feature. AR resume
-  is truncate-force-continue (easier than diffusion resume), reusing the
-  `supports_resume` + resume-message path; top-k capture is opt-in like
-  DiffusionGemma's `entropy_signal`.
+**Remaining AR follow-ups.**
 - Integrate **Phi-4-mini-instruct** and **Gemma-3n-E2B-it**.
 - **Download-from-menu**: a curated allowlist of the candidate models; needs a
   dynamic registry layer (registry is a static dict today) + disk-space checks.
@@ -239,7 +299,7 @@ prompt-history button) that fills the prompt via a small always-on CPU model, wi
 a Settings model dropdown. Deferred because the randomizer must coexist with the
 resident model, which the one-worker-at-a-time manager forbids; it needs a
 separate concurrent CPU "utility" worker with its own lifecycle. High effort for
-the near-term payoff, so the core AR feature comes first.
+the near-term payoff.
 
 ---
 
