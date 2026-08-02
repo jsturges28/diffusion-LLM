@@ -285,9 +285,9 @@ class Smollm3Backend(Backend):
 
         state = self.last_run_state
         assert state is not None
+        assert state.get("ids"), "run state has no token trace"
         position = request["position"]
         start = time.monotonic()
-        branch: Dict[str, Any] = {}
         try:
             generator = streaming_substitute(
                 self.model,
@@ -314,7 +314,16 @@ class Smollm3Backend(Backend):
                 alternatives=state["alternatives_enabled"],
                 seed=state["seed"],
                 cancel_event=cancel_event,
-                state_sink=branch,
+                # The branch's trace is deliberately discarded, so
+                # last_run_state stays pinned to the recorded run.
+                # Retry on the client restores its arrays to the
+                # pre-substitution run (restoreEditSnapshot in
+                # app.js), so adopting the branch here would leave
+                # the two sides validating against different
+                # candidate sets and would reject every position at
+                # or after the edit. Each substitution therefore
+                # re-enters the run the user still sees.
+                state_sink=None,
             )
             await stream.run(generator, start)
         except Exception as exc:  # noqa: BLE001
@@ -323,10 +332,6 @@ class Smollm3Backend(Backend):
                 {"type": "error", "message": str(exc)}
             )
             return
-        # Chain substitutions: the branch becomes the run a further
-        # substitution re-enters.
-        if branch.get("ids"):
-            state.update(branch)
 
 
 def build_backend() -> Backend:

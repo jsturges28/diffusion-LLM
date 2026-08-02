@@ -1646,14 +1646,20 @@ button {
   border-color: rgba(79, 195, 247, 0.55);
 }
 
-/* Edit Frames locked after an edited run is saved (until next run). */
+/* Edit Frames locked after an edited run is saved (until next run).
+   Deliberately still hoverable rather than pointer-events:none, so
+   the title tooltip can explain why it is locked; aria-disabled plus
+   the caller-side is-locked guards are what block activation. */
 .btn-edit-frames.is-locked,
-.btn-edit-frames.is-locked:hover {
+.btn-edit-frames.is-locked:hover,
+.btn-edit-frames.is-locked:active,
+.btn-edit-frames.is-locked:focus {
   opacity: 0.4;
   cursor: not-allowed;
   color: var(--text-dim);
   background: rgba(255, 255, 255, 0.04);
   border-color: var(--border);
+  box-shadow: none;
 }
 
 .btn-edit-frames.is-locked::after {

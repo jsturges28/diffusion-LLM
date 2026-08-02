@@ -2460,33 +2460,58 @@ function runIsMultiCanvas() {
 // lock. Either way the button carries a tooltip, explaining the lock
 // when locked and what the mode does when not, matching What If.
 function updateEditFramesLock() {
-  if (editedRunSaved) {
-    btnEditFrames.classList.add("is-locked");
-    btnEditFrames.title =
+  // An edited save in flight locks too, not just a completed one:
+  // confirmGuidedEdit fires the save and re-shows the buttons before
+  // its async handler can set editedRunSaved, which would otherwise
+  // leave a live window where a second edit could be started.
+  var locked = editedRunSaved
+    || (isSaving && remaskEdits.length > 0);
+  if (locked) {
+    setButtonLocked(
+      btnEditFrames,
       "This run already has a saved edit."
-      + " Generate again to edit a new run.";
+      + " Generate again to edit a new run."
+    );
   } else {
-    btnEditFrames.classList.remove("is-locked");
-    btnEditFrames.title =
+    setButtonUnlocked(
+      btnEditFrames,
       "Remask tokens at any frame, then resume the run"
-      + " from there";
+      + " from there"
+    );
   }
   if (!btnWhatIf) {
     return;
   }
   // What If writes the same single saved edit per generation, so it
   // locks on the same condition as Edit Frames.
-  if (editedRunSaved) {
-    btnWhatIf.classList.add("is-locked");
-    btnWhatIf.title =
+  if (locked) {
+    setButtonLocked(
+      btnWhatIf,
       "This run already has a saved edit."
-      + " Generate again to try another branch.";
+      + " Generate again to try another branch."
+    );
   } else {
-    btnWhatIf.classList.remove("is-locked");
-    btnWhatIf.title =
+    setButtonUnlocked(
+      btnWhatIf,
       "Replace a token with one the model nearly"
-      + " chose, then regenerate";
+      + " chose, then regenerate"
+    );
   }
+}
+
+// The lock is both visual and behavioural: pointer-events is off in
+// CSS, aria-disabled announces it, and the callers keep their own
+// is-locked guard so a programmatic click still cannot slip through.
+function setButtonLocked(button, title) {
+  button.classList.add("is-locked");
+  button.setAttribute("aria-disabled", "true");
+  button.title = title;
+}
+
+function setButtonUnlocked(button, title) {
+  button.classList.remove("is-locked");
+  button.removeAttribute("aria-disabled");
+  button.title = title;
 }
 
 // Once a run is finalized (an edited run has been saved), the primary
@@ -3911,6 +3936,10 @@ function saveRun() {
   isSaving = true;
   btnSave.disabled = true;
   setSavingControls(true);
+  // Locks the edit entry points for the whole save, not just after it
+  // succeeds, so confirming an edit cannot be immediately followed by
+  // starting another one.
+  updateEditFramesLock();
   if (saveCheckTimer !== null) {
     clearTimeout(saveCheckTimer);
     saveCheckTimer = null;
@@ -3985,6 +4014,9 @@ function saveRun() {
       btnSave.classList.remove("is-saving");
       setSavingControls(false);
       updateGuidedUI();
+      // Releases the in-flight lock; the success branch below
+      // re-applies it permanently once editedRunSaved is set.
+      updateEditFramesLock();
       stopStatusDots();
       if (result.success) {
         // Flash a glowing check for half a second, then revert to
@@ -4029,6 +4061,7 @@ function saveRun() {
       btnSave.classList.remove("is-saving", "is-saved");
       setSavingControls(false);
       updateGuidedUI();
+      updateEditFramesLock();
       stopStatusDots();
       btnSave.disabled = false;
       statusMessage.textContent =
