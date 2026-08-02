@@ -299,6 +299,17 @@
                 <div class="chart-wrap">
                   <canvas id="chart-entropy"></canvas>
                 </div>
+                <!-- Crossfade between the pre-edit run and the
+                     branch. Shown only when a snapshot with entropy
+                     exists, so unedited runs never see it. -->
+                <div id="entropy-blend-row" hidden>
+                  <span class="diff-slider-label diff-orig-label"
+                    >Original</span>
+                  <input type="range" id="entropy-blend"
+                    min="0" max="100" value="100" />
+                  <span class="diff-slider-label diff-edit-label"
+                    >Edited</span>
+                </div>
               </div>
             </div>
 

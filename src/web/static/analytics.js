@@ -93,6 +93,16 @@ var overlayDiffOrigOpacity = 50;
 var overlayDiffEditOpacity = 100;
 var overlayDiffBlendOn = false;
 
+// Crossfade between the entropy chart's two layers. A single slider
+// rather than the diff overlay's two: superimposed bars at matching
+// opacity just occlude each other, so independent control buys
+// nothing here. 1 is the edited run alone, 0 the pre-edit snapshot.
+var entropyBlendRow =
+  document.getElementById("entropy-blend-row");
+var entropyBlendInput =
+  document.getElementById("entropy-blend");
+var entropyBlend = 1;
+
 var comparePanel =
   document.getElementById("compare-panel");
 var btnCloseCompare =
@@ -139,43 +149,219 @@ Chart.Tooltip.positioners.topLeft =
     };
   };
 
-// Smart positioner: places the tooltip in the chart-area corner
-// diagonally opposite the hovered point, so the box steers clear of
-// the data as the cursor moves along the curve.
-// Places the tooltip in the chart-area corner diagonally opposite
-// the hovered point, and returns the box's intended top-left corner
-// (paired with forced xAlign:"left"/yAlign:"top"). The point is
-// clamped so the box stays fully inside the plotting area on all
-// four sides, so it never spills onto the x-axis.
+// Corner preference for the smart positioner, most wanted first.
+var TOOLTIP_CORNERS = ["tl", "tr", "bl", "br"];
+
+// Smart positioner: parks the tooltip in a corner of the plotting
+// area that is free of both the pointer and the drawn data,
+// preferring the top-left and falling back through the rest.
+//
+// The rule this replaced put the box in the corner diagonally
+// opposite the hovered point, which knows where the cursor is but
+// not where the line goes: on a rising trend "diagonally opposite"
+// aims the box straight at it. Returns the box's top-left origin,
+// which is what the forced xAlign:"left"/yAlign:"top" expects.
+//
+// When no corner is free the box has to sit on the data, and
+// burnThroughPlugin redraws the line through it.
 Chart.Tooltip.positioners.smart =
   function (elements, eventPosition) {
     var chart = this.chart;
-    var area = chart.chartArea;
     var pad = 10;
     // Box size from the previous frame (0 on the very first hover,
     // corrected on the next frame as it fades in).
     var w = this.width || 120;
     var h = this.height || 44;
-    if (!elements || elements.length === 0) {
-      return { x: area.left + pad, y: area.top + pad };
-    }
-    var el = elements[0].element;
-    var midX = (area.left + area.right) / 2;
-    var midY = (area.top + area.bottom) / 2;
-    var x = (el.x > midX)
-      ? area.left + pad
-      : area.right - pad - w;
-    var y = (el.y > midY)
-      ? area.top + pad
-      : area.bottom - pad - h;
-    x = Math.max(
-      area.left + pad, Math.min(x, area.right - pad - w)
+    var corner = smartTooltipCorner(
+      chart, eventPosition, w, h, pad
     );
-    y = Math.max(
-      area.top + pad, Math.min(y, area.bottom - pad - h)
+    chart.$smartCorner = corner;
+    var rect = tooltipCornerRect(
+      chart.chartArea, corner, w, h, pad
     );
-    return { x: x, y: y };
+    return { x: rect.left, y: rect.top };
   };
+
+// The first corner, in TOOLTIP_CORNERS order, that clears both the
+// pointer and the data. Corners the pointer occupies are out
+// entirely, since a box under the cursor is a box in the way.
+function smartTooltipCorner(chart, cursor, w, h, pad) {
+  var area = chart.chartArea;
+  var clear = [];
+  var fallback = null;
+  for (var i = 0; i < TOOLTIP_CORNERS.length; i++) {
+    var name = TOOLTIP_CORNERS[i];
+    var rect = tooltipCornerRect(area, name, w, h, pad);
+    if (!cursor || !rectHasPoint(rect, cursor.x, cursor.y, pad)) {
+      if (fallback === null) {
+        fallback = name;
+      }
+      if (!chartDataHitsRect(chart, rect)) {
+        clear.push(name);
+      }
+    }
+  }
+  return pickTooltipCorner(clear, chart.$smartCorner, fallback);
+}
+
+// Hysteresis: the standing corner wins while it is still clear, so
+// the box settles instead of hopping between two equally good
+// corners every time the pointer twitches.
+function pickTooltipCorner(clear, previous, fallback) {
+  for (var i = 0; i < clear.length; i++) {
+    if (clear[i] === previous) {
+      return previous;
+    }
+  }
+  if (clear.length > 0) {
+    return clear[0];
+  }
+  if (fallback) {
+    return fallback;
+  }
+  return TOOLTIP_CORNERS[0];
+}
+
+// Where a box of w by h sits in one chart-area corner, clamped so it
+// stays fully inside the plotting area on all four sides and never
+// spills onto the axes.
+function tooltipCornerRect(area, corner, w, h, pad) {
+  var left = (corner === "tl" || corner === "bl")
+    ? area.left + pad
+    : area.right - pad - w;
+  var top = (corner === "tl" || corner === "tr")
+    ? area.top + pad
+    : area.bottom - pad - h;
+  left = Math.max(
+    area.left + pad, Math.min(left, area.right - pad - w)
+  );
+  top = Math.max(
+    area.top + pad, Math.min(top, area.bottom - pad - h)
+  );
+  return {
+    left: left,
+    top: top,
+    right: left + w,
+    bottom: top + h,
+  };
+}
+
+// Whether any drawn data would end up under a box at ``rect``.
+function chartDataHitsRect(chart, rect) {
+  for (var di = 0; di < chart.data.datasets.length; di++) {
+    var meta = chart.getDatasetMeta(di);
+    if (meta.hidden || !meta.data || meta.data.length === 0) {
+      continue;
+    }
+    if (meta.type === "bar") {
+      if (barsHitRect(meta.data, rect)) {
+        return true;
+      }
+    } else if (lineHitsRect(meta.data, rect)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Bars are tested as their whole body rather than their top edge:
+// the bottom corners of a bar chart are solid even where no bar top
+// reaches them.
+function barsHitRect(elements, rect) {
+  for (var i = 0; i < elements.length; i++) {
+    var el = elements[i];
+    if (el) {
+      var p = el.getProps(["x", "y", "base", "width"], true);
+      var half = Math.max(1, p.width) / 2;
+      var body = {
+        left: p.x - half,
+        right: p.x + half,
+        top: Math.min(p.y, p.base),
+        bottom: Math.max(p.y, p.base),
+      };
+      if (rectsOverlap(body, rect)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Each span between consecutive points, so a gap (a skipped point)
+// breaks the chain rather than drawing a phantom segment across it.
+// The first point after a break is tested on its own, which is also
+// what a single-point dataset needs.
+function lineHitsRect(elements, rect) {
+  var previous = null;
+  for (var i = 0; i < elements.length; i++) {
+    var el = elements[i];
+    if (!el || el.skip) {
+      previous = null;
+      continue;
+    }
+    var from = previous || el;
+    if (segmentHitsRect(from.x, from.y, el.x, el.y, rect)) {
+      return true;
+    }
+    previous = el;
+  }
+  return false;
+}
+
+function rectHasPoint(rect, x, y, margin) {
+  if (x < rect.left - margin) { return false; }
+  if (x > rect.right + margin) { return false; }
+  if (y < rect.top - margin) { return false; }
+  if (y > rect.bottom + margin) { return false; }
+  return true;
+}
+
+function rectsOverlap(a, b) {
+  if (a.right < b.left) { return false; }
+  if (a.left > b.right) { return false; }
+  if (a.bottom < b.top) { return false; }
+  if (a.top > b.bottom) { return false; }
+  return true;
+}
+
+// Whether a segment touches a rect, by Liang-Barsky clipping: walk
+// the four boundary slabs, narrowing the stretch of the segment that
+// could still be inside, and report whether any stretch survives.
+// Segments rather than their endpoints alone, because a sparse run's
+// trendline can stride clean across a corner box without landing a
+// single vertex inside it. A zero-length segment degenerates into a
+// point-in-rect test, which is what a lone point needs.
+function segmentHitsRect(x0, y0, x1, y1, rect) {
+  var dx = x1 - x0;
+  var dy = y1 - y0;
+  var edge = [-dx, dx, -dy, dy];
+  var slack = [
+    x0 - rect.left,
+    rect.right - x0,
+    y0 - rect.top,
+    rect.bottom - y0,
+  ];
+  var enter = 0;
+  var exit = 1;
+  for (var i = 0; i < 4; i++) {
+    if (edge[i] === 0) {
+      // Parallel to this slab: outside it is outside the rect.
+      if (slack[i] < 0) {
+        return false;
+      }
+    } else {
+      var t = slack[i] / edge[i];
+      if (edge[i] < 0) {
+        if (t > exit) { return false; }
+        if (t > enter) { enter = t; }
+      } else {
+        if (t < enter) { return false; }
+        if (t < exit) { exit = t; }
+      }
+    }
+  }
+  return true;
+}
 
 // Inline plugin: once the tooltip box is drawn, "burn" the data
 // through it. Any trendline segment the box covers is redrawn,
@@ -287,6 +473,12 @@ var COMPARE_COLORS = [
 // Colors for resumed timing segments.
 var TIMING_COLOR = "#00aaff";
 var TIMING_RESUMED = "#66ccff";
+
+// The app's edit color, shared with .token-remasked in style.css, so
+// an intervention reads the same in the chart as it does in the
+// generator's token view.
+var EDIT_COLOR = "#ff9f1c";
+var EDIT_TINT = "rgba(255, 159, 28, 0.15)";
 
 // ---- Data fetching ----
 
@@ -802,16 +994,41 @@ function canvasBoundaryPlugin(boundaries) {
 // branch shows where the intervention happened and therefore where
 // the shared prefix ends. Empty list is a no-op, so unedited runs
 // draw nothing.
+//
+// Two hooks: the tint goes behind the bars (an edited column reads as
+// touched even where its bar is short), the dashed line goes over
+// them (a one-pixel bar would otherwise hide it).
 function substitutionMarkerPlugin(positions) {
   return {
     id: "substitutionMarkers",
+    beforeDatasetsDraw: function (chart) {
+      if (!positions || positions.length === 0) { return; }
+      var yScale = chart.scales.y;
+      var ctx = chart.ctx;
+      ctx.save();
+      clipToChartArea(ctx, chart.chartArea);
+      ctx.fillStyle = EDIT_TINT;
+      for (var i = 0; i < positions.length; i++) {
+        var span = entropyColumnSpan(chart, positions[i]);
+        if (span) {
+          ctx.fillRect(
+            span.left,
+            yScale.top,
+            span.width,
+            yScale.bottom - yScale.top
+          );
+        }
+      }
+      ctx.restore();
+    },
     afterDatasetsDraw: function (chart) {
       if (!positions || positions.length === 0) { return; }
       var xScale = chart.scales.x;
       var yScale = chart.scales.y;
       var ctx = chart.ctx;
       ctx.save();
-      ctx.strokeStyle = "rgba(0,255,65,0.55)";
+      clipToChartArea(ctx, chart.chartArea);
+      ctx.strokeStyle = EDIT_COLOR;
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 4]);
       for (var i = 0; i < positions.length; i++) {
@@ -825,6 +1042,93 @@ function substitutionMarkerPlugin(positions) {
     },
   };
 }
+
+// Confine drawing to the plotting area. Chart.js clips each dataset
+// for us, but the dataset-level hooks run outside that clip, so a
+// marker for a position zoom or pan has pushed off screen would
+// otherwise paint over the axes.
+function clipToChartArea(ctx, area) {
+  ctx.beginPath();
+  ctx.rect(
+    area.left,
+    area.top,
+    area.right - area.left,
+    area.bottom - area.top
+  );
+  ctx.clip();
+}
+
+// Pixel span of one position's column on the entropy chart. A long
+// run puts about a pixel per bar, so a highlight drawn at the true
+// bar width would be invisible; the floor mirrors the generator's
+// profile. Reads the laid-out element rather than the scale so it
+// stays correct under zoom and pan. Falls through the datasets
+// because a shorter original run has no element at a high index.
+function entropyColumnSpan(chart, index) {
+  var bar = null;
+  for (var di = 0; di < chart.data.datasets.length; di++) {
+    var meta = chart.getDatasetMeta(di);
+    if (meta && meta.data && meta.data[index]) {
+      bar = meta.data[index];
+      break;
+    }
+  }
+  if (!bar) {
+    return null;
+  }
+  var props = bar.getProps(["x", "width"], true);
+  var width = Math.max(2, props.width);
+  return { left: props.x - width / 2, width: width };
+}
+
+// Inline Chart.js plugin: a faint full-height guide behind the bar
+// under the pointer, so a one-pixel column is findable at a glance.
+// The bar itself brightens via the dataset's hoverBackgroundColor,
+// which (unlike a hand-drawn bar) still honors the crossfade alpha.
+var entropyHoverPlugin = {
+  id: "entropyHover",
+  beforeDatasetsDraw: function (chart) {
+    var active = chart.getActiveElements();
+    if (!active || active.length === 0) { return; }
+    var span = entropyColumnSpan(chart, active[0].index);
+    if (!span) { return; }
+    var yScale = chart.scales.y;
+    var ctx = chart.ctx;
+    ctx.save();
+    clipToChartArea(ctx, chart.chartArea);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
+    ctx.fillRect(
+      span.left,
+      yScale.top,
+      span.width,
+      yScale.bottom - yScale.top
+    );
+    ctx.restore();
+  },
+};
+
+// Inline Chart.js plugin: crossfade the entropy chart's two layers.
+// Applied as canvas alpha at draw time rather than by rewriting
+// several hundred color strings per slider step, which also keeps
+// the entropy ramp itself untouched. No-op on an unedited run, where
+// there is only one layer to show.
+var entropyBlendPlugin = {
+  id: "entropyBlend",
+  beforeDatasetDraw: function (chart, args) {
+    if (chart.data.datasets.length < 2) { return; }
+    var alpha = (args.index === 0)
+      ? 1 - entropyBlend
+      : entropyBlend;
+    chart.ctx.save();
+    chart.ctx.globalAlpha = alpha;
+  },
+  // Guarded identically to the save above, so the pair can never
+  // come apart and leak canvas state into the next dataset.
+  afterDatasetDraw: function (chart) {
+    if (chart.data.datasets.length < 2) { return; }
+    chart.ctx.restore();
+  },
+};
 
 // Show/hide the eye's diagonal slash. Driven via inline style (not
 // only CSS) so it is robust to any stale-stylesheet caching.
@@ -969,11 +1273,14 @@ function overlayConfText(c) {
   return String(+c.toFixed(3));
 }
 
-// Whether the saved run carries per-token entropy. Checked on the
-// final frame, which is the run's ground truth.
-function overlayEntropyAvailable(data) {
-  var frames = data && data.frames ? data.frames : [];
-  var final = frames[overlayFinalFrameIndex(frames)];
+// Whether a frame series carries per-token entropy. Checked on the
+// final frame, which is the series' ground truth. Split out from
+// overlayEntropyAvailable so the pre-edit snapshot can be tested the
+// same way: it was saved by the same code path but predates the
+// signal on older runs.
+function framesHaveEntropy(frames) {
+  var list = frames || [];
+  var final = list[overlayFinalFrameIndex(list)];
   if (!final) {
     return false;
   }
@@ -983,6 +1290,11 @@ function overlayEntropyAvailable(data) {
     }
   }
   return false;
+}
+
+// Whether the saved run carries per-token entropy.
+function overlayEntropyAvailable(data) {
+  return framesHaveEntropy(data && data.frames);
 }
 
 // Per-position candidate sets for the open run, or an empty list.
@@ -1932,19 +2244,28 @@ function confidenceOptions() {
 function clearEntropyChart() {
   chartEntropy = destroyChart(chartEntropy);
   chartInstances.entropy = null;
+  // Back to the edited run at full opacity, so the next run opens on
+  // the branch it is a record of rather than on a stale mix.
+  entropyBlend = 1;
+  if (entropyBlendInput) {
+    entropyBlendInput.value = "100";
+  }
+  setEntropyBlendVisible(false);
   var section = document.getElementById("entropy-section");
   if (section) {
     section.hidden = true;
   }
 }
 
-// Per-position entropy for the open run, read off the final frame:
-// every position is sampled once in an autoregressive run, so its
-// entropy never changes after the frame that introduced it. Mirrors
-// the generator's entropyProfileValues.
-function entropyChartValues(data) {
-  var frames = data.frames || [];
-  var final = frames[overlayFinalFrameIndex(frames)] || [];
+// Per-position entropy for one frame series, read off its final
+// frame: every position is sampled once in an autoregressive run, so
+// its entropy never changes after the frame that introduced it.
+// Mirrors the generator's entropyProfileValues. Runs over both the
+// open run and its pre-edit snapshot, which is why it takes frames
+// rather than the payload.
+function entropySeriesFrom(frames) {
+  var list = frames || [];
+  var final = list[overlayFinalFrameIndex(list)] || [];
   var values = [];
   var texts = [];
   for (var i = 0; i < final.length; i++) {
@@ -1979,6 +2300,69 @@ function editedPositions(data) {
   return positions;
 }
 
+// The position where the two runs part ways, or null when the run
+// was never edited. A What If branch copies the original trace's
+// prefix verbatim, so everything left of this index is identical in
+// both series and only the right side is worth comparing.
+//
+// This single-boundary reading is autoregressive-shaped. Diffusion
+// remasks are scattered rather than a prefix cut, so once those runs
+// carry entropy the comparison will want per-position divergence
+// instead of one index.
+function divergencePosition(data) {
+  var positions = editedPositions(data);
+  if (positions.length === 0) {
+    return null;
+  }
+  var earliest = positions[0];
+  for (var i = 1; i < positions.length; i++) {
+    if (positions[i] < earliest) {
+      earliest = positions[i];
+    }
+  }
+  return earliest;
+}
+
+// One entropy layer. grouped:false is load-bearing: left grouped,
+// Chart.js sits the two runs side by side and halves every bar,
+// where the whole point is to superimpose them and crossfade.
+function entropyDataset(label, series) {
+  var colors = [];
+  var glowColors = [];
+  for (var i = 0; i < series.values.length; i++) {
+    colors.push(entropyColor(series.values[i]));
+    glowColors.push(entropyGlowColor(series.values[i]));
+  }
+  return {
+    label: label,
+    data: series.values,
+    backgroundColor: colors,
+    hoverBackgroundColor: glowColors,
+    borderWidth: 0,
+    barPercentage: 1,
+    categoryPercentage: 1,
+    grouped: false,
+  };
+}
+
+// The pre-edit run's entropy, or null when there is nothing to
+// compare against. Needs three things at once: a divergence point, a
+// saved snapshot, and entropy inside it. The snapshot exists for any
+// edited run but predates the entropy signal on older ones, so an
+// older branch falls back to the single layer.
+function entropyOriginalSeries(data, divergence) {
+  if (divergence === null) {
+    return null;
+  }
+  if (!data.original_frames) {
+    return null;
+  }
+  if (!framesHaveEntropy(data.original_frames)) {
+    return null;
+  }
+  return entropySeriesFrom(data.original_frames);
+}
+
 // One bar per generated position, tall and hot where the model was
 // torn. Unlike the three charts above it is indexed by position
 // rather than frame, which is also why it is drawn as bars: an
@@ -1994,13 +2378,32 @@ function renderEntropyChart(data) {
     section.hidden = false;
   }
 
-  var profile = entropyChartValues(data);
-  var labels = [];
-  var colors = [];
-  for (var i = 0; i < profile.values.length; i++) {
-    labels.push(i);
-    colors.push(entropyColor(profile.values[i]));
+  var divergence = divergencePosition(data);
+  var edited = entropySeriesFrom(data.frames);
+  var original = entropyOriginalSeries(data, divergence);
+  setEntropyBlendVisible(original !== null);
+
+  // Labels span the longer run: a branch can outlive or fall short
+  // of the run it forked from.
+  var count = edited.values.length;
+  if (original && original.values.length > count) {
+    count = original.values.length;
   }
+  var labels = [];
+  for (var i = 0; i < count; i++) {
+    labels.push(i);
+  }
+
+  // Original first, so it draws beneath the branch it produced and
+  // so dataset index 0 is the one the crossfade fades out.
+  var datasets = [];
+  var texts = [];
+  if (original) {
+    datasets.push(entropyDataset("Original", original));
+    texts.push(original.texts);
+  }
+  datasets.push(entropyDataset("Edited", edited));
+  texts.push(edited.texts);
 
   var canvas = document.getElementById("chart-entropy");
   chartEntropy = new Chart(
@@ -2009,29 +2412,50 @@ function renderEntropyChart(data) {
       type: "bar",
       data: {
         labels: labels,
-        datasets: [{
-          label: "Entropy",
-          data: profile.values,
-          backgroundColor: colors,
-          borderWidth: 0,
-          barPercentage: 1,
-          categoryPercentage: 1,
-        }],
+        datasets: datasets,
       },
-      options: entropyChartOptions(profile.texts),
+      options: entropyChartOptions(
+        texts, original ? divergence : null
+      ),
       // Deliberately without burnThroughPlugin: it redraws a
       // dataset's *line* through the tooltip box, which a bar chart
       // has none of, and would stroke a stray polyline across the bar
       // tops instead. The eye toggle covers hiding the box.
+      //
+      // Marker before hover so the pointer's white guide lays over
+      // the edit tint rather than under it.
       plugins: [
         substitutionMarkerPlugin(editedPositions(data)),
+        entropyHoverPlugin,
+        entropyBlendPlugin,
       ],
     }
   );
   chartInstances.entropy = chartEntropy;
 }
 
-function entropyChartOptions(texts) {
+// The crossfade only means something with a layer on each side.
+function setEntropyBlendVisible(visible) {
+  if (!entropyBlendRow) {
+    return;
+  }
+  entropyBlendRow.hidden = !visible;
+}
+
+// Only the layer alpha changes, so nothing is reparsed; "none" skips
+// the animation that would otherwise lag the drag.
+function onEntropyBlendInput() {
+  entropyBlend = Number(entropyBlendInput.value) / 100;
+  if (chartEntropy) {
+    chartEntropy.update("none");
+  }
+}
+
+// ``texts`` holds one token-text array per dataset, so the tooltip
+// can name the token each layer chose. ``divergence`` is null on a
+// run with nothing to compare against, which collapses the tooltip
+// back to the single unlabeled row.
+function entropyChartOptions(texts, divergence) {
   return {
     responsive: true,
     maintainAspectRatio: false,
@@ -2046,10 +2470,13 @@ function entropyChartOptions(texts) {
         caretSize: 0,
         xAlign: "left",
         yAlign: "top",
+        filter: function (item) {
+          return entropyTooltipFilter(item, divergence);
+        },
         callbacks: {
           title: positionTooltipTitle,
           label: function (ctx) {
-            return entropyTooltipLabel(ctx, texts);
+            return entropyTooltipLabel(ctx, texts, divergence);
           },
         },
       },
@@ -2088,15 +2515,42 @@ function positionTooltipTitle(items) {
   return "Position " + items[0].label;
 }
 
+// Which rows the hovered position is worth showing. A null value is
+// the tail of a run that stopped short of its counterpart. The
+// original layer is dropped left of the divergence point because the
+// branch copies its prefix verbatim there, so a second row would
+// only ever restate the first.
+function entropyTooltipFilter(item, divergence) {
+  if (item.parsed.y === null) {
+    return false;
+  }
+  if (divergence === null) {
+    return true;
+  }
+  if (item.datasetIndex > 0) {
+    return true;
+  }
+  return item.dataIndex >= divergence;
+}
+
 // Naming the token is the thing the generator's compact profile
 // cannot do, so the tooltip carries it alongside the value.
-function entropyTooltipLabel(ctx, texts) {
+//
+// From the divergence point on, each row is named for its run. Note
+// that at the marked position itself the two rows carry the same
+// nats and different tokens, which is the intervention in one line:
+// entropy describes the distribution the prefix produced, and
+// forcing a token changes which one was drawn, not the distribution
+// it was drawn from.
+function entropyTooltipLabel(ctx, texts, divergence) {
   var value = ctx.formattedValue + " nats";
-  var text = texts[ctx.dataIndex];
-  if (!text) {
-    return value;
+  var series = texts[ctx.datasetIndex] || [];
+  var text = series[ctx.dataIndex];
+  var row = text ? value + "  \u2022  " + text : value;
+  if (divergence === null || ctx.dataIndex < divergence) {
+    return row;
   }
-  return value + "  \u2022  " + text;
+  return ctx.dataset.label + ": " + row;
 }
 
 // ---- Comparison mode ----
@@ -2644,6 +3098,12 @@ modalDelete.addEventListener("click", function (e) {
 
 wireOverlayDiffControls();
 wireOverlayScrubber();
+
+if (entropyBlendInput) {
+  entropyBlendInput.addEventListener(
+    "input", onEntropyBlendInput
+  );
+}
 
 // Reveal the "Generation" nav link only when a model is resident. The
 // generator is gated on an active model (see server.py), so surfacing

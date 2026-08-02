@@ -819,6 +819,39 @@ html, body {
   display: none;
 }
 
+/* Original-to-edited crossfade below the entropy chart. One slider,
+   not the diff overlay's two: superimposed bars at matching opacity
+   occlude each other, so the useful axis is the mix. Labels reuse
+   .diff-slider-label from style.css so Original reads the same cyan
+   in both places; the accent on Edited is scoped here because the
+   generator's two-slider row distinguishes its ends by slider color
+   instead, which a single slider cannot do. */
+#entropy-blend-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 8px;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+}
+
+#entropy-blend-row[hidden] {
+  display: none;
+}
+
+#entropy-blend-row .diff-edit-label {
+  color: var(--accent);
+}
+
+#entropy-blend {
+  width: 160px;
+  height: 3px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
 /* Per-frame scrubber below the overlay canvas. Mirrors the generator's
    scrubber; the arrow-button look comes from style.css (.scrub-btn),
    while the slider is keyed to this id since style.css scopes its

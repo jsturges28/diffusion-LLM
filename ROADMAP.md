@@ -182,6 +182,25 @@ analytics suite.
   `entropyColor`, hover naming the token, and dashed markers at edited positions
   so a What If branch shows where its shared prefix ends. It also restores a
   third chart for AR runs, which hide Convergence.
+- Shipped (this session): the counterfactual layer on that chart, plus a
+  collision-aware tooltip positioner. The chart now carries a hover column
+  matching the generator's profile, edit-orange markers and tint (`#ff9f1c`,
+  the `.token-remasked` color) rather than accent green, a tooltip that splits
+  into labeled **Original** / **Edited** rows from the divergence point
+  rightward, and an **Original** / **Edited** crossfade slider over two
+  superimposed `grouped: false` bar datasets, blended with canvas
+  `globalAlpha` rather than by rewriting several hundred color strings per
+  slider step. The original layer reads the pre-edit snapshot that
+  `original_tokens.json` already carries, gated on the snapshot actually
+  holding `e` so pre-Phase-C branches degrade to the single layer. Because a
+  branch copies its prefix verbatim, both the second tooltip row and the
+  visible crossfade start at the marker, which makes the divergence point
+  legible without drawing anything extra. `Chart.Tooltip.positioners.smart`
+  now scores the four plot-area corners against the pointer and the drawn
+  data (bar bodies as rects, trendlines segment by segment via Liang-Barsky,
+  so a sparse run's long segment cannot slip across a corner box unnoticed)
+  and keeps its standing corner while it stays clear; `burnThroughPlugin`
+  becomes the genuine last resort it was meant to be.
 - For the feature overview and architecture, see `README.md`. For the build
   history, see `.cursor/plans/`.
 
@@ -284,10 +303,19 @@ cleanly onto AR: frame N is the sequence after N generated tokens, every token
   changed.
 - **Entropy by Position chart** in the Analytics detail modal, the same signal
   promoted from the generator's compact profile into an inspectable chart: axes,
-  zoom/pan, a tooltip naming the token, and a dashed marker at each edited
-  position. Built from the frames payload in `loadRunOverlays` rather than the
-  metrics payload in `loadRunCharts`, so it costs no extra request. Gated on the
-  data (`overlayEntropyAvailable`), not on `model_type`.
+  zoom/pan, a tooltip naming the token, a hover column, and an edit-orange
+  marker plus tint at each edited position. Built from the frames payload in
+  `loadRunOverlays` rather than the metrics payload in `loadRunCharts`, so it
+  costs no extra request. Gated on the data (`overlayEntropyAvailable`), not on
+  `model_type`.
+- **Counterfactual entropy comparison** on that chart for edited runs: the
+  pre-edit snapshot as a second superimposed bar layer, an Original/Edited
+  crossfade slider, and a tooltip that grows a labeled second row exactly where
+  the branch stops sharing its prefix. At the substituted position the two rows
+  carry the same nats and different tokens, which is the intervention stated in
+  one line: `_substitute_loop` keeps the forced position's originally captured
+  entropy because the distribution there is a function of the prefix, and the
+  substitution changes only which token was drawn from it.
 
 **Remaining AR follow-ups.**
 - Integrate **Phi-4-mini-instruct** and **Gemma-3n-E2B-it**.
