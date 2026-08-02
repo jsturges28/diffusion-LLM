@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 MASK_CHAR = "\u2591"  # ░
 FRAME_HEADER_RE = re.compile(
@@ -113,6 +113,49 @@ def canvas_boundaries(
     ]
 
 
+def total_elapsed_seconds(
+    per_frame_elapsed: Any,
+) -> Optional[float]:
+    """Wall-clock seconds for a whole run, resumes included.
+
+    The worker restarts its clock for each generate/resume/substitute
+    segment, so a run edited before the client began carrying the
+    offset forward has an elapsed series that drops back toward zero
+    at each branch, and its stored ``elapsed_seconds`` (the last
+    sample) covers only the final segment. Each drop marks a boundary,
+    so summing the last value of every segment recovers the true
+    total.
+
+    Series saved since that fix are already monotonic, so there is no
+    drop and this returns the final sample unchanged. Applying it to
+    every run is therefore idempotent.
+
+    Returns None for an empty or non-numeric series, which tells the
+    caller to leave whatever was stored alone.
+    """
+    if not isinstance(per_frame_elapsed, list):
+        return None
+    if len(per_frame_elapsed) == 0:
+        return None
+    for value in per_frame_elapsed:
+        if not isinstance(value, (int, float)):
+            return None
+        if isinstance(value, bool):
+            return None
+
+    total = 0.0
+    for i in range(1, len(per_frame_elapsed)):
+        if per_frame_elapsed[i] < per_frame_elapsed[i - 1]:
+            total += per_frame_elapsed[i - 1]
+    total += per_frame_elapsed[-1]
+
+    assert total >= 0.0, "elapsed total went negative"
+    assert total >= per_frame_elapsed[-1], (
+        "total is shorter than its final segment"
+    )
+    return round(total, 2)
+
+
 def _frames_have_records(frames: List[Any]) -> bool:
     """True if a token stream stores rich records, not legacy ids.
 
@@ -134,15 +177,16 @@ def load_run_frames(
 
     Reads ``tokens.json`` (primary / possibly edited run), the
     optional ``original_tokens.json`` (pre-edit snapshot), and the
-    optional ``alternatives.json`` (per-position candidate sets, only
-    written when the capture was enabled). Tolerates legacy files
-    that stored only integer ids: those cannot drive the token
-    overlays, so ``records_available`` is False.
+    optional ``alternatives.json`` / ``original_alternatives.json``
+    (per-position candidate sets for each run, only written when the
+    capture was enabled). Tolerates legacy files that stored only
+    integer ids: those cannot drive the token overlays, so
+    ``records_available`` is False.
 
     Returns a dict with ``frames``, ``original_frames`` (or None),
-    ``records_available``, ``alternatives`` (or None), and
-    ``alternatives_available``. Raises ``ValueError`` on malformed
-    files.
+    ``records_available``, ``alternatives`` (or None),
+    ``alternatives_available``, and ``original_alternatives`` (or
+    None). Raises ``ValueError`` on malformed files.
     """
     assert run_dir.is_dir(), f"run dir not found: {run_dir}"
 
@@ -152,6 +196,7 @@ def load_run_frames(
         "records_available": False,
         "alternatives": None,
         "alternatives_available": False,
+        "original_alternatives": None,
     }
 
     tokens_path = run_dir / "tokens.json"
@@ -180,22 +225,39 @@ def load_run_frames(
     # Position-indexed, not per-frame: a position's candidate set is
     # fixed when it is sampled, so one entry per position covers the
     # whole run (see ar_sampler._build_frame).
-    alternatives_path = run_dir / "alternatives.json"
-    if alternatives_path.is_file():
-        alternatives = json.loads(
-            alternatives_path.read_text(encoding="utf-8")
-        )
-        if not isinstance(alternatives, list):
-            raise ValueError(
-                f"alternatives.json is malformed in {run_dir}"
-            )
+    alternatives = _load_alternatives(
+        run_dir / "alternatives.json", run_dir
+    )
+    if alternatives is not None:
         result["alternatives"] = alternatives
         result["alternatives_available"] = any(
             isinstance(entry, list) and len(entry) > 0
             for entry in alternatives
         )
 
+    # The pre-edit run's candidate sets. Unlike its tokens these
+    # cannot be reconstructed after the fact, because a substitution
+    # discards the candidates from the edit position onward.
+    result["original_alternatives"] = _load_alternatives(
+        run_dir / "original_alternatives.json", run_dir
+    )
+
     return result
+
+
+def _load_alternatives(
+    path: Path,
+    run_dir: Path,
+) -> Optional[List[Any]]:
+    """Read one position-indexed candidate file, or None if absent."""
+    if not path.is_file():
+        return None
+    alternatives = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(alternatives, list):
+        raise ValueError(
+            f"{path.name} is malformed in {run_dir}"
+        )
+    return alternatives
 
 
 def load_run_metadata(
@@ -245,6 +307,14 @@ def list_runs(
             meta["has_diff"] = (
                 child / "original_tokens.json"
             ).is_file()
+            # Repairs edited runs saved before the elapsed series was
+            # made cumulative, whose stored value covers only the
+            # final segment. A no-op for every other run.
+            repaired = total_elapsed_seconds(
+                meta.get("per_frame_elapsed")
+            )
+            if repaired is not None:
+                meta["elapsed_seconds"] = repaired
             runs.append(meta)
         except (json.JSONDecodeError, AssertionError):
             continue

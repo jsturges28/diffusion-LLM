@@ -71,13 +71,95 @@ compare runs in an analytics suite.
 
 ## Recently shipped (this session)
 
-**NOT yet validated on hardware.** This session landed the `results/` rename,
-all of **AR Phase C** (entropy, top-k alternatives, What If substitution), and an
-Analytics **Entropy by Position** chart on top of it. In-sandbox checks pass
-(`pytest` 54/54, `py_compile` under both `.venv` and `.venv-ar`, `node --check`,
-ReadLints clean), and the sampler plus substitution path are covered by new unit
-tests against a stub model, but nothing that needs CUDA or a display was
-exercised. **See the manual-verification checklist at the bottom.**
+**Latest pass: What If lifecycle fixes plus the edited-run timing foundation.**
+Two commits, both in-sandbox verified (`pytest` 79/79, `py_compile`,
+`node --check`, ReadLints clean, 70-column audit). Nothing needing CUDA or a
+display was exercised; checklist items 11 to 15 at the bottom cover them.
+
+**What If lifecycle (two reported bugs).**
+
+- **The button stayed live after Confirm.** `confirmGuidedEdit` fires an async
+  `saveRun()` and then immediately calls `activateScrubber()`, which re-shows
+  `#btn-what-if` and runs `updateEditFramesLock()` while `editedRunSaved` is
+  still false, so a second edit could be started during the save. The lock
+  condition is now `editedRunSaved || (isSaving && remaskEdits.length > 0)`
+  (edits already exist at confirm time, so it reads synchronously), and
+  `updateEditFramesLock` is called when the save starts and from both terminal
+  handlers, so the lock spans the save and releases if it fails. `setButtonLocked`
+  / `setButtonUnlocked` also set `aria-disabled`.
+  Note the CSS deliberately does **not** use `pointer-events: none`: that would
+  suppress the native `title` tooltip explaining *why* the button is locked. The
+  `is-locked` guards in `enterSubstitutionMode` / `enterRemaskMode` are what
+  actually block activation.
+- **Retry then picking a later token errored.** The client's Retry restores its
+  arrays to the pre-substitution run (`restoreEditSnapshot`), but the worker was
+  doing `state.update(branch)`, so `last_run_state` had moved to the branch. The
+  popover offered the original's candidates while `_validate_substitute` checked
+  the branch's, and every position at or after the edit failed with "token X was
+  not among the captured candidates at position Y". Positions *before* the edit
+  worked, which is what made it look intermittent (a branch copies its prefix
+  verbatim, alternatives included). Fixed by discarding the branch trace
+  (`state_sink=None`). Chaining was already unreachable from the UI, so pinning
+  to the recorded run matches what Retry does. `tests/backends/test_smollm3_substitute.py`
+  covers it against a stub, including the negative case that a branch-only
+  candidate is still rejected.
+
+**Edited-run timing was misaligned, not just mislabeled.** Both splice sites
+(`doSubstitute`, `doGuidedResume`) truncated the frame arrays but left
+`perFrameElapsed` whole, so a branch's samples appended to the original's full
+array. For an edited run `per_frame_elapsed` was therefore **longer than**
+`frames`, and the Timing chart's x axis stopped meaning the same thing as every
+other chart's (a 256-token run showed Timing running to ~374 while Confidence
+ran to 242). Because `worker_base.py` restarts its clock per segment,
+`elapsed_seconds` (the array's last value) was the branch duration alone: the
+summary read 2.08s while the chart's own cumulative total showed ~7s.
+
+- Both sites now call `truncateRunArraysAt(offset)`, which cuts `perFrameElapsed`
+  with its siblings and records `resumeElapsedOffset` (the elapsed at the last
+  kept frame). `handleFrame` adds that offset and re-rounds to the worker's two
+  decimals, so the series stays cumulative and frame-aligned. Snapshotted in
+  `captureEditSnapshot` / `restoreEditSnapshot` and cleared in `resetRunState`.
+- `handleDone`'s first-completion block now also captures
+  `originalPerFrameElapsed`, `originalMeanConf`, and `originalPositionAlts`.
+  The candidate sets are the load-bearing one: `doSubstitute` truncates
+  `positionAlts` at the edit and the branch overwrites the rest, so this is the
+  only chance to keep the pre-edit run's. All three are session-persisted in the
+  `full` payload, or an Analytics round trip loses them.
+- Persisted for edited runs as `original_per_frame_elapsed`,
+  `original_elapsed_seconds`, `original_mean_conf` (metadata) and
+  `original_alternatives.json`, all optional on `SaveRunRequest` (strict
+  pydantic, so `tests/web/test_save_signals.py` pins them). Served by
+  `/metrics` and `/frames` respectively. Nothing consumes them yet; they are the
+  foundation for the confidence and timing comparison work below.
+- `alternativeRecordsFrom` used to gate on the module-level `positionAlts` via
+  `alternativesAvailable()`, which would have answered for the wrong run. Split
+  out `hasAnyAlternatives(positions)` so it gates on its argument.
+- **Legacy runs are repaired at read time.** `total_elapsed_seconds` in
+  `metrics.py` sums the segments an elapsed drop delimits, which is the same
+  arithmetic `buildCumulativeTiming` already does for the chart. Applied in
+  `list_runs` and `_compute_run_metrics` so the two endpoints cannot disagree.
+  It is idempotent: a monotonic series has no drop, so it returns the final
+  sample unchanged, which is why it can run over every run unconditionally.
+- **Watch this when adding the dashed edit marker.** `buildCumulativeTiming`
+  finds resume boundaries by looking for elapsed drops, and new runs no longer
+  have any, so the light-blue post-resume coloring would have silently vanished.
+  `resumeBoundarySet` picks the source explicitly: drops when present (a legacy
+  array still holds the pre-edit frames in full, so `remask_edits` does not line
+  up with it at all), otherwise the edit's own `frame_index`.
+
+**Earlier in this session.** Landed the `results/` rename, all of **AR Phase C**
+(entropy, top-k alternatives, What If substitution), an Analytics **Entropy by
+Position** chart on top of it, and then a counterfactual layer on that chart
+(hover column, edit-orange markers, a divergence-aware two-row tooltip, an
+Original/Edited crossfade slider) plus a collision-aware tooltip positioner
+shared by every chart. The Entropy chart and the tooltip positioner have since
+been eyeballed by the maintainer and look right; everything else below is still
+unvalidated. The sampler and substitution path are covered by unit tests against
+a stub model, and the tooltip geometry and tooltip-row logic were exercised
+against the real source in a throwaway node harness (corner choice for rising /
+falling / flat / bar-dense charts, Liang-Barsky edge cases, hysteresis,
+divergence filtering). **Nothing needing CUDA or a display has been exercised in
+any pass; see the manual-verification checklist at the bottom.**
 
 **One thing to know before testing:** a SmolLM3 run needs the new **Alternatives**
 toggle on for the popover and What If to appear. The `Results/` to `results/`
@@ -132,14 +214,82 @@ would otherwise have dropped it silently (a test pins this).
     presence, not `model_type`.
   - y axis uses `suggestedMax: OVERLAYS_ENTROPY_REF_NATS`, not a hard `max`, so
     runs stay comparable without clipping an unusually torn position.
-  - `substitutionMarkerPlugin` (modeled on `canvasBoundaryPlugin`) draws dashed
-    markers at the union of `token_positions` across `remask_edits`, which for a
-    What If branch is the substituted position and therefore the end of the
-    shared prefix. Reading `token_positions` rather than `frame_index` is what
-    makes it generalize to diffusion remasks.
+  - `substitutionMarkerPlugin` (modeled on `canvasBoundaryPlugin`) marks the
+    union of `token_positions` across `remask_edits`, which for a What If
+    branch is the substituted position and therefore the end of the shared
+    prefix. Reading `token_positions` rather than `frame_index` is what makes
+    it generalize to diffusion remasks. Two hooks: a faint tint behind the bars
+    (`beforeDatasetsDraw`) and the dashed line over them
+    (`afterDatasetsDraw`), both in `EDIT_COLOR` / `EDIT_TINT` (`#ff9f1c`, the
+    `.token-remasked` color). It was accent green at first, which read as "this
+    is the app's highlight" rather than "this is an edit".
   - Deliberately **not** given `burnThroughPlugin`: that plugin redraws a
     dataset's line through the tooltip box, which a bar chart has none of, and
     would stroke a stray polyline across the bar tops.
+  - `entropyHoverPlugin` lights the hovered column the way the generator's
+    profile does, using `entropyColumnSpan` with a 2px floor because a
+    256-position run gives each bar about a pixel. The bar itself brightens via
+    the dataset's `hoverBackgroundColor` (built from `entropyGlowColor`) rather
+    than a hand-drawn bar, so the highlight still honors the crossfade alpha
+    below; that is the one place it deviates from `drawEntropyProfileGlow`.
+
+**Counterfactual entropy (Analytics, edited runs).** The chart carries the
+pre-edit run as a second layer, so a What If branch can be read against the run
+it forked from.
+
+- Two datasets, `Original` at index 0 and `Edited` at index 1, both with
+  **`grouped: false`**. That flag is load-bearing: left grouped, Chart.js sits
+  the runs side by side and halves every bar instead of superimposing them.
+  Labels span the longer of the two, since a branch can outlive or fall short of
+  its parent.
+- The `#entropy-blend` slider crossfades them through `entropyBlendPlugin`,
+  which sets canvas `globalAlpha` per dataset at draw time. Chosen over
+  regenerating several hundred `hsl()` strings per slider step, and it leaves
+  the entropy ramp itself untouched. A single slider rather than the diff
+  overlay's two, because superimposed bars at matching opacity just occlude each
+  other. `clearEntropyChart` resets it to Edited so a new run never opens on a
+  stale mix.
+- The original layer needs three things at once (`entropyOriginalSeries`): a
+  divergence point, a saved `original_frames`, and `e` inside it. The snapshot
+  exists for any edited run but predates the entropy signal on older ones, so a
+  pre-Phase-C branch degrades to the single layer with no slider.
+  `framesHaveEntropy` was split out of `overlayEntropyAvailable` for this.
+- `divergencePosition` is the earliest edited position.
+  `entropyTooltipFilter` drops the Original row left of it, because a branch
+  copies its prefix verbatim and the row would only restate the first;
+  `entropyTooltipLabel` names the rows from there rightward. The same fact is
+  why the crossfade only visibly moves right of the marker. Note the reasoning
+  is AR-shaped (one prefix cut); diffusion remasks are scattered, so once those
+  runs carry entropy this will want per-position divergence instead.
+- **Expect the two rows at the marker to show the same nats.** That is the
+  intervention in one line, not a bug: `_substitute_loop` keeps the forced
+  position's originally captured entropy because the distribution there is a
+  function of the prefix, and forcing a token changes only which one was drawn
+  from it. The row labels are what keep it from reading as a duplicate.
+
+**Collision-aware chart tooltips.** `Chart.Tooltip.positioners.smart` used to
+park the box in the corner diagonally opposite the hovered point, which knows
+where the cursor is but not where the line goes: on a monotonically rising
+timing curve "diagonally opposite" aims the box straight at the trendline. It
+now scores the four plot-area corners (`smartTooltipCorner`), rejecting any that
+holds the pointer or collides with drawn data, and takes the first survivor in
+top-left, top-right, bottom-left, bottom-right order.
+
+- Bars are tested as their whole body (`barsHitRect`), not their top edge: the
+  bottom corners of a bar chart are solid even where no bar top reaches them.
+- Trendlines are tested segment by segment (`lineHitsRect` +
+  `segmentHitsRect`, Liang-Barsky), not vertex by vertex. An AR run's points sit
+  about a pixel apart so vertices would do, but a 20-frame DiffusionGemma canvas
+  has segments long enough to stride across a corner box without landing a
+  vertex in it. A zero-length segment degenerates into a point-in-rect test,
+  which covers a lone point.
+- `pickTooltipCorner` adds hysteresis via `chart.$smartCorner`: the standing
+  corner wins while it stays clear, so the box settles instead of hopping
+  between two equally good corners on every twitch.
+- Shared by all five tooltips (all force `xAlign: "left"` / `yAlign: "top"`, so
+  the positioner returns the box's top-left origin). `burnThroughPlugin` is now
+  the genuine last resort it was meant to be: it only fires when every corner is
+  occupied.
 
 **AR top-k alternatives (opt-in).** `alternatives` BOOL `ParamSpec` on `SMOLLM3`
 (`registry.py`), k fixed at `TOP_K_ALTERNATIVES = 5`. Key payload decision: a
@@ -176,9 +326,10 @@ of the viewport.
   published through a `state_sink` dict rather than the `done` frame so it never
   hits the wire. `_validate_substitute` rejects an out-of-range position and any
   token that was not in that position's captured top-k, keeping the branch a real
-  counterfactual. Substitutions chain (the branch becomes the next re-entry
-  point). Note the trace key `alternatives` vs the param `alternatives_enabled`:
-  they collide if you ever `state.update(params)`.
+  counterfactual. Substitutions **do not** chain: `handle_substitute` passes
+  `state_sink=None` so `last_run_state` stays pinned to the recorded run (see
+  the Retry fix below). Note the trace key `alternatives` vs the param
+  `alternatives_enabled`: they collide if you ever `state.update(params)`.
 - **Frontend**: `#btn-what-if` (shown when `supports_substitution &&
   alternativesAvailable()`), `beginSubstitutionSession` / `doSubstitute` reusing
   the diffusion `resumeFrameOffset` / `isResuming` splice path and the existing
@@ -467,19 +618,120 @@ by accident. Then:
    `alternatives.json` is present and position-indexed.
 6. **Entropy chart**: the detail modal shows a third chart for AR runs (Timing,
    Confidence, Entropy by Position) whose bars match the shape of the generator's
-   profile for the same run. Hover names the token and reads nats; zoom, pan,
-   Reset, and the eye toggle all behave; the What If branch shows a dashed green
-   marker at the substituted position. Then open an AR run saved **before** this
-   session: the section should stay hidden rather than drawing an empty chart.
-   Switch between two runs without closing the modal to confirm no stale chart
-   survives.
-7. **Error path**: substitute after switching models and back (which clears
+   profile for the same run. Hover lights the column and names the token with its
+   nats; zoom, pan, Reset, and the eye toggle all behave. Then open an AR run
+   saved **before** this session: the section should stay hidden rather than
+   drawing an empty chart. Switch between two runs without closing the modal to
+   confirm no stale chart survives.
+7. **Counterfactual layer** (open the confirmed What If branch): the substituted
+   position carries an **orange** dashed marker and a faint orange column tint,
+   matching the generator's remask color rather than the old green. Hovering at
+   or right of that position gives two rows labeled Original and Edited;
+   hovering left of it gives one unlabeled row. **The two rows at the marker
+   should show the same nats and different tokens**, which is correct (see
+   "Counterfactual entropy" above), so treat matching numbers there as a pass,
+   not a bug. The Original/Edited slider appears; dragging it left fades the
+   branch out and the pre-edit run in, and the change should be visible only
+   right of the marker. Reopening a different run should reset the slider to
+   Edited. An AR run edited **before** this session (snapshot without `e`) should
+   show the marker but no slider and no second row.
+8. **Tooltip placement**: on the Timing chart, hover anywhere along the rising
+   line; the box should settle in the **top-left** rather than on the trendline,
+   and should not flicker between corners as you sweep the pointer. On
+   Confidence (a curve hugging the top) expect a bottom corner. Park the cursor
+   in the box's chosen corner and confirm it moves out of the way. Burn-through
+   should now be rare: it is the fallback for when all four corners are
+   occupied, most likely on a heavily zoomed view.
+9. **Error path**: substitute after switching models and back (which clears
    `last_run_state`). Expect a clean error message and the **original run
    restored**, not a truncated one.
-8. **Regressions**: one LLaDA Edit Frames session still works end to end
-   (`_stream_tokens` refactor and the `handleError` rollback are the shared
-   surfaces), both models still save/load normally, and a diffusion run's detail
-   modal still shows exactly its three charts with no Entropy section.
+10. **Regressions**: one LLaDA Edit Frames session still works end to end
+    (`_stream_tokens` refactor and the `handleError` rollback are the shared
+    surfaces), both models still save/load normally, and a diffusion run's
+    detail modal still shows exactly its three charts with no Entropy section.
+    The tooltip positioner is shared, so give the Convergence chart a hover too.
+
+The rest cover the What If lifecycle and timing pass:
+
+11. **Confirm locks What If**: SmolLM3 run, What If, pick a candidate, let it
+    finish, click the green check. The button must grey out the instant you
+    click (not when the save lands) and stay unclickable, and hovering it should
+    still show the "already has a saved edit" tooltip. Try clicking it during
+    the save specifically, since that was the open window.
+12. **Retry then pick a later token**: same setup but click the blue Retry
+    icon, then hover a token **after** the edit position and pick a candidate.
+    It should run, with no "not among the captured candidates" error and no
+    need to hit Generate first. Repeat picking a token *before* the edit
+    position, which worked even with the bug, to confirm nothing regressed.
+13. **Timing alignment on a fresh edited run**: save one, open Analytics. The
+    Timing chart's last frame index should now match Confidence and Entropy
+    (before, a 256-token run showed ~374 against 242), and the **Elapsed** row
+    should agree with the chart's final y value rather than showing just the
+    branch (2.08s against a ~7s chart was the symptom). The post-edit segment
+    should still be light blue, now driven by `remask_edits` rather than an
+    elapsed drop.
+14. **Legacy runs still read correctly**: open an edited run saved *before* this
+    pass. Its Time column and Elapsed row should now show the repaired total,
+    its Timing chart should be unchanged (still misaligned, since the stored
+    array cannot be re-cut), and its post-edit segment should still be light
+    blue via the drop heuristic. Also confirm an unedited legacy run's elapsed
+    is untouched.
+15. **Diffusion parity and session round trip**: run a LLaDA Edit Frames resume
+    and confirm the same alignment holds there. Then generate, edit, navigate to
+    Analytics and back, and save: the restored session should still produce a
+    complete edited run (the pre-edit signals ride in the `full` sessionStorage
+    payload, which falls back to a lighter one when the quota is hit).
+
+**0. The comparison surfaces (agreed with the maintainer, planned next).** The
+timing foundation above exists to serve these. The unifying idea settled in
+discussion: **the pre-edit run is a first-class layer everywhere**, driven by one
+shared Original/Edited state rather than a bespoke control per surface. Tokens
+already have it, the Entropy chart just got it, and these close the gap. Settled
+decisions:
+
+- **One crossfade is the primary control** on both pages, replacing the need for
+  per-chart sliders. Diff mode keeps its two independent opacity sliders, because
+  the Difference blend needs both layers up at once and a single crossfade cannot
+  express that.
+- **Generalize the two-layer token stack** out of diff-only into any overlay mode.
+  Two blockers to plan around: `overlaysBuildDiffLayers` emits bare `<span>`s with
+  no `data-pos` and no `token-span`, which is why hover, the popover, and entropy
+  highlighting are all dead in diff mode today; and with two stacked layers the
+  top one swallows every pointer event even at zero opacity. The fix for the
+  second is the maintainer's own midpoint idea, applied to **interaction** rather
+  than visibility: the crossfade stays continuous, but below 50 the original layer
+  takes the mouse and feeds the popover, at or above 50 the edited one does.
+- **Cross-highlighting** both directions, both pages. The generator already does
+  token to bar (`setEntropyHoverPosition`); `#entropy-profile` has no mouse
+  handlers at all, so the reverse is a `mousemove` reusing the layout math in
+  `drawEntropyProfile`. In Analytics the hovered index is already computed in
+  `entropyHoverPlugin`, and token to bar is `chart.setActiveElements()`. Both need
+  a way to highlight a token **by position**, which does not exist yet (today it
+  is pure CSS `:hover`). Decided **not** to gate this on the `highlightTokens`
+  comfort setting: that setting is about reading token boundaries, this is an
+  analysis affordance, and Analytics does not read app settings at all today.
+- **Popover pagination** (Original/Edited arrows for positions past the edit) is
+  unblocked now that `original_alternatives.json` is persisted, but only for runs
+  saved from here on.
+- **Confidence chart**: cumulative versus per-position toggle. Note the default is
+  **modality-aware**, not per-position everywhere: the AR `mean_conf` is a
+  cumulative running mean so its curve is degenerate, but LLaDA's and
+  DiffusionGemma's are per-frame canvas means and that curve is what makes
+  adaptive stopping visible. Per-position is the entropy chart again (read `c` off
+  the final frame), so it comes from the **frames** payload while the line comes
+  from **metrics**, and the toggle straddles two independent fetches.
+- **Timing chart**: dashed edit marker (reuse `substitutionMarkerPlugin` with
+  frame indices via `resumeBoundarySet`; its orange tint is sized from bar
+  geometry, so a line chart needs either a width strategy or no tint), "E204"
+  style tooltip labels, an overlay toggle for the two lines, and both elapsed
+  totals in the summary.
+- **Status message stack** (the one piece with no dependency on any of this):
+  `#status-message` is a single overwritten span, and both existing toast systems
+  (the draggable download toast, the analytics delete toast) are single-slot. The
+  split that makes it tractable: leave the steady-state readouts (`Step`,
+  `Elapsed`, prefs) in the footer and lift only the **event** messages into a
+  stack, which is what makes "Saving run" and "Resuming" coexist. Watch for
+  collision with the download toast, which is fixed-position and drag-positioned.
 
 **1. State-space models: Mamba-3 (new model class).** A genuinely new xAI
 direction: SSMs compress all context into a fixed-size recurrent state, so they

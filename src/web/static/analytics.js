@@ -613,6 +613,12 @@ function buildRemaskFrameSet(remaskEdits) {
 // {values, resumeStartSet} where resumeStartSet
 // maps frame indices of each resume's first frame
 // to true.
+//
+// Runs saved since the client began carrying the
+// elapsed offset across a splice are already
+// cumulative, so this is a pass-through for them
+// and resumeStartSet comes back empty; older runs
+// still drop at each branch and get stitched here.
 function buildCumulativeTiming(raw, remaskSet) {
   var values = [];
   var resumeStartSet = {};
@@ -631,6 +637,24 @@ function buildCumulativeTiming(raw, remaskSet) {
     values: values,
     resumeStartSet: resumeStartSet,
   };
+}
+
+// Where the resumed part of an edited run begins, as a set of frame
+// indices. Two sources, deliberately not merged: an elapsed drop is
+// the only trustworthy marker in an older run, whose timing array
+// still holds the pre-edit run's frames in full and so does not line
+// up with remask_edits at all. Once the array is aligned there is no
+// drop left to find, and the edit's own frame index is exact.
+function resumeBoundarySet(resumeStartSet, remaskSet) {
+  if (Object.keys(resumeStartSet).length > 0) {
+    return resumeStartSet;
+  }
+  var set = {};
+  var keys = Object.keys(remaskSet);
+  for (var i = 0; i < keys.length; i++) {
+    set[keys[i]] = true;
+  }
+  return set;
 }
 
 // Shared zoom plugin options for scroll + pinch.
@@ -2014,7 +2038,9 @@ function renderTimingChart(data, remaskSet, run) {
     data.per_frame_elapsed, remaskSet
   );
   var values = cumResult.values;
-  var resumeSet = cumResult.resumeStartSet;
+  var resumeSet = resumeBoundarySet(
+    cumResult.resumeStartSet, remaskSet
+  );
 
   var labels = [];
   for (var t = 0; t < values.length; t++) {

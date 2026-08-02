@@ -409,7 +409,7 @@
         <h4>Convergence chart</h4>
         <p>Plots the percentage of resolved (unmasked) tokens at each frame. The curve shows how quickly the model commits to its output. If the run includes user remask edits, the transition segments leading into edited frames are highlighted in <strong style="color:#4fc3f7;">blue</strong>, and hovering reveals which token positions were remasked.</p>
         <h4>Timing chart</h4>
-        <p>Plots cumulative elapsed time per frame. Time accumulates across resume operations so the chart shows total wall-clock cost. Transition segments into remasked frames are highlighted in <strong style="color:#00ff41;">green</strong>. The detected GPU is displayed in the chart header.</p>
+        <p>Plots cumulative elapsed time per frame. Time accumulates across resume operations so the chart shows total wall-clock cost, and the <em>Elapsed</em> figure in the run summary reports that same total (for an edited run, the original plus the branch, not the branch alone). Transition segments into remasked frames are highlighted in <strong style="color:#00ff41;">green</strong>, and the resumed stretch after an edit is drawn in a lighter blue. The detected GPU is displayed in the chart header.</p>
         <h4>Confidence chart</h4>
         <p>Plots the mean per-token confidence at each frame, which typically climbs toward 100% as a canvas converges. This makes DiffusionGemma's <em>adaptive stopping</em> visible: confidence rises and then a canvas commits. Shown only for runs saved with confidence data.</p>
         <h4>Entropy chart</h4>

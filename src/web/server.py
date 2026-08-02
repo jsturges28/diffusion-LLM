@@ -52,6 +52,7 @@ from src.analytics.metrics import (
     load_run_frames,
     load_run_metadata,
     parse_history,
+    total_elapsed_seconds,
 )
 from src.backends.protocol import ModelInfo
 from src.backends.registry import DEFAULT_MODEL, REGISTRY
@@ -1131,6 +1132,17 @@ class SaveRunRequest(BaseModel):
     canvas_index: Optional[List[int]] = None
     mean_conf: Optional[List[Optional[float]]] = None
     remask_edits: Optional[List[RemaskEdit]] = None
+    # The pre-edit run's own signals, sent alongside
+    # ``original_frame_tokens`` for edited runs. They let Analytics
+    # compare original against edited on timing, confidence, and
+    # candidates, not just on token text. Absent on unedited runs and
+    # on edited runs saved before these fields existed.
+    original_per_frame_elapsed: Optional[List[float]] = None
+    original_elapsed_seconds: Optional[float] = None
+    original_mean_conf: Optional[List[Optional[float]]] = None
+    original_alternatives: Optional[
+        List[Optional[List[TokenAlternative]]]
+    ] = None
     # When set, update this existing run folder in place instead of
     # creating a new one. Used when a saved run is edited-and-resumed:
     # the edited (bundled) run replaces its pre-edit original so it is a
@@ -1259,6 +1271,16 @@ def _save_run_blocking(body: SaveRunRequest) -> str:
         metadata["canvas_index"] = body.canvas_index
     if body.mean_conf is not None:
         metadata["mean_conf"] = body.mean_conf
+    if body.original_per_frame_elapsed is not None:
+        metadata["original_per_frame_elapsed"] = (
+            body.original_per_frame_elapsed
+        )
+    if body.original_elapsed_seconds is not None:
+        metadata["original_elapsed_seconds"] = (
+            body.original_elapsed_seconds
+        )
+    if body.original_mean_conf is not None:
+        metadata["original_mean_conf"] = body.original_mean_conf
     if body.remask_edits:
         metadata["remask_edits"] = [
             edit.model_dump() for edit in body.remask_edits
@@ -1307,6 +1329,14 @@ def _save_run_blocking(body: SaveRunRequest) -> str:
         (run_dir / "alternatives.json").write_text(
             json.dumps(
                 _dump_alternatives(body.alternatives),
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+    if body.original_alternatives is not None:
+        (run_dir / "original_alternatives.json").write_text(
+            json.dumps(
+                _dump_alternatives(body.original_alternatives),
                 ensure_ascii=False,
             ),
             encoding="utf-8",
@@ -1371,9 +1401,19 @@ def _compute_run_metrics(run_id: str) -> Dict[str, Any]:
         "elapsed_seconds",
         "remask_edits",
         "mean_conf",
+        "original_per_frame_elapsed",
+        "original_elapsed_seconds",
+        "original_mean_conf",
     ):
         if key in meta:
             result[key] = meta[key]
+    # Same repair list_runs applies, so the two endpoints cannot
+    # disagree about how long an edited run took.
+    repaired = total_elapsed_seconds(
+        meta.get("per_frame_elapsed")
+    )
+    if repaired is not None:
+        result["elapsed_seconds"] = repaired
     canvas_index = meta.get("canvas_index")
     if canvas_index:
         result["canvas_boundaries"] = canvas_boundaries(
@@ -1419,6 +1459,9 @@ def _compute_run_frames(run_id: str) -> Dict[str, Any]:
         "alternatives": data["alternatives"],
         "alternatives_available": data[
             "alternatives_available"
+        ],
+        "original_alternatives": data[
+            "original_alternatives"
         ],
         "remask_edits": meta.get("remask_edits", []),
         "canvas_index": meta.get("canvas_index"),

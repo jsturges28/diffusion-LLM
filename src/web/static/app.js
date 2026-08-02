@@ -225,6 +225,14 @@ var lastFinalText = null;
 var originalTotalFrames = 0;
 var originalFrameHistory = [];
 var originalFrameTokens = [];
+// The pre-edit run's own signals, captured once when the first run
+// completes. Timing and mean confidence could in principle be
+// recovered from the saved frames, but the candidate sets cannot:
+// doSubstitute truncates positionAlts at the edit and the branch
+// overwrites the rest, so this is the only chance to keep them.
+var originalPerFrameElapsed = [];
+var originalMeanConf = [];
+var originalPositionAlts = [];
 
 // Per-position competing candidates, indexed by token position (not
 // by frame): a position's candidate set is fixed the moment it is
@@ -284,9 +292,14 @@ var guidedResumeAction = null;
 var guidedTargetFrame = null;
 
 // Resume state: when resuming, incoming frames are
-// appended starting at resumeFrameOffset.
+// appended starting at resumeFrameOffset. The worker restarts its
+// clock for each generate/resume/substitute segment, so elapsed
+// samples from the branch are shifted by resumeElapsedOffset (the
+// elapsed value at the last frame kept) to stay cumulative and
+// aligned with the frame arrays.
 var isResuming = false;
 var resumeFrameOffset = 0;
+var resumeElapsedOffset = 0;
 
 // ---- Output placeholder ----
 
@@ -1371,7 +1384,12 @@ function handleFrame(data) {
   }
 
   if (typeof data.elapsed === "number") {
-    perFrameElapsed.push(data.elapsed);
+    // Shifted by the pre-resume total and re-rounded to the worker's
+    // two decimals, so the series stays cumulative across segments
+    // instead of dropping back to zero at each branch.
+    perFrameElapsed.push(
+      +(data.elapsed + resumeElapsedOffset).toFixed(2)
+    );
   }
   frameCanvasIndex.push(
     typeof data.canvas_index === "number"
@@ -1431,6 +1449,9 @@ function handleDone(data) {
     originalTotalFrames = frameHistory.length;
     originalFrameHistory = frameHistory.slice();
     originalFrameTokens = frameTokens.slice();
+    originalPerFrameElapsed = perFrameElapsed.slice();
+    originalMeanConf = frameMeanConf.slice();
+    originalPositionAlts = positionAlts.slice();
   }
 
   setSaveAvailable(true);
@@ -1772,8 +1793,15 @@ function entropyAvailable() {
 // Whether any position captured competing candidates for the hover
 // popover (and, for models that support it, What If substitution).
 function alternativesAvailable() {
-  for (var i = 0; i < positionAlts.length; i++) {
-    var alts = positionAlts[i];
+  return hasAnyAlternatives(positionAlts);
+}
+
+// True when at least one position captured a candidate set. Takes
+// the array so it answers for the pre-edit run as well as the live
+// one.
+function hasAnyAlternatives(positions) {
+  for (var i = 0; i < positions.length; i++) {
+    var alts = positions[i];
     if (alts && alts.length > 0) {
       return true;
     }
@@ -2922,6 +2950,7 @@ function captureEditSnapshot() {
     frameCanvasIndex: frameCanvasIndex.slice(),
     frameMeanConf: frameMeanConf.slice(),
     perFrameElapsed: perFrameElapsed.slice(),
+    resumeElapsedOffset: resumeElapsedOffset,
     positionAlts: positionAlts.slice(),
     finalText: lastFinalText,
     remaskEditsLen: remaskEdits.length,
@@ -2939,6 +2968,7 @@ function restoreEditSnapshot() {
   frameCanvasIndex = preEditSnapshot.frameCanvasIndex.slice();
   frameMeanConf = preEditSnapshot.frameMeanConf.slice();
   perFrameElapsed = preEditSnapshot.perFrameElapsed.slice();
+  resumeElapsedOffset = preEditSnapshot.resumeElapsedOffset;
   positionAlts = preEditSnapshot.positionAlts.slice();
   lastFinalText = preEditSnapshot.finalText;
   // Drop any edits committed during this (now-cancelled) session.
@@ -2948,6 +2978,25 @@ function restoreEditSnapshot() {
   commitSteps = null;
   diffData = null;
   preEditSnapshot = null;
+}
+
+// Cut every per-frame array back to `offset` so the branch about to
+// be generated appends cleanly at that index. perFrameElapsed is cut
+// with the rest: leaving it whole made the saved timing array longer
+// than the frame arrays, which knocked the Timing chart's x axis out
+// of step with every other chart. The elapsed value at the last kept
+// frame carries forward, because the worker restarts its clock for
+// the new segment.
+function truncateRunArraysAt(offset) {
+  resumeFrameOffset = offset;
+  resumeElapsedOffset = offset > 0
+    ? (perFrameElapsed[offset - 1] || 0)
+    : 0;
+  frameHistory.length = offset;
+  frameTokens.length = offset;
+  frameCanvasIndex.length = offset;
+  frameMeanConf.length = offset;
+  perFrameElapsed.length = offset;
 }
 
 function unlockScrubberNav() {
@@ -3081,11 +3130,7 @@ function doSubstitute(position, tokenId) {
   perFrameRemasked = {};
   remaskedPositions = {};
 
-  resumeFrameOffset = position;
-  frameHistory.length = resumeFrameOffset;
-  frameTokens.length = resumeFrameOffset;
-  frameCanvasIndex.length = resumeFrameOffset;
-  frameMeanConf.length = resumeFrameOffset;
+  truncateRunArraysAt(position);
   // Positions from the substituted one onward are about to be
   // resampled, so their captured candidates no longer apply.
   positionAlts.length = position;
@@ -3352,11 +3397,7 @@ function doGuidedResume(action) {
   perFrameRemasked = {};
   remaskedPositions = {};
 
-  resumeFrameOffset = frameIndex;
-  frameHistory.length = resumeFrameOffset;
-  frameTokens.length = resumeFrameOffset;
-  frameCanvasIndex.length = resumeFrameOffset;
-  frameMeanConf.length = resumeFrameOffset;
+  truncateRunArraysAt(frameIndex);
   commitSteps = null;
   diffData = null;
   isResuming = true;
@@ -3718,6 +3759,9 @@ function resetRunState() {
   originalTotalFrames = 0;
   originalFrameHistory = [];
   originalFrameTokens = [];
+  originalPerFrameElapsed = [];
+  originalMeanConf = [];
+  originalPositionAlts = [];
   positionAlts = [];
   entropyHoverPos = null;
   hideAltsPopover();
@@ -3727,6 +3771,7 @@ function resetRunState() {
   lastSavedRunId = null;
   isResuming = false;
   resumeFrameOffset = 0;
+  resumeElapsedOffset = 0;
   updateEditFramesLock();
   updateGenerateButton();
   setSaveAvailable(false);
@@ -3843,11 +3888,36 @@ function tokenRecordsFrom(frames) {
   return out;
 }
 
+// Attach the pre-edit run's own timing, confidence, and candidate
+// sets to an edited run's save. These let Analytics compare the two
+// runs on every axis rather than only on token text, and each is
+// omitted when the original never recorded it (older sessions, or
+// Alternatives left off), so the reader can tell absent from empty.
+function addOriginalRunSignals(payload) {
+  if (originalPerFrameElapsed.length > 0) {
+    payload.original_per_frame_elapsed =
+      originalPerFrameElapsed.slice();
+    payload.original_elapsed_seconds =
+      originalPerFrameElapsed[
+        originalPerFrameElapsed.length - 1
+      ];
+  }
+  if (originalMeanConf.length > 0) {
+    payload.original_mean_conf = originalMeanConf.slice();
+  }
+  var originalAlts = alternativeRecordsFrom(
+    originalPositionAlts
+  );
+  if (originalAlts !== null) {
+    payload.original_alternatives = originalAlts;
+  }
+}
+
 // Project accumulated candidate sets into the persisted shape, one
 // entry per token position. Returns null when nothing was captured,
 // so the run simply omits alternatives.json.
 function alternativeRecordsFrom(positions) {
-  if (!alternativesAvailable()) {
+  if (!hasAnyAlternatives(positions)) {
     return null;
   }
   var out = [];
@@ -3992,6 +4062,7 @@ function saveRun() {
       payload.original_frame_tokens =
         tokenRecordsFrom(originalFrameTokens);
     }
+    addOriginalRunSignals(payload);
     // Update the pre-edit run's folder in place so the bundled edited
     // run replaces its original (one Analytics row, not two).
     if (lastSavedRunId) {
@@ -4680,6 +4751,9 @@ function saveSessionState() {
     frameMeanConf: frameMeanConf,
     originalFrameHistory: originalFrameHistory,
     originalFrameTokens: originalFrameTokens,
+    originalPerFrameElapsed: originalPerFrameElapsed,
+    originalMeanConf: originalMeanConf,
+    originalPositionAlts: originalPositionAlts,
     positionAlts: positionAlts,
   });
   // Prefer the token-rich payload; fall back to a lighter one
@@ -4753,6 +4827,9 @@ function restoreSessionState() {
     s.originalTotalFrames || frameHistory.length;
   originalFrameHistory = s.originalFrameHistory || [];
   originalFrameTokens = s.originalFrameTokens || [];
+  originalPerFrameElapsed = s.originalPerFrameElapsed || [];
+  originalMeanConf = s.originalMeanConf || [];
+  originalPositionAlts = s.originalPositionAlts || [];
   positionAlts = s.positionAlts || [];
   editedRunSaved = !!s.editedRunSaved;
   runSaved = !!s.runSaved;
