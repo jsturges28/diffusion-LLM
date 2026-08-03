@@ -235,6 +235,14 @@
                       title="Toggle tooltip box" aria-label="Toggle tooltip box">
                       <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" /><circle cx="12" cy="12" r="3" /><line class="eye-slash" x1="3" y1="3" x2="21" y2="21" /></svg>
                     </button>
+                  </div>
+                </div>
+                <div class="chart-wrap">
+                  <canvas id="chart-convergence"></canvas>
+                  <!-- Zoom sits in the axis gutter, which every
+                       chart leaves free, rather than crowding the
+                       header next to the title. -->
+                  <div class="chart-zoom-dock">
                     <button class="zoom-btn" data-chart="convergence"
                       data-action="in" title="Zoom in">+</button>
                     <button class="zoom-btn" data-chart="convergence"
@@ -242,24 +250,38 @@
                     <button class="zoom-btn" data-chart="convergence"
                       data-action="reset" title="Reset zoom">&#8634;</button>
                   </div>
-                </div>
-                <div class="chart-wrap">
-                  <canvas id="chart-convergence"></canvas>
                 </div>
               </div>
 
               <div class="chart-section" id="timing-section"
                 hidden>
                 <div class="chart-header-row">
-                  <h3>
-                    Timing
-                    <span id="gpu-label" class="gpu-label"></span>
-                  </h3>
+                  <h3>Timing</h3>
                   <div class="zoom-controls">
                     <button class="zoom-btn tooltip-toggle-btn" data-chart="timing"
                       title="Toggle tooltip box" aria-label="Toggle tooltip box">
                       <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" /><circle cx="12" cy="12" r="3" /><line class="eye-slash" x1="3" y1="3" x2="21" y2="21" /></svg>
                     </button>
+                    <!-- Which runs this chart draws at rest. Hidden
+                         unless the run carries a pre-edit series. -->
+                    <div class="compare-pins" data-chart="timing"
+                      hidden>
+                      <button class="zoom-btn compare-pin-btn"
+                        data-chart="timing" data-series="original"
+                        title="Show the original run"
+                        aria-label="Show the original run"
+                        aria-pressed="true">1</button>
+                      <button class="zoom-btn compare-pin-btn"
+                        data-chart="timing" data-series="edited"
+                        title="Show the edited run"
+                        aria-label="Show the edited run"
+                        aria-pressed="true">2</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="chart-wrap">
+                  <canvas id="chart-timing"></canvas>
+                  <div class="chart-zoom-dock">
                     <button class="zoom-btn" data-chart="timing"
                       data-action="in" title="Zoom in">+</button>
                     <button class="zoom-btn" data-chart="timing"
@@ -267,9 +289,6 @@
                     <button class="zoom-btn" data-chart="timing"
                       data-action="reset" title="Reset zoom">&#8634;</button>
                   </div>
-                </div>
-                <div class="chart-wrap">
-                  <canvas id="chart-timing"></canvas>
                 </div>
               </div>
 
@@ -282,6 +301,26 @@
                       title="Toggle tooltip box" aria-label="Toggle tooltip box">
                       <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" /><circle cx="12" cy="12" r="3" /><line class="eye-slash" x1="3" y1="3" x2="21" y2="21" /></svg>
                     </button>
+                    <div class="compare-pins" data-chart="confidence"
+                      hidden>
+                      <button class="zoom-btn compare-pin-btn"
+                        data-chart="confidence"
+                        data-series="original"
+                        title="Show the original run"
+                        aria-label="Show the original run"
+                        aria-pressed="true">1</button>
+                      <button class="zoom-btn compare-pin-btn"
+                        data-chart="confidence"
+                        data-series="edited"
+                        title="Show the edited run"
+                        aria-label="Show the edited run"
+                        aria-pressed="true">2</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="chart-wrap">
+                  <canvas id="chart-confidence"></canvas>
+                  <div class="chart-zoom-dock">
                     <button class="zoom-btn" data-chart="confidence"
                       data-action="in" title="Zoom in">+</button>
                     <button class="zoom-btn" data-chart="confidence"
@@ -290,9 +329,6 @@
                       data-action="reset"
                       title="Reset zoom">&#8634;</button>
                   </div>
-                </div>
-                <div class="chart-wrap">
-                  <canvas id="chart-confidence"></canvas>
                 </div>
               </div>
 
@@ -309,6 +345,11 @@
                       title="Toggle tooltip box" aria-label="Toggle tooltip box">
                       <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" /><circle cx="12" cy="12" r="3" /><line class="eye-slash" x1="3" y1="3" x2="21" y2="21" /></svg>
                     </button>
+                  </div>
+                </div>
+                <div class="chart-wrap">
+                  <canvas id="chart-entropy"></canvas>
+                  <div class="chart-zoom-dock">
                     <button class="zoom-btn" data-chart="entropy"
                       data-action="in" title="Zoom in">+</button>
                     <button class="zoom-btn" data-chart="entropy"
@@ -317,9 +358,6 @@
                       data-action="reset"
                       title="Reset zoom">&#8634;</button>
                   </div>
-                </div>
-                <div class="chart-wrap">
-                  <canvas id="chart-entropy"></canvas>
                 </div>
               </div>
             </div>

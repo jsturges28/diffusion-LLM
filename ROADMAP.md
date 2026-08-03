@@ -238,6 +238,33 @@ analytics suite.
   outside `PERSIST_KEYS` so a fresh launch still starts from the recommended
   defaults, with a `#btn-param-defaults` Reset on the Experimental row that
   disables itself while everything already matches.
+- Shipped (this session): the **line-chart comparison layer**, which finally
+  consumes `original_per_frame_elapsed` / `original_mean_conf`. Both were
+  already saved by `addOriginalRunSignals` and served by the metrics route,
+  but the timing and confidence charts had stayed single-series, so an edited
+  run could only ever show its branch. They now draw both runs, the original
+  solid in grey and the branch dashed in the chart's own hue, sharing a prefix
+  and separating at the edit. Which runs are drawn is owned by two **pins**
+  per chart header (1 / 2, lit accent green, both on at open) as a three-state
+  control rather than two independent checkboxes: the last lit pin is locked,
+  because a chart drawing neither run has no reading. The run crossfade stays
+  the token view's control and only *borrows* these two for the length of a
+  pointer drag, easing back over 180ms on release (`scrubWeight` lerped
+  against the pin answer in `seriesBlendPlugin`), which keeps the modal moving
+  together without tying two frame-indexed charts to a slider that lives four
+  hundred pixels away. Keyboard adjustments are deliberately excluded: arrow
+  keys produce input events with no press to end them. Also moved the zoom
+  controls into a segmented pill docked in each chart's bottom-left axis
+  gutter (freeing the header for the pins, `layout.padding.bottom` reserving
+  the strip),   and the processor name from the timing header into its own run
+  summary row, correctly labelled GPU or CPU from the run's own metadata.
+  Fixed a long-standing bug the two-series tooltips made obvious: Chart.js
+  paints a white backing behind each tooltip swatch and fills it with the
+  dataset's `backgroundColor`, which on the line charts is an area wash at
+  0.08 alpha (`"transparent"` on the compare panel), so every swatch read
+  white with a colored rim. A shared `lineLabelColor` now paints them with
+  the line's own color, which is what tells Original from Edited in a
+  two-row tooltip.
 - For the feature overview and architecture, see `README.md`. For the build
   history, see `.cursor/plans/`.
 

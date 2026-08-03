@@ -28,8 +28,6 @@ var btnCloseDetail =
   document.getElementById("btn-close-detail");
 var timingSection =
   document.getElementById("timing-section");
-var gpuLabel =
-  document.getElementById("gpu-label");
 
 var overlayViewer =
   document.getElementById("overlay-viewer");
@@ -398,10 +396,13 @@ var burnThroughPlugin = {
         ) {
           continue;
         }
+        var alpha = chartSeriesAlpha(chart, di);
+        if (alpha <= 0.02) { continue; }
         var ds = chart.data.datasets[di];
         var color = (typeof ds.borderColor === "string")
           ? ds.borderColor : "#ffffff";
         ctx.save();
+        ctx.globalAlpha = alpha;
         ctx.beginPath();
         ctx.rect(bx, by, bw, bh);
         ctx.clip();
@@ -431,10 +432,15 @@ var burnThroughPlugin = {
       for (var i = 0; i < active.length; i++) {
         var ael = active[i].element;
         if (!ael) { continue; }
+        var aalpha = chartSeriesAlpha(
+          chart, active[i].datasetIndex
+        );
+        if (aalpha <= 0.02) { continue; }
         var ads = chart.data.datasets[active[i].datasetIndex];
         var acolor = (ads && typeof ads.borderColor === "string")
           ? ads.borderColor : "#ffffff";
         ctx.save();
+        ctx.globalAlpha = aalpha;
         ctx.beginPath();
         ctx.arc(ael.x, ael.y, 3.5, 0, Math.PI * 2);
         ctx.fillStyle = acolor;
@@ -484,6 +490,17 @@ var COMPARE_COLORS = [
 // Colors for resumed timing segments.
 var TIMING_COLOR = "#00aaff";
 var TIMING_RESUMED = "#66ccff";
+
+// The pre-edit run's line on the timing and confidence charts.
+// Neutral grey rather than a second hue: timing already spends blue
+// on the branch, lighter blue on its resumed stretch, and amber on
+// canvas boundaries, so another color would read as a fourth
+// category instead of as the baseline both runs share.
+var COMPARE_ORIGINAL_COLOR = "#8b93a1";
+
+// Solid for the run that happened, dashed for the branch. The
+// counterfactual is the one drawn provisionally.
+var COMPARE_EDITED_DASH = [5, 3];
 
 // The app's edit color, shared with .token-remasked in style.css, so
 // an intervention reads the same in the chart as it does in the
@@ -668,6 +685,14 @@ function resumeBoundarySet(resumeStartSet, remaskSet) {
   return set;
 }
 
+// Room under the x axis for the zoom controls docked in the chart's
+// bottom-left corner. The y-axis gutter alone is narrower than the
+// three buttons, so without this the pill would overlap the first
+// tick label. Not used by the compare panel, which has no dock.
+function chartGutterLayout() {
+  return { padding: { bottom: 16 } };
+}
+
 // Shared zoom plugin options for scroll + pinch.
 function zoomPluginOptions() {
   return {
@@ -689,6 +714,30 @@ function zoomPluginOptions() {
 function tooltipTitle(items) {
   if (items.length === 0) { return ""; }
   return "Frame " + items[0].label;
+}
+
+// Shared tooltip swatch color for the line charts. Chart.js paints
+// multiKeyBackground (white by default) behind every swatch and then
+// fills it with the dataset's backgroundColor, which on these charts
+// is an area wash at 0.08 to 0.1 alpha, or "transparent" on the
+// compare panel. The white therefore showed straight through and the
+// series color survived only as a thin rim. Painting the swatch with
+// the line's own color makes it a solid chip instead.
+//
+// The entropy chart deliberately does not use this: its bars carry
+// solid per-bar colors, so its swatches already read correctly and
+// showing the hovered bar's own ramp color says more than the series
+// color would.
+function lineLabelColor(ctx) {
+  var color = ctx.dataset.borderColor;
+  if (typeof color !== "string") {
+    color = "#ffffff";
+  }
+  return {
+    borderColor: color,
+    backgroundColor: color,
+    borderWidth: 0,
+  };
 }
 
 // ---- Sorting ----
@@ -959,6 +1008,8 @@ function showDetail(runId) {
       + '</span></div>';
   }
 
+  html += processorMetaRow(run);
+
   if (run.elapsed_seconds !== undefined
     && run.elapsed_seconds !== null) {
     html += '<div class="meta-row">'
@@ -973,6 +1024,24 @@ function showDetail(runId) {
   renderTable();
   loadRunCharts(runId, run);
   loadRunOverlays(runId, run);
+}
+
+// Which processor produced the run, on its own summary line. The
+// label comes from the run itself, already normalized to GPU or CPU
+// at save time, so a CPU run is not mislabelled. Older runs recorded
+// neither field and fall back to the machine's current GPU, which is
+// the same guess the timing header used to make.
+function processorMetaRow(run) {
+  var name = run.processor_name || gpuName;
+  if (!name) {
+    return "";
+  }
+  var label = run.processor === "CPU" ? "CPU" : "GPU";
+  return '<div class="meta-row">'
+    + '<span class="meta-label">' + label + ':</span> '
+    + '<span class="meta-value">'
+    + escHtml(String(name))
+    + '</span></div>';
 }
 
 function hideDetail() {
@@ -1186,6 +1255,176 @@ var compareBlendPlugin = {
   },
 };
 
+// How much the run crossfade is currently borrowing the line charts,
+// from 0 (the pins decide) to 1 (the slider decides). Raised while
+// the slider is being dragged and eased back on release, so the
+// slider never permanently governs a chart it does not sit next to.
+// Armed on press but engaged only once the thumb actually moves, so
+// a press that never becomes a drag leaves the charts alone.
+var scrubWeight = 0;
+var scrubEaseHandle = null;
+var scrubArmed = false;
+var scrubEngaged = false;
+
+// Long enough to read as the charts handing control back, short
+// enough not to sit between the release and the answer.
+var SCRUB_EASE_MS = 180;
+
+// What a line chart's dataset draws at, blending the resting answer
+// (its pins) with the drag answer (the crossfade). At rest this is
+// exactly the pin state; mid-drag it is exactly the slider.
+function seriesBlendAlpha(name, index) {
+  var state = linePinState[name];
+  var pinned = state
+    ? !!state[index === 0 ? "original" : "edited"]
+    : true;
+  var pinAlpha = pinned ? 1 : 0;
+  if (scrubWeight === 0) {
+    return pinAlpha;
+  }
+  var blendAlpha = (index === 0)
+    ? 1 - compareBlend
+    : compareBlend;
+  return pinAlpha
+    + (blendAlpha - pinAlpha) * scrubWeight;
+}
+
+// The line-chart counterpart to compareBlendPlugin. Alpha at draw
+// time for the same reason: one number per dataset instead of
+// rewriting colors, and the segment coloring underneath stays as it
+// is. No-op on a run with only one series to show.
+function seriesBlendPlugin(name) {
+  return {
+    id: "seriesBlend-" + name,
+    beforeDatasetDraw: function (chart, args) {
+      if (chart.data.datasets.length < 2) { return; }
+      chart.ctx.save();
+      chart.ctx.globalAlpha = seriesBlendAlpha(
+        name, args.index
+      );
+    },
+    // Guarded identically to the save above, so the pair can never
+    // come apart and leak canvas state into the next dataset.
+    afterDatasetDraw: function (chart) {
+      if (chart.data.datasets.length < 2) { return; }
+      chart.ctx.restore();
+    },
+  };
+}
+
+// The alpha a dataset is actually drawn at, resolved from the canvas
+// so the shared burn-through plugin can honor it without knowing
+// which chart it is decorating. Charts with a single series, and the
+// ones outside the run comparison, resolve to fully opaque.
+function chartSeriesAlpha(chart, index) {
+  if (chart.data.datasets.length < 2) { return 1; }
+  var id = chart.canvas ? chart.canvas.id : "";
+  if (id === "chart-timing") {
+    return seriesBlendAlpha("timing", index);
+  }
+  if (id === "chart-confidence") {
+    return seriesBlendAlpha("confidence", index);
+  }
+  return 1;
+}
+
+// A run faded out to nothing still reports values to the tooltip, so
+// a row is dropped once its series is effectively invisible. The
+// floor is above zero to also catch a crossfade parked at an end.
+function seriesRowVisible(name, item) {
+  return seriesBlendAlpha(
+    name, item.datasetIndex
+  ) > 0.02;
+}
+
+// The branch is always the last dataset: an original series, when
+// there is one, is inserted ahead of it.
+function isEditedDataset(ctx) {
+  var last = ctx.chart.data.datasets.length - 1;
+  return ctx.datasetIndex === last;
+}
+
+// Redraw both line charts without animating: only alpha changed, and
+// the drag needs every frame to land immediately.
+function updateLineCharts() {
+  if (chartTiming) {
+    chartTiming.update("none");
+  }
+  if (chartConfidence) {
+    chartConfidence.update("none");
+  }
+}
+
+// Dim both charts' pins while the slider is driving them, so the
+// override is visible without changing what the pins hold.
+function setPinsPreviewing(previewing) {
+  var buttons = document.querySelectorAll(
+    ".compare-pin-btn"
+  );
+  for (var i = 0; i < buttons.length; i++) {
+    buttons[i].classList.toggle(
+      "is-previewing", previewing
+    );
+  }
+}
+
+// Ease rather than snap, in both directions. An instant handover
+// reads as a glitch where a short settle reads as the charts lending
+// themselves out and taking themselves back.
+function easeScrubWeight(target) {
+  cancelScrubEase();
+  var from = scrubWeight;
+  if (from === target) { return; }
+  var start = performance.now();
+  var step = function (now) {
+    var t = (now - start) / SCRUB_EASE_MS;
+    if (t < 1) {
+      var eased = 1 - Math.pow(1 - t, 3);
+      scrubWeight = from + (target - from) * eased;
+      scrubEaseHandle = requestAnimationFrame(step);
+    } else {
+      scrubWeight = target;
+      scrubEaseHandle = null;
+    }
+    updateLineCharts();
+  };
+  scrubEaseHandle = requestAnimationFrame(step);
+}
+
+function cancelScrubEase() {
+  if (scrubEaseHandle !== null) {
+    cancelAnimationFrame(scrubEaseHandle);
+    scrubEaseHandle = null;
+  }
+}
+
+// Pressing the slider only arms the preview. Engaging here instead
+// would fade the charts the instant the thumb is touched, before the
+// user has asked for anything.
+function armBlendScrub() {
+  scrubArmed = true;
+}
+
+// Called from the slider's input handler, so the charts are borrowed
+// on the first actual movement of a press. Pointer drags only: arrow
+// keys on a focused slider produce input events with no press to
+// arm them, so keyboard adjustments move the tokens and the entropy
+// bars while the line charts stay on their pins.
+function engageBlendScrub() {
+  if (!scrubArmed || scrubEngaged) { return; }
+  scrubEngaged = true;
+  setPinsPreviewing(true);
+  easeScrubWeight(1);
+}
+
+function endBlendScrub() {
+  scrubArmed = false;
+  if (!scrubEngaged) { return; }
+  scrubEngaged = false;
+  setPinsPreviewing(false);
+  easeScrubWeight(0);
+}
+
 // Show/hide the eye's diagonal slash. Driven via inline style (not
 // only CSS) so it is robust to any stale-stylesheet caching.
 function setEyeSlash(btn, show) {
@@ -1209,6 +1448,68 @@ function resetTooltipToggles() {
     btns[i].classList.remove("is-off");
     setEyeSlash(btns[i], false);
   }
+}
+
+// Which of the two runs each line chart draws. Both on by default,
+// so an edited run opens with the comparison already visible.
+// Exactly one of three states (original, edited, both) holds at any
+// time: a chart drawing neither has nothing to read, so the last lit
+// pin cannot be turned off.
+var linePinState = {
+  timing: { original: true, edited: true },
+  confidence: { original: true, edited: true },
+};
+
+// Each newly-opened run starts with both runs pinned on, and with
+// the pins hidden until a chart actually renders a pre-edit series.
+// Hiding here rather than only in the render functions covers the
+// runs where a chart bails early for want of data, which would
+// otherwise leave the previous run's pins standing.
+function resetComparePins() {
+  var names = Object.keys(linePinState);
+  for (var i = 0; i < names.length; i++) {
+    linePinState[names[i]].original = true;
+    linePinState[names[i]].edited = true;
+    updateComparePins(names[i], false);
+  }
+}
+
+function comparePinsBothOn(state) {
+  return state.original && state.edited;
+}
+
+// Reflect a chart's pin state onto its two buttons. The pin that is
+// the only one lit is marked locked, so the dead click reads as
+// unavailable before it is made rather than being swallowed.
+function refreshComparePins(name) {
+  var state = linePinState[name];
+  if (!state) { return; }
+  var buttons = document.querySelectorAll(
+    '.compare-pin-btn[data-chart="' + name + '"]'
+  );
+  for (var i = 0; i < buttons.length; i++) {
+    var btn = buttons[i];
+    var on = !!state[btn.getAttribute("data-series")];
+    btn.classList.toggle("is-on", on);
+    btn.classList.toggle(
+      "is-locked", on && !comparePinsBothOn(state)
+    );
+    btn.setAttribute(
+      "aria-pressed", on ? "true" : "false"
+    );
+  }
+}
+
+// With only one run there is nothing to pin, so the pair is hidden
+// for unedited runs and for those saved without the pre-edit signal.
+function updateComparePins(name, hasOriginal) {
+  var group = document.querySelector(
+    '.compare-pins[data-chart="' + name + '"]'
+  );
+  if (group) {
+    group.hidden = !hasOriginal;
+  }
+  refreshComparePins(name);
 }
 
 // Autoregressive runs have no masked canvas, so the convergence chart
@@ -1235,6 +1536,7 @@ function loadRunCharts(runId, run) {
     if (data.error) { return; }
 
     resetTooltipToggles();
+    resetComparePins();
 
     chartConvergence = destroyChart(
       chartConvergence
@@ -1260,7 +1562,7 @@ function loadRunCharts(runId, run) {
       }
       renderConvergenceChart(data, remaskSet);
     }
-    renderTimingChart(data, remaskSet, run);
+    renderTimingChart(data, remaskSet);
     renderConfidenceChart(data);
     // The fourth chart, Entropy by Position, is built in
     // loadRunOverlays instead: it needs per-token records from the
@@ -2264,6 +2566,7 @@ function convergenceOptions(remaskSet) {
   return {
     responsive: true,
     maintainAspectRatio: false,
+    layout: chartGutterLayout(),
     interaction: {
       mode: "index",
       intersect: false,
@@ -2277,6 +2580,7 @@ function convergenceOptions(remaskSet) {
         yAlign: "top",
         callbacks: {
           title: tooltipTitle,
+          labelColor: lineLabelColor,
           label: function (ctx) {
             return ctx.dataset.label + ": "
               + ctx.formattedValue;
@@ -2313,7 +2617,7 @@ function convergenceOptions(remaskSet) {
   };
 }
 
-function renderTimingChart(data, remaskSet, run) {
+function renderTimingChart(data, remaskSet) {
   if (
     !data.per_frame_elapsed
     || data.per_frame_elapsed.length === 0
@@ -2322,15 +2626,6 @@ function renderTimingChart(data, remaskSet, run) {
     return;
   }
   timingSection.hidden = false;
-
-  // Prefer the run's own processor name (GPU or CPU); fall back to the
-  // detected GPU for older runs saved before processor_name existed.
-  var deviceName = (run && run.processor_name) || gpuName;
-  if (deviceName) {
-    gpuLabel.textContent = "(" + deviceName + ")";
-  } else {
-    gpuLabel.textContent = "";
-  }
 
   var canvas = document.getElementById(
     "chart-timing"
@@ -2344,10 +2639,18 @@ function renderTimingChart(data, remaskSet, run) {
     cumResult.resumeStartSet, remaskSet
   );
 
-  var labels = [];
-  for (var t = 0; t < values.length; t++) {
-    labels.push(t);
+  var original = timingOriginalValues(data);
+  var labels = compareFrameLabels(values, original);
+
+  // Original first, so it draws beneath the branch it produced and
+  // so dataset index 0 is the one the pins and crossfade fade out.
+  var datasets = [];
+  if (original) {
+    datasets.push(compareOriginalDataset(original));
   }
+  datasets.push(timingEditedDataset(
+    values, remaskSet, resumeSet, !!original
+  ));
 
   chartTiming = new Chart(
     canvas.getContext("2d"),
@@ -2355,46 +2658,100 @@ function renderTimingChart(data, remaskSet, run) {
       type: "line",
       data: {
         labels: labels,
-        datasets: [{
-          label: "Elapsed (s)",
-          data: values,
-          borderColor: TIMING_COLOR,
-          backgroundColor:
-            "rgba(0,170,255,0.08)",
-          fill: true,
-          tension: 0.2,
-          pointRadius: 0,
-          borderWidth: 1.5,
-          segment: {
-            borderColor: function (ctx) {
-              var fi = ctx.p1DataIndex;
-              if (remaskSet[fi]) {
-                return "#00ff41";
-              }
-              if (isInResumedRange(
-                fi, resumeSet
-              )) {
-                return TIMING_RESUMED;
-              }
-              return undefined;
-            },
-            borderWidth: function (ctx) {
-              if (remaskSet[ctx.p1DataIndex]) {
-                return 2.5;
-              }
-              return undefined;
-            },
-          },
-        }],
+        datasets: datasets,
       },
       options: timingOptions(remaskSet),
       plugins: [
         canvasBoundaryPlugin(data.canvas_boundaries || []),
         burnThroughPlugin,
+        seriesBlendPlugin("timing"),
       ],
     }
   );
   chartInstances.timing = chartTiming;
+  updateComparePins("timing", !!original);
+}
+
+// Cumulative elapsed for the pre-edit run, or null when this run
+// carries none: an unedited run, or one saved before the signal
+// existed. That array is a single unbranched segment and so needs no
+// stitching; it goes through buildCumulativeTiming only so both
+// series are produced the same way.
+function timingOriginalValues(data) {
+  var raw = data.original_per_frame_elapsed;
+  if (!raw || raw.length === 0) {
+    return null;
+  }
+  return buildCumulativeTiming(raw, {}).values;
+}
+
+// Frame labels spanning the longer run: a branch can outlive or fall
+// short of the run it forked from.
+function compareFrameLabels(values, original) {
+  var count = values.length;
+  if (original && original.length > count) {
+    count = original.length;
+  }
+  var labels = [];
+  for (var i = 0; i < count; i++) {
+    labels.push(i);
+  }
+  return labels;
+}
+
+// The pre-edit run's line, shared by the timing and confidence
+// charts. Solid, neutral, and deliberately without the branch's
+// segment coloring: no remask or resume happened in this run.
+function compareOriginalDataset(values) {
+  return {
+    label: "Original",
+    data: values,
+    borderColor: COMPARE_ORIGINAL_COLOR,
+    fill: false,
+    tension: 0.2,
+    pointRadius: 0,
+    borderWidth: 1.5,
+    spanGaps: true,
+  };
+}
+
+// ``paired`` is true once there is an original series to compare
+// against, which switches the label to name its run and drops the
+// filled area: two translucent fills stacked over the prefix the
+// runs share read as a third color rather than as two runs.
+function timingEditedDataset(
+  values, remaskSet, resumeSet, paired
+) {
+  return {
+    label: paired ? "Edited" : "Elapsed",
+    data: values,
+    borderColor: TIMING_COLOR,
+    backgroundColor: "rgba(0,170,255,0.08)",
+    fill: !paired,
+    borderDash: paired ? COMPARE_EDITED_DASH : [],
+    tension: 0.2,
+    pointRadius: 0,
+    borderWidth: 1.5,
+    spanGaps: true,
+    segment: {
+      borderColor: function (ctx) {
+        var fi = ctx.p1DataIndex;
+        if (remaskSet[fi]) {
+          return "#00ff41";
+        }
+        if (isInResumedRange(fi, resumeSet)) {
+          return TIMING_RESUMED;
+        }
+        return undefined;
+      },
+      borderWidth: function (ctx) {
+        if (remaskSet[ctx.p1DataIndex]) {
+          return 2.5;
+        }
+        return undefined;
+      },
+    },
+  };
 }
 
 // Check whether a frame index falls within a
@@ -2414,6 +2771,7 @@ function timingOptions(remaskSet) {
   return {
     responsive: true,
     maintainAspectRatio: false,
+    layout: chartGutterLayout(),
     interaction: {
       mode: "index",
       intersect: false,
@@ -2425,13 +2783,21 @@ function timingOptions(remaskSet) {
         caretSize: 0,
         xAlign: "left",
         yAlign: "top",
+        filter: function (item) {
+          return seriesRowVisible("timing", item);
+        },
         callbacks: {
           title: tooltipTitle,
+          labelColor: lineLabelColor,
           label: function (ctx) {
             return ctx.dataset.label + ": "
-              + ctx.formattedValue;
+              + ctx.formattedValue + "s";
           },
           afterLabel: function (ctx) {
+            // The branch is the last dataset, and the resume is an
+            // event in it alone, so the note is not repeated under
+            // the original run's row.
+            if (!isEditedDataset(ctx)) { return ""; }
             var pos = remaskSet[ctx.dataIndex];
             if (!pos) { return ""; }
             return "Resume point ("
@@ -2479,17 +2845,17 @@ function renderConfidenceChart(data) {
     "chart-confidence"
   );
 
-  var labels = [];
-  var values = [];
-  for (var i = 0; i < meanConf.length; i++) {
-    labels.push(i);
-    var v = meanConf[i];
-    values.push(
-      v === null || v === undefined
-        ? null
-        : +(v * 100).toFixed(2)
-    );
+  var values = confidencePercentValues(meanConf);
+  var original = confidenceOriginalValues(data);
+  var labels = compareFrameLabels(values, original);
+
+  var datasets = [];
+  if (original) {
+    datasets.push(compareOriginalDataset(original));
   }
+  datasets.push(
+    confidenceEditedDataset(values, !!original)
+  );
 
   chartConfidence = new Chart(
     canvas.getContext("2d"),
@@ -2497,32 +2863,65 @@ function renderConfidenceChart(data) {
       type: "line",
       data: {
         labels: labels,
-        datasets: [{
-          label: "Mean confidence",
-          data: values,
-          borderColor: "#ffb400",
-          backgroundColor: "rgba(255,180,0,0.08)",
-          fill: true,
-          tension: 0.2,
-          pointRadius: 0,
-          borderWidth: 1.5,
-          spanGaps: true,
-        }],
+        datasets: datasets,
       },
       options: confidenceOptions(),
       plugins: [
         canvasBoundaryPlugin(data.canvas_boundaries || []),
         burnThroughPlugin,
+        seriesBlendPlugin("confidence"),
       ],
     }
   );
   chartInstances.confidence = chartConfidence;
+  updateComparePins("confidence", !!original);
+}
+
+// Fractions to whole percents, preserving nulls so a frame that
+// recorded no confidence stays a gap rather than reading as zero.
+function confidencePercentValues(raw) {
+  var out = [];
+  for (var i = 0; i < raw.length; i++) {
+    var v = raw[i];
+    out.push(
+      v === null || v === undefined
+        ? null
+        : +(v * 100).toFixed(2)
+    );
+  }
+  return out;
+}
+
+// The pre-edit run's confidence, or null when this run carries none.
+function confidenceOriginalValues(data) {
+  var raw = data.original_mean_conf;
+  if (!raw || raw.length === 0) {
+    return null;
+  }
+  return confidencePercentValues(raw);
+}
+
+// See timingEditedDataset for what ``paired`` switches and why.
+function confidenceEditedDataset(values, paired) {
+  return {
+    label: paired ? "Edited" : "Mean confidence",
+    data: values,
+    borderColor: "#ffb400",
+    backgroundColor: "rgba(255,180,0,0.08)",
+    fill: !paired,
+    borderDash: paired ? COMPARE_EDITED_DASH : [],
+    tension: 0.2,
+    pointRadius: 0,
+    borderWidth: 1.5,
+    spanGaps: true,
+  };
 }
 
 function confidenceOptions() {
   return {
     responsive: true,
     maintainAspectRatio: false,
+    layout: chartGutterLayout(),
     interaction: {
       mode: "index",
       intersect: false,
@@ -2534,8 +2933,12 @@ function confidenceOptions() {
         caretSize: 0,
         xAlign: "left",
         yAlign: "top",
+        filter: function (item) {
+          return seriesRowVisible("confidence", item);
+        },
         callbacks: {
           title: tooltipTitle,
+          labelColor: lineLabelColor,
           label: function (ctx) {
             return ctx.dataset.label + ": "
               + ctx.formattedValue + "%";
@@ -2767,6 +3170,12 @@ function renderEntropyChart(data) {
 // per-token entropy.
 function resetRunBlend(visible) {
   compareBlend = 1;
+  // A run can be opened while a previous drag is still easing out.
+  cancelScrubEase();
+  scrubWeight = 0;
+  scrubArmed = false;
+  scrubEngaged = false;
+  setPinsPreviewing(false);
   if (runBlendInput) {
     runBlendInput.value = "100";
   }
@@ -2776,13 +3185,19 @@ function resetRunBlend(visible) {
 }
 
 // Only layer alpha changes, so nothing is reparsed; "none" skips the
-// animation that would otherwise lag the drag.
+// animation that would otherwise lag the drag. The line charts are
+// only touched once a press has become a drag, and are left entirely
+// alone for a keyboard adjustment.
 function onRunBlendInput() {
   compareBlend = Number(runBlendInput.value) / 100;
   if (chartEntropy) {
     chartEntropy.update("none");
   }
   applyTokenLayerBlend();
+  engageBlendScrub();
+  if (scrubEngaged) {
+    updateLineCharts();
+  }
 }
 
 // Restyle the stacked token layers in place. Rebuilding them would
@@ -2815,6 +3230,7 @@ function entropyChartOptions(texts, divergence) {
   return {
     responsive: true,
     maintainAspectRatio: false,
+    layout: chartGutterLayout(),
     interaction: {
       mode: "index",
       intersect: false,
@@ -3033,6 +3449,7 @@ function compareChartOptions(xLabel, yLabel) {
         yAlign: "top",
         callbacks: {
           title: tooltipTitle,
+          labelColor: lineLabelColor,
         },
       },
       zoom: zoomPluginOptions(),
@@ -3360,6 +3777,31 @@ function handleTooltipToggle(e) {
   }
 }
 
+// ---- Per-chart run pins ----
+
+// The pins own which runs a line chart draws at rest. They are
+// deliberately independent of the run crossfade, which only borrows
+// the charts for the duration of a drag (see engageBlendScrub).
+function handleComparePinClick(e) {
+  var btn = e.target.closest(".compare-pin-btn");
+  if (!btn) { return; }
+  var name = btn.getAttribute("data-chart");
+  var state = linePinState[name];
+  if (!state) { return; }
+  var series = btn.getAttribute("data-series");
+  // Turning off the only lit pin would blank the chart, which is the
+  // one state with nothing in it to read.
+  if (state[series] && !comparePinsBothOn(state)) {
+    return;
+  }
+  state[series] = !state[series];
+  refreshComparePins(name);
+  var chart = chartInstances[name];
+  if (chart) {
+    chart.update("none");
+  }
+}
+
 // ---- Wire up events ----
 
 document.querySelector("#runs-table thead")
@@ -3431,6 +3873,7 @@ btnCompare.addEventListener("click", function () {
 });
 
 document.addEventListener("click", handleTooltipToggle);
+document.addEventListener("click", handleComparePinClick);
 
 btnDeleteConfirm.addEventListener("click", confirmDelete);
 btnDeleteCancel.addEventListener("click", closeDeleteModal);
@@ -3465,6 +3908,13 @@ if (overlayHighlightCheckbox) {
 
 if (runBlendInput) {
   runBlendInput.addEventListener("input", onRunBlendInput);
+  runBlendInput.addEventListener(
+    "pointerdown", armBlendScrub
+  );
+  // On window rather than the slider: a drag frequently releases
+  // with the pointer well outside the track.
+  window.addEventListener("pointerup", endBlendScrub);
+  window.addEventListener("pointercancel", endBlendScrub);
 }
 
 // Reveal the "Generation" nav link only when a model is resident. The

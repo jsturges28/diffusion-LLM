@@ -71,7 +71,113 @@ compare runs in an analytics suite.
 
 ## Recently shipped (this session)
 
-**Latest pass: the shared comparison layer, then two persistence changes.**
+**Latest pass: the line-chart comparison layer.** Frontend only, so `pytest`
+(79/79) is a regression check; `node --check`, ReadLints, and the 70-column
+audit are clean. Nothing needing a display was exercised; checklist items 21 to
+27 at the bottom cover them.
+
+The finding that set the scope: **the timing and confidence charts had no
+original series at all.** `addOriginalRunSignals` (`app.js`) has been saving
+`original_per_frame_elapsed` and `original_mean_conf` and the metrics route has
+been serving them, but neither string appeared anywhere in `analytics.js`, so
+both charts were still single-dataset and an edited run could only ever show
+its branch. Building that second series was the bulk of the work; the controls
+sit on top of it.
+
+- **Both runs, distinguished by dash rather than by hue.** Original solid in a
+  neutral grey (`COMPARE_ORIGINAL_COLOR`), branch dashed
+  (`COMPARE_EDITED_DASH`) in the chart's existing color, original at dataset
+  index 0 to match the entropy chart. Grey and not a second hue because timing
+  already spends blue on the branch, lighter blue on its resumed stretch, and
+  amber on canvas boundaries; a fourth color would read as a fourth category
+  rather than as the baseline. The two share a prefix and separate at the edit,
+  so the dashes leaving the solid line *is* the reading.
+  - `fill` drops to false whenever there are two series (the `paired` flag on
+    `timingEditedDataset` / `confidenceEditedDataset`). Two translucent fills
+    stacked over the shared prefix blend into a third color and stop reading as
+    two runs at all. A single-series run keeps its filled area and looks
+    exactly as it did.
+  - The branch keeps its `segment` callbacks; the original gets none, because
+    no remask or resume happened in it. The "Resume point" `afterLabel` is
+    gated on `isEditedDataset` for the same reason, or it prints under both
+    rows.
+  - Labels span the longer run (`compareFrameLabels`): a branch can outlive or
+    fall short of the run it forked from.
+- **Pins are a three-state control, not two checkboxes.** `linePinState` per
+  chart, both on at open, rendered by `refreshComparePins`. Turning off the
+  only lit pin is refused and the button carries `is-locked` so the dead click
+  reads as unavailable beforehand. Every state still reaches every other in at
+  most two clicks. The alternative (clicking the sole lit pin swaps to the
+  other) was rejected: pressing 1 and watching 2 light up is a surprise, and it
+  buys nothing over two clicks.
+  - `resetComparePins` hides both groups as well as resetting them, because a
+    chart that bails early for want of data never reaches its
+    `updateComparePins` call and would otherwise leave the previous run's pins
+    standing.
+- **The crossfade borrows the line charts; it does not own them.** This was the
+  design argument of the session. The slider governs the token view and the
+  entropy bars, where "both at full opacity" is not expressible because marks
+  occlude. On strokes it is, so the pins own the resting state and the slider
+  only takes over for the length of a pointer drag: `scrubWeight` eases to 1
+  and back over `SCRUB_EASE_MS`, with `seriesBlendAlpha` lerping between the
+  pin answer and the blend answer at draw time. The
+  whole modal moves together during the drag, which was the point, without
+  permanently tying two frame-indexed charts to a slider four hundred pixels
+  away in another column.
+  - Alpha at draw time (`seriesBlendPlugin`), mirroring `compareBlendPlugin`,
+    with the same paired `save`/`restore` guard and the same `< 2 datasets`
+    no-op.
+  - The ease matters, and it runs in **both** directions. An instant revert on
+    release reads as a glitch; a short settle reads as the charts handing
+    control back. The pins dim (`is-previewing`) while it is happening.
+  - `pointerdown` only **arms** (`scrubArmed`); the borrow engages on the first
+    `input` of that press (`scrubEngaged`). Engaging on the press itself would
+    fade the charts the instant the thumb is touched, before the user has asked
+    for anything, and would make a click that never becomes a drag a visible
+    event. This split is also what keeps keyboard out: arrow keys fire `input`
+    with nothing armed.
+  - `pointerup` and `pointercancel` are on **window**, not the slider: a drag
+    frequently releases with the pointer well off the track.
+  - **Keyboard is deliberately excluded.** Arrow keys on a focused range input
+    fire `input` with no press to end a preview, so there is no natural release
+    event to hand control back on. Arrow keys move the tokens and the bars; the
+    line charts stay pinned.
+  - `burnThroughPlugin` needed fixing for this. It redraws every dataset's line
+    inside the tooltip box at full strength, so a pinned-off run came back to
+    life there. It now resolves the same alpha via `chartSeriesAlpha`, which
+    reads the canvas id so the shared plugin does not have to know which chart
+    it is decorating. Tooltip rows are filtered on the same value.
+- **Zoom moved into the chart, and the processor out of it.** The `+` / `-` /
+  reset trio left the header for a segmented pill docked in each chart's
+  bottom-left axis gutter (`.chart-zoom-dock`, all four charts), dimmed to 0.5
+  until `.chart-wrap:hover`. The gutter corner is only about 40 to 45px wide
+  against a ~56px pill, so `chartGutterLayout` adds 16px of bottom padding to
+  reserve a clean strip rather than overlapping the first tick label; the
+  compare panel is excluded since it has no dock. No handler changes were
+  needed: `handleZoomClick` is a document-level delegate on `data-chart` /
+  `data-action`. That frees the header for the pins. `#gpu-label` is gone
+  entirely, replaced by a `processorMetaRow` line in the run summary that reads
+  `run.processor` (already normalized to GPU / CPU / Unknown at save time) so a
+  CPU run is finally labelled correctly.
+- **Tooltip swatches were white** on every line chart, a long-standing bug
+  spotted while reviewing this pass. Chart.js paints `multiKeyBackground`
+  (`'#fff'` by default) behind each swatch and then fills it with the dataset's
+  `backgroundColor`; ours are area washes at 0.08 to 0.1 alpha, and the compare
+  panel's is literally `"transparent"`, so the white showed through and the
+  series color survived only as a rim. A shared `lineLabelColor` callback now
+  paints the swatch with the line's own color on convergence, timing,
+  confidence, and the compare charts. The entropy chart is deliberately left
+  alone: its bars carry solid per-bar colors, so its swatch already read
+  correctly and showing the hovered bar's ramp color says more.
+
+**Rejected along the way, so it does not come back:** a discontinuous slider
+with a middle "park" dock and a translucent ghost thumb. It was coherent as a
+state machine, but the dock is a slider position with no meaning for the token
+view or the entropy bars, which the same slider governs; it would have relocated
+the honesty problem rather than solved it. It also breaks the drag gesture and
+would have meant replacing `<input type="range">` with a hand-rolled widget.
+
+**Previous pass: the shared comparison layer, then two persistence changes.**
 Three commits. No Python changed in any of them, so `pytest` (79/79) is a
 regression check only; `node --check`, ReadLints, and the 70-column audit are
 clean. Nothing needing a display was exercised; checklist items 16 to 20 at the
@@ -916,13 +1022,54 @@ because runs saved before the previous pass carry no `original_alternatives`.
     single-dataset chart (snapshot without `e`), and the popover should show no
     pager (no `original_alternatives`) while otherwise working. Nothing here
     should throw; the failure mode to watch for is a blank overlay.
+21. **Both runs draw on the line charts.** Open a What If branch (or a LLaDA
+    Edit Frames resume) saved with its pre-edit snapshot. Timing and Confidence
+    should each show two lines: grey solid for the original, colored dashed for
+    the branch, overlapping exactly until the edit and separating after it.
+    Neither chart should be filled. An **unedited** run should still show one
+    filled line and **no pins** at all.
+22. **The pins, all three states.** Both are lit green on open. Click 2: only
+    the grey original remains and 1 becomes unclickable (cursor does not change
+    to a pointer, clicking it does nothing). Click 2 again for both. Click 1:
+    only the dashed branch remains. Confirm the two charts are independent of
+    each other, and that tooltips drop the row for whichever run is hidden.
+23. **The drag preview and the ease back.** With both pins lit, drag the
+    Original / Edited crossfade above the token view. Timing and Confidence
+    should crossfade along with the tokens and the entropy bars, and the pins
+    should dim while you hold. Release: the two line charts should settle back
+    to showing both over roughly a fifth of a second, and the pins should
+    brighten. Release with the pointer dragged well outside the slider (and
+    outside the modal) and confirm it still hands back.
+24. **Keyboard is intentionally not previewing.** Click the slider thumb, then
+    use the arrow keys. The tokens and entropy bars should move; Timing and
+    Confidence should not. This is by design, not a bug.
+25. **Zoom dock.** All four charts should carry the `+` / `-` / reset pill in
+    their bottom-left corner, faint until you hover the chart. Check it does
+    not overlap the first x-axis tick label or the axis title on any of them,
+    and that zoom, pan, and reset still work. Scroll-wheel zoom over the plot
+    should be unaffected.
+26. **Tooltip swatches.** Hover any of Convergence, Timing, Confidence, and a
+    compare-panel chart. Each swatch should be a solid chip of that series'
+    line color, not a white box with a colored rim. On an edited run the two
+    chips should be visibly different (grey for the original).
+27. **Processor row.** The run summary above the charts should carry a
+    `GPU: <name>` line (or `CPU: <name>` for a SmolLM3 CPU run, which is the
+    case the old timing header got wrong), and the Timing header should now
+    read just "Timing" plus its controls. An older run saved without the field
+    should fall back to the detected GPU rather than showing an empty row.
 
 **0. The comparison surfaces (agreed with the maintainer, partly shipped).** The
 timing foundation exists to serve these, and the unifying idea is settled: **the
 pre-edit run is a first-class layer everywhere**, driven by one shared
 Original/Edited state rather than a bespoke control per surface. The shared
-layer, cross-highlighting, and popover pagination all landed this session (see
-"Recently shipped"); what remains is below.
+layer, cross-highlighting, popover pagination, and now the line charts have all
+landed (see "Recently shipped"); what remains is below.
+
+One correction to the framing above, learned from the line-chart pass: **one
+shared state does not mean one shared control.** "Both runs at once" is only
+expressible on stroke marks, so the line charts needed their own pins, with the
+crossfade reduced to a momentary borrow during a drag. Expect the same split
+anywhere the mark type cannot show two runs at full opacity.
 
 - **The generator's crossfade and two-layer stack**, deliberately deferred. It
   has the bidirectional cross-highlighting and the popover pager already, but
@@ -941,11 +1088,14 @@ layer, cross-highlighting, and popover pagination all landed this session (see
   adaptive stopping visible. Per-position is the entropy chart again (read `c` off
   the final frame), so it comes from the **frames** payload while the line comes
   from **metrics**, and the toggle straddles two independent fetches.
-- **Timing chart**: dashed edit marker (reuse `substitutionMarkerPlugin` with
-  frame indices via `resumeBoundarySet`; its orange tint is sized from bar
+- **Timing chart**, the remainder after this pass. The two-line overlay shipped,
+  so what is left is: a dashed edit marker (reuse `substitutionMarkerPlugin`
+  with frame indices via `resumeBoundarySet`; its orange tint is sized from bar
   geometry, so a line chart needs either a width strategy or no tint), "E204"
-  style tooltip labels, an overlay toggle for the two lines, and both elapsed
-  totals in the summary.
+  style tooltip labels for the branch's frames, and both elapsed totals in the
+  summary rather than only the combined one. The marker is the valuable one:
+  the two lines separate visibly, but nothing yet names the frame where they
+  do.
 - **Status message stack** (the one piece with no dependency on any of this):
   `#status-message` is a single overwritten span, and both existing toast systems
   (the draggable download toast, the analytics delete toast) are single-slot. The
