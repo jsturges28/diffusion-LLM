@@ -111,6 +111,66 @@ function overlaysPopoverTop(tokenRect, popoverBox) {
   return Math.max(8, below);
 }
 
+// ---- Candidate popover chrome ----
+//
+// The popover pages between the two runs' candidate sets, which only
+// exist together from the divergence point rightward: left of it a
+// branch copies its prefix verbatim, so there is one set and nothing
+// to page through.
+
+var OVERLAYS_ALT_PAGES = ["original", "edited"];
+
+function overlaysAltPageLabel(page) {
+  return page === "original" ? "Original" : "Edited";
+}
+
+// The popover's heading. ``page`` is null for a single candidate set,
+// which renders the plain title and no pager. ``onPage`` is called
+// with the page an arrow moves to.
+function overlaysBuildAltHeading(pos, page, onPage) {
+  var heading = document.createElement("div");
+  heading.className = "alt-heading";
+  var title = document.createElement("span");
+  title.textContent = "Position " + (pos + 1) + ": "
+    + (page === null
+      ? "candidates"
+      : overlaysAltPageLabel(page));
+  heading.appendChild(title);
+  if (page === null) {
+    return heading;
+  }
+  var pager = document.createElement("span");
+  pager.className = "alt-pager";
+  for (var i = 0; i < OVERLAYS_ALT_PAGES.length; i++) {
+    pager.appendChild(
+      overlaysBuildAltPager(
+        OVERLAYS_ALT_PAGES[i], page, onPage
+      )
+    );
+  }
+  heading.appendChild(pager);
+  return heading;
+}
+
+function overlaysBuildAltPager(target, page, onPage) {
+  var label = overlaysAltPageLabel(target) + " run";
+  var button = document.createElement("button");
+  button.type = "button";
+  button.className = "alt-pager-btn";
+  button.textContent =
+    target === "original" ? "\u2039" : "\u203A";
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.disabled = target === page;
+  button.addEventListener("click", function (event) {
+    // The popover sits over the token view on both pages, whose own
+    // handlers would otherwise treat this as a token interaction.
+    event.stopPropagation();
+    onPage(target);
+  });
+  return button;
+}
+
 // Render a candidate token's raw text readably. Alternatives keep
 // control tokens and whitespace intact (the sampler deliberately
 // does not sanitize them), so make the invisible ones visible rather
@@ -184,37 +244,103 @@ function overlaysDiffLayerColor(diff, index, isOriginal, blend) {
   return "#e6e6e6";
 }
 
-function overlaysBuildDiffLayerSpans(
-  tokens, diff, isOriginal, blend, maskChar
+// A colorFor callback over one diff layer. Masked positions return
+// null so the .token-mask class colors them, keeping the mask glyph
+// identical to the single-layer paths.
+function overlaysDiffColorFor(diff, isOriginal, blend) {
+  return function (index, tok) {
+    if (!tok || tok.m) {
+      return null;
+    }
+    return overlaysDiffLayerColor(
+      diff, index, isOriginal, blend
+    );
+  };
+}
+
+// Which of two exactly overlapping layers receives pointer events:
+// the more opaque one, ties going to the edited run. The layers share
+// a grid cell, so without an explicit choice the later sibling wins
+// every hit test even when faded to nothing, leaving the layer the
+// user is actually reading inert.
+function overlaysEditedOwnsPointer(origOpacity, editedOpacity) {
+  return editedOpacity >= origOpacity;
+}
+
+// Re-apply that choice to layers already in the DOM. The generator
+// updates layer opacity inline while a slider drags rather than
+// re-rendering, so ownership has to follow the same path or the
+// pointer would stay with whichever layer happened to win at build
+// time.
+function overlaysApplyLayerPointers(
+  root, origOpacity, editedOpacity
 ) {
-  var mask = maskChar || OVERLAYS_MASK_CHAR;
-  var frag = document.createDocumentFragment();
-  for (var i = 0; i < tokens.length; i++) {
-    var tok = tokens[i];
-    if (!tok) {
-      continue;
-    }
-    var span = document.createElement("span");
-    if (tok.m) {
-      span.textContent = mask;
-      span.style.color = "var(--mask-color)";
-    } else {
-      span.textContent = tok.t;
-      span.style.color =
-        overlaysDiffLayerColor(diff, i, isOriginal, blend);
-    }
-    frag.appendChild(span);
+  var editedTakes = overlaysEditedOwnsPointer(
+    origOpacity, editedOpacity
+  );
+  var orig = root.querySelector(".token-layer-original");
+  var edited = root.querySelector(".token-layer-edited");
+  if (orig) {
+    orig.style.pointerEvents = editedTakes ? "none" : "auto";
   }
-  return frag;
+  if (edited) {
+    edited.style.pointerEvents = editedTakes ? "auto" : "none";
+  }
+}
+
+// One token span. Carries ``token-span`` and ``data-pos`` because
+// every interaction on both pages keys off exactly those two: the
+// hover highlight, the candidate popover, the entropy
+// cross-highlight, and the generator's remask click. A layer built
+// without them looks right and does nothing.
+function overlaysBuildTokenSpan(index, tok, mask, opts) {
+  // A missing token is a hole in the canvas, drawn as the mask glyph
+  // rather than skipped: two layers only line up if both emit a span
+  // per position.
+  var masked = !tok || !!tok.m;
+  var span = document.createElement("span");
+  span.setAttribute("data-pos", String(index));
+  span.className = "token-span "
+    + (masked ? "token-mask" : "token-resolved");
+  span.textContent = masked ? mask : tok.t;
+  var color = opts.colorFor(index, tok);
+  if (color) {
+    span.style.color = color;
+  }
+  if (opts.titleFor) {
+    span.title = opts.titleFor(index, tok);
+  }
+  return span;
+}
+
+// Build one stacked layer of token spans. ``opts`` carries the layer
+// class, its opacity in [0,1], an ``interactive`` flag deciding which
+// layer takes the pointer, a colorFor(index, token), and an optional
+// titleFor(index, token). Pure: the caller owns the container and
+// must give it the stacking mode.
+function overlaysBuildTokenLayer(tokens, opts) {
+  var mask = opts.maskChar || OVERLAYS_MASK_CHAR;
+  var layer = document.createElement("div");
+  layer.className = "token-layer " + opts.layerClass;
+  layer.style.opacity = String(opts.opacity);
+  layer.style.pointerEvents =
+    opts.interactive ? "auto" : "none";
+  for (var i = 0; i < tokens.length; i++) {
+    layer.appendChild(
+      overlaysBuildTokenSpan(i, tokens[i], mask, opts)
+    );
+  }
+  return layer;
 }
 
 // Build the two stacked layers for the "Diff vs Original" overlay:
 // the original and edited runs drawn on top of each other with
 // independent opacity and an optional difference blend. Pure: returns
-// a DocumentFragment of two ``.diff-layer`` nodes; the caller owns the
-// container (and must give it the stacking mode). ``diff`` is an
+// a DocumentFragment of two ``.token-layer`` nodes; the caller owns
+// the container (and must give it the stacking mode). ``diff`` is an
 // overlaysComputeDiff() result; ``opts`` carries opacities in [0,100]
-// (originalOpacity / editedOpacity) plus a ``blend`` flag.
+// (originalOpacity / editedOpacity), a ``blend`` flag, and an
+// optional titleFor(index, token).
 function overlaysBuildDiffLayers(
   origTokens, editedTokens, diff, opts, maskChar
 ) {
@@ -226,27 +352,30 @@ function overlaysBuildDiffLayers(
     typeof options.editedOpacity === "number"
       ? options.editedOpacity : 100;
   var blend = !!options.blend;
-
-  var origLayer = document.createElement("div");
-  origLayer.className = "diff-layer diff-layer-original";
-  origLayer.style.opacity = String(origOpacity / 100);
-  origLayer.appendChild(
-    overlaysBuildDiffLayerSpans(
-      origTokens || [], diff, true, blend, maskChar
-    )
+  var editedTakes = overlaysEditedOwnsPointer(
+    origOpacity, editedOpacity
   );
 
-  var editLayer = document.createElement("div");
-  editLayer.className = "diff-layer diff-layer-edited";
-  editLayer.style.opacity = String(editedOpacity / 100);
+  var origLayer = overlaysBuildTokenLayer(origTokens || [], {
+    layerClass: "token-layer-original",
+    opacity: origOpacity / 100,
+    interactive: !editedTakes,
+    maskChar: maskChar,
+    colorFor: overlaysDiffColorFor(diff, true, blend),
+    titleFor: options.titleFor,
+  });
+
+  var editLayer = overlaysBuildTokenLayer(editedTokens || [], {
+    layerClass: "token-layer-edited",
+    opacity: editedOpacity / 100,
+    interactive: editedTakes,
+    maskChar: maskChar,
+    colorFor: overlaysDiffColorFor(diff, false, blend),
+    titleFor: options.titleFor,
+  });
   if (blend) {
     editLayer.style.mixBlendMode = "difference";
   }
-  editLayer.appendChild(
-    overlaysBuildDiffLayerSpans(
-      editedTokens || [], diff, false, blend, maskChar
-    )
-  );
 
   var frag = document.createDocumentFragment();
   frag.appendChild(origLayer);

@@ -141,11 +141,27 @@
               <section id="overlay-viewer" hidden>
                 <div id="overlay-viewer-header">
                   <h3>Token overlay</h3>
-                  <div id="overlay-legend"
-                    class="overlay-legend" hidden>
-                    <span>early</span>
-                    <span class="overlay-legend-bar"></span>
-                    <span>late</span>
+                  <div id="overlay-header-controls">
+                    <div id="overlay-legend"
+                      class="overlay-legend" hidden>
+                      <span>early</span>
+                      <span class="overlay-legend-bar"></span>
+                      <span>late</span>
+                    </div>
+                    <!-- Run-level crossfade between the pre-edit
+                         run and the branch. Governs the token view
+                         and the entropy chart from one place, so it
+                         sits on the token view's own header rather
+                         than under either surface. Shown only for an
+                         edited run saved with its snapshot. -->
+                    <div id="run-blend-row" hidden>
+                      <span class="diff-slider-label diff-orig-label"
+                        >Original</span>
+                      <input type="range" id="run-blend"
+                        min="0" max="100" value="100" />
+                      <span class="diff-slider-label diff-edit-label"
+                        >Edited</span>
+                    </div>
                   </div>
                 </div>
                 <!-- Bordered canvas; the overlay drawer tucks into
@@ -298,17 +314,6 @@
                 </div>
                 <div class="chart-wrap">
                   <canvas id="chart-entropy"></canvas>
-                </div>
-                <!-- Crossfade between the pre-edit run and the
-                     branch. Shown only when a snapshot with entropy
-                     exists, so unedited runs never see it. -->
-                <div id="entropy-blend-row" hidden>
-                  <span class="diff-slider-label diff-orig-label"
-                    >Original</span>
-                  <input type="range" id="entropy-blend"
-                    min="0" max="100" value="100" />
-                  <span class="diff-slider-label diff-edit-label"
-                    >Edited</span>
                 </div>
               </div>
             </div>

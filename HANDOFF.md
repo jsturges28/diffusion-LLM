@@ -71,7 +71,84 @@ compare runs in an analytics suite.
 
 ## Recently shipped (this session)
 
-**Latest pass: What If lifecycle fixes plus the edited-run timing foundation.**
+**Latest pass: the shared comparison layer.** No Python changed, so `pytest`
+(79/79) is a regression check only; `node --check`, ReadLints, and the 70-column
+audit are clean. Nothing needing a display was exercised; checklist items 16 to
+20 at the bottom cover them. The idea it implements: **the pre-edit run is a
+layer, not a mode.** It used to be one in exactly two places (the diff overlay's
+token stack, the entropy chart's crossfade), each with its own control.
+
+- **The layered spans were inert, which was the blocker.**
+  `overlaysBuildDiffLayerSpans` emitted bare `<span>`s with no class and no
+  `data-pos`, and both pages' hover paths require both, so hover, the popover,
+  and entropy highlighting were all dead in diff mode. Replaced by
+  `overlaysBuildTokenSpan` / `overlaysBuildTokenLayer` in `overlays.js`, now the
+  single span builder behind every path on both pages: `token-span` plus
+  `token-mask` / `token-resolved`, `data-pos`, and a caller-supplied
+  `titleFor(index, token)`. A null token renders as the mask glyph instead of
+  being skipped, because two layers only line up if both emit a span per
+  position. `.diff-layer` became `.token-layer` and the container class
+  `.diff-overlay-mode` became `.token-layers`, since layering is no longer
+  diff-specific.
+- **Pointer ownership is explicit.** Stacked layers share a grid cell, so the
+  later sibling used to win every hit test even at zero opacity.
+  `overlaysEditedOwnsPointer` states the rule once (the more opaque layer takes
+  it, ties to edited) and `overlaysApplyLayerPointers` re-applies it during a
+  slider drag, where the generator restyles in place rather than re-rendering.
+- **One run-level crossfade** on the token overlay's own heading row
+  (`#run-blend-row` / `#run-blend`, state `compareBlend`), grouped with the
+  commit-order legend inside `#overlay-header-controls`. That wrapper exists
+  because two `margin-left: auto` siblings split the free space between them
+  instead of clustering; one auto margin on a wrapper keeps the pair adjacent
+  at the right whether or not the legend is showing. Living inside
+  `#overlay-viewer` also means the control inherits the viewer's hidden state.
+  Its gate widened from the entropy series to `overlayDiffAvailable`, because
+  the token layers only need the snapshot while a second bar series also needs
+  it to carry `e`. The per-run reset moved out of `clearEntropyChart` into
+  `resetRunBlend`, called from `loadRunOverlays`, `clearOverlay`, and
+  `showOverlayUnavailable`.
+- **Every overlay mode is layered now**, not just Diff. `renderOverlayTokens`
+  takes an options object and its `colorFor(index, token)` reads the token, so
+  the same callback colors either layer **by its own values**: the original
+  layer shows the original run's confidence and entropy, not the branch's. That
+  is the whole point of the comparison. Commit Order is the exception, since a
+  commit step is a property of a frame stream rather than of a token, so it
+  memoizes a second `overlayOriginalCommitSteps` from `original_frames`.
+- **Cross-highlighting, both directions, both pages**, via a
+  `token-cross-highlight` class and a `setTokenHighlight(pos)` on each page
+  (there can be two spans per position now, so both get lit). Analytics drives
+  the chart with `setActiveElements` from token hover and the tokens from
+  `tokenLinkPlugin`; the generator adds the missing `mousemove` on
+  `#entropy-profile`, inverting `drawEntropyProfile`'s `cssWidth / values.length`
+  step. The bar-to-token direction is a plugin `afterEvent` hook rather than the
+  `onHover` option **on purpose**: Chart.js only fires `onHover` while the
+  pointer is inside `chartArea`, so leaving through the axis gutter or off the
+  canvas never delivered the empty-elements call and the last token stayed lit.
+  `afterEvent` fires for every event in `options.events`, `mouseout` included,
+  after the active set is recomputed.
+- **One highlight look, not two.** The pointer-driven hover and the
+  entropy-driven cross-highlight now share a single rule in `style.css`
+  (neutral white plus a soft glow). Neutral because the overlays paint
+  arbitrary backgrounds underneath, and the old orange wash vanished on top of
+  an orange `.token-remasked` or the Heatmap's warm end. Analytics applies
+  `token-hover-highlight` to `#overlay-output` via `updateOverlayHoverHighlight`,
+  which it never did before; the chart could light a token that a direct hover
+  could not.
+- **Popover pagination.** `.alt-heading` is now a flex row carrying an
+  Original/Edited pager (`overlaysBuildAltHeading`) for positions at or past
+  divergence where both runs captured candidates. Each page marks the token its
+  own run drew. Two details worth keeping: paging re-renders **without** an
+  anchor span, because re-placing a box of a different height under the pointer
+  that just clicked an arrow slides it away and fires the close; and the
+  generator's substitution click is gated on `altsPopoverPage !== "original"`,
+  since the worker only holds the live run's state. Analytics also gained the
+  generator's `matches(":hover")` keep-open guard, without which the arrows
+  would be unclickable.
+
+**Deferred deliberately:** the generator's own crossfade and two-layer stack.
+When scheduled, the crossfade goes in its own row below the frame scrubber.
+
+**Previous pass: What If lifecycle fixes plus the edited-run timing foundation.**
 Two commits, both in-sandbox verified (`pytest` 79/79, `py_compile`,
 `node --check`, ReadLints clean, 70-column audit). Nothing needing CUDA or a
 display was exercised; checklist items 11 to 15 at the bottom cover them.
@@ -682,37 +759,89 @@ The rest cover the What If lifecycle and timing pass:
     complete edited run (the pre-edit signals ride in the `full` sessionStorage
     payload, which falls back to a lighter one when the quota is hit).
 
-**0. The comparison surfaces (agreed with the maintainer, planned next).** The
-timing foundation above exists to serve these. The unifying idea settled in
-discussion: **the pre-edit run is a first-class layer everywhere**, driven by one
-shared Original/Edited state rather than a bespoke control per surface. Tokens
-already have it, the Entropy chart just got it, and these close the gap. Settled
-decisions:
+The rest cover the shared comparison layer. Every item has a degrade path,
+because runs saved before the previous pass carry no `original_alternatives`.
 
-- **One crossfade is the primary control** on both pages, replacing the need for
-  per-chart sliders. Diff mode keeps its two independent opacity sliders, because
-  the Difference blend needs both layers up at once and a single crossfade cannot
-  express that.
-- **Generalize the two-layer token stack** out of diff-only into any overlay mode.
-  Two blockers to plan around: `overlaysBuildDiffLayers` emits bare `<span>`s with
-  no `data-pos` and no `token-span`, which is why hover, the popover, and entropy
-  highlighting are all dead in diff mode today; and with two stacked layers the
-  top one swallows every pointer event even at zero opacity. The fix for the
-  second is the maintainer's own midpoint idea, applied to **interaction** rather
-  than visibility: the crossfade stays continuous, but below 50 the original layer
-  takes the mouse and feeds the popover, at or above 50 the edited one does.
-- **Cross-highlighting** both directions, both pages. The generator already does
-  token to bar (`setEntropyHoverPosition`); `#entropy-profile` has no mouse
-  handlers at all, so the reverse is a `mousemove` reusing the layout math in
-  `drawEntropyProfile`. In Analytics the hovered index is already computed in
-  `entropyHoverPlugin`, and token to bar is `chart.setActiveElements()`. Both need
-  a way to highlight a token **by position**, which does not exist yet (today it
-  is pure CSS `:hover`). Decided **not** to gate this on the `highlightTokens`
-  comfort setting: that setting is about reading token boundaries, this is an
-  analysis affordance, and Analytics does not read app settings at all today.
-- **Popover pagination** (Original/Edited arrows for positions past the edit) is
-  unblocked now that `original_alternatives.json` is persisted, but only for runs
-  saved from here on.
+16. **Diff mode is interactive again** (the regression this pass was blocked
+    on). Open an edited run in Analytics, pick **Diff vs Original**, and hover a
+    token: the tooltip, the candidate popover, and the entropy bar highlight
+    should all now work, where before nothing happened. Drag the two opacity
+    sliders past each other and confirm the popover starts reading the layer
+    that is now more opaque. Then check the same in the generator's diff
+    overlay. Nulls in a frame now draw as `░` rather than vanishing, so watch a
+    substitution near the end where the two runs differ in length.
+17. **The crossfade governs everything.** Open a What If branch saved **this
+    session**. The Original/Edited slider should sit at the right of the
+    **Token overlay** heading row, directly above the text it blends, and
+    appear for any edited run with a snapshot (not only ones carrying
+    entropy). Switch to **Commit Order** and confirm the legend and the
+    slider sit together at the right rather than spreading across the row,
+    and narrow the window until the header wraps. Drag it in **None**,
+    then **Heatmap**, then **Entropy**, then **Commit Order**: the tokens should
+    crossfade between the two runs in every mode, and the entropy chart's bars
+    should follow the same slider. The key correctness check is Heatmap and
+    Entropy: at full Original the colors must be the **pre-edit run's own**
+    confidence and entropy, not the branch's colors under the original text.
+    Commit Order has its own second steps array, so its original layer should
+    show the pre-edit run's gradient. Switch runs and confirm it reopens on
+    Edited. Then open an **unedited** run: no slider, one layer, everything
+    exactly as before.
+18. **Cross-highlighting, and that it lets go.** In Analytics, hover a bar and
+    watch the matching token light up white in the overlay above; hover a token
+    and watch its bar light. Then sweep off the chart three ways: down into the
+    x-axis label strip, sideways off the canvas, and by closing the modal
+    outright. The token must go dark every time (this was the sticky-highlight
+    bug, and the axis-gutter exit is the one the old `onHover` wiring missed).
+    On the generator, sweep the entropy profile and confirm the token lights and
+    tracks correctly at both ends of the sequence (that is the math inversion;
+    an off-by-one would show as a consistent one-token drift). With the
+    crossfade mid-way, both layers should light at once.
+18b. **One highlight look.** A direct token hover and an entropy-driven
+    highlight should now be visually identical (white with a soft glow) on both
+    pages, where the direct hover used to be a separate orange. Check it over a
+    remasked token and at the Heatmap's warm end, which is where the old orange
+    disappeared. Analytics tokens should highlight on direct hover at all,
+    which they previously did not.
+18c. **Entropy profile marker.** On the generator, scrub to the **last** frame:
+    the faint full-height guide should sit on the **final** column, not the
+    second-to-last, and the nats readout at the right should report that
+    position's value. Scrub to frame 0 and mid-run and confirm the guide
+    tracks. The old marker was a 2px white stub floating at the top of the
+    strip, one column to the left; both the position and the shape changed.
+19. **Popover pagination.** On a branch saved this session, hover a token
+    **past** the substitution: the heading should read "Position N: Edited" with
+    a `‹ ›` pager, the current side disabled. Click `‹` for the pre-edit
+    candidates, and confirm the marked "chosen" row changes to the token the
+    original run actually drew. The box should stay put rather than jumping when
+    the two pages differ in row count, and reaching into it must not close it.
+    Hover a token **before** the substitution: no pager, since both runs
+    recorded the same set there. In Analytics, drag the crossfade below halfway
+    and confirm a freshly hovered token opens on **Original**. On the generator
+    with What If armed, the Edited page should be clickable and the Original
+    page read-only (no hint line, no substitution on click).
+20. **Degrade paths.** Open an edited run saved **before** the previous pass:
+    the crossfade should be absent (no snapshot at all) or present with a
+    single-dataset chart (snapshot without `e`), and the popover should show no
+    pager (no `original_alternatives`) while otherwise working. Nothing here
+    should throw; the failure mode to watch for is a blank overlay.
+
+**0. The comparison surfaces (agreed with the maintainer, partly shipped).** The
+timing foundation exists to serve these, and the unifying idea is settled: **the
+pre-edit run is a first-class layer everywhere**, driven by one shared
+Original/Edited state rather than a bespoke control per surface. The shared
+layer, cross-highlighting, and popover pagination all landed this session (see
+"Recently shipped"); what remains is below.
+
+- **The generator's crossfade and two-layer stack**, deliberately deferred. It
+  has the bidirectional cross-highlighting and the popover pager already, but
+  its token view is still single-layer outside diff mode. The shared primitives
+  are in place (`overlaysBuildTokenLayer`, `overlaysEditedOwnsPointer`,
+  `overlaysApplyLayerPointers`), so the work is the control and routing
+  `renderFrameWithTokens` through the layer builder. **Settled:** the crossfade
+  goes in its own row below the frame scrubber, not in the toolbar. Unlike
+  Analytics the generator has live state to respect, so gate it on
+  `diffAvailable()` and keep it out of the way during an edit session
+  (`remaskMode !== null`).
 - **Confidence chart**: cumulative versus per-position toggle. Note the default is
   **modality-aware**, not per-position everywhere: the AR `mean_conf` is a
   cumulative running mean so its curve is degenerate, but LLaDA's and

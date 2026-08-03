@@ -67,16 +67,22 @@ var overlayMode = "none";
 var overlayFrameIndex = 0;
 // Per-run derived data, memoized and invalidated when a new run loads:
 // the Commit Order gradient's per-position steps and the diff change
-// set (neither depends on the scrubber frame).
+// set (neither depends on the scrubber frame). The pre-edit run needs
+// steps of its own, since a commit step is a property of a frame
+// stream rather than of a token.
 var overlayCommitSteps = null;
+var overlayOriginalCommitSteps = null;
 var overlayDiffData = null;
 // Whether the open run is autoregressive; gates Commit Order off
 // (diffusion-only for now), keeping None + Heatmap + Entropy.
 var overlayIsAutoregressive = false;
 // Candidate popover for the token overlay (mirrors the generator).
+// The page is "original", "edited", or null where only one run
+// captured candidates and there is nothing to page between.
 var altsPopover =
   document.getElementById("token-alts-popover");
 var altsPopoverPos = null;
+var altsPopoverPage = null;
 
 // Layered "Diff vs Original" controls (mirror the generator): two
 // opacity sliders plus a difference-blend toggle. State is kept here
@@ -93,15 +99,18 @@ var overlayDiffOrigOpacity = 50;
 var overlayDiffEditOpacity = 100;
 var overlayDiffBlendOn = false;
 
-// Crossfade between the entropy chart's two layers. A single slider
-// rather than the diff overlay's two: superimposed bars at matching
-// opacity just occlude each other, so independent control buys
-// nothing here. 1 is the edited run alone, 0 the pre-edit snapshot.
-var entropyBlendRow =
-  document.getElementById("entropy-blend-row");
-var entropyBlendInput =
-  document.getElementById("entropy-blend");
-var entropyBlend = 1;
+// Run-level crossfade between the pre-edit run and the branch: 1 is
+// the edited run alone, 0 the snapshot. One slider rather than the
+// diff overlay's two, because superimposed bars and tokens at
+// matching opacity just occlude each other, so the useful axis is the
+// mix. It governs every comparison surface at once (the token layers
+// and the entropy chart), which is why it lives in the modal header
+// rather than under either of them.
+var runBlendRow =
+  document.getElementById("run-blend-row");
+var runBlendInput =
+  document.getElementById("run-blend");
+var compareBlend = 1;
 
 var comparePanel =
   document.getElementById("compare-panel");
@@ -1131,18 +1140,39 @@ var entropyHoverPlugin = {
   },
 };
 
-// Inline Chart.js plugin: crossfade the entropy chart's two layers.
-// Applied as canvas alpha at draw time rather than by rewriting
-// several hundred color strings per slider step, which also keeps
-// the entropy ramp itself untouched. No-op on an unedited run, where
-// there is only one layer to show.
-var entropyBlendPlugin = {
-  id: "entropyBlend",
+// Inline Chart.js plugin: the chart-to-token half of the
+// cross-highlight, so a tall warm bar can be read back to the word
+// the model was torn over.
+//
+// This has to be a plugin rather than the options.onHover callback,
+// which Chart.js only fires while the pointer is inside chartArea.
+// Leaving through the axis gutter or off the canvas therefore never
+// delivered the empty-elements call that clears the token, and the
+// last position stayed lit. afterEvent is notified for every event
+// in options.events (mouseout included) and runs after the active
+// set is recomputed, so getActiveElements is authoritative here.
+var tokenLinkPlugin = {
+  id: "tokenLink",
+  afterEvent: function (chart) {
+    var active = chart.getActiveElements();
+    setTokenHighlight(
+      active.length > 0 ? active[0].index : null
+    );
+  },
+};
+
+// Inline Chart.js plugin: crossfade the entropy chart's two layers
+// from the run-level compareBlend. Applied as canvas alpha at draw
+// time rather than by rewriting several hundred color strings per
+// slider step, which also keeps the entropy ramp itself untouched.
+// No-op on an unedited run, where there is only one layer to show.
+var compareBlendPlugin = {
+  id: "compareBlend",
   beforeDatasetDraw: function (chart, args) {
     if (chart.data.datasets.length < 2) { return; }
     var alpha = (args.index === 0)
-      ? 1 - entropyBlend
-      : entropyBlend;
+      ? 1 - compareBlend
+      : compareBlend;
     chart.ctx.save();
     chart.ctx.globalAlpha = alpha;
   },
@@ -1329,6 +1359,34 @@ function overlayAlternatives() {
   return overlayData.alternatives;
 }
 
+// The same for the pre-edit run. Present only for branches saved
+// since the snapshot began carrying its candidates, so an older
+// edited run pages through nothing.
+function overlayOriginalAlternatives() {
+  if (!overlayData || !overlayData.original_alternatives) {
+    return [];
+  }
+  return overlayData.original_alternatives;
+}
+
+// Whether this position has a candidate set from each run to page
+// between. Both runs record the same set left of the divergence
+// point, where the branch copies its prefix verbatim, so a pager
+// there would flip between two identical lists.
+function altsPageable(pos) {
+  var divergence = overlayData
+    ? divergencePosition(overlayData) : null;
+  if (divergence === null || pos < divergence) {
+    return false;
+  }
+  var original = overlayOriginalAlternatives()[pos];
+  var edited = overlayAlternatives()[pos];
+  return !!(
+    original && original.length > 0
+    && edited && edited.length > 0
+  );
+}
+
 // Trailing tooltip lines: entropy when saved, plus a hover nudge for
 // positions that carry competing candidates.
 function overlayEntropyText(tok) {
@@ -1349,27 +1407,62 @@ function hideAltsPopover() {
   altsPopover.hidden = true;
   altsPopover.textContent = "";
   altsPopoverPos = null;
+  altsPopoverPage = null;
+}
+
+// Which run's candidates a pageable position opens on: the one the
+// crossfade is currently favoring, so the popover agrees with what
+// the tokens and bars are showing. Both pages stay reachable through
+// the arrows either way, so the midpoint chooses a default rather
+// than gating access.
+function defaultAltsPage() {
+  return compareBlend < 0.5 ? "original" : "edited";
 }
 
 function showAltsPopover(pos, span) {
+  altsPopoverPage = altsPageable(pos)
+    ? defaultAltsPage() : null;
+  renderAltsPopover(pos, span);
+}
+
+// Flip pages in place. Rendered without an anchor deliberately: the
+// two pages can differ in height, and re-placing the box under the
+// pointer that just clicked an arrow can slide it out from under that
+// pointer, firing the mouseleave that closes it.
+function setAltsPage(page) {
+  if (altsPopoverPos === null) {
+    return;
+  }
+  altsPopoverPage = page;
+  renderAltsPopover(altsPopoverPos, null);
+}
+
+// With an anchor span, placed above the token (or below when that
+// would overflow). Without one, left where it already sits.
+function renderAltsPopover(pos, span) {
   if (!altsPopover) {
     return;
   }
-  var alts = overlayAlternatives()[pos];
+  var original = altsPopoverPage === "original";
+  var alts = original
+    ? overlayOriginalAlternatives()[pos]
+    : overlayAlternatives()[pos];
   if (!alts || alts.length === 0) {
     hideAltsPopover();
     return;
   }
-  var frame = overlayFrameAt(overlayFrameIndex);
+  // Each page marks the token its own run drew, so the Original page
+  // does not mark the branch's substitution as chosen.
+  var frames = original
+    ? (overlayData.original_frames || [])
+    : (overlayData.frames || []);
+  var frame = overlayClampedFrame(frames);
   var chosen = frame && frame[pos] ? frame[pos].id : null;
 
   altsPopover.textContent = "";
-  var heading = document.createElement("div");
-  heading.className = "alt-heading";
-  heading.textContent =
-    "Position " + (pos + 1) + ": candidates";
-  altsPopover.appendChild(heading);
-
+  altsPopover.appendChild(
+    overlaysBuildAltHeading(pos, altsPopoverPage, setAltsPage)
+  );
   for (var i = 0; i < alts.length; i++) {
     altsPopover.appendChild(buildAltRow(alts[i], chosen));
   }
@@ -1377,11 +1470,25 @@ function showAltsPopover(pos, span) {
 
   // Unhide before measuring: the height is unknown while hidden.
   altsPopover.hidden = false;
-  var rect = span.getBoundingClientRect();
-  var box = altsPopover.getBoundingClientRect();
-  altsPopover.style.left = overlaysPopoverLeft(rect, box) + "px";
-  altsPopover.style.top = overlaysPopoverTop(rect, box) + "px";
+  if (span) {
+    var rect = span.getBoundingClientRect();
+    var box = altsPopover.getBoundingClientRect();
+    altsPopover.style.left =
+      overlaysPopoverLeft(rect, box) + "px";
+    altsPopover.style.top =
+      overlaysPopoverTop(rect, box) + "px";
+  }
   altsPopoverPos = pos;
+}
+
+// A frame series at the scrubber's index, clamped to its end. The two
+// runs can differ in length, so the snapshot may stop short.
+function overlayClampedFrame(frames) {
+  if (!frames || frames.length === 0) {
+    return null;
+  }
+  var index = Math.min(overlayFrameIndex, frames.length - 1);
+  return frames[index] || null;
 }
 
 // One candidate row: token text, proportional bar, probability.
@@ -1415,13 +1522,15 @@ function buildAltRow(alt, chosenId) {
 function loadRunOverlays(runId, run) {
   overlayData = null;
   overlayCommitSteps = null;
+  overlayOriginalCommitSteps = null;
   overlayDiffData = null;
   overlayIsAutoregressive = runIsAutoregressive(run);
   hideAltsPopover();
   // Torn down before the fetch, not inside it, so switching runs can
-  // never leave the previous run's chart on screen while the new
-  // payload is in flight.
+  // never leave the previous run's chart or crossfade on screen while
+  // the new payload is in flight.
   clearEntropyChart();
+  resetRunBlend(false);
   fetchFrames(runId).then(function (data) {
     if (!data || data.error) {
       showOverlayUnavailable();
@@ -1439,6 +1548,7 @@ function loadRunOverlays(runId, run) {
     overlayOutput.hidden = false;
     overlaySelectGroup.hidden = false;
     setOverlayDrawerOpen(false);
+    resetRunBlend(hasDiff);
     // Mirror the generator: default to None; the drawer offers the
     // durable overlays (Heatmap for record runs, plus Commit Order and
     // Diff vs Original for diffusion runs with the required data).
@@ -1505,7 +1615,7 @@ function showOverlayUnavailable() {
   overlayViewer.hidden = false;
   overlaySelectGroup.hidden = true;
   overlayOutput.textContent = "";
-  overlayOutput.classList.remove("diff-overlay-mode");
+  overlayOutput.classList.remove("token-layers");
   overlayOutput.hidden = true;
   overlayReadout.textContent = "";
   overlayReadout.hidden = true;
@@ -1516,17 +1626,19 @@ function showOverlayUnavailable() {
   if (overlayScrubber) {
     overlayScrubber.hidden = true;
   }
+  resetRunBlend(false);
   overlayEmpty.hidden = false;
 }
 
 function clearOverlay() {
   overlayData = null;
   overlayCommitSteps = null;
+  overlayOriginalCommitSteps = null;
   overlayDiffData = null;
   overlayViewer.hidden = true;
   overlaySelectGroup.hidden = true;
   overlayOutput.textContent = "";
-  overlayOutput.classList.remove("diff-overlay-mode");
+  overlayOutput.classList.remove("token-layers");
   overlayOutput.hidden = false;
   overlayReadout.textContent = "";
   overlayReadout.hidden = true;
@@ -1537,6 +1649,7 @@ function clearOverlay() {
   if (overlayScrubber) {
     overlayScrubber.hidden = true;
   }
+  resetRunBlend(false);
   overlayEmpty.hidden = true;
 }
 
@@ -1614,11 +1727,6 @@ function setOverlayMode(mode) {
   if (overlayDiffControls) {
     overlayDiffControls.hidden = mode !== "diff";
   }
-  // The layered diff needs the stacking container; every other mode
-  // renders plain token spans, so drop the class when leaving diff.
-  if (mode !== "diff") {
-    overlayOutput.classList.remove("diff-overlay-mode");
-  }
   hideAltsPopover();
   renderCurrentOverlay();
 }
@@ -1643,11 +1751,10 @@ function renderCurrentOverlay() {
 function renderNoneOverlay() {
   overlayReadout.hidden = true;
   overlayReadout.textContent = "";
-  renderOverlayTokens(
-    overlayFrameAt(overlayFrameIndex),
-    function () { return null; },
-    function () { return ""; }
-  );
+  renderOverlayTokens({
+    frame: overlayFrameAt(overlayFrameIndex),
+    colorFor: function () { return null; },
+  });
 }
 
 // Confidence heatmap: recolor resolved tokens at the current frame by
@@ -1657,54 +1764,15 @@ function renderNoneOverlay() {
 function renderHeatmapOverlay() {
   overlayReadout.hidden = true;
   overlayReadout.textContent = "";
-  var frame = overlayFrameAt(overlayFrameIndex);
-  renderOverlayTokens(
-    frame,
-    function (i) {
-      var tok = frame ? frame[i] : null;
-      if (tok && typeof tok.c === "number") {
+  renderOverlayTokens({
+    frame: overlayFrameAt(overlayFrameIndex),
+    colorFor: function (index, tok) {
+      if (typeof tok.c === "number") {
         return heatColor(tok.c);
       }
       return null;
     },
-    function () { return ""; }
-  );
-}
-
-// Render the final frame as token spans, coloring each resolved
-// token via colorFn(index) and appending titleFn(index) to its
-// hover tooltip. Masked positions render as the mask glyph.
-function renderOverlayTokens(frame, colorFn, titleFn) {
-  overlayOutput.textContent = "";
-  if (!frame) {
-    return;
-  }
-  var fragment = document.createDocumentFragment();
-  for (var i = 0; i < frame.length; i++) {
-    var tok = frame[i];
-    var span = document.createElement("span");
-    span.setAttribute("data-pos", String(i));
-    if (!tok || tok.m) {
-      span.className = "token-span token-mask";
-      span.textContent = OVERLAYS_MASK_CHAR;
-      span.title =
-        "Token: " + (i + 1) + "\nConfidence: 0";
-      fragment.appendChild(span);
-      continue;
-    }
-    span.className = "token-span token-resolved";
-    span.textContent = tok.t;
-    var color = colorFn(i);
-    if (color) {
-      span.style.color = color;
-    }
-    span.title = "Token: " + (i + 1)
-      + "\nConfidence: " + overlayConfText(tok.c)
-      + overlayEntropyText(tok)
-      + titleFn(i);
-    fragment.appendChild(span);
-  }
-  overlayOutput.appendChild(fragment);
+  });
 }
 
 // Entropy profile: recolor resolved tokens at the current frame by
@@ -1714,20 +1782,21 @@ function renderOverlayTokens(frame, colorFn, titleFn) {
 function renderEntropyOverlay() {
   overlayReadout.hidden = true;
   overlayReadout.textContent = "";
-  var frame = overlayFrameAt(overlayFrameIndex);
-  renderOverlayTokens(
-    frame,
-    function (i) {
-      var tok = frame ? frame[i] : null;
-      if (tok && typeof tok.e === "number") {
+  renderOverlayTokens({
+    frame: overlayFrameAt(overlayFrameIndex),
+    colorFor: function (index, tok) {
+      if (typeof tok.e === "number") {
         return entropyColor(tok.e);
       }
       return null;
     },
-    function () { return ""; }
-  );
+  });
 }
 
+// Commit Order. Unlike the per-token modes above, its colors come
+// from the frame stream rather than from fields on the token, so the
+// pre-edit layer cannot be described by the same callback: it needs
+// its own steps, computed from the snapshot's frames.
 function renderCommitOverlay() {
   overlayReadout.hidden = true;
   overlayReadout.textContent = "";
@@ -1738,25 +1807,228 @@ function renderCommitOverlay() {
   if (overlayCommitSteps === null) {
     overlayCommitSteps = overlaysComputeCommitSteps(frames);
   }
-  var steps = overlayCommitSteps;
-  var maxStep = frames.length - 1;
-  renderOverlayTokens(
-    overlayFrameAt(overlayFrameIndex),
-    function (i) {
-      var step = steps[i];
-      if (typeof step === "number" && step >= 0) {
-        return commitColor(step, maxStep);
-      }
-      return null;
-    },
-    function (i) {
-      var step = steps[i];
-      if (typeof step === "number" && step >= 0) {
-        return "\nResolved at step: " + step;
-      }
-      return "";
+  var original = overlayData.original_frames || [];
+  if (overlayOriginalCommitSteps === null
+    && original.length > 0) {
+    overlayOriginalCommitSteps =
+      overlaysComputeCommitSteps(original);
+  }
+  renderOverlayTokens({
+    frame: overlayFrameAt(overlayFrameIndex),
+    colorFor: commitColorFor(
+      overlayCommitSteps, frames.length - 1
+    ),
+    extraFor: commitExtraFor(overlayCommitSteps),
+    originalColorFor: commitColorFor(
+      overlayOriginalCommitSteps || [], original.length - 1
+    ),
+    originalExtraFor: commitExtraFor(
+      overlayOriginalCommitSteps || []
+    ),
+  });
+}
+
+function commitColorFor(steps, maxStep) {
+  return function (index) {
+    var step = steps[index];
+    if (typeof step === "number" && step >= 0) {
+      return commitColor(step, maxStep);
     }
+    return null;
+  };
+}
+
+function commitExtraFor(steps) {
+  return function (index) {
+    var step = steps[index];
+    if (typeof step === "number" && step >= 0) {
+      return "\nResolved at step: " + step;
+    }
+    return "";
+  };
+}
+
+// Render the active mode's tokens: one layer normally, two stacked
+// and crossfaded when the run carries a pre-edit snapshot. ``opts``
+// carries the edited ``frame``, a colorFor(index, token) that never
+// sees a masked position, an optional extraFor(index, token) appended
+// to the tooltip, and optional originalColorFor / originalExtraFor
+// for modes whose colors are not a function of the token alone.
+//
+// The default is to reuse the same callbacks for both layers, which
+// is what makes the comparison mean anything: the pre-edit layer is
+// colored by its own confidence or entropy, not the branch's.
+function renderOverlayTokens(opts) {
+  overlayOutput.textContent = "";
+  tokenHighlightPos = null;
+  var edited = {
+    colorFor: overlayColorFn(opts.colorFor),
+    titleFor: overlayTitleFn(opts.extraFor),
+  };
+  var original = overlayComparisonFrame();
+  if (original !== null) {
+    renderOverlayLayers(original, opts.frame || [], edited, {
+      colorFor: overlayColorFn(
+        opts.originalColorFor || opts.colorFor
+      ),
+      titleFor: overlayTitleFn(
+        opts.originalExtraFor || opts.extraFor
+      ),
+    });
+    return;
+  }
+  overlayOutput.classList.remove("token-layers");
+  if (!opts.frame) {
+    return;
+  }
+  var fragment = document.createDocumentFragment();
+  for (var i = 0; i < opts.frame.length; i++) {
+    fragment.appendChild(
+      overlaysBuildTokenSpan(
+        i, opts.frame[i], OVERLAYS_MASK_CHAR, edited
+      )
+    );
+  }
+  overlayOutput.appendChild(fragment);
+}
+
+// Stack the pre-edit run under the branch at the crossfade's mix.
+function renderOverlayLayers(
+  origTokens, editedTokens, edited, original
+) {
+  overlayOutput.classList.add("token-layers");
+  var editedTakes = overlaysEditedOwnsPointer(
+    1 - compareBlend, compareBlend
   );
+  overlayOutput.appendChild(
+    overlaysBuildTokenLayer(origTokens, {
+      layerClass: "token-layer-original",
+      opacity: 1 - compareBlend,
+      interactive: !editedTakes,
+      colorFor: original.colorFor,
+      titleFor: original.titleFor,
+    })
+  );
+  overlayOutput.appendChild(
+    overlaysBuildTokenLayer(editedTokens, {
+      layerClass: "token-layer-edited",
+      opacity: compareBlend,
+      interactive: editedTakes,
+      colorFor: edited.colorFor,
+      titleFor: edited.titleFor,
+    })
+  );
+}
+
+// ---- Token hover highlight ----
+
+// The pointer-driven half of the highlight, which is pure CSS once
+// the class is on the container (see .token-hover-highlight in
+// style.css). Analytics never applied it before, which left the
+// chart-to-token direction lighting tokens that a direct hover
+// could not.
+function updateOverlayHoverHighlight() {
+  if (!overlayOutput) {
+    return;
+  }
+  overlayOutput.classList.add("token-hover-highlight");
+}
+
+// ---- Cross-highlighting: token overlay <-> entropy chart ----
+
+// Position currently lit from the chart side, so a pointer sweeping
+// the bars does not re-query the DOM on every mousemove. Reset
+// whenever the overlay re-renders, since that drops the class.
+var tokenHighlightPos = null;
+
+// Light the token(s) at a position. There are two when the run is
+// layered, and lighting both keeps the mark visible wherever the
+// crossfade happens to sit.
+function setTokenHighlight(pos) {
+  if (tokenHighlightPos === pos) {
+    return;
+  }
+  clearTokenHighlight();
+  tokenHighlightPos = pos;
+  if (pos === null || !overlayOutput) {
+    return;
+  }
+  var spans = overlayOutput.querySelectorAll(
+    "[data-pos=\"" + pos + "\"]"
+  );
+  for (var i = 0; i < spans.length; i++) {
+    spans[i].classList.add("token-cross-highlight");
+  }
+}
+
+function clearTokenHighlight() {
+  tokenHighlightPos = null;
+  if (!overlayOutput) {
+    return;
+  }
+  var lit = overlayOutput.querySelectorAll(
+    ".token-cross-highlight"
+  );
+  for (var i = 0; i < lit.length; i++) {
+    lit[i].classList.remove("token-cross-highlight");
+  }
+}
+
+// The reverse: light the entropy bar at a token position. Chart.js
+// already owns this highlight (the hover plugin's column guide and
+// the bars' own hoverBackgroundColor both key off active elements),
+// so driving it from a token hover is a matter of setting those.
+// A no-op for runs without the chart, which is every diffusion run.
+function setEntropyBarHighlight(pos) {
+  if (!chartEntropy) {
+    return;
+  }
+  var elements = [];
+  var datasets = chartEntropy.data.datasets;
+  for (var i = 0; pos !== null && i < datasets.length; i++) {
+    if (pos < datasets[i].data.length) {
+      elements.push({ datasetIndex: i, index: pos });
+    }
+  }
+  chartEntropy.setActiveElements(elements);
+  chartEntropy.update("none");
+}
+
+// The pre-edit run's tokens at the scrubber's frame, or null when
+// there is nothing to compare against. Clamped to the snapshot's
+// final frame once it ends, since a branch can outlive or fall short
+// of the run it forked from (mirrors renderDiffOverlay).
+function overlayComparisonFrame() {
+  if (!overlayData || !overlayDiffAvailable(overlayData)) {
+    return null;
+  }
+  return overlayClampedFrame(overlayData.original_frames);
+}
+
+// Spare every mode from repeating the masked-position check: a mask
+// takes its color from .token-mask, not from the overlay.
+function overlayColorFn(colorFor) {
+  return function (index, tok) {
+    if (!tok || tok.m) {
+      return null;
+    }
+    return colorFor(index, tok);
+  };
+}
+
+// The per-token tooltip, shared by the single-layer modes and the
+// stacked layers so a token reads the same however it is drawn.
+function overlayTitleFn(extraFor) {
+  return function (index, tok) {
+    if (!tok || tok.m) {
+      return "Token: " + (index + 1) + "\nConfidence: 0";
+    }
+    var extra = extraFor ? extraFor(index, tok) : "";
+    return "Token: " + (index + 1)
+      + "\nConfidence: " + overlayConfText(tok.c)
+      + overlayEntropyText(tok)
+      + extra;
+  };
 }
 
 // Layered diff (mirrors the generator): the original and edited final
@@ -1793,7 +2065,8 @@ function renderDiffOverlay() {
   var origTokens = (oIdx >= 0 ? origFrames[oIdx] : null) || [];
 
   overlayOutput.textContent = "";
-  overlayOutput.classList.add("diff-overlay-mode");
+  tokenHighlightPos = null;
+  overlayOutput.classList.add("token-layers");
   overlayOutput.appendChild(
     overlaysBuildDiffLayers(
       origTokens,
@@ -1803,6 +2076,7 @@ function renderDiffOverlay() {
         originalOpacity: overlayDiffOrigOpacity,
         editedOpacity: overlayDiffEditOpacity,
         blend: overlayDiffBlendOn,
+        titleFor: overlayTitleFn(null),
       }
     )
   );
@@ -1860,7 +2134,8 @@ function wireOverlayScrubber() {
 
   // Candidate popover on token hover, for runs saved with the
   // Alternatives capture. Read-only here (substitution lives on the
-  // generator, which still holds the worker's run state).
+  // generator, which still holds the worker's run state). The same
+  // hover lights the matching entropy bar.
   if (overlayOutput) {
     overlayOutput.addEventListener(
       "mouseover",
@@ -1874,6 +2149,7 @@ function wireOverlayScrubber() {
           return;
         }
         var pos = parseInt(raw, 10);
+        setEntropyBarHighlight(pos);
         if (pos === altsPopoverPos) {
           return;
         }
@@ -1883,9 +2159,20 @@ function wireOverlayScrubber() {
     overlayOutput.addEventListener(
       "mouseleave",
       function () {
+        setEntropyBarHighlight(null);
+        // Reaching into the popover keeps it open, so its pagination
+        // arrows are clickable (mirrors the generator).
+        if (altsPopover && altsPopover.matches(":hover")) {
+          return;
+        }
         hideAltsPopover();
       }
     );
+  }
+  if (altsPopover) {
+    altsPopover.addEventListener("mouseleave", function () {
+      hideAltsPopover();
+    });
   }
   window.addEventListener(
     "scroll",
@@ -2270,13 +2557,10 @@ function confidenceOptions() {
 function clearEntropyChart() {
   chartEntropy = destroyChart(chartEntropy);
   chartInstances.entropy = null;
-  // Back to the edited run at full opacity, so the next run opens on
-  // the branch it is a record of rather than on a stale mix.
-  entropyBlend = 1;
-  if (entropyBlendInput) {
-    entropyBlendInput.value = "100";
-  }
-  setEntropyBlendVisible(false);
+  // The chart owns one direction of the cross-highlight, so tearing
+  // it down while a bar is hovered would otherwise strand the class
+  // on whichever token was last lit.
+  clearTokenHighlight();
   var section = document.getElementById("entropy-section");
   if (section) {
     section.hidden = true;
@@ -2407,7 +2691,6 @@ function renderEntropyChart(data) {
   var divergence = divergencePosition(data);
   var edited = entropySeriesFrom(data.frames);
   var original = entropyOriginalSeries(data, divergence);
-  setEntropyBlendVisible(original !== null);
 
   // Labels span the longer run: a branch can outlive or fall short
   // of the run it forked from.
@@ -2453,28 +2736,60 @@ function renderEntropyChart(data) {
       plugins: [
         substitutionMarkerPlugin(editedPositions(data)),
         entropyHoverPlugin,
-        entropyBlendPlugin,
+        compareBlendPlugin,
+        tokenLinkPlugin,
       ],
     }
   );
   chartInstances.entropy = chartEntropy;
 }
 
-// The crossfade only means something with a layer on each side.
-function setEntropyBlendVisible(visible) {
-  if (!entropyBlendRow) {
-    return;
+// Back to the edited run at full opacity, so each run opens on the
+// branch it is a record of rather than on the previous run's mix.
+// The control shows for any edited run saved with its snapshot, which
+// is a wider gate than the entropy chart's: the token layers only
+// need the snapshot, while a second bar series also needs it to carry
+// per-token entropy.
+function resetRunBlend(visible) {
+  compareBlend = 1;
+  if (runBlendInput) {
+    runBlendInput.value = "100";
   }
-  entropyBlendRow.hidden = !visible;
+  if (runBlendRow) {
+    runBlendRow.hidden = !visible;
+  }
 }
 
-// Only the layer alpha changes, so nothing is reparsed; "none" skips
-// the animation that would otherwise lag the drag.
-function onEntropyBlendInput() {
-  entropyBlend = Number(entropyBlendInput.value) / 100;
+// Only layer alpha changes, so nothing is reparsed; "none" skips the
+// animation that would otherwise lag the drag.
+function onRunBlendInput() {
+  compareBlend = Number(runBlendInput.value) / 100;
   if (chartEntropy) {
     chartEntropy.update("none");
   }
+  applyTokenLayerBlend();
+}
+
+// Restyle the stacked token layers in place. Rebuilding them would
+// mean several hundred spans per slider step, and would also drop the
+// popover mid-drag. Diff mode is left alone: its two sliders own the
+// layers there.
+function applyTokenLayerBlend() {
+  if (overlayMode === "diff") {
+    return;
+  }
+  var original =
+    overlayOutput.querySelector(".token-layer-original");
+  var edited =
+    overlayOutput.querySelector(".token-layer-edited");
+  if (!original || !edited) {
+    return;
+  }
+  original.style.opacity = String(1 - compareBlend);
+  edited.style.opacity = String(compareBlend);
+  overlaysApplyLayerPointers(
+    overlayOutput, 1 - compareBlend, compareBlend
+  );
 }
 
 // ``texts`` holds one token-text array per dataset, so the tooltip
@@ -2489,6 +2804,8 @@ function entropyChartOptions(texts, divergence) {
       mode: "index",
       intersect: false,
     },
+    // The bar-to-token half of the cross-highlight lives in
+    // tokenLinkPlugin rather than onHover; see its comment.
     plugins: {
       legend: { display: false },
       tooltip: {
@@ -3124,11 +3441,10 @@ modalDelete.addEventListener("click", function (e) {
 
 wireOverlayDiffControls();
 wireOverlayScrubber();
+updateOverlayHoverHighlight();
 
-if (entropyBlendInput) {
-  entropyBlendInput.addEventListener(
-    "input", onEntropyBlendInput
-  );
+if (runBlendInput) {
+  runBlendInput.addEventListener("input", onRunBlendInput);
 }
 
 // Reveal the "Generation" nav link only when a model is resident. The

@@ -2229,10 +2229,20 @@ input[type="checkbox"].app-checkbox:checked::after {
   vertical-align: middle;
 }
 
-/* Global per-token hover highlight (a persistent user preference). */
-.token-hover-highlight .token-span:hover {
-  background: rgba(255, 159, 28, 0.14);
+/* One look for a token under attention, however it got there: the
+   pointer resting on it, or the entropy surface pointing at it (a
+   bar in the Analytics chart, a column in the generator's profile).
+   Both mean "this token", so both read the same.
+
+   Neutral white rather than an accent tint because the overlays
+   paint arbitrary backgrounds underneath, and an orange wash over
+   an orange .token-remasked or the Heatmap's warm end loses the
+   mark entirely. */
+.token-hover-highlight .token-span:hover,
+.token-cross-highlight {
+  background: rgba(255, 255, 255, 0.16);
   border-radius: 2px;
+  box-shadow: 0 0 6px rgba(255, 255, 255, 0.22);
 }
 
 /* Visual-overlay picker: a glassy drawer tucked against the output
@@ -2350,13 +2360,14 @@ input[type="checkbox"].app-checkbox:checked::after {
   cursor: pointer;
 }
 
-/* Two-layer diff overlay: both layers stacked in one grid cell so
-   the container sizes to the taller and scrolls naturally. */
-#output-area.diff-overlay-mode {
+/* Stacked token layers (the diff overlay, and in Analytics any
+   crossfaded comparison): both layers share one grid cell so the
+   container sizes to the taller and scrolls naturally. */
+#output-area.token-layers {
   display: grid;
 }
 
-#output-area.diff-overlay-mode > .diff-layer {
+#output-area.token-layers > .token-layer {
   grid-area: 1 / 1;
   min-width: 0;
   white-space: pre-wrap;
@@ -2383,11 +2394,14 @@ input[type="checkbox"].app-checkbox:checked::after {
   letter-spacing: 0.06em;
 }
 
+/* Only a bottom border, so clientWidth matches the drawing width the
+   pointer-to-position math inverts (entropyProfilePosition). */
 #entropy-profile {
   flex: 1;
   min-width: 0;
   height: 34px;
   border-bottom: 1px solid var(--border);
+  cursor: crosshair;
 }
 
 #entropy-profile-readout {
@@ -2420,11 +2434,48 @@ input[type="checkbox"].app-checkbox:checked::after {
 }
 
 .alt-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   margin-bottom: 5px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   font-size: 9px;
   color: var(--text-secondary);
+}
+
+/* Original/Edited pager, shown only where both runs captured
+   candidates. Two arrows rather than a toggle so the direction
+   matches the crossfade above: left is the pre-edit run. */
+.alt-pager {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.alt-pager-btn {
+  background: none;
+  border: none;
+  padding: 0 3px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.alt-pager-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* Disabled means "already on this page", so it reads as a position
+   indicator rather than a dead control. */
+.alt-pager-btn:disabled {
+  color: var(--accent);
+  cursor: default;
 }
 
 .alt-row {

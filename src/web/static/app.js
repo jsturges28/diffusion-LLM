@@ -240,7 +240,10 @@ var originalPositionAlts = [];
 // Empty unless the model's Alternatives capture was enabled.
 var positionAlts = [];
 // Position whose candidate popover is open, or null when closed.
+// The page is "original", "edited", or null where only one run
+// captured candidates and there is nothing to page between.
 var altsPopoverPos = null;
+var altsPopoverPage = null;
 // Token position under the pointer, or null. Drives the glowing
 // column in the entropy profile, so it is tracked for every token,
 // independent of whether that position captured alternatives.
@@ -1494,7 +1497,7 @@ function handleError(data) {
 // ---- Rendering ----
 
 function renderFrame(text) {
-  outputArea.classList.remove("diff-overlay-mode");
+  outputArea.classList.remove("token-layers");
   var fragment =
     document.createDocumentFragment();
   for (var i = 0; i < text.length; i++) {
@@ -1575,8 +1578,10 @@ function renderDiffOverlay(frameIndex) {
   var origTokens =
     (oIdx >= 0 ? originalFrameTokens[oIdx] : null) || [];
 
+  var total = editedTokens.length;
   outputArea.textContent = "";
-  outputArea.classList.add("diff-overlay-mode");
+  tokenHighlightPos = null;
+  outputArea.classList.add("token-layers");
   outputArea.appendChild(
     overlaysBuildDiffLayers(
       origTokens,
@@ -1586,6 +1591,15 @@ function renderDiffOverlay(frameIndex) {
         originalOpacity: diffOriginalOpacity,
         editedOpacity: diffEditedOpacity,
         blend: diffBlend,
+        titleFor: function (index, tok) {
+          if (!tok || tok.m) {
+            return tokenLabel(index, total)
+              + "\nConfidence: 0";
+          }
+          return tokenLabel(index, total) + "\n"
+            + "Confidence: " + confLabel(tok.c)
+            + tokenExtraLabel(index, tok);
+        },
       },
       MASK_CHAR
     )
@@ -1809,6 +1823,23 @@ function hasAnyAlternatives(positions) {
   return false;
 }
 
+// The earliest position a What If branch could differ at: the
+// leftmost remasked position across every edit. Null on an unedited
+// run. Left of it the branch reproduces the original verbatim,
+// candidate sets included, so there is nothing to compare there.
+function editDivergencePosition() {
+  var earliest = null;
+  for (var e = 0; e < remaskEdits.length; e++) {
+    var positions = remaskEdits[e].token_positions || [];
+    for (var p = 0; p < positions.length; p++) {
+      if (earliest === null || positions[p] < earliest) {
+        earliest = positions[p];
+      }
+    }
+  }
+  return earliest;
+}
+
 // ---- Top-k alternatives popover ----
 
 function hideAltsPopover() {
@@ -1818,6 +1849,23 @@ function hideAltsPopover() {
   altsPopover.hidden = true;
   altsPopover.textContent = "";
   altsPopoverPos = null;
+  altsPopoverPage = null;
+}
+
+// Whether this position has a candidate set from each run to page
+// between. Only possible at or past the divergence point, and only
+// for a branch whose pre-edit candidates were retained.
+function altsPageable(pos) {
+  var divergence = editDivergencePosition();
+  if (divergence === null || pos < divergence) {
+    return false;
+  }
+  var original = originalPositionAlts[pos];
+  var edited = positionAlts[pos];
+  return !!(
+    original && original.length > 0
+    && edited && edited.length > 0
+  );
 }
 
 // Build one row per candidate: the token text, a proportional bar,
@@ -1862,44 +1910,73 @@ function buildAltsRows(alts, chosenId) {
 }
 
 // Show the candidate popover for a token position, anchored to its
-// span. Positioned in viewport coordinates (the popover is fixed at
-// body level) and flipped above the token when it would overflow.
+// span. Opens on the branch, which is what the token view is showing;
+// the pager reaches the pre-edit set where one was retained.
 function showAltsPopover(pos, span) {
+  altsPopoverPage = altsPageable(pos) ? "edited" : null;
+  renderAltsPopover(pos, span);
+}
+
+// Flip pages in place. Rendered without an anchor deliberately: the
+// two pages can differ in height, and re-placing the box under the
+// pointer that just clicked an arrow can slide it out from under that
+// pointer, firing the mouseleave that closes it.
+function setAltsPage(page) {
+  if (altsPopoverPos === null) {
+    return;
+  }
+  altsPopoverPage = page;
+  renderAltsPopover(altsPopoverPos, null);
+}
+
+// With an anchor span, positioned in viewport coordinates (the
+// popover is fixed at body level) and flipped above the token when it
+// would overflow. Without one, left where it already sits.
+function renderAltsPopover(pos, span) {
   if (!altsPopover) {
     return;
   }
-  var alts = positionAlts[pos];
+  var original = altsPopoverPage === "original";
+  var alts = original
+    ? originalPositionAlts[pos] : positionAlts[pos];
   if (!alts || alts.length === 0) {
     hideAltsPopover();
     return;
   }
-  var tokens = frameTokens[currentScrubFrame];
+  // Each page marks the token its own run drew, so the Original page
+  // does not mark the branch's substitution as chosen.
+  var tokens = original
+    ? originalFrameTokens[originalFrameTokens.length - 1]
+    : frameTokens[currentScrubFrame];
   var chosen = tokens && tokens[pos] ? tokens[pos].id : null;
 
   altsPopover.textContent = "";
-  var heading = document.createElement("div");
-  heading.className = "alt-heading";
-  heading.textContent =
-    "Position " + (pos + 1) + ": candidates";
-  altsPopover.appendChild(heading);
+  altsPopover.appendChild(
+    overlaysBuildAltHeading(pos, altsPopoverPage, setAltsPage)
+  );
   altsPopover.appendChild(buildAltsRows(alts, chosen));
-  if (substitutionMode) {
+  // Substitution only ever applies to the live run, so the Original
+  // page is read-only even while What If is armed.
+  var pickable = substitutionMode && !original;
+  if (pickable) {
     var hint = document.createElement("div");
     hint.className = "alt-hint";
     hint.textContent = "Click a candidate to substitute";
     altsPopover.appendChild(hint);
   }
-  altsPopover.classList.toggle(
-    "alt-pickable", substitutionMode
-  );
+  altsPopover.classList.toggle("alt-pickable", pickable);
 
   // Measure before placing: the popover must be visible for its
   // height to be known, so unhide first, then correct the position.
   altsPopover.hidden = false;
-  var rect = span.getBoundingClientRect();
-  var box = altsPopover.getBoundingClientRect();
-  altsPopover.style.left = overlaysPopoverLeft(rect, box) + "px";
-  altsPopover.style.top = overlaysPopoverTop(rect, box) + "px";
+  if (span) {
+    var rect = span.getBoundingClientRect();
+    var box = altsPopover.getBoundingClientRect();
+    altsPopover.style.left =
+      overlaysPopoverLeft(rect, box) + "px";
+    altsPopover.style.top =
+      overlaysPopoverTop(rect, box) + "px";
+  }
   altsPopoverPos = pos;
 }
 
@@ -1953,9 +2030,25 @@ function drawEntropyProfile() {
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
   ctx.clearRect(0, 0, cssWidth, cssHeight);
 
-  var current = currentScrubFrame - 1;
+  // Frame index maps straight onto position: the autoregressive
+  // worker emits no leading empty canvas (ar_sampler._build_frame
+  // runs after the pick is appended), so frameHistory[k] holds k+1
+  // tokens and the frame at k is the one that introduced position k.
+  // The profile only renders for runs carrying per-token entropy,
+  // which is autoregressive-only, so the diffusion all-mask frame 0
+  // does not apply here.
+  var current = currentScrubFrame;
   var step = cssWidth / values.length;
   var barWidth = Math.max(1, step - 0.5);
+
+  // Behind the bars: a faint guide marking the scrubber's position,
+  // in the same language as the hover guide below so it reads as a
+  // marker rather than as a stray fragment.
+  if (current >= 0 && current < values.length) {
+    ctx.fillStyle = "rgba(255, 255, 255, 0.06)";
+    ctx.fillRect(current * step, 0, barWidth, cssHeight);
+  }
+
   for (var i = 0; i < values.length; i++) {
     var frac = overlaysEntropyFraction(values[i]);
     var height = Math.max(1, frac * (cssHeight - 2));
@@ -1969,10 +2062,6 @@ function drawEntropyProfile() {
     );
   }
   ctx.globalAlpha = 1;
-  if (current >= 0 && current < values.length) {
-    ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
-    ctx.fillRect(current * step, 0, Math.max(1, barWidth), 2);
-  }
   drawEntropyProfileGlow(ctx, {
     values: values,
     step: step,
@@ -2042,6 +2131,73 @@ function setEntropyHoverPosition(pos) {
   if (visible) {
     drawEntropyProfile();
   }
+}
+
+// ---- Cross-highlighting: entropy profile -> token view ----
+//
+// The token -> column direction already exists (the output area's
+// mouseover feeds setEntropyHoverPosition). These close the loop, so
+// a tall warm column can be read back to the word behind it.
+
+// Position currently lit from the profile, so sweeping the pointer
+// across one column does not re-query the DOM on every pixel. Reset
+// by the render paths below, which drop the class with the spans.
+var tokenHighlightPos = null;
+
+// Light the token(s) at a position. There are two while the diff
+// overlay is stacked, and lighting both keeps the mark visible
+// whichever layer is on top.
+function setTokenHighlight(pos) {
+  if (tokenHighlightPos === pos) {
+    return;
+  }
+  clearTokenHighlight();
+  tokenHighlightPos = pos;
+  if (pos === null || !outputArea) {
+    return;
+  }
+  var spans = outputArea.querySelectorAll(
+    "[data-pos=\"" + pos + "\"]"
+  );
+  for (var i = 0; i < spans.length; i++) {
+    spans[i].classList.add("token-cross-highlight");
+  }
+}
+
+function clearTokenHighlight() {
+  tokenHighlightPos = null;
+  if (!outputArea) {
+    return;
+  }
+  var lit = outputArea.querySelectorAll(
+    ".token-cross-highlight"
+  );
+  for (var i = 0; i < lit.length; i++) {
+    lit[i].classList.remove("token-cross-highlight");
+  }
+}
+
+// Map a pointer x on the profile back to a token position by
+// inverting the layout drawEntropyProfile lays down. Columns are
+// contiguous at `step` (the half-pixel gap is taken out of the bar,
+// not the slot), so the floor of x/step names the column drawn there.
+// Uses clientWidth, the same measure the draw does.
+function entropyProfilePosition(event) {
+  if (!entropyProfileCanvas) {
+    return null;
+  }
+  var values = entropyProfileValues();
+  if (values.length === 0) {
+    return null;
+  }
+  var cssWidth = entropyProfileCanvas.clientWidth || 1;
+  var step = cssWidth / values.length;
+  var rect = entropyProfileCanvas.getBoundingClientRect();
+  var index = Math.floor((event.clientX - rect.left) / step);
+  if (index < 0 || index >= values.length) {
+    return null;
+  }
+  return index;
 }
 
 // Show the profile only when the run carries entropy and the
@@ -2337,7 +2493,8 @@ function renderFrameWithTokens(frameIndex) {
     return;
   }
 
-  outputArea.classList.remove("diff-overlay-mode");
+  outputArea.classList.remove("token-layers");
+  tokenHighlightPos = null;
   var allowClick = remaskMode === "edit";
   var fragment =
     document.createDocumentFragment();
@@ -2387,7 +2544,7 @@ function renderFrameWithTokens(frameIndex) {
 }
 
 function renderTargetPlaceholder(frameIndex) {
-  outputArea.classList.remove("diff-overlay-mode");
+  outputArea.classList.remove("token-layers");
   outputArea.textContent = "";
 
   var editedFrames = [];
@@ -2713,6 +2870,7 @@ function deactivateScrubber() {
     entropyProfileRow.hidden = true;
   }
   entropyHoverPos = null;
+  clearTokenHighlight();
   hideAltsPopover();
   clearRemaskedPositions();
 }
@@ -3764,6 +3922,7 @@ function resetRunState() {
   originalPositionAlts = [];
   positionAlts = [];
   entropyHoverPos = null;
+  clearTokenHighlight();
   hideAltsPopover();
   remaskEdits = [];
   editedRunSaved = false;
@@ -4318,11 +4477,12 @@ if (diffOriginalSlider) {
       diffOriginalSlider.value, 10
     );
     var layer = outputArea.querySelector(
-      ".diff-layer-original"
+      ".token-layer-original"
     );
     if (layer) {
       layer.style.opacity = String(diffOriginalOpacity / 100);
     }
+    applyDiffLayerPointers();
   });
 }
 
@@ -4332,12 +4492,22 @@ if (diffEditedSlider) {
       diffEditedSlider.value, 10
     );
     var layer = outputArea.querySelector(
-      ".diff-layer-edited"
+      ".token-layer-edited"
     );
     if (layer) {
       layer.style.opacity = String(diffEditedOpacity / 100);
     }
+    applyDiffLayerPointers();
   });
+}
+
+// Hand the pointer to whichever layer a drag just made the more
+// opaque, so hover and the candidate popover follow the layer the
+// user is reading.
+function applyDiffLayerPointers() {
+  overlaysApplyLayerPointers(
+    outputArea, diffOriginalOpacity, diffEditedOpacity
+  );
 }
 
 if (diffBlendToggle) {
@@ -4515,6 +4685,29 @@ outputArea.addEventListener(
   }
 );
 
+// The profile's own hover, the mirror of the handler above: moving
+// along the columns lights both the column and the token it belongs
+// to. A direct token hover reaches the same look through CSS
+// (.token-hover-highlight), so the two directions match without
+// this having to touch the class the pointer already applies.
+if (entropyProfileCanvas) {
+  entropyProfileCanvas.addEventListener(
+    "mousemove",
+    function (e) {
+      var pos = entropyProfilePosition(e);
+      setEntropyHoverPosition(pos);
+      setTokenHighlight(pos);
+    }
+  );
+  entropyProfileCanvas.addEventListener(
+    "mouseleave",
+    function () {
+      setEntropyHoverPosition(null);
+      setTokenHighlight(null);
+    }
+  );
+}
+
 // The token position an event target represents, or null when the
 // pointer is over the output area's padding rather than a token.
 function hoveredTokenPosition(target) {
@@ -4551,6 +4744,12 @@ if (altsPopover) {
   // If mode; the popover is read-only otherwise.
   altsPopover.addEventListener("click", function (e) {
     if (!substitutionMode || altsPopoverPos === null) {
+      return;
+    }
+    // The Original page shows the pre-edit run's candidates. There is
+    // nothing to substitute into on that side, and the worker only
+    // holds the live run's state anyway.
+    if (altsPopoverPage === "original") {
       return;
     }
     var row = e.target.closest(".alt-row");

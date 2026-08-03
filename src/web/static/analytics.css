@@ -218,7 +218,6 @@ html, body {
 
 /* ---- Detail header ---- */
 
-#detail-header,
 #compare-header {
   display: flex;
   align-items: center;
@@ -226,7 +225,6 @@ html, body {
   margin-bottom: 12px;
 }
 
-#detail-header h2,
 #compare-header h2 {
   font-size: 13px;
   font-weight: 500;
@@ -692,7 +690,7 @@ html, body {
 #overlay-viewer-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 12px;
   flex-wrap: wrap;
   margin-bottom: 10px;
@@ -705,6 +703,17 @@ html, body {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-secondary);
+}
+
+/* The heading sits left and this cluster takes the slack, so the
+   legend and the run-level crossfade stay adjacent on the right.
+   A wrapper rather than two auto margins, which would split the
+   free space between them instead of grouping them. */
+#overlay-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
 }
 
 /* The token output's home: a bordered canvas whose top-right corner
@@ -788,14 +797,15 @@ html, body {
   border-radius: 3px;
 }
 
-/* Layered "Diff vs Original" overlay: both layers share one grid cell
-   so the container sizes to the taller and scrolls naturally (mirrors
-   the generator's #output-area.diff-overlay-mode). */
-#overlay-output.diff-overlay-mode {
+/* Stacked token layers: the "Diff vs Original" overlay and any
+   crossfaded comparison share one grid cell so the container sizes to
+   the taller and scrolls naturally (mirrors the generator's
+   #output-area.token-layers). */
+#overlay-output.token-layers {
   display: grid;
 }
 
-#overlay-output.diff-overlay-mode > .diff-layer {
+#overlay-output.token-layers > .token-layer {
   grid-area: 1 / 1;
   min-width: 0;
   white-space: pre-wrap;
@@ -819,33 +829,34 @@ html, body {
   display: none;
 }
 
-/* Original-to-edited crossfade below the entropy chart. One slider,
-   not the diff overlay's two: superimposed bars at matching opacity
-   occlude each other, so the useful axis is the mix. Labels reuse
-   .diff-slider-label from style.css so Original reads the same cyan
-   in both places; the accent on Edited is scoped here because the
-   generator's two-slider row distinguishes its ends by slider color
-   instead, which a single slider cannot do. */
-#entropy-blend-row {
+/* Run-level original-to-edited crossfade, on the token overlay's
+   header row. One slider, not the diff overlay's two: superimposed
+   bars and tokens at matching opacity occlude each other, so the
+   useful axis is the mix.
+   Diff mode keeps its own pair, which the Difference blend needs.
+   Labels reuse .diff-slider-label from style.css so Original reads
+   the same cyan in both places; the accent on Edited is scoped here
+   because the generator's two-slider row distinguishes its ends by
+   slider color instead, which a single slider cannot do. */
+#run-blend-row {
   display: flex;
   align-items: center;
-  justify-content: center;
   gap: 10px;
-  margin-top: 8px;
+  flex: 0 0 auto;
   font-size: 10px;
   letter-spacing: 0.05em;
   color: var(--text-secondary);
 }
 
-#entropy-blend-row[hidden] {
+#run-blend-row[hidden] {
   display: none;
 }
 
-#entropy-blend-row .diff-edit-label {
+#run-blend-row .diff-edit-label {
   color: var(--accent);
 }
 
-#entropy-blend {
+#run-blend {
   width: 160px;
   height: 3px;
   cursor: pointer;

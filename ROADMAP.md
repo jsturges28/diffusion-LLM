@@ -201,6 +201,28 @@ analytics suite.
   so a sparse run's long segment cannot slip across a corner box unnoticed)
   and keeps its standing corner while it stays clear; `burnThroughPlugin`
   becomes the genuine last resort it was meant to be.
+- Shipped (this session): the **shared comparison layer**, which turns the
+  pre-edit run from a mode into a layer. `overlays.js` now owns one token-span
+  builder (`overlaysBuildTokenSpan` / `overlaysBuildTokenLayer`) behind every
+  path on both pages, so a stacked layer finally carries `token-span` and
+  `data-pos` and is interactive; that alone repaired hover, the popover, and
+  entropy highlighting in Diff mode, where they had never worked. Pointer
+  ownership between exactly overlapping layers is now stated once
+  (`overlaysEditedOwnsPointer`: the more opaque layer takes it, ties to
+  edited) rather than falling out of sibling order. In Analytics the entropy
+  chart's slider was promoted to a run-level crossfade in the detail modal
+  header, gated on the snapshot rather than on the entropy series, and
+  `renderOverlayTokens` takes a `colorFor(index, token)` so **every** overlay
+  mode stacks and blends the two runs, each layer colored by its own values.
+  Commit Order needs a second memoized steps array, since a commit step is a
+  property of a frame stream rather than of a token. Entropy bars and tokens
+  cross-highlight in both directions on both pages (`setActiveElements` one
+  way, a `token-cross-highlight` class the other; on the generator the missing
+  half was a `mousemove` on `#entropy-profile` inverting its own layout math),
+  ungated by the `highlightTokens` comfort setting. The candidate popover pages
+  between the two runs' top-k sets from the divergence point rightward, each
+  page marking the token its own run drew. The generator's own crossfade and
+  two-layer stack are deferred.
 - For the feature overview and architecture, see `README.md`. For the build
   history, see `.cursor/plans/`.
 
