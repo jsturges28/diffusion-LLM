@@ -346,7 +346,7 @@ def _git_commit() -> Optional[str]:
 def _venv_cuda_lib_dirs(python_path: Path) -> List[str]:
     """Bundled CUDA lib dirs for a venv (for bitsandbytes etc.).
 
-    ``<venv>/lib/pythonX.Y/site-packages/nvidia/*/lib`` — native
+    ``<venv>/lib/pythonX.Y/site-packages/nvidia/*/lib``: native
     extensions like bitsandbytes need these on LD_LIBRARY_PATH,
     since the dynamic linker resolves them at process start.
     """
@@ -1158,6 +1158,32 @@ def _make_run_dir(base: Path, model_id: str) -> Path:
     return run_dir
 
 
+def _display_run_path(run_dir: Path) -> str:
+    """Run folder as written in the repo, for the UI's status line.
+
+    The two save branches disagree about resolution: a fresh save
+    joins the relative ``RESULTS_DIR`` and stays relative, while an
+    in-place update goes through ``_existing_run_dir``, which must
+    ``resolve()`` for its traversal guard. Reporting that raw made the
+    same message read "results/..." after one save and
+    "/home/you/.../results/..." after the next. Normalizing at the one
+    point both branches meet keeps the guard intact and gives the
+    status line the short form either way.
+
+    Falls back to the path as given when it is not under the repo, for
+    example a ``results`` directory symlinked elsewhere or a server
+    started from another working directory. That is an operating
+    condition, not a broken invariant, so it degrades to a longer
+    message rather than raising.
+    """
+    try:
+        return str(
+            run_dir.resolve().relative_to(REPO_ROOT)
+        )
+    except ValueError:
+        return str(run_dir)
+
+
 def _existing_run_dir(run_id: str) -> Path:
     """Resolve an existing run folder for in-place update.
 
@@ -1347,7 +1373,7 @@ def _save_run_blocking(body: SaveRunRequest) -> str:
         run_dir / "diffusion.gif",
         header_text=body.prompt,
     )
-    return str(run_dir)
+    return _display_run_path(run_dir)
 
 
 @app.post("/api/save")

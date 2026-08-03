@@ -1062,9 +1062,155 @@ button {
   letter-spacing: 0.04em;
 }
 
-#status-message {
-  margin-left: auto;
+/* One right-anchored row: the resting message sits at the right end
+   where it always has, and chips extend leftward from it.
+
+   flex: 1 rather than margin-left: auto so the box has real width to
+   clamp against. Sized by content it would hug its items, leaving
+   max-width nothing to resolve and letting a long message run left
+   across "Elapsed:" unchecked. Claiming the leftover width instead
+   turns the footer's own 24px gap into the gutter, and the overflow
+   below then lands exactly there. */
+#status-stack {
+  /* Distance from the row's bottom edge to the window's: the
+     footer's 8px bottom padding plus #app's 16px. The clip below
+     opens exactly that far, and a chip's entrance starts exactly that
+     low, so it begins life past the window edge and rises in. One
+     property so the two cannot drift apart. */
+  --status-rise: 24px;
+  display: flex;
+  justify-content: flex-end;
+  align-items: baseline;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  /* Clips left and right at the box edges, the same clamp
+     overflow: hidden gave, but leaves the space below open so chips
+     can rise through the footer's padding. (overflow would have had
+     to clip both axes, and it also makes the box a scroll container,
+     whose baseline is its margin edge rather than its text.) */
+  clip-path: inset(0 0 calc(-1 * var(--status-rise)) 0);
+  /* Fades the oldest chip against the gutter rather than
+     guillotining it. Safe to leave on: the row is right-anchored, so
+     content only reaches this band when it genuinely overflows. The
+     gradient is uniform vertically, so the default tiling covers the
+     region the clip opens up. Prefixed for the WebKitGTK desktop
+     window. */
+  -webkit-mask-image: linear-gradient(
+    to right, transparent 0, #000 24px
+  );
+  mask-image: linear-gradient(
+    to right, transparent 0, #000 24px
+  );
+}
+
+#status-message,
+.status-chip {
+  /* Neither yields width to the other. Overflow spills off the left
+     edge, where the clip and the fade are, so the oldest chip is
+     always what gives way and the message is never the casualty. */
+  flex-shrink: 0;
+  white-space: nowrap;
   color: var(--accent);
+}
+
+/* The message is the record (saveSessionState persists its text), so
+   it truncates only against the row itself, never to make room for a
+   chip. Cosmetic either way: textContent keeps the full string. */
+#status-message {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Two messages abutting on one row in the same accent green read as
+   one sentence, so each gets a separator from whatever precedes it.
+   The DOM does the selecting: chips are inserted directly before the
+   message, so the message's immediate predecessor is the newest chip
+   exactly when any chip is up. :not(:empty) then suppresses a stray
+   dot during a run, when the message has been cleared. */
+.status-chip + .status-chip::before,
+.status-chip + #status-message:not(:empty)::before {
+  content: "\00B7";
+  margin-right: 10px;
+  color: var(--text-secondary);
+  transition: opacity 0.25s ease;
+}
+
+/* A separator sits on the item to the right of the gap, so it has to
+   track the chip on its left. Without this it would hold full
+   strength all through that chip's fade and then blink out when the
+   node is finally removed. Keying on is-visible rather than a class
+   of its own also fades it in with an arriving chip. */
+.status-chip:not(.is-visible) + .status-chip::before,
+.status-chip:not(.is-visible) + #status-message::before {
+  opacity: 0;
+}
+
+/* A fixed slot for the ellipsis, so ticking the dots cannot change
+   the chip's width and shove everything to its left. 3ch is exactly
+   three characters in the footer's monospace face; the footer's
+   letter-spacing applies to each of them, so it is added back to
+   leave the third dot room. */
+.status-chip-dots {
+  display: inline-block;
+  width: calc(3ch + 0.12em);
+  text-align: left;
+}
+
+/* Three states, not two. Sharing one rule between "not yet entered"
+   and "leaving" meant a dismissed chip transitioned back to its
+   entrance offset, drifting toward the resting message and printing
+   over it (transforms move no layout, so the message never knew).
+   Entering rises from past the window edge; leaving steps aside to
+   the left, out of the way of the footer line that replaces it.
+
+   The offsets use the `translate` longhand so `transform` stays free
+   for statusRowReflow's FLIP, which may be moving the same chip
+   sideways at the same time. The two compose instead of overwriting
+   each other. */
+.status-chip {
+  opacity: 0;
+  translate: 0 var(--status-rise);
+  transition:
+    opacity 0.25s ease,
+    translate 0.25s ease,
+    transform 0.25s ease;
+}
+
+.status-chip.is-visible {
+  opacity: 1;
+  translate: 0 0;
+}
+
+/* Quicker than the entrance: by now the footer already carries the
+   outcome, so the chip is the only thing still holding row width.
+   transform stays on the entrance's timing, because a leaving chip is
+   the likeliest thing for statusRowReflow to be sliding, and that
+   slide should read the same wherever it happens. */
+.status-chip.is-leaving {
+  opacity: 0;
+  translate: -8px 0;
+  transition:
+    opacity 0.15s ease,
+    translate 0.15s ease,
+    transform 0.25s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-chip,
+  .status-chip.is-visible,
+  .status-chip.is-leaving {
+    translate: none;
+  }
+
+  .status-chip {
+    transition: opacity 0.25s ease;
+  }
+
+  .status-chip.is-leaving {
+    transition: opacity 0.15s ease;
+  }
 }
 
 /* ---- Loading overlay ---- */

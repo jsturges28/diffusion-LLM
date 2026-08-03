@@ -317,6 +317,77 @@ analytics suite.
   white backing showed as a half-pixel band inside it because the stroke is
   centered on a one-pixel inset. Transparent `borderColor` plus a global
   transparent `multiKeyBackground` leaves just the fill.
+- Shipped (this session): the **status message stack**, the last item that
+  had no dependency on the comparison-surface work. `#status-message` was a
+  single overwritten span, so two operations at once lost one of them: the
+  auto-save of the pre-edit run on entering What If, then picking a candidate,
+  left only "Resuming". The split is by lifetime rather than by category.
+  Work in flight raises a transient chip; the run's resting state (Done, the
+  saved path, an error) stays in the footer, which is also what
+  `saveSessionState` persists, so chips are free to expire without taking a
+  record with them. That split is why session persistence needed no changes
+  at all. The enabling refactor was small and had its precedent one function
+  above it: `denoiseReveal` already kept its timer on the element so
+  independent targets could animate at once, but `startStatusDots` kept
+  module-level singletons, so two chips could not animate their own dots.
+  Chips render inside the footer's own slot (a bottom-anchored column whose
+  last row is the resting message, which collapses when empty), so a single
+  chip lands exactly where the message alone used to and the common case
+  looks unchanged. Bounded at four rather than made scrollable, since the
+  real ceiling is two (one run, and `saveRun` guards itself with `isSaving`).
+  The one trap: `resetStatus()` runs immediately before every resume, which
+  is exactly when a save may be in flight, so it clears the footer only.
+- And a third pass, after seeing it on screen a second time: **the column
+  became a row.** Chips now extend leftward from the resting message rather
+  than stacking above it, separated by a faint middle dot, clipped and faded
+  against the gutter the footer's own gap already leaves before the readouts.
+  Two details carried the change. The separators need no JavaScript: chips are
+  inserted directly before the message, so `.status-chip + #status-message`
+  matches exactly when a chip is up, and keying their opacity on `is-visible`
+  makes them fade in and out with the neighbor they belong to. And the message
+  keeps `flex-shrink: 0` with `max-width: 100%`, so it truncates only against
+  the row itself and never to make room for a chip; overflow spills off the
+  left, where the fade is, so the oldest chip is always what gives way. The
+  clamp is cosmetic regardless: `saveSessionState` persists `textContent`. The
+  same pass split each chip into a word span and a fixed-width dots span
+  (`3ch` plus the footer's letter-spacing), which is what finally let the
+  ellipsis tick continuously in every text mode, cycle included, since
+  re-diffusing the word no longer rewrites the dots.
+- Also this session, after seeing the stack rendered: **chips went quiet, and
+  the messages got specific.** Letting a chip report its own outcome put
+  "Done" on top of "Done." and "Saved" on top of "Saved to results/...",
+  which read as stutter and was the only thing that ever pushed a second line
+  into an already crowded corner. Chips now say only what is happening and
+  simply leave when it is over, with the footer filling in as the handoff, so
+  the whole `statusResolve` path, the hold timer, and the chip error style
+  deleted themselves. Messages also name their subject rather than just their
+  verb: a save reads "Saving original run" or "Saving edited run" off the
+  `wasEdited` flag it already computed, and a resume reads "Running edit from
+  frame X to Y" (or "to end"), which for `doGuidedResume` comes from a single
+  `resumeTarget` shared with the request's `max_frames` so the text and the
+  wire cannot drift. A layout fix rode along: `#status-stack` had been sized
+  by `margin-left: auto` while its only child was absolutely positioned,
+  leaving it zero-wide, so a long saved path ran left across "Elapsed:" and
+  `max-width` had nothing to resolve against; `flex: 1; min-width: 0` gives it
+  real width and the text now ellipsizes at the footer's own gutter.
+- And a fourth pass on the same row, this one about **motion, which was the
+  last thing still wrong.** A chip now rises in from the window's bottom edge
+  and steps *left* on the way out, rather than sharing one rule with its
+  entrance and so drifting back into the resting line it was handing off to.
+  The exit is shortened to 150ms, since the footer already carries the outcome
+  by then. Getting the rise meant trading `overflow: hidden` for a negative
+  `clip-path` inset, because only the left and right clamps are wanted, with
+  the rise distance held in one custom property that both the clip and the
+  offset read. Flex offers no transition for a neighbour changing width, so
+  `statusRowReflow` wraps every mutation that reshapes the row (a chip
+  arriving, a chip's node leaving, the resting line filling in) in a
+  first-last-invert-play, gated on `prefers-reduced-motion`. The row's
+  entrances use the `translate` longhand precisely so that FLIP can own
+  `transform` and the two compose. One backend fix rode along: the save
+  endpoint reaches its folder two ways, and only one of them resolves, so the
+  same message read `results/...` after a fresh save and an absolute path
+  after an in-place update. `_display_run_path` normalizes where the branches
+  meet, leaving the traversal guard alone.
 - For the feature overview and architecture, see `README.md`. For the build
   history, see `.cursor/plans/`.
 

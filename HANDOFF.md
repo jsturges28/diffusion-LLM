@@ -71,7 +71,202 @@ compare runs in an analytics suite.
 
 ## Recently shipped (this session)
 
-**Latest pass: three finishing touches on the comparison surfaces.** Frontend
+**Latest pass: the status message row.** `pytest` (84/84, five of them new for
+`_display_run_path`), `node --check`, ReadLints, and the 70-column audit are
+clean. The chip lifecycle was exercised head-on with a throwaway Node harness
+that located the real source region in `app.js` by content markers, evaluated
+it against a stub DOM and a fake clock, and asserted the coexistence case,
+independent dot timers, retirement, the cap, and timer leaks. The fourth pass
+re-ran it with the motion states added, checking that a dismissed chip takes
+`is-leaving` and not merely the loss of `is-visible`, and that `statusRowReflow`
+emits its writes in the order FLIP requires (`transition: none`, the inverted
+offset, a forced reflow, then release) with the offset equal to the width the
+arriving chip consumed. All passed and the harness was deleted. What the
+harness cannot see is layout, easing, and copy, so checklist items 38 to 47
+carry the weight.
+
+`#status-message` was a single overwritten span. Two operations at once lost
+one of them: entering **What If?** on an unsaved run auto-saves the original,
+and picking a candidate before that POST lands used to replace "Saving run"
+with "Resuming", so the save became invisible while still holding the confirm
+and retry buttons disabled.
+
+Three more passes followed once it could be seen on screen, all folded into the
+notes below. The second made chips quiet, gave messages a subject, restored
+the ellipsis in cycle mode, and gave the box real width. The third replaced
+the upward column with a leftward row, and split each chip's word and
+ellipsis into separate spans, which is what properly fixed cycle mode. The
+fourth was motion: chips rise in and step aside going out, neighbours ease
+rather than snap, and saved paths stopped depending on which branch wrote
+them. See the three "What the Nth pass changed" sections after the two traps.
+
+- **The split is by lifetime, not by category.** Work in flight gets a
+  transient chip; the run's *resting state* stays in the footer. That is the
+  part worth carrying forward, because the resting line is also what
+  `saveSessionState` captures ([app.js](src/web/static/app.js),
+  `statusMessage.textContent`), so drawing the line there meant session
+  persistence needed **no changes at all**. Chips can expire without taking
+  any record with them, and an error that scrolls away is still on screen
+  underneath. The second pass sharpened this into a rule: a chip says only
+  what is *happening* and never what *happened*, so every outcome has exactly
+  one home.
+- **The enabling refactor had its precedent one function above it.**
+  `denoiseReveal` already stored its timer on the element, with a comment
+  saying it did so "so independent targets can animate simultaneously without
+  one cancelling the other". But `startStatusDots` / `startStatusCycle` /
+  `stopStatusDots` kept module-level `statusDotsTimer` / `statusCycleTimer` /
+  `statusDotsCount`, so two chips could not animate their own dots. Moving
+  those onto the element and giving the three functions an `el` parameter is
+  what the rest composes on.
+- **Chips live on the footer's own row.** `#status-message` sits inside
+  `#status-stack`, a right-anchored flex row, and chips are inserted before
+  it, so they extend leftward from the resting line without ever displacing
+  it. (It began as a bottom-anchored absolute column growing upward; see
+  "What the third pass changed".)
+- **Bounded at four rather than scrollable.** The real ceiling is two (one
+  run; `saveRun` guards itself with `isSaving`), so a scroll region would
+  have been dead code. The cap exists so an unforeseen caller cannot push an
+  unbounded run of chips out under the fade, costing layout while unreadable.
+
+### Two things a future change here will trip over
+
+**`resetStatus()` must stay footer-only.** It is called immediately before
+`startRunStatus(editRunLabel(...))` in both `doSubstitute` and
+`doGuidedResume`, which is precisely the moment a save may be in flight. If it
+ever clears the stack, the exact bug this pass fixed comes straight back.
+There is a comment on it saying so.
+
+**A chip's slot is held until it fades, not until it is retired.**
+`statusChips` holds chips that own a slot, and a departing chip still owns one
+because it is still on screen; it leaves the list when dismissal *starts*,
+which is what makes a late `statusRetire` a no-op rather than a resurrection.
+A live chip persists indefinitely by design, since it stands for work still
+running, so any new caller of `statusPush` owns the obligation to retire its
+handle on every exit path, including failures. `startRunStatus` retires the
+previous handle for exactly this reason.
+
+### What the second pass changed
+
+- **Chips went quiet.** Having them report outcomes put "Done" directly above
+  "Done." and "Saved" above "Saved to results/...", which read as stutter and
+  was the only thing that ever put a second line in that corner during
+  ordinary use. A chip now just leaves when its work ends, and the footer
+  filling in *is* the handoff. `statusResolve`, `STATUS_CHIP_HOLD_MS`,
+  `_holdTimer`, and `.status-chip.is-error` all went with it; the five
+  terminal sites call `statusRetire`. `endRunStatus` takes no arguments now.
+- **Messages name their subject.** `saveRun` already computed `wasEdited` for
+  the Edit Frames lock, so hoisting it above the push yields "Saving original
+  run" / "Saving edited run" and a footer of "Saved <label> run to ...",
+  which matters because entering What If or Edit Frames saves on your behalf.
+  Resumes read "Running edit from frame X to Y" via `editRunLabel`; in
+  `doGuidedResume` the endpoint is a single `resumeTarget` local shared with
+  the request's `max_frames`, so the text and the wire cannot disagree.
+- **Cycle mode gained the ellipsis.** It had been suppressed on the theory
+  that re-diffusing the word was indicator enough, but that left the ellipsis
+  present on two text settings and absent on the third with nothing on screen
+  to explain it. First attempt made one pass reveal-then-tick with cycle mode
+  repeating the pass; the third pass replaced that with two genuinely
+  independent animations (below), which is what it should have been.
+- **The stack got real width.** `#status-stack` was sized by
+  `margin-left: auto`, but its only child is absolutely positioned, so the
+  box was zero-wide: `max-width: 100%` resolved against nothing and a long
+  saved path ran left underneath "Elapsed:". `flex: 1; min-width: 0` gives it
+  the leftover footer width, and the message clamps with an ellipsis at the
+  footer's own gap. Worth remembering if anything else is ever added to that
+  row.
+
+### What the third pass changed
+
+- **The column became a row.** Chips now extend leftward from the resting
+  message instead of stacking above it, which is what the maintainer wanted
+  from the start; the vertical version was the one place the design and the
+  build had diverged. `#status-stack-items` is gone: `#status-stack` is
+  itself the flex row (`justify-content: flex-end`, `overflow: hidden`), so
+  the absolute positioning, the reserved `min-height`, and the `z-index` that
+  existed only to let a column escape the footer all went with it.
+- **The separators need no JavaScript.** Two messages abutting in the same
+  accent green read as one sentence, so each item takes a middle dot from
+  whatever precedes it. Chips are inserted *directly before* the message, so
+  `.status-chip + #status-message:not(:empty)` matches exactly when a chip is
+  up, and `.status-chip + .status-chip` covers the rest. The subtlety worth
+  keeping: a separator belongs to the item on the *right* of the gap, so it
+  has to track the chip on its left or it holds full strength through that
+  chip's fade and then blinks out. Keying it on
+  `.status-chip:not(.is-visible) + ...` handles both directions at once,
+  fading it in with an arriving chip too.
+- **The message never yields, but it still truncates.** Both it and the chips
+  are `flex-shrink: 0`, so overflow spills off the *left* edge, where the
+  clip and the mask fade are, making the oldest chip the thing that gives
+  way. `max-width: 100%` on the message then caps it against the row, so it
+  ellipsizes only when it alone is too long. Do not give it `flex-shrink: 1`
+  to "make room": with the chips fixed it would become the only shrinkable
+  item and get squeezed first, which is backwards. All of this is cosmetic to
+  the data, since `saveSessionState` persists `textContent`.
+- **The fade is free of JavaScript too.** A left-edge `mask-image` gradient
+  can stay on permanently because the row is right-anchored, so content only
+  reaches the faded band when it genuinely overflows. Shipped with the
+  `-webkit-` prefix as well, for the WebKitGTK desktop window.
+- **The dots got their own span, and their own timer.** The chip is now
+  `.status-chip-text` plus `.status-chip-dots`, the latter `width: calc(3ch +
+  0.12em)`: three monospace characters plus the footer's `letter-spacing`
+  applied to each. Two things follow. The chip is one fixed width for life,
+  which a right-anchored row needs (any width change shoves every chip to its
+  left), and the word and the ellipsis can animate independently, so the dots
+  tick continuously in *all* three text modes. That is what actually fixed
+  cycle mode: the old collapse was never the dot count, it was
+  `denoiseReveal` writing the bare word into the shared text node and
+  dropping the padding for the length of each re-diffusion.
+
+### What the fourth pass changed
+
+The row was correct by then and still read badly, because every motion in it
+was either wrong-way or missing. Three fixes, one of them in the backend.
+
+- **A chip has three states, not two.** Sharing one rule between "not yet
+  entered" and "leaving" meant a dismissed chip transitioned *back* to its
+  entrance offset. With the entrance coming from the right, that walked the
+  fading chip into the resting line and printed the two over each other, which
+  nothing could catch at runtime: transforms move no layout, so the message
+  never knew. `.is-leaving` is now its own class, drifting left, away from the
+  line taking over from it, and shortened to 150ms because by then the footer
+  already carries the outcome. `STATUS_CHIP_FADE_MS` matches it, as always.
+- **The entrance rises from the window edge.** `--status-rise: 24px` on
+  `#status-stack` is the footer's 8px bottom padding plus `#app`'s 16px, and it
+  feeds both the chip's starting offset and the clip, so the two cannot drift
+  apart. Getting the rise required dropping `overflow: hidden` for
+  `clip-path: inset(0 0 calc(-1 * var(--status-rise)) 0)`: overflow can only
+  clip both axes, and the left/right clamp is the half that has to stay.
+  (It is also why the row's baseline alignment survived; an `overflow` value
+  makes the box a scroll container, whose baseline is its margin edge rather
+  than its text.) Negative insets are well-supported and are the standard way
+  to clip on three sides. The offsets live on the `translate` longhand so
+  `transform` stays free for the FLIP below; the two compose rather than
+  overwrite.
+- **`statusRowReflow` eases every sideways jump.** Flex has no transition for
+  "the item beside me changed width", so a chip arriving, a chip's node
+  finally leaving, and the resting line filling in all snapped their
+  neighbours across in one frame. It is a plain first-last-invert-play:
+  measure, mutate, hand each moved chip its former position as a `transform`,
+  force a reflow, release. Two details are load-bearing. It reads its set from
+  the **DOM**, not `statusChips`, because a chip midway through its fade has
+  already left that list but still holds row width and is the likeliest thing
+  to be shoved; and `.is-leaving` therefore has to keep `transform` in its
+  transition list, or that chip's slide would snap. It no-ops under
+  `prefersReducedMotion`. Wired at six sites: the insert, the deferred
+  removal, and the five terminal messages.
+- **Saved paths agree between branches.** The save endpoint reaches its folder
+  two ways, and a fresh save stayed relative while an in-place update went
+  through `_existing_run_dir`, which must `resolve()` for its traversal guard.
+  So the same message read `results/...` after one save and
+  `/home/you/.../results/...` after the next, purely as an artifact of which
+  branch ran. `_display_run_path` normalizes at the one point both branches
+  meet, leaving the guard untouched, and falls back to the full path when the
+  run is genuinely outside the repo (a symlinked `results`, or a server
+  started elsewhere), which is an operating condition rather than a broken
+  invariant. Covered by `tests/web/test_display_run_path.py`, including the
+  case that asserts the two branches produce one string.
+
+**Previous pass: three finishing touches on the comparison surfaces.** Frontend
 only; `pytest` (79/79), `node --check`, ReadLints, and the 70-column audit are
 clean. `withAlpha` was checked head-on in Node against all four hues plus the
 zero-alpha case a dark pin produces, since a bad hex parse would fail silently
@@ -1265,6 +1460,80 @@ The generator crossfade pass (all on the **generation** page, not Analytics):
     colored ring around it and no white edge inside it. Check the entropy
     chart too: its swatches show the hovered bar's own ramp color and should
     be unchanged apart from losing the same white edge.
+38. **The original bug is gone.** Generate a run and do **not** save it. Enter
+    **What If?**, which auto-saves the original in the background, and pick a
+    candidate immediately. Both *Saving original run* and *Running edit from
+    frame N to end* must be up at the same time, side by side on one row
+    separated by a faint dot, the resume nearest the resting message, each
+    animating its own dots independently. Before this pass the save's message
+    vanished. Let both finish: each should drift left and fade as its work
+    ends, taking its separator with it and leaving *Done.* alone at the
+    right.
+39. **The single-message case looks unchanged.** Generate a plain run with
+    nothing else happening. The *Running* text must sit on the same baseline
+    as *Step* and *Elapsed*, at the far right where the status message has
+    always sat, with nothing above or below it. This is the detail most
+    likely to be a pixel off, since the row's alignment is no longer pinned
+    by hand the way the old absolute column was.
+40. **The footer keeps the record, and only the footer.** Save a completed
+    run. The chip reads *Saving original run* and then disappears as the
+    footer settles on *Saved original run to results/...*; at no point should
+    two lines say the same thing. Navigate to Analytics and back: the footer
+    line must still be there (it is what `saveSessionState` persists) and
+    there should be no leftover chip. Then force a failure if you can (stop
+    the server mid-save): the chip just goes, and the footer carries the full
+    error text in red. Save an edited run too and confirm both the chip and
+    the footer say *edited* rather than *original*, **and that both saves
+    report the same shape of path**: `results/<run>`, never an absolute
+    `/home/...` one. That asymmetry was the bug this pass fixed, and the
+    edited save is the branch that used to show the long form.
+41. **Nothing lingers or leaks.** Run several generate/save cycles in a row
+    and confirm chips always drain, never pile up permanently, and never
+    leave a half-faded ghost or an orphaned separator dot. Retry a run while
+    one is going (Generate again after an error) and confirm the old chip
+    goes rather than sitting there animating forever.
+42. **The ellipsis animates in all three text modes, at a fixed width.** In
+    Settings, cycle through the diffusion text effect (off, default, cycle)
+    and start a run each time. The dots must tick in all three. In *Cycle*
+    watch the word specifically: it re-diffuses every second or so, and the
+    dots must keep ticking straight through that, with the message's left
+    edge dead still. Any horizontal twitch as the word re-diffuses, or as the
+    dot count passes through zero, means the fixed slot has been lost.
+43. **Long messages clamp instead of colliding.** Save a run whose results
+    path is long (a deep output directory, or just narrow the window). The
+    footer line must truncate with an ellipsis at a small gap to the right of
+    *Elapsed:*, never overlapping or sliding under it. Widen the window again
+    and it should return to the full path. Note the boundary sits further
+    right on diffusion runs, where the commit legend occupies that space.
+44. **The row gives way at the left, not the right.** Narrow the window with
+    two messages up (easiest during a What If auto-save) until they no longer
+    fit. The oldest must fade out against the left edge rather than being cut
+    with a hard vertical edge, and the resting message on the right must keep
+    its full width throughout: it should never be the thing squeezed to make
+    room for a chip.
+45. **Chips rise in and step aside going out.** Start a run and watch the
+    message appear: it should rise from below the row, out of the window's
+    bottom edge, fading as it comes, not slide in from the right. Then watch
+    one end. It must drift *left*, away from the resting line, and be gone
+    quickly. The specific failure to look for is the fading text and the
+    footer line printing over each other for a moment, which is what the
+    old shared entrance/exit rule did. Check the rise clears the footer's
+    padding cleanly rather than appearing to start mid-air; if it looks
+    wrong, `--status-rise` in `style.css` is the single knob, and it must
+    stay equal to the footer's bottom padding plus `#app`'s.
+46. **Neighbours slide, they do not jump.** With one chip up, start a second
+    operation (the What If auto-save overlap is easiest). The first chip must
+    *glide* left as the new one arrives, not teleport. Then let a chip finish
+    and watch the survivors glide back right. Hardest case, and the one worth
+    doing deliberately: save a run with a long path while a chip is still
+    up, so the resting line grows from empty to its full width in one go;
+    the chip should ease across rather than being flung. Then turn on the
+    OS "reduce motion" setting and confirm all of this degrades to plain
+    fades with no sliding at all.
+47. **The row does not fight the other floating surfaces.** Trigger a model
+    download so the draggable download toast appears: at its default
+    bottom-left it should not touch the row at bottom-right. Dragging the
+    toast onto the row is expected to overlap and is not a bug.
 
 **0. The comparison surfaces (agreed with the maintainer, partly shipped).** The
 timing foundation exists to serve these, and the unifying idea is settled: **the
@@ -1303,13 +1572,14 @@ anywhere the mark type cannot show two runs at full opacity.
   summary rather than only the combined one. The marker is the valuable one:
   the two lines separate visibly, but nothing yet names the frame where they
   do.
-- **Status message stack** (the one piece with no dependency on any of this):
-  `#status-message` is a single overwritten span, and both existing toast systems
-  (the draggable download toast, the analytics delete toast) are single-slot. The
-  split that makes it tractable: leave the steady-state readouts (`Step`,
-  `Elapsed`, prefs) in the footer and lift only the **event** messages into a
-  stack, which is what makes "Saving run" and "Resuming" coexist. Watch for
-  collision with the download toast, which is fixed-position and drag-positioned.
+- ~~Status message stack~~ **shipped this session** (see "Recently shipped").
+  One correction to the framing this entry had: the split that mattered was
+  not footer readouts versus event messages, since `Step` and `Elapsed` were
+  already their own elements. It was *inside* `#status-message`, between work
+  in flight and the run's resting state. The download toast turned out not to
+  collide, since it defaults to bottom-left and the stack is bottom-right,
+  though a user who drags it there can still overlap it; that was judged not
+  worth constraining a drag surface over.
 
 **1. State-space models: Mamba-3 (new model class).** A genuinely new xAI
 direction: SSMs compress all context into a fixed-size recurrent state, so they

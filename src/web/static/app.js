@@ -56,6 +56,8 @@ var statusElapsed =
   document.getElementById("status-elapsed");
 var statusMessage =
   document.getElementById("status-message");
+var statusStack =
+  document.getElementById("status-stack");
 var loadingOverlay =
   document.getElementById("loading-overlay");
 var validationHint =
@@ -1447,8 +1449,12 @@ function handleFrame(data) {
 function handleDone(data) {
   setGenerating(false);
   isResuming = false;
-  stopStatusDots();
-  statusMessage.textContent = "Done.";
+  endRunStatus();
+  // The chip is still fading as the line fills in beneath it, so
+  // ease the row's new shape instead of snapping the chip sideways.
+  statusRowReflow(function () {
+    statusMessage.textContent = "Done.";
+  });
   if (data.final_text) {
     lastFinalText = data.final_text;
   }
@@ -1489,7 +1495,7 @@ function handleDone(data) {
 function handleError(data) {
   setGenerating(false);
   isResuming = false;
-  stopStatusDots();
+  endRunStatus();
   if (remaskMode !== null) {
     // A resume or substitution truncates the run before the worker
     // answers, so a rejected request would otherwise strand the user
@@ -1497,8 +1503,10 @@ function handleError(data) {
     restoreEditSnapshot();
     resetGuidedMode();
   }
-  statusMessage.textContent =
-    "Error: " + (data.message || "unknown");
+  statusRowReflow(function () {
+    statusMessage.textContent =
+      "Error: " + (data.message || "unknown");
+  });
   statusMessage.style.color = "var(--danger)";
   setTimeout(function () {
     statusMessage.style.color = "";
@@ -3672,7 +3680,8 @@ function doSubstitute(position, tokenId) {
   setSaveAvailable(false);
   resetStatus();
   setGenerating(true);
-  startStatusDots("Resuming");
+  // A substitution always resamples to the end of the run.
+  startRunStatus(editRunLabel(position, null));
 
   ws.send(JSON.stringify({
     type: "substitute",
@@ -3933,10 +3942,18 @@ function doGuidedResume(action) {
   remaskMode = "generating";
   updateGuidedUI();
 
+  // One source for where the branch stops, so the message on screen
+  // and the request on the wire cannot drift apart. Null means run to
+  // the end, which is both the "resume to end" action and the
+  // fallback when no target frame was captured.
+  var resumeTarget = (
+    action === "another" && guidedTargetFrame !== null
+  ) ? guidedTargetFrame : null;
+
   setSaveAvailable(false);
   resetStatus();
   setGenerating(true);
-  startStatusDots("Resuming");
+  startRunStatus(editRunLabel(frameIndex, resumeTarget));
 
   var message = {
     type: "resume",
@@ -3944,12 +3961,8 @@ function doGuidedResume(action) {
     remask_positions: positions,
   };
 
-  if (
-    action === "another"
-    && guidedTargetFrame !== null
-  ) {
-    message.max_frames =
-      guidedTargetFrame - frameIndex + 1;
+  if (resumeTarget !== null) {
+    message.max_frames = resumeTarget - frameIndex + 1;
   }
 
   ws.send(JSON.stringify(message));
@@ -4072,13 +4085,6 @@ function setGenerating(active) {
   }
 }
 
-// Animated "<base>..." status where only the trailing dots cycle
-// (3 -> 0 -> 1 -> 2 -> 3 ...), padded with non-breaking spaces so
-// the base word stays put in the right-aligned status slot.
-var statusDotsTimer = null;
-var statusDotsCount = 3;
-var statusCycleTimer = null;
-
 // Block glyphs for the optional "diffusion-style text" reveal.
 var DENOISE_GLYPHS = "\u2591\u2592\u2593";
 
@@ -4197,57 +4203,263 @@ function denoiseDissolve(el, onDone) {
   el._denoiseTimer = setInterval(render, 40);
 }
 
-// Cycle mode: re-diffuse the base word, hold the resolved text briefly,
-// then diffuse again, looping until stopStatusDots. The re-diffusion is
-// the activity indicator, so the trailing dots are omitted here.
+var STATUS_DOTS_MS = 400;
+
+// How long the resolved word rests before re-diffusing in cycle mode.
+// It no longer has to line up with the dots: they tick on their own
+// continuous timer, in their own span, so the two animations cannot
+// interfere however their periods fall.
 var STATUS_CYCLE_HOLD_MS = 700;
 
-function startStatusCycle(base) {
-  var runOnce = function () {
-    denoiseReveal(statusMessage, base, function () {
-      statusCycleTimer = setTimeout(runOnce, STATUS_CYCLE_HOLD_MS);
-    });
-  };
-  runOnce();
-}
-
-function startStatusDots(base) {
-  stopStatusDots();
-  statusDotsCount = 3;
-  statusMessage.style.color = "";
-
-  if (
-    diffusionEffectActive()
-    && appSettings.diffusionTextMode === "cycle"
-  ) {
-    startStatusCycle(base);
-    return;
-  }
-
-  // Default: reveal the base word once (denoise effect when enabled),
-  // then cycle the trailing dots on the resolved text.
-  denoiseReveal(statusMessage, base, function () {
-    var render = function () {
-      var dots = ".".repeat(statusDotsCount);
-      var pad = "\u00A0".repeat(3 - statusDotsCount);
-      statusMessage.textContent = base + dots + pad;
-      statusDotsCount = (statusDotsCount + 1) % 4;
-    };
-    render();
-    statusDotsTimer = setInterval(render, 400);
+// Diffuse the word into the chip, and in cycle mode keep re-diffusing
+// it on a loop. Touches only the word's span, never the ellipsis
+// beside it.
+//
+// Cycle mode used to suppress the dots entirely, on the grounds that
+// re-diffusing the word was indicator enough. That left the ellipsis
+// present on two text settings and absent on the third for no reason
+// a user could see, and routing both through one text node was what
+// forced the choice: rewriting the word meant rewriting the dots.
+function statusWordPass(el, base, cycle) {
+  denoiseReveal(el._textEl, base, function () {
+    if (!cycle) {
+      return;
+    }
+    el._cycleTimer = setTimeout(function () {
+      statusWordPass(el, base, true);
+    }, STATUS_CYCLE_HOLD_MS);
   });
 }
 
-function stopStatusDots() {
-  cancelDenoise(statusMessage);
-  if (statusDotsTimer !== null) {
-    clearInterval(statusDotsTimer);
-    statusDotsTimer = null;
+// Animated "<base>..." activity text: the word reveals (once, or
+// repeatedly in cycle mode) while the trailing dots run 3 -> 0 -> 1
+// -> 2 -> 3 beside it, independently and without pause.
+//
+// Every timer lives on the element rather than on the module, for the
+// same reason denoiseReveal's does: the status row runs one of these
+// per chip, and a save animating its dots must not cancel a run
+// animating its own.
+function startStatusDots(el, base) {
+  stopStatusDots(el);
+  el._dotsCount = 3;
+  var render = function () {
+    el._dotsEl.textContent = ".".repeat(el._dotsCount);
+    el._dotsCount = (el._dotsCount + 1) % 4;
+  };
+  render();
+  el._dotsTimer = setInterval(render, STATUS_DOTS_MS);
+  var cycle = diffusionEffectActive()
+    && appSettings.diffusionTextMode === "cycle";
+  statusWordPass(el, base, cycle);
+}
+
+function stopStatusDots(el) {
+  cancelDenoise(el._textEl);
+  if (el._dotsTimer) {
+    clearInterval(el._dotsTimer);
+    el._dotsTimer = null;
   }
-  if (statusCycleTimer !== null) {
-    clearTimeout(statusCycleTimer);
-    statusCycleTimer = null;
+  if (el._cycleTimer) {
+    clearTimeout(el._cycleTimer);
+    el._cycleTimer = null;
   }
+}
+
+// ---- Status stack ----
+//
+// The footer message is a single slot, so two operations running at
+// once used to overwrite each other: auto-saving the pre-edit run and
+// then picking a What If candidate left only "Resuming" on screen,
+// with no sign the save was still in flight.
+//
+// The split that fixes it is by lifetime, not by category. A chip
+// says only what is *happening*; where the run *stands* (Done, Saved
+// to..., an error) belongs to the footer, which is also what
+// saveSessionState persists.
+//
+// Chips deliberately do not report their own outcome. Letting them
+// meant "Done" sat on top of "Done." and "Saved" on top of "Saved to
+// results/...", which read as stutter, and it was the only thing that
+// ever put a second line into an already crowded corner. A chip
+// leaving as the footer fills in is the handoff, so silence is the
+// success signal and the footer carries every word of the result.
+//
+// Chips are inserted directly before the resting message and so
+// extend leftward from it, newest nearest the footer line, oldest
+// furthest out. The row clips and fades at its left edge, against the
+// gutter the footer's own gap leaves before the readouts.
+
+// Two concurrent operations is the real ceiling (one run, and saveRun
+// guards itself with isSaving), so this bound is slack. It exists so
+// an unforeseen caller cannot push an unbounded run of chips out
+// under the fade, where they cost layout while being unreadable.
+var STATUS_STACK_MAX = 4;
+
+// Must match the .status-chip.is-leaving transition in style.css: the
+// chip is removed from the DOM only once its fade has finished.
+var STATUS_CHIP_FADE_MS = 150;
+
+// Chips currently owning a slot. A chip leaves this list the moment
+// it starts to dismiss, not when its node is finally removed, so a
+// late retire cannot bring a departing chip back.
+var statusChips = [];
+
+// Run `mutate`, then animate away the sideways jump it caused.
+//
+// Flex offers no transition for "the item beside me changed width",
+// so a chip arriving, a chip's node finally leaving, or the resting
+// message growing all snap their neighbours across instantly. This is
+// the standard first-last-invert-play: measure, mutate, hand each
+// moved chip its former position as a transform, then release it so
+// the CSS transition carries it home.
+//
+// The offset goes on `transform` while the chips' own entrances and
+// exits use the `translate` longhand, so a chip can be sliding
+// sideways and rising at the same time without either being lost.
+function statusRowReflow(mutate) {
+  if (!statusStack || prefersReducedMotion()) {
+    mutate();
+    return;
+  }
+  // Read from the DOM rather than statusChips: a chip that is midway
+  // through its fade has already left that list but still holds row
+  // width, and it is the one most likely to be shoved, since the
+  // resting line usually fills in as it goes.
+  var moved = Array.prototype.slice.call(
+    statusStack.querySelectorAll(".status-chip")
+  );
+  var before = moved.map(function (chip) {
+    return chip.getBoundingClientRect().left;
+  });
+  mutate();
+  for (var i = 0; i < moved.length; i++) {
+    var chip = moved[i];
+    var delta =
+      before[i] - chip.getBoundingClientRect().left;
+    if (delta === 0) {
+      continue;
+    }
+    chip.style.transition = "none";
+    chip.style.transform =
+      "translateX(" + delta + "px)";
+    // Commit the inverted position before the transition returns,
+    // or the browser coalesces both into no visible movement.
+    void chip.offsetWidth;
+    chip.style.transition = "";
+    chip.style.transform = "";
+  }
+}
+
+// Raise a chip for an operation that has just started, and hand back
+// the handle its caller retires when the operation ends.
+function statusPush(text) {
+  if (!statusStack) {
+    return null;
+  }
+  var chip = document.createElement("span");
+  chip.className = "status-chip";
+  // The word and the ellipsis get separate spans so each can animate
+  // without rewriting the other, and so the dots occupy a slot sized
+  // in CSS instead of being padded out with spaces. The chip is then
+  // one fixed width for its whole life, which a right-anchored row
+  // needs: any width change here shoves every chip to its left.
+  chip._textEl = document.createElement("span");
+  chip._textEl.className = "status-chip-text";
+  chip._dotsEl = document.createElement("span");
+  chip._dotsEl.className = "status-chip-dots";
+  chip.appendChild(chip._textEl);
+  chip.appendChild(chip._dotsEl);
+  // Wrapped so the chips already up slide aside rather than jumping.
+  // The new chip is outside the snapshot either way (it is not in the
+  // DOM yet), which is right: it has its own entrance.
+  statusRowReflow(function () {
+    statusStack.insertBefore(chip, statusMessage);
+    statusChips.push(chip);
+  });
+  statusStackTrim();
+  startStatusDots(chip, text);
+  // Force a reflow so the browser has the hidden state to animate
+  // from; without it the chip is painted visible from the start.
+  void chip.offsetWidth;
+  chip.classList.add("is-visible");
+  return chip;
+}
+
+// Take a chip down, because its operation finished or was superseded.
+// A no-op for a handle that has already left, so a promise landing
+// after its chip was retired or trimmed does nothing.
+function statusRetire(chip) {
+  if (!chip) {
+    return;
+  }
+  if (statusChips.indexOf(chip) === -1) {
+    return;
+  }
+  statusChipDismiss(chip);
+}
+
+function statusStackTrim() {
+  while (statusChips.length > STATUS_STACK_MAX) {
+    statusChipDismiss(statusChips[0]);
+  }
+}
+
+// The run's chip. Generating, substituting, and guided resume are
+// mutually exclusive and all finish in handleDone or handleError,
+// which are socket handlers with no closure to carry a handle, so the
+// one in flight is tracked here instead. A save's handle is a local,
+// which is what lets the two coexist.
+var runStatusHandle = null;
+
+function startRunStatus(text) {
+  // A retry that never got a terminal message would otherwise leave
+  // its chip animating forever.
+  statusRetire(runStatusHandle);
+  runStatusHandle = statusPush(text);
+}
+
+// Names the stretch a resume is about to regenerate. "Resuming" said
+// only that something had restarted, which reads as ambiguous next to
+// a plain run; the frame range says which part of the output is being
+// replaced, and that is what you are waiting to watch change. A null
+// target means the branch runs to the end, which is always the case
+// for a left-to-right substitution.
+function editRunLabel(fromFrame, toFrame) {
+  var target = toFrame === null ? "end" : String(toFrame);
+  return "Running edit from frame " + fromFrame
+    + " to " + target;
+}
+
+// Called from handleDone and handleError alike: the chip says nothing
+// about the outcome, so both endings look the same here and the
+// footer is left to draw the distinction.
+function endRunStatus() {
+  statusRetire(runStatusHandle);
+  runStatusHandle = null;
+}
+
+// Give up the slot now, release the node after the fade. Every timer
+// the chip owns is cleared here, so nothing can write to a node on
+// its way out of the document.
+function statusChipDismiss(chip) {
+  var at = statusChips.indexOf(chip);
+  if (at !== -1) {
+    statusChips.splice(at, 1);
+  }
+  stopStatusDots(chip);
+  // is-leaving rather than merely dropping is-visible: the two states
+  // need different offsets, and one rule cannot serve both without
+  // sending a departing chip back the way it came in.
+  chip.classList.remove("is-visible");
+  chip.classList.add("is-leaving");
+  chip._exitTimer = setTimeout(function () {
+    chip._exitTimer = null;
+    if (chip.parentNode) {
+      statusRowReflow(function () {
+        chip.parentNode.removeChild(chip);
+      });
+    }
+  }, STATUS_CHIP_FADE_MS);
 }
 
 function setSaveAvailable(available) {
@@ -4255,6 +4467,11 @@ function setSaveAvailable(available) {
   btnSave.disabled = !(available && frameHistory.length > 0);
 }
 
+// Clears the footer readouts only, never the stack. doSubstitute and
+// doGuidedResume both call this immediately before starting a resume,
+// which is exactly when the pre-edit run's auto-save may still be in
+// flight; clearing the chips here would put back the overwriting this
+// stack exists to fix.
 function resetStatus() {
   statusStep.textContent =
     "Step -/-";
@@ -4363,7 +4580,7 @@ function startGeneration() {
   clearSessionState();
   resetStatus();
   setGenerating(true);
-  startStatusDots("Running");
+  startRunStatus("Running");
 
   var payload = getParamValues();
   payload.type = "generate";
@@ -4543,17 +4760,26 @@ function saveRun() {
     clearTimeout(saveCheckTimer);
     saveCheckTimer = null;
   }
+  // Captured now so the async success handler locks Edit Frames only
+  // when the saved run actually carried edits, and so the messages
+  // below name which of the two runs is being written. That is worth
+  // stating: entering What If or Edit Frames triggers a save of the
+  // pre-edit run on your behalf, and an unlabelled "Saving run" gives
+  // no clue that is what you are watching.
+  var wasEdited = remaskEdits.length > 0;
+  var runLabel = wasEdited ? "edited" : "original";
+
   btnSave.classList.remove("is-saved");
   btnSave.classList.add("is-saving");
-  startStatusDots("Saving run");
+  // A local, so this chip survives a run starting underneath it. That
+  // is the whole point: entering What If auto-saves the pre-edit run,
+  // and picking a candidate before the POST lands used to overwrite
+  // this with the resume's message.
+  var saveStatus = statusPush("Saving " + runLabel + " run");
 
   var totalElapsed = perFrameElapsed.length > 0
     ? perFrameElapsed[perFrameElapsed.length - 1]
     : null;
-
-  // Captured now so the async success handler locks Edit Frames only
-  // when the saved run actually carried edits.
-  var wasEdited = remaskEdits.length > 0;
 
   var payload = {
     model: activeModelId,
@@ -4617,7 +4843,6 @@ function saveRun() {
       // Releases the in-flight lock; the success branch below
       // re-applies it permanently once editedRunSaved is set.
       updateEditFramesLock();
-      stopStatusDots();
       if (result.success) {
         // Flash a glowing check for half a second, then revert to
         // the (disabled) arrow. It stays disabled to prevent a
@@ -4639,19 +4864,30 @@ function saveRun() {
         var savedParts = String(result.path || "").split("/");
         lastSavedRunId = savedParts[savedParts.length - 1] || null;
         showAnalyticsCue(lastSavedRunId || "");
-        statusMessage.textContent =
-          "Saved to " + result.path;
+        statusRetire(saveStatus);
+        // The longest line the row ever shows, arriving while the
+        // save's chip is still on screen. Easing it is what keeps the
+        // chip from being flung left in a single frame.
+        statusRowReflow(function () {
+          statusMessage.textContent =
+            "Saved " + runLabel + " run to "
+            + result.path;
+        });
         statusMessage.style.color =
           "var(--accent)";
         // Persist LAST, so the session captures the final run id and
-        // "Saved to..." status (not the transient "Saving run..." text
-        // or a stale run id) and survives a round-trip to Analytics.
+        // the "Saved ... to ..." line rather than a stale run id, and
+        // survives a round-trip to Analytics. The in-flight text is
+        // never at risk here: it lives on a chip, not in the footer.
         saveSessionState();
       } else {
         btnSave.disabled = false;
-        statusMessage.textContent =
-          "Save failed: "
-          + (result.message || "unknown");
+        statusRetire(saveStatus);
+        statusRowReflow(function () {
+          statusMessage.textContent =
+            "Save failed: "
+            + (result.message || "unknown");
+        });
         statusMessage.style.color =
           "var(--danger)";
       }
@@ -4662,10 +4898,12 @@ function saveRun() {
       setSavingControls(false);
       updateGuidedUI();
       updateEditFramesLock();
-      stopStatusDots();
       btnSave.disabled = false;
-      statusMessage.textContent =
-        "Save failed: " + error.message;
+      statusRetire(saveStatus);
+      statusRowReflow(function () {
+        statusMessage.textContent =
+          "Save failed: " + error.message;
+      });
       statusMessage.style.color =
         "var(--danger)";
     });
