@@ -5,8 +5,6 @@
 
 "use strict";
 
-var settingHighlightCb =
-  document.getElementById("setting-highlight-tokens");
 var settingDiffusionCb =
   document.getElementById("setting-diffusion-text");
 var settingGpuTickerCb =
@@ -33,6 +31,9 @@ var settingsPanels =
 var appliedSettings = parseSettings(null);
 var stagedSettings = parseSettings(null);
 
+// highlightTokens is carried but never shown: its control moved to
+// each page's overlay drawer. Save writes this whole blob, so keeping
+// the field here is what stops a save from clobbering the checkbox.
 function cloneSettings(source) {
   return {
     highlightTokens: source.highlightTokens,
@@ -44,9 +45,6 @@ function cloneSettings(source) {
 
 // Mirror the staged settings into the controls.
 function syncControls() {
-  if (settingHighlightCb) {
-    settingHighlightCb.checked = stagedSettings.highlightTokens;
-  }
   if (settingDiffusionCb) {
     settingDiffusionCb.checked = stagedSettings.diffusionText;
   }
@@ -118,20 +116,19 @@ function saveStaged() {
   }, 300);
 }
 
+// Reset only what this page shows. highlightTokens is carried in the
+// same blob but controlled from the overlay drawers, so resetting it
+// from here would silently flip a switch the user cannot see.
 function resetStaged() {
+  var highlight = stagedSettings.highlightTokens;
   stagedSettings = cloneSettings(SETTINGS_DEFAULTS);
+  stagedSettings.highlightTokens = highlight;
   syncControls();
   updateButtons();
   setStatus("", false);
 }
 
 function wireControls() {
-  if (settingHighlightCb) {
-    settingHighlightCb.addEventListener("change", function () {
-      stagedSettings.highlightTokens = settingHighlightCb.checked;
-      updateButtons();
-    });
-  }
   if (settingDiffusionCb) {
     settingDiffusionCb.addEventListener("change", function () {
       stagedSettings.diffusionText = settingDiffusionCb.checked;

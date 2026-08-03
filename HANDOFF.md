@@ -134,6 +134,25 @@ token stack, the entropy chart's crossfade), each with its own control.
   `token-hover-highlight` to `#overlay-output` via `updateOverlayHoverHighlight`,
   which it never did before; the chart could light a token that a direct hover
   could not.
+- **Highlight tokens left the Settings page** for a checkbox in each page's
+  `#overlay-drawer-content` (`#overlay-highlight-tokens`, `.overlay-check`),
+  next to the tokens it acts on, applying immediately instead of through the
+  Settings stage/Save cycle. It defaults **on** now, via the `gpuTicker`-style
+  `parsed.highlightTokens !== false` in `parseSettings`, since a visible
+  control no longer needs discovering. Three things worth knowing:
+  - The value still lives in the shared `diffusion_settings` blob, read and
+    written through `overlaysReadHighlightTokens` /
+    `overlaysWriteHighlightTokens` in `overlays.js`, so both pages agree and
+    the value survives a restart.
+  - `settings.js` therefore has to keep carrying a field it no longer shows.
+    `cloneSettings` and `parseSettings` still include `highlightTokens`
+    because Save writes the whole blob; drop it there and saving Settings
+    silently clobbers the checkbox. `resetStaged` also preserves it, so
+    Reset cannot flip a switch that is not on that page.
+  - The status-bar `Highlighted Tokens: On/Off` readout is gone, along with
+    `updateStatusPrefs`. A visible checkbox makes a mirror redundant.
+  - The drawer is hidden until a run exists on both pages, so the checkbox
+    appears with the token view. That is also the only time it does anything.
 - **Popover pagination.** `.alt-heading` is now a flex row carrying an
   Original/Edited pager (`overlaysBuildAltHeading`) for positions at or past
   divergence where both runs captured candidates. Each page marks the token its
@@ -802,6 +821,18 @@ because runs saved before the previous pass carry no `original_alternatives`.
     remasked token and at the Heatmap's warm end, which is where the old orange
     disappeared. Analytics tokens should highlight on direct hover at all,
     which they previously did not.
+18d. **The highlight checkbox, and that nothing clobbers it.** The **Overlay**
+    drawer on both pages should carry a **Highlight tokens** checkbox, ticked
+    by default, taking effect the instant you toggle it. Untick it on the
+    generator, open Analytics, and confirm its drawer opens unticked too, then
+    toggle it there and confirm the generator agrees on return. Reload and
+    confirm it holds. The load-bearing regression check: with it **unticked**,
+    open the Settings page, change something (or just hit **Reset**), hit
+    **Save**, then go back and confirm the checkbox is still unticked.
+    Settings saves the whole blob and no longer shows this field, so a
+    clobber here is the failure mode to watch. The status bar should no
+    longer carry `Highlighted Tokens: On/Off`, and Settings' Appearance tab
+    should be down to the diffusion-text rows.
 18c. **Entropy profile marker.** On the generator, scrub to the **last** frame:
     the faint full-height guide should sit on the **final** column, not the
     second-to-last, and the nats readout at the right should report that

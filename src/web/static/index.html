@@ -138,6 +138,11 @@
           <span class="overlay-select-label">Overlay</span>
           <span id="overlay-select-mount"></span>
           <span id="diff-summary" hidden></span>
+          <label class="overlay-check"
+            title="Highlight the token under your cursor">
+            <input type="checkbox" id="overlay-highlight-tokens" />
+            <span>Highlight tokens</span>
+          </label>
         </div>
       </div>
       <details id="thinking-panel" hidden>
@@ -219,7 +224,6 @@
     <footer id="status-bar">
       <span id="status-step">Step -/-</span>
       <span id="status-elapsed">Elapsed: -</span>
-      <span id="status-highlight">Highlighted Tokens: Off</span>
       <span id="status-commit">
         <span id="commit-legend" hidden>
           <span class="commit-legend-label">early</span>
@@ -355,7 +359,7 @@
         <h3>Entropy &amp; alternatives</h3>
         <p>Confidence answers "how likely was the token it picked?". <strong>Entropy</strong> answers a different question: "how spread out was the model's whole distribution?". A token can be picked with modest confidence from two close rivals (low entropy, a real coin-flip between two options) or from thousands of vaguely plausible options (high entropy, genuinely unsure). Entropy is reported in <em>nats</em>: 0 means complete certainty, and about 5 nats is roughly an even choice among 150 tokens, which is about as torn as a language model gets.</p>
         <p>Autoregressive runs always capture it. Hovering a token adds an <em>Entropy</em> line to its tooltip, the <strong>Entropy</strong> overlay recolors tokens from cool blue (decisive) to hot amber (torn), and an <strong>entropy profile</strong> appears below the scrubber: one column per position, tall and hot where the model hesitated, with the column for your current frame highlighted. Hovering a token makes its column glow and shows that position's value, in nats, at the right of the profile. Because an autoregressive model decides each position exactly once, that profile reads across the sequence rather than over time.</p>
-        <p>The profile and the text <strong>cross-highlight</strong>, so you can read in either direction: hover a token to light its column, or sweep the profile to light the token behind any column that catches your eye. That one is always on, separate from the <em>Highlight tokens</em> setting, because it is a way of reading the run rather than a comfort preference.</p>
+        <p>The profile and the text <strong>cross-highlight</strong>, so you can read in either direction: hover a token to light its column, or sweep the profile to light the token behind any column that catches your eye. A token lit this way looks exactly like one under your cursor, since both mean the same thing. Sweeping the profile lights tokens whether or not <em>Highlight tokens</em> is ticked, because following a column back to its word is a way of reading the run rather than a comfort preference.</p>
         <p>Turn on the <strong>Alternatives</strong> hyperparameter before generating to also capture the <strong>top five candidates</strong> at each position. Hovering a token then opens a popover listing them with a probability bar each, and the one the model actually chose is highlighted. Whitespace and control tokens are shown with visible stand-ins (<code>&middot;</code> for a space, <code>&crarr;</code> for a newline) so an invisible candidate is still legible.</p>
 
         <h3>What If? (autoregressive counterfactuals)</h3>
@@ -397,10 +401,9 @@
         <p>Preferences live on a shared <strong>Settings</strong> page, opened from the <strong>gear icon</strong> in the header (the Main Menu and Analytics have the same gear). Changes are staged behind <strong>Save</strong> / <strong>Reset</strong>, saved on the server, and shared across every page:</p>
         <ul>
           <li><strong>Render diffusion-style text</strong>: dynamic status messages resolve from scrambled block-glyph noise, like a denoising pass; a <strong>Mode</strong> sub-setting picks <em>Default</em> (resolve once) or <em>Cycle</em> (keep re-diffusing while the status is active). Skipped automatically under reduced-motion.</li>
-          <li><strong>Highlight tokens</strong>: add a light hover highlight so the full span of the hovered token is easy to see.</li>
           <li><strong>Device tag ticker</strong>: the scrolling GPU / device readout on the model tag.</li>
         </ul>
-        <p>The status bar reflects the highlight toggle (<em>Highlighted Tokens: On/Off</em>). Hovering any token shows its position and confidence for the current frame.</p>
+        <p>One preference does not live there. <strong>Highlight tokens</strong> is a checkbox in the <strong>Overlay</strong> drawer, on this page and in the Analytics detail modal, because it acts on the tokens the drawer sits over. It is on by default, takes effect the moment you tick it rather than needing a Save, and is still remembered across sessions and shared between the two pages. Hovering any token shows its position and confidence for the current frame.</p>
 
         <h3>Analytics Suite</h3>
         <p>Click <strong>Analytics</strong> in the header to open the Analytics Suite. It reads saved runs from the <code>results/</code> directory and provides interactive charts for comparing generation behavior across configurations.</p>

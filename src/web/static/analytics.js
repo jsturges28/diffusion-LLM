@@ -39,6 +39,8 @@ var overlayDrawerHandle =
   document.getElementById("overlay-drawer-handle");
 var overlaySelectMount =
   document.getElementById("overlay-select-mount");
+var overlayHighlightCheckbox =
+  document.getElementById("overlay-highlight-tokens");
 var overlayOutput =
   document.getElementById("overlay-output");
 var overlayReadout =
@@ -1924,14 +1926,27 @@ function renderOverlayLayers(
 
 // The pointer-driven half of the highlight, which is pure CSS once
 // the class is on the container (see .token-hover-highlight in
-// style.css). Analytics never applied it before, which left the
-// chart-to-token direction lighting tokens that a direct hover
+// style.css). Analytics never applied it at all before, which left
+// the chart-to-token direction lighting tokens that a direct hover
 // could not.
+//
+// The preference is shared with the generator through the settings
+// blob, so the drawer checkbox here and the one there mean the same
+// thing rather than each page keeping its own idea.
 function updateOverlayHoverHighlight() {
+  var on = overlaysReadHighlightTokens();
+  if (overlayHighlightCheckbox) {
+    overlayHighlightCheckbox.checked = on;
+  }
   if (!overlayOutput) {
     return;
   }
-  overlayOutput.classList.add("token-hover-highlight");
+  overlayOutput.classList.toggle("token-hover-highlight", on);
+}
+
+function onOverlayHighlightToggle() {
+  overlaysWriteHighlightTokens(overlayHighlightCheckbox.checked);
+  updateOverlayHoverHighlight();
 }
 
 // ---- Cross-highlighting: token overlay <-> entropy chart ----
@@ -3441,7 +3456,12 @@ modalDelete.addEventListener("click", function (e) {
 
 wireOverlayDiffControls();
 wireOverlayScrubber();
-updateOverlayHoverHighlight();
+
+if (overlayHighlightCheckbox) {
+  overlayHighlightCheckbox.addEventListener(
+    "change", onOverlayHighlightToggle
+  );
+}
 
 if (runBlendInput) {
   runBlendInput.addEventListener("input", onRunBlendInput);
@@ -3476,7 +3496,12 @@ fetchSystemInfo().then(function (info) {
   }
 });
 
-// Hydrate durable UI state (the "new run" cue) from the server before
-// the first table render, so per-row dots reflect saved runs across
-// restarts. persistHydrate always runs its callback, even on failure.
-persistHydrate(loadAndRender);
+// Hydrate durable UI state (the "new run" cue and the shared settings
+// blob) from the server before the first render, so per-row dots
+// reflect saved runs across restarts and the drawer's highlight
+// checkbox opens on the value the generator last wrote.
+// persistHydrate always runs its callback, even on failure.
+persistHydrate(function () {
+  updateOverlayHoverHighlight();
+  loadAndRender();
+});

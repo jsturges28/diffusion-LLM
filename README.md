@@ -310,14 +310,16 @@ A collapsible **Overlay** drawer in the top-right of the output area recolors th
 
 Runs that captured **Alternatives** also get two xAI affordances. Hovering any token opens a **candidate popover** listing the top five tokens the model weighed at that position, with a proportional bar and probability each, and the one it actually chose marked. After a **What If?** branch, positions at or past the substitution get a small **Original** / **Edited** pager in the popover's heading, so you can flip between what the two runs were weighing at the same position; each page marks the token its own run drew, and only the Edited page is clickable while substitution is armed. Below the scrubber, an **entropy profile** draws one column per position, tall and hot where the model was torn, with the column for the frame under the scrubber highlighted and its value read out in nats. Because an autoregressive model samples each position exactly once, this is a profile across the sequence, not a trajectory of one position over time.
 
-The profile and the tokens **cross-highlight** in both directions: hovering a token lights its column, and hovering a column lights the token it belongs to. This is an analysis affordance rather than a reading aid, so it is always on, independent of the **Highlight tokens** preference.
+The profile and the tokens **cross-highlight** in both directions: hovering a token lights its column, and hovering a column lights the token it belongs to. A token lit from the profile looks identical to one under the cursor, since both mean "this token". Sweeping the profile lights tokens regardless of the **Highlight tokens** setting, because reading a column back to its word is an analysis affordance rather than a comfort preference.
 
-Persistent preferences live on a shared **Settings page** (`/settings.html`), reached from a **gear icon** in the header of the generator, the Main Menu, and Analytics. It has a left tab rail and stages changes behind **Save** / **Reset**; all settings are server-persisted and shared across pages:
+**Highlight tokens** itself is a checkbox in the **Overlay** drawer, on the generator and in the Analytics detail modal, rather than a Settings row: it acts on the tokens the drawer sits over, applies immediately without a Save step, and is on by default. The value is still server-persisted and shared between the two pages.
 
-- **Appearance** tab: **Render diffusion-style text** (dynamic status messages resolve from scrambled block-glyph noise, like a denoising pass, in the green palette, skipped automatically under `prefers-reduced-motion`; a **Mode** sub-setting picks **Default** to resolve once or **Cycle** to keep re-diffusing while the status is active, and the same effect drives small button interactions) and **Highlight tokens** (a light hover highlight so the full span of the hovered token is easy to see).
+The remaining persistent preferences live on a shared **Settings page** (`/settings.html`), reached from a **gear icon** in the header of the generator, the Main Menu, and Analytics. It has a left tab rail and stages changes behind **Save** / **Reset**; all settings are server-persisted and shared across pages:
+
+- **Appearance** tab: **Render diffusion-style text** (dynamic status messages resolve from scrambled block-glyph noise, like a denoising pass, in the green palette, skipped automatically under `prefers-reduced-motion`; a **Mode** sub-setting picks **Default** to resolve once or **Cycle** to keep re-diffusing while the status is active, and the same effect drives small button interactions).
 - **Interface** tab: **Device tag ticker** (the scrolling GPU/device readout).
 
-The status bar reflects the highlight toggle (`Highlighted Tokens: On/Off`). Hovering any token still shows its position (`Token X/total` for LLaDA, `Token: X` for DiffusionGemma) and confidence for that frame (masked tokens report 0).
+Hovering any token still shows its position (`Token X/total` for LLaDA, `Token: X` for DiffusionGemma) and confidence for that frame (masked tokens report 0).
 
 #### Analytics Suite
 
@@ -396,8 +398,10 @@ Clicking **Save** writes a timestamped folder under `results/` containing `metad
 - [x] What If lifecycle fixes: the button locks the moment Confirm is clicked and stays locked through the save, and Retry no longer desynchronizes the worker's run state (picking a candidate after a Retry used to fail with "not among the captured candidates")
 - [x] Edited-run timing alignment: a branch's `per_frame_elapsed` is cut at the splice like its sibling arrays and offset so it stays cumulative, putting the Timing chart on the same x axis as every other chart and making Elapsed the whole run rather than the branch; legacy runs are repaired at read time, and the pre-edit run's timing, confidence, and candidate sets are persisted for comparison
 - [x] Shared comparison layer: one token-span builder behind every path on both pages, so stacked layers are interactive (this repaired hover, the candidate popover, and entropy highlighting in Diff mode) with the more opaque layer owning the pointer; in Analytics a run-level Original/Edited crossfade on the token overlay's heading row drives the token view in every overlay mode and the entropy chart at once, each layer colored by its own run's values
-- [x] Entropy cross-highlighting in both directions on both pages (hover a bar or profile column to light its token, hover a token to light its bar), independent of the Highlight tokens preference
+- [x] Entropy cross-highlighting in both directions on both pages (hover a bar or profile column to light its token, hover a token to light its bar), with the entropy-driven direction independent of the Highlight tokens preference
 - [x] Candidate-popover pagination: positions at or past a What If substitution get Original/Edited arrows over the two runs' top-k sets, each page marking the token its own run drew
+- [x] One token-highlight look for both the pointer hover and the entropy-driven highlight, in neutral white so it survives the overlays' arbitrary backgrounds; Analytics gained the direct hover it never applied
+- [x] Highlight tokens moved out of Settings into each page's Overlay drawer, next to the tokens it acts on: applies immediately, defaults on, still server-persisted and shared across pages
 
 
 ## Roadmap

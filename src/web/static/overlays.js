@@ -538,16 +538,20 @@ function persistApplyHydrated(state) {
 // ---- Shared settings model (generator + settings page) ----
 //
 // Durable user preferences, persisted under SETTINGS_KEY (see
-// persistSet / PERSIST_KEYS). app.js applies the live effects; the
-// Settings page (settings.js) edits them. Both source their defaults
-// and parsing here so the schema lives in exactly one place. Commit
-// Order is intentionally not here: it is a per-view overlay option now,
-// not a saved preference.
+// persistSet / PERSIST_KEYS). Both pages source their defaults and
+// parsing here so the schema lives in exactly one place.
+//
+// Two fields are edited outside the Settings page. Commit Order left
+// long ago: it is a per-view overlay option, not a preference.
+// highlightTokens followed it, and is now a checkbox in each page's
+// overlay drawer, next to the tokens it affects. It stays in this
+// blob so one preference still governs both pages, which means
+// settings.js has to keep round-tripping a field it no longer shows.
 
 var SETTINGS_KEY = "diffusion_settings";
 
 var SETTINGS_DEFAULTS = {
-  highlightTokens: false,
+  highlightTokens: true,
   diffusionText: false,
   diffusionTextMode: "default",
   gpuTicker: true,
@@ -569,17 +573,45 @@ function parseSettings(raw) {
   try {
     var parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object") {
-      settings.highlightTokens = !!parsed.highlightTokens;
+      // Default on when the key is absent (older saved state), so a
+      // fresh profile meets the highlight rather than having to find
+      // a control for it. An explicit false is still honored.
+      settings.highlightTokens = parsed.highlightTokens !== false;
       settings.diffusionText = !!parsed.diffusionText;
       settings.diffusionTextMode =
         parsed.diffusionTextMode === "cycle" ? "cycle" : "default";
-      // Default on when the key is absent (older saved state).
       settings.gpuTicker = parsed.gpuTicker !== false;
     }
   } catch (_e) {
     // Corrupt storage: keep the defaults.
   }
   return settings;
+}
+
+// The stored settings, or the defaults when storage is unavailable
+// or empty. parseSettings never throws, so this is total.
+function overlaysLoadSettings() {
+  var raw = null;
+  try {
+    raw = localStorage.getItem(SETTINGS_KEY);
+  } catch (_e) {
+    // Storage unavailable: parseSettings(null) yields the defaults.
+  }
+  return parseSettings(raw);
+}
+
+// Read the one preference that lives outside the Settings page, so
+// both drawers agree without either of them owning the storage.
+function overlaysReadHighlightTokens() {
+  return overlaysLoadSettings().highlightTokens;
+}
+
+// Write it back through the whole blob, since the Settings page saves
+// the same key wholesale and a partial write would drop its fields.
+function overlaysWriteHighlightTokens(on) {
+  var settings = overlaysLoadSettings();
+  settings.highlightTokens = !!on;
+  persistSet(SETTINGS_KEY, JSON.stringify(settings));
 }
 
 // Field-wise equality, driving the Settings page Save/Reset enablement.

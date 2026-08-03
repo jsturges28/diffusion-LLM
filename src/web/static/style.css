@@ -2304,6 +2304,35 @@ input[type="checkbox"].app-checkbox:checked::after {
   color: var(--text-secondary);
 }
 
+/* View options that ride in the drawer beside the overlay picker.
+   Separated by a rule so the drawer reads as picker-then-toggles
+   rather than one undifferentiated row. */
+.overlay-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.overlay-check:hover {
+  color: var(--text-primary);
+}
+
+.overlay-check input[type="checkbox"] {
+  width: 11px;
+  height: 11px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
 /* Diff-overlay opacity sliders + blend toggle. Shown as a slim row in
    the scrubber area (below the output) when the Diff overlay is
    selected, so it never covers generated text. */

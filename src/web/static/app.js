@@ -81,10 +81,6 @@ var thinkingPanel =
 var thinkingContent =
   document.getElementById("thinking-content");
 
-// Settings are edited on the shared /settings.html page; the generator
-// only applies the persisted preferences (loadSettings/applySettings).
-var statusHighlight =
-  document.getElementById("status-highlight");
 // Header "new run saved" cue on the Analytics link.
 var linkAnalytics =
   document.getElementById("link-analytics");
@@ -122,6 +118,8 @@ var overlayDrawerHandle =
   document.getElementById("overlay-drawer-handle");
 var overlaySelectMount =
   document.getElementById("overlay-select-mount");
+var overlayHighlightCheckbox =
+  document.getElementById("overlay-highlight-tokens");
 var overlaySelect = null;
 // Track how the picker was last built so it is only rebuilt when
 // the option set actually changes (the Diff option appearing after
@@ -1696,9 +1694,14 @@ function tokenLabel(index, total) {
   return "Token: " + (index + 1);
 }
 
-// The per-token hover highlight is now a global preference,
-// independent of any coloring overlay.
+// The per-token hover highlight, independent of any coloring overlay.
+// Its control is the overlay drawer's checkbox rather than a Settings
+// row, so it sits next to the tokens it acts on; the value is still
+// persisted (and shared with Analytics) through the settings blob.
 function updateHoverHighlight() {
+  if (overlayHighlightCheckbox) {
+    overlayHighlightCheckbox.checked = appSettings.highlightTokens;
+  }
   if (!outputArea) {
     return;
   }
@@ -1706,6 +1709,12 @@ function updateHoverHighlight() {
     "token-hover-highlight",
     appSettings.highlightTokens
   );
+}
+
+function onOverlayHighlightToggle() {
+  appSettings.highlightTokens = overlayHighlightCheckbox.checked;
+  overlaysWriteHighlightTokens(appSettings.highlightTokens);
+  updateHoverHighlight();
 }
 
 // Select the active visual overlay from the picker and re-render.
@@ -2434,19 +2443,9 @@ function loadSettings() {
   appSettings = parseSettings(localStorage.getItem(SETTINGS_KEY));
 }
 
-// Reflect the applied settings in the status bar.
-function updateStatusPrefs() {
-  if (statusHighlight) {
-    statusHighlight.textContent =
-      "Highlighted Tokens: "
-      + (appSettings.highlightTokens ? "On" : "Off");
-  }
-}
-
-// Apply the (saved) settings to the live app: status bar, hover
-// highlight, and any active token coloring.
+// Apply the (saved) settings to the live app: hover highlight and any
+// active token coloring.
 function applySettings() {
-  updateStatusPrefs();
   updateHoverHighlight();
   // Toggling the effect starts/stops the Generate idle cycle live.
   updateGenerateIdleEffect();
@@ -4468,6 +4467,12 @@ if (overlayDrawerHandle) {
   });
 }
 
+if (overlayHighlightCheckbox) {
+  overlayHighlightCheckbox.addEventListener(
+    "change", onOverlayHighlightToggle
+  );
+}
+
 // Diff-overlay opacity sliders update the live layers directly;
 // the blend toggle re-renders (it changes the original layer's
 // coloring as well as the blend mode).
@@ -5072,7 +5077,6 @@ function boot() {
   loadSettings();
   loadPromptHistory();
   updatePromptHistoryUI();
-  updateStatusPrefs();
   updateHoverHighlight();
   refreshAnalyticsCue();
   fetchModels()
