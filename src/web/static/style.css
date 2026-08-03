@@ -2377,6 +2377,36 @@ input[type="checkbox"].app-checkbox:checked::after {
   border-top: 1px solid var(--border);
 }
 
+/* The run crossfade shares the diff row's label styling, but sits on
+   its own line: it is one control over the whole token view, not one
+   of a pair. */
+#run-blend-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+}
+
+#run-blend-row[hidden] {
+  display: none;
+}
+
+#run-blend-row .diff-edit-label {
+  color: var(--accent);
+}
+
+#run-blend {
+  width: 160px;
+  height: 3px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
 .diff-slider-row {
   display: flex;
   align-items: center;

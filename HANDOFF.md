@@ -71,7 +71,144 @@ compare runs in an analytics suite.
 
 ## Recently shipped (this session)
 
-**Latest pass: the line-chart comparison layer.** Frontend only, so `pytest`
+**Latest pass: three finishing touches on the comparison surfaces.** Frontend
+only; `pytest` (79/79), `node --check`, ReadLints, and the 70-column audit are
+clean. `withAlpha` was checked head-on in Node against all four hues plus the
+zero-alpha case a dark pin produces, since a bad hex parse would fail silently
+as `rgba(NaN, ...)`. All three items are visual and need eyes; checklist items
+34 to 37 cover them.
+
+- **The generator's entropy profile now marks its edits.** Analytics had the
+  marker since the Entropy by Position chart landed; the generator's strip did
+  not, so a branch's forcing point was invisible there. Ported as two passes
+  around the existing series draw: `drawEntropyProfileEditTint` under the bars
+  and `drawEntropyProfileEditLines` over them, with the hover glow last, which
+  reproduces the stacking Analytics gets for free from plugin order (the
+  pointer's guide lays over the edit tint, not under it). Positions come from a
+  flattened `editedProfilePositions()` rather than a single index, so
+  sequential What If rounds each stay marked; the dash is centered at
+  `pos * step + barWidth / 2` to match Analytics, and the tint is floored at
+  2px because at a few hundred tokens a bar-width column is too thin to find.
+  Worth knowing why this does not contradict the previous session: the *scrub*
+  marker was removed from this strip on purpose because a standing neutral
+  guide reads as an artifact when the bar opacity already says where you are.
+  This one is a different statement. It names a position the run was
+  intervened at, which is true wherever the cursor is, so it should persist.
+  The comment above `drawEntropyProfile` was reworded to keep that distinction
+  legible to whoever reads it next.
+- **The line charts have their area fill back, as a band between the curves.**
+  `fill: !paired` had disabled it for two-series charts, correctly: two washes
+  to the axis stack over the shared prefix and read as a third color. A band
+  (`fill: {target: 0}` on the branch) has neither problem and is strictly more
+  informative, since the runs share their prefix exactly and the band is
+  therefore empty until the edit. Colored by whichever run bounds the region
+  from above (`above` the branch's hue, `below` the original's grey), which is
+  a rule that needs no legend and, importantly, stays neutral across two
+  charts that disagree about whether higher is good: higher is *slower* on
+  timing and *better* on confidence, so a good/bad palette would have to be
+  inverted between them.
+- **The tooltip swatch fix from the previous session was only half done.**
+  `lineLabelColor` fixed the fill but the swatch kept a colored ring with a
+  white sliver inside it. Two causes: Chart.js resolves the swatch stroke as
+  `borderWidth || 1`, so asking for zero still strokes a pixel, and the white
+  `multiKeyBackground` shows through because the stroke is centered on a
+  one-pixel inset and covers only half of it. Transparent `borderColor` plus
+  a global transparent `multiKeyBackground` leaves exactly the inset fill.
+  The global default also cleans up the entropy chart, whose swatches only
+  looked right because their default border is a near-black invisible against
+  the tooltip.
+
+### Where the band's alpha lives, and why it is not canvas state
+
+This is the one non-obvious thing in the pass. `seriesBlendPlugin` dims a line
+by setting `globalAlpha` on `beforeDatasetDraw`, and the natural instinct is to
+let the fill ride along. It cannot: **Filler is a globally registered plugin**,
+and `notifyPlugins` walks registered plugins before a chart's inline ones, so
+Filler's `beforeDatasetDraw` always runs *first* and would draw the band before
+any alpha is set. So the alpha is baked into the color instead, by a scriptable
+`fill` (`compareBandFill`) returning `min` of the two series alphas times the
+base wash. `min` because the band describes a relationship: bounded by a line
+you cannot see, it is a smear with no reading in it.
+
+Scriptables are re-resolved on `chart.update`, and every path that moves a pin
+(`handleComparePinClick`) or the scrub (`updateLineCharts`) already calls
+`chart.update("none")`, so there is no separate invalidation to keep in sync.
+If a future change moves blend state somewhere that does *not* update the
+chart, the band will stick at its last alpha; that is the failure mode to look
+for.
+
+**Previous pass: the generator crossfade and two-layer token stack.** Frontend
+only, so `pytest` (79/79) is a regression check; `node --check`, ReadLints, and
+the 70-column audit are clean. The shared span builder was additionally
+exercised head-on with a throwaway Node harness (a stub `document`,
+`vm.runInThisContext` on `overlays.js`, 20 assertions covering the no-hook
+Analytics path, each generator hook, and the null-token guard); all passed and
+the harness was deleted. Nothing needing a display was exercised; checklist
+items 28 to 33 at the bottom cover them.
+
+This closes the last structural gap between the two pages. The generator has
+had the layered diff since the counterfactual overlay landed, but its other
+four overlays stayed single-layer, so a branch could only be compared against
+its original from *inside* Diff. It also still built its token spans inline,
+the one place in the app not going through `overlays.js`.
+
+- **A `#run-blend-row` below the scrubber**, sibling to `#diff-overlay-controls`
+  and mutually exclusive with it: whichever row governs the layers currently on
+  screen is the one that shows. Placed there rather than above the output area
+  (where Analytics puts its copy) because the generator's output top-right is
+  already occupied by the overlay drawer, and the diff sliders set the
+  precedent that blend controls live under the scrubber.
+- **`runBlendActive()` is `diffAvailable() && remaskMode === null`**, and that
+  gate is what makes the stack *safe* rather than merely hidden. The obvious
+  hazard with two stacked runs is clicking a token in the one you cannot edit.
+  It cannot happen: `token-clickable` requires `remaskMode === "edit"` and
+  `token-substitutable` requires `substitutionMode`, which implies
+  `remaskMode === "substitute"`. Both are excluded by the same gate, so no
+  interactive affordance can ever render on a stacked layer. No extra guard
+  was needed, which is why the gate is worth keeping stated in one predicate.
+- **Layer opacity is restyled in place on drag** (`applyRunBlendToLayers`),
+  never rebuilt. Several hundred spans per slider step would also drop the
+  candidate popover mid-drag. Same reasoning, same shape, as Analytics'
+  `applyTokenLayerBlend`.
+- **One span builder for the whole app.** `overlaysBuildTokenSpan` gained three
+  optional callbacks, all defaulting to today's behavior so Analytics passes
+  none of them: `maskedFor` (draw the glyph over a resolved token, for a remask
+  selection), `classFor` (`token-remasked` / `token-clickable` /
+  `token-substitutable`), and `opacityFor` (masks graded by the model's live
+  predicted confidence, which Analytics never needed because its masks are
+  flat). `maskedFor` is deliberately consulted *only* for a token that exists,
+  so a hook can add masking but never strip it off a hole and leave `tok.t`
+  read from null.
+  - `applyTokenColor` both tinted a span and appended to its tooltip, which the
+    two-callback contract cannot express. Split into a pure `tokenColorAt` and
+    `tokenTitleExtra`, mirroring `overlayColorFn` / `overlayTitleFn`.
+  - `.token-remasked` (`style.css`) is declared after `.token-mask` at equal
+    specificity, so a span now carrying both still renders orange. No CSS
+    change was needed.
+- **Commit steps are memoized per run.** `originalCommitSteps` sits beside
+  `commitSteps`, and both plus `diffData` are cleared by a single
+  `invalidateRunMemos()` replacing five duplicated two-line resets. Without
+  this the ghost layer would have been painted from the *branch's* settle
+  schedule and misreported every position past the edit. Only Commit Order
+  needed it: Heatmap and Entropy read the token's own fields and are per-layer
+  correct for free.
+- **The entropy profile carries both runs**, mixed by the same slider, with the
+  pre-edit columns underneath. It steps off the longer of the two
+  (`entropyProfileColumns`), and that helper is shared with
+  `entropyProfilePosition` so the drawing and the pointer-to-position inverse
+  cannot disagree about the step. The glow and the nats readout follow
+  `runBlendFavorsOriginal()`, as does the candidate popover's opening page
+  (`defaultAltsPage`, ported from Analytics).
+  - `onRunBlendInput` calls `updateEntropyProfileVisibility()` rather than
+    `drawEntropyProfile()` directly. The latter would un-hide the strip for a
+    run with no entropy at all, since `entropyProfileValues` returns a 0 per
+    token rather than an empty array.
+- **Deliberately not persisted:** the crossfade resets to Edited on every
+  `activateScrubber`, so a resumed branch opens on itself and a session restore
+  starts fresh. Matches how Analytics resets per run open. Change
+  `resetRunBlend` if that turns out to be the wrong call.
+
+**Previous pass: the line-chart comparison layer.** Frontend only, so `pytest`
 (79/79) is a regression check; `node --check`, ReadLints, and the 70-column
 audit are clean. Nothing needing a display was exercised; checklist items 21 to
 27 at the bottom cover them.
@@ -303,8 +440,8 @@ and splitting would have committed code the next commit rewrote.
     Reset button's enabled state cannot drift. Reset re-saves rather than
     clearing the record, because the prompt draft shares it.
 
-**Deferred deliberately:** the generator's own crossfade and two-layer stack.
-When scheduled, the crossfade goes in its own row below the frame scrubber.
+**Deferred at the time:** the generator's own crossfade and two-layer stack,
+shipped in the latest pass above.
 
 **Previous pass: What If lifecycle fixes plus the edited-run timing foundation.**
 Two commits, both in-sandbox verified (`pytest` 79/79, `py_compile`,
@@ -1058,12 +1195,84 @@ because runs saved before the previous pass carry no `original_alternatives`.
     read just "Timing" plus its controls. An older run saved without the field
     should fall back to the detected GPU rather than showing an empty row.
 
+The generator crossfade pass (all on the **generation** page, not Analytics):
+
+28. **Nothing changed before a branch exists.** Generate a plain run of each
+    kind (LLaDA, SmolLM3) and scrub through it in every overlay. No
+    Original / Edited row should appear below the scrubber, and the tokens
+    should look exactly as they did: masks fading up with confidence as you
+    scrub a mid-run frame, Heatmap and Entropy and Commit Order colors
+    unchanged, tooltips carrying the same lines. This is the regression check
+    that matters most, since every span on the page now comes from the shared
+    builder rather than the old inline one.
+29. **The crossfade appears and blends.** Run SmolLM3 with Alternatives, use
+    **What If?**, and confirm. The Original / Edited row should appear below
+    the scrubber. Drag it: the text should fade between the two runs, and the
+    entropy strip's columns should fade with it. Switch to **Heatmap** and
+    drag to full Original: the colors should be the *original* run's
+    confidence, not the branch's colors sitting under the original words.
+    Repeat with a LLaDA Edit Frames resume.
+30. **Pointer follows the opaque side.** With the slider left of center, hover
+    a token past the divergence. The tooltip should describe the original
+    run's token, and the candidate popover should open on its **Original**
+    page. Drag right of center and hover the same position: both should flip
+    to the branch. Then scrub to a mid-run frame and confirm the masks still
+    grade by confidence in *both* layers.
+31. **Edit modes still render one layer.** With a branch in place, click
+    **Edit Frames** (LLaDA). The crossfade row must disappear, the tokens must
+    go back to a single layer, and clicking one must still select it for
+    remasking (orange, fully opaque). Exit and confirm the crossfade returns.
+    Do the same with **What If?** armed on SmolLM3: the dotted underlines must
+    be present and clickable, with no ghost layer behind them.
+32. **Diff still owns its own controls.** Pick **Diff vs Original**: the
+    crossfade row must hide and the two opacity sliders plus Difference blend
+    must take its place, working as before. Switch back to any other overlay
+    and confirm the crossfade returns at the value you left it.
+33. **Commit Order colors each run by its own schedule.** On an edited LLaDA
+    run, pick **Commit Order** and drag the crossfade fully left. The ghost
+    layer's tints and its "Resolved at step" tooltips should describe the
+    original run, which for positions past the edit means different values
+    than the branch shows at full right. If the two look identical past the
+    edit, `originalCommitSteps` is not being reached.
+34. **The generator's entropy strip marks the edit.** Run SmolLM3 with
+    **Alternatives** on, use **What If?** on a mid-sequence token, and let the
+    branch finish. A dashed orange line over a faint tint must appear on the
+    substituted position in the profile below the scrubber, matching the
+    Analytics entropy chart's marker. Scrub the frame slider and drag the
+    Original / Edited crossfade end to end: the marker must stay put through
+    both. Hover the marked column and confirm the white hover glow draws *over*
+    the orange tint rather than under it. Then run a second What If on a
+    different position and confirm **both** markers show. On an unedited run
+    the strip must have no marker at all.
+35. **The band shows the cost of the edit.** Open an edited SmolLM3 or LLaDA
+    run in Analytics. The timing and confidence charts should show a wash
+    filling the gap between the grey solid line and the dashed branch, empty
+    to the left of the edit and opening up to the right of it. Where the
+    branch is higher the wash takes the chart's color (blue on timing, amber
+    on confidence); where the original is higher it should be grey. Check both
+    directions if you can produce them: a branch that is slower than the
+    original gives blue, one that finishes faster gives grey.
+36. **The band respects the pins and the scrub.** Unpin **1**, then **2** (one
+    at a time): the band must vanish entirely with either, since it needs both
+    edges. Re-pin both and drag the token view's Original / Edited crossfade:
+    the band should fade with whichever line is fading out and come back as
+    the charts ease home on release. It must not double-dim, that is, it
+    should never look noticeably more transparent than the fainter of the two
+    lines bounding it.
+37. **Tooltip swatches are solid chips.** Hover any point on the timing,
+    confidence, or convergence chart, and on the compare panel's charts. Each
+    tooltip row's swatch must be a flat square of the series color with no
+    colored ring around it and no white edge inside it. Check the entropy
+    chart too: its swatches show the hovered bar's own ramp color and should
+    be unchanged apart from losing the same white edge.
+
 **0. The comparison surfaces (agreed with the maintainer, partly shipped).** The
 timing foundation exists to serve these, and the unifying idea is settled: **the
 pre-edit run is a first-class layer everywhere**, driven by one shared
 Original/Edited state rather than a bespoke control per surface. The shared
-layer, cross-highlighting, popover pagination, and now the line charts have all
-landed (see "Recently shipped"); what remains is below.
+layer, cross-highlighting, popover pagination, the line charts, and now the
+generator's own crossfade have all landed (see "Recently shipped"); what
+remains is below.
 
 One correction to the framing above, learned from the line-chart pass: **one
 shared state does not mean one shared control.** "Both runs at once" is only
@@ -1071,16 +1280,14 @@ expressible on stroke marks, so the line charts needed their own pins, with the
 crossfade reduced to a momentary borrow during a drag. Expect the same split
 anywhere the mark type cannot show two runs at full opacity.
 
-- **The generator's crossfade and two-layer stack**, deliberately deferred. It
-  has the bidirectional cross-highlighting and the popover pager already, but
-  its token view is still single-layer outside diff mode. The shared primitives
-  are in place (`overlaysBuildTokenLayer`, `overlaysEditedOwnsPointer`,
-  `overlaysApplyLayerPointers`), so the work is the control and routing
-  `renderFrameWithTokens` through the layer builder. **Settled:** the crossfade
-  goes in its own row below the frame scrubber, not in the toolbar. Unlike
-  Analytics the generator has live state to respect, so gate it on
-  `diffAvailable()` and keep it out of the way during an edit session
-  (`remaskMode !== null`).
+- ~~The generator's crossfade and two-layer stack~~ **shipped this session**
+  (see "Recently shipped"): `#run-blend-row` below the scrubber, gated on
+  `runBlendActive()`, with `renderFrameWithTokens` routed through the shared
+  span builder. The one thing worth carrying forward from it: that gate turned
+  out to be load-bearing for *safety*, not just for tidiness, since it is what
+  makes an interactive affordance on the un-editable layer structurally
+  impossible. Any future surface that stacks the two runs should establish the
+  same property rather than guarding each click site.
 - **Confidence chart**: cumulative versus per-position toggle. Note the default is
   **modality-aware**, not per-position everywhere: the AR `mean_conf` is a
   cumulative running mean so its curve is degenerate, but LLaDA's and

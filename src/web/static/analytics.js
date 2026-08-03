@@ -147,6 +147,16 @@ Chart.defaults.font.family =
   "'JetBrains Mono', monospace";
 Chart.defaults.font.size = 10;
 
+// Chart.js paints every tooltip swatch as a white rect at the full
+// box size, then strokes it, then fills a square inset one pixel per
+// side. The stroke is centered, so it covers only half that inset
+// and leaves a half-pixel of white showing between the border and
+// the fill (a whole physical pixel at 2x). Dropping the white
+// backing removes that edge; see lineLabelColor for the border half
+// of the same swatch.
+Chart.defaults.plugins.tooltip.multiKeyBackground =
+  "transparent";
+
 // Fixed-position tooltip: anchored to the top-left
 // of the chart area so it never obscures data lines.
 Chart.Tooltip.positioners.topLeft =
@@ -490,6 +500,7 @@ var COMPARE_COLORS = [
 // Colors for resumed timing segments.
 var TIMING_COLOR = "#00aaff";
 var TIMING_RESUMED = "#66ccff";
+var CONFIDENCE_COLOR = "#ffb400";
 
 // The pre-edit run's line on the timing and confidence charts.
 // Neutral grey rather than a second hue: timing already spends blue
@@ -501,6 +512,24 @@ var COMPARE_ORIGINAL_COLOR = "#8b93a1";
 // Solid for the run that happened, dashed for the branch. The
 // counterfactual is the one drawn provisionally.
 var COMPARE_EDITED_DASH = [5, 3];
+
+// Wash strength for the band between the two runs. The grey side
+// runs stronger because it is desaturated and vanishes at the alpha
+// the saturated hues sit comfortably at.
+var BAND_ALPHA_EDITED = 0.16;
+var BAND_ALPHA_ORIGINAL = 0.24;
+
+// "#00aaff" -> "rgba(0, 170, 255, 0.16)". The band washes are
+// derived from the line colors rather than written out beside them,
+// so a wash cannot drift away from the line it belongs to, and
+// because their alpha has to be computed per draw anyway.
+function withAlpha(hex, alpha) {
+  var r = parseInt(hex.slice(1, 3), 16);
+  var g = parseInt(hex.slice(3, 5), 16);
+  var b = parseInt(hex.slice(5, 7), 16);
+  return "rgba(" + r + ", " + g + ", " + b + ", "
+    + alpha + ")";
+}
 
 // The app's edit color, shared with .token-remasked in style.css, so
 // an intervention reads the same in the chart as it does in the
@@ -716,13 +745,17 @@ function tooltipTitle(items) {
   return "Frame " + items[0].label;
 }
 
-// Shared tooltip swatch color for the line charts. Chart.js paints
-// multiKeyBackground (white by default) behind every swatch and then
-// fills it with the dataset's backgroundColor, which on these charts
-// is an area wash at 0.08 to 0.1 alpha, or "transparent" on the
-// compare panel. The white therefore showed straight through and the
-// series color survived only as a thin rim. Painting the swatch with
-// the line's own color makes it a solid chip instead.
+// Shared tooltip swatch color for the line charts. A line's
+// backgroundColor is an area wash at around 0.1 alpha, so a swatch
+// filled with it reads as almost nothing; the line's own color is
+// what tells one series from another in a two-row tooltip.
+//
+// The border is deliberately invisible rather than absent. Chart.js
+// resolves the swatch stroke as ``borderWidth || 1``, so asking for
+// zero still strokes a pixel, and that ring plus the white backing
+// underneath (see the multiKeyBackground default above) is what made
+// the chip read as a colored frame around a lighter square. With
+// both suppressed the swatch is exactly the inset fill.
 //
 // The entropy chart deliberately does not use this: its bars carry
 // solid per-bar colors, so its swatches already read correctly and
@@ -734,9 +767,8 @@ function lineLabelColor(ctx) {
     color = "#ffffff";
   }
   return {
-    borderColor: color,
+    borderColor: "transparent",
     backgroundColor: color,
-    borderWidth: 0,
   };
 }
 
@@ -1309,6 +1341,44 @@ function seriesBlendPlugin(name) {
       if (chart.data.datasets.length < 2) { return; }
       chart.ctx.restore();
     },
+  };
+}
+
+// Alpha for the difference band. It describes a relationship between
+// the two runs rather than either one of them, so it follows
+// whichever is closer to invisible: a band bounded by a line that is
+// not there is a smear with no reading in it.
+function bandAlpha(name) {
+  return Math.min(
+    seriesBlendAlpha(name, 0),
+    seriesBlendAlpha(name, 1)
+  );
+}
+
+// The area between the two runs, colored by whichever bounds it from
+// above: the branch's own hue where the branch leads, the original's
+// grey where it does not. That rule needs no legend and calls
+// neither direction good nor bad, which matters because "higher"
+// means slower on the timing chart and better on confidence. The
+// runs share their prefix exactly, so the band is empty until the
+// edit and opens up only where the intervention actually reached.
+//
+// Scriptable because its alpha tracks the pins and the crossfade,
+// and every path that moves either already calls chart.update, which
+// re-resolves this. Note the alpha lives in the color and not in
+// canvas state: the Filler plugin is registered globally, so it
+// draws on beforeDatasetDraw ahead of seriesBlendPlugin's inline
+// hook and would never see a globalAlpha set there.
+function compareBandFill(name, hue) {
+  return function () {
+    var alpha = bandAlpha(name);
+    return {
+      target: 0,
+      above: withAlpha(hue, BAND_ALPHA_EDITED * alpha),
+      below: withAlpha(
+        COMPARE_ORIGINAL_COLOR, BAND_ALPHA_ORIGINAL * alpha
+      ),
+    };
   };
 }
 
@@ -2716,9 +2786,10 @@ function compareOriginalDataset(values) {
 }
 
 // ``paired`` is true once there is an original series to compare
-// against, which switches the label to name its run and drops the
-// filled area: two translucent fills stacked over the prefix the
-// runs share read as a third color rather than as two runs.
+// against, which switches the label to name its run and turns the
+// area fill into a band between the two runs. Filling both to the
+// axis instead would stack two translucent washes over the prefix
+// the runs share and read as a third color rather than as two runs.
 function timingEditedDataset(
   values, remaskSet, resumeSet, paired
 ) {
@@ -2726,8 +2797,10 @@ function timingEditedDataset(
     label: paired ? "Edited" : "Elapsed",
     data: values,
     borderColor: TIMING_COLOR,
-    backgroundColor: "rgba(0,170,255,0.08)",
-    fill: !paired,
+    backgroundColor: withAlpha(TIMING_COLOR, 0.08),
+    fill: paired
+      ? compareBandFill("timing", TIMING_COLOR)
+      : true,
     borderDash: paired ? COMPARE_EDITED_DASH : [],
     tension: 0.2,
     pointRadius: 0,
@@ -2906,9 +2979,11 @@ function confidenceEditedDataset(values, paired) {
   return {
     label: paired ? "Edited" : "Mean confidence",
     data: values,
-    borderColor: "#ffb400",
-    backgroundColor: "rgba(255,180,0,0.08)",
-    fill: !paired,
+    borderColor: CONFIDENCE_COLOR,
+    backgroundColor: withAlpha(CONFIDENCE_COLOR, 0.08),
+    fill: paired
+      ? compareBandFill("confidence", CONFIDENCE_COLOR)
+      : true,
     borderDash: paired ? COMPARE_EDITED_DASH : [],
     tension: 0.2,
     pointRadius: 0,

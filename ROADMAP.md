@@ -256,7 +256,7 @@ analytics suite.
   keys produce input events with no press to end them. Also moved the zoom
   controls into a segmented pill docked in each chart's bottom-left axis
   gutter (freeing the header for the pins, `layout.padding.bottom` reserving
-  the strip),   and the processor name from the timing header into its own run
+  the strip), and the processor name from the timing header into its own run
   summary row, correctly labelled GPU or CPU from the run's own metadata.
   Fixed a long-standing bug the two-series tooltips made obvious: Chart.js
   paints a white backing behind each tooltip swatch and fills it with the
@@ -265,6 +265,58 @@ analytics suite.
   white with a colored rim. A shared `lineLabelColor` now paints them with
   the line's own color, which is what tells Original from Edited in a
   two-row tooltip.
+- Shipped (this session): the **generator crossfade and two-layer token
+  stack**, closing the last gap between the two pages. The generator had the
+  layered diff since the counterfactual overlay landed, but its other four
+  overlays stayed single-layer, so a branch could only be compared against its
+  original inside Diff. A `#run-blend-row` below the scrubber (beside the diff
+  sliders it is mutually exclusive with) now stacks the pre-edit run under the
+  branch in every non-diff overlay, gated on `runBlendActive()`
+  (`diffAvailable() && remaskMode === null`). That gate is what makes the
+  stack safe rather than merely hidden: `token-clickable` needs
+  `remaskMode === "edit"` and `token-substitutable` implies
+  `remaskMode === "substitute"`, so a clickable affordance can never appear on
+  a layer belonging to the run you cannot edit. Layer opacity is restyled in
+  place on drag rather than rebuilt, since several hundred spans per slider
+  step would also drop the candidate popover mid-drag.
+- Also this session: **one span builder for the whole app**. The generator had
+  built its spans inline since before `overlays.js` existed, because the
+  shared builder could not express a remask selection, the edit-mode classes,
+  or a mask graded by live predicted confidence. Three optional callbacks
+  (`maskedFor`, `classFor`, `opacityFor`, all defaulting to today's behavior
+  so Analytics passes none) closed that gap, and `applyTokenColor`, which both
+  tinted a span and appended to its tooltip, split into a pure `tokenColorAt`
+  and `tokenTitleExtra`. `maskedFor` is deliberately consulted only for a
+  token that exists, so a hook can add masking but never strip it off a hole
+  and leave `tok.t` read from null. Commit steps are now memoized per run
+  (`originalCommitSteps` beside `commitSteps`, both cleared by one
+  `invalidateRunMemos`), because a ghost layer painted from the branch's
+  settle schedule would have misreported every position past the edit. The
+  entropy profile gained the same treatment, stepping off the longer of the
+  two runs so the drawing and the pointer-to-position inverse agree.
+- Also this session: three finishing passes on the comparison surfaces. The
+  generator's entropy profile gained the **edit marker** Analytics already
+  had (tint under the bars, dashed orange line over them, hover glow last, so
+  the pointer's guide lays over the tint rather than under it), drawn from a
+  flattened `editedProfilePositions()` rather than a single index so
+  sequential What If rounds each stay marked. It is deliberately the one
+  standing mark on a strip whose scrub position is carried by bar opacity: it
+  names a semantic fact about the run, not the cursor. The line charts got
+  their **area fill back as a band between the two curves** (`fill: {target:
+  0}` on the branch) instead of two washes to the axis, colored by whichever
+  run bounds the region from above, which needs no legend and stays neutral
+  across two charts that disagree about whether higher is good. Its alpha is
+  `min` of the two series alphas and is baked into the color by a scriptable
+  `fill`, not set as canvas state: Filler is registered globally, so it draws
+  on `beforeDatasetDraw` ahead of `seriesBlendPlugin`'s inline hook and would
+  never see a `globalAlpha` set there. Every path that moves a pin or the
+  scrub already calls `chart.update`, which re-resolves the scriptable.
+  Finally the tooltip swatch fix from the previous session was completed:
+  `lineLabelColor` had painted the fill correctly but Chart.js resolves the
+  swatch stroke as `borderWidth || 1`, so a colored ring survived, and the
+  white backing showed as a half-pixel band inside it because the stroke is
+  centered on a one-pixel inset. Transparent `borderColor` plus a global
+  transparent `multiKeyBackground` leaves just the fill.
 - For the feature overview and architecture, see `README.md`. For the build
   history, see `.cursor/plans/`.
 

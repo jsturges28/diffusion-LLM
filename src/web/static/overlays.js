@@ -293,19 +293,53 @@ function overlaysApplyLayerPointers(
 // hover highlight, the candidate popover, the entropy
 // cross-highlight, and the generator's remask click. A layer built
 // without them looks right and does nothing.
+//
+// Beyond the required colorFor, ``opts`` takes four optional
+// callbacks, all defaulting to the plain Analytics behavior so that
+// page passes none of them:
+//
+//   titleFor(index, tok)            -> hover tooltip
+//   maskedFor(index, tok)           -> mask a resolved token
+//   classFor(index, tok, masked)    -> extra classes
+//   opacityFor(index, tok, masked)  -> inline opacity
+//
+// The generator needs all four. It draws the mask glyph over
+// positions the user selected for remasking even though their tokens
+// are resolved (hence maskedFor), marks those and its clickable and
+// substitutable positions with their own classes (classFor), and
+// grades a mask's opacity by the model's live predicted confidence
+// (opacityFor). Analytics has no live run, so its masks are flat.
 function overlaysBuildTokenSpan(index, tok, mask, opts) {
   // A missing token is a hole in the canvas, drawn as the mask glyph
   // rather than skipped: two layers only line up if both emit a span
   // per position.
   var masked = !tok || !!tok.m;
+  // Consulted only for a token that is really there, so the hook can
+  // add masking but never strip it off a hole and leave tok.t to be
+  // read from null below.
+  if (!masked && opts.maskedFor) {
+    masked = !!opts.maskedFor(index, tok);
+  }
   var span = document.createElement("span");
   span.setAttribute("data-pos", String(index));
   span.className = "token-span "
     + (masked ? "token-mask" : "token-resolved");
+  var extraClass = opts.classFor
+    ? opts.classFor(index, tok, masked)
+    : "";
+  if (extraClass) {
+    span.className += " " + extraClass;
+  }
   span.textContent = masked ? mask : tok.t;
   var color = opts.colorFor(index, tok);
   if (color) {
     span.style.color = color;
+  }
+  var opacity = opts.opacityFor
+    ? opts.opacityFor(index, tok, masked)
+    : null;
+  if (opacity !== null) {
+    span.style.opacity = String(opacity);
   }
   if (opts.titleFor) {
     span.title = opts.titleFor(index, tok);
@@ -315,9 +349,9 @@ function overlaysBuildTokenSpan(index, tok, mask, opts) {
 
 // Build one stacked layer of token spans. ``opts`` carries the layer
 // class, its opacity in [0,1], an ``interactive`` flag deciding which
-// layer takes the pointer, a colorFor(index, token), and an optional
-// titleFor(index, token). Pure: the caller owns the container and
-// must give it the stacking mode.
+// layer takes the pointer, and is passed through to
+// overlaysBuildTokenSpan for the per-token callbacks. Pure: the
+// caller owns the container and must give it the stacking mode.
 function overlaysBuildTokenLayer(tokens, opts) {
   var mask = opts.maskChar || OVERLAYS_MASK_CHAR;
   var layer = document.createElement("div");

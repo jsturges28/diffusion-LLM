@@ -149,6 +149,10 @@ var diffEditedSlider =
   document.getElementById("diff-edited-opacity");
 var diffBlendToggle =
   document.getElementById("diff-blend-toggle");
+var runBlendRow =
+  document.getElementById("run-blend-row");
+var runBlendInput =
+  document.getElementById("run-blend");
 // Active visual overlay chosen in the picker:
 // "none" | "conf" (heatmap) | "diff". Commit-order tinting is a
 // separate persistent setting applied only when no overlay is
@@ -158,6 +162,10 @@ var overlayMode = "none";
 // null until first needed and invalidated whenever frameTokens
 // is replaced (new run, resume, or session restore).
 var commitSteps = null;
+// The same for the retained pre-edit run, needed because the ghost
+// layer of a crossfade settles its positions on its own schedule and
+// would be quietly wrong colored by the branch's.
+var originalCommitSteps = null;
 // Memoized intervention diff (branch vs original final frame),
 // null until needed and invalidated alongside commitSteps.
 var diffData = null;
@@ -166,6 +174,10 @@ var diffData = null;
 var diffOriginalOpacity = 50;
 var diffEditedOpacity = 100;
 var diffBlend = false;
+// The run crossfade, from 0 (the retained pre-edit run) to 1 (the
+// branch). Governs the stacked token layers and the entropy strip in
+// every overlay except Diff, which keeps its own two sliders.
+var runBlend = 1;
 
 // Guided edit mode DOM refs.
 var guidedEditControls =
@@ -1545,6 +1557,15 @@ function computeCommitSteps() {
   return overlaysComputeCommitSteps(frameTokens);
 }
 
+// Drop every memo derived from the frame arrays. Called wherever
+// those arrays are replaced or truncated, in one place so the three
+// can never fall out of step with each other.
+function invalidateRunMemos() {
+  commitSteps = null;
+  originalCommitSteps = null;
+  diffData = null;
+}
+
 // commitColor now lives in overlays.js (shared with Analytics).
 
 // Compare the branch's final frame against the retained original
@@ -1570,9 +1591,7 @@ function computeDiff() {
 // construction is shared via overlaysBuildDiffLayers; this wrapper
 // resolves the per-frame tokens and owns the output container.
 function renderDiffOverlay(frameIndex) {
-  if (diffData === null) {
-    diffData = computeDiff();
-  }
+  var diff = currentDiffData();
   var editedTokens = frameTokens[frameIndex] || [];
   var oIdx = Math.min(
     frameIndex, originalFrameTokens.length - 1
@@ -1588,7 +1607,7 @@ function renderDiffOverlay(frameIndex) {
     overlaysBuildDiffLayers(
       origTokens,
       editedTokens,
-      diffData,
+      diff,
       {
         originalOpacity: diffOriginalOpacity,
         editedOpacity: diffEditedOpacity,
@@ -1629,50 +1648,103 @@ function tokenExtraLabel(tok) {
   return "\nEntropy: " + String(+tok.e.toFixed(3)) + " nats";
 }
 
-// Apply the effective color mode to one resolved-token span,
-// mutating its inline color and (where useful) its tooltip. Mask
-// and user-remasked tokens never reach here.
-function applyTokenColor(span, index, tok) {
+// The divergence map, computed on first use and memoized. Both the
+// diff coloring and the diff tooltip lines need it, so the lazy
+// build lives here rather than in each.
+function currentDiffData() {
+  if (diffData === null) {
+    diffData = computeDiff();
+  }
+  return diffData;
+}
+
+// Commit steps for whichever of the two runs a layer is drawing,
+// memoized separately. The runs settle their positions on different
+// schedules, so the ghost layer painted from the branch's would
+// misreport every position past the edit.
+function commitStepsFor(isOriginal) {
+  if (isOriginal) {
+    if (originalCommitSteps === null) {
+      originalCommitSteps =
+        overlaysComputeCommitSteps(originalFrameTokens);
+    }
+    return originalCommitSteps;
+  }
+  if (commitSteps === null) {
+    commitSteps = computeCommitSteps();
+  }
+  return commitSteps;
+}
+
+// Which step resolved a position under the Commit Order overlay, or
+// null where the run recorded none.
+function tokenCommitStep(index, isOriginal) {
+  var step = commitStepsFor(isOriginal)[index];
+  if (typeof step !== "number" || step < 0) {
+    return null;
+  }
+  return step;
+}
+
+// The active overlay's color for one resolved token, or null to let
+// the token's own class color it. Kept separate from the tooltip
+// lines the same overlay contributes (tokenTitleExtra below) because
+// the span builder takes color and title as independent callbacks.
+function tokenColorAt(index, tok, isOriginal) {
   var mode = effectiveColorMode();
   if (mode === "conf") {
-    if (typeof tok.c === "number") {
-      span.style.color = heatColor(tok.c);
+    if (typeof tok.c !== "number") {
+      return null;
     }
-    return;
+    return heatColor(tok.c);
   }
   if (mode === "entropy") {
-    if (typeof tok.e === "number") {
-      span.style.color = entropyColor(tok.e);
+    if (typeof tok.e !== "number") {
+      return null;
     }
-    return;
+    return entropyColor(tok.e);
   }
   if (mode === "commit") {
-    if (commitSteps === null) {
-      commitSteps = computeCommitSteps();
+    var step = tokenCommitStep(index, isOriginal);
+    if (step === null) {
+      return null;
     }
-    var step = commitSteps[index];
-    if (typeof step === "number" && step >= 0) {
-      span.style.color = commitColor(
-        step, frameTokens.length - 1
-      );
-      span.title += "\nResolved at step: " + step;
-    }
-    return;
+    var frames = isOriginal ? originalFrameTokens : frameTokens;
+    return commitColor(step, frames.length - 1);
   }
   if (mode === "diff") {
-    if (diffData === null) {
-      diffData = computeDiff();
+    var diff = currentDiffData();
+    if (diff.origins[index]) {
+      return "#ff8a3d";
     }
-    if (diffData.origins[index]) {
-      span.style.color = "#ff8a3d";
-      span.title += "\n(remasked here)";
-    } else if (diffData.changed[index]) {
-      span.style.color = diffColor(true);
-      span.title += "\nwas: " + diffData.origText[index];
-    } else {
-      span.style.color = diffColor(false);
-    }
+    return diffColor(!!diff.changed[index]);
   }
+  return null;
+}
+
+// The overlay-specific trailing tooltip lines for one resolved
+// token, on top of the confidence and entropy lines every token
+// carries.
+function tokenTitleExtra(index, isOriginal) {
+  var mode = effectiveColorMode();
+  if (mode === "commit") {
+    var step = tokenCommitStep(index, isOriginal);
+    if (step === null) {
+      return "";
+    }
+    return "\nResolved at step: " + step;
+  }
+  if (mode === "diff") {
+    var diff = currentDiffData();
+    if (diff.origins[index]) {
+      return "\n(remasked here)";
+    }
+    if (diff.changed[index]) {
+      return "\nwas: " + diff.origText[index];
+    }
+    return "";
+  }
+  return "";
 }
 
 // Format a token's confidence for the hover tooltip. Masked or
@@ -1722,6 +1794,7 @@ function setOverlayMode(mode) {
   overlayMode = mode;
   updateDiffSummary();
   updateDiffOverlayControls();
+  updateRunBlendControls();
   updateCommitLegend();
   hideAltsPopover();
   if (scrubberActive) {
@@ -1746,6 +1819,64 @@ function updateDiffOverlayControls() {
   diffOverlayControls.hidden = !(
     overlayMode === "diff" && diffAvailable() && remaskMode === null
   );
+}
+
+// The run crossfade is the other overlays' answer to the diff
+// sliders, so the two rows are mutually exclusive: whichever one
+// governs the layers currently on screen is the one that shows.
+function updateRunBlendControls() {
+  if (!runBlendRow) {
+    return;
+  }
+  runBlendRow.hidden = !(
+    overlayMode !== "diff" && runBlendActive()
+  );
+}
+
+// Back to the branch at full opacity. Called per run, so a resumed
+// branch opens on itself rather than on the previous mix.
+function resetRunBlend() {
+  runBlend = 1;
+  if (runBlendInput) {
+    runBlendInput.value = "100";
+  }
+  updateRunBlendControls();
+}
+
+// Restyle the stacked layers in place. Rebuilding them would mean
+// several hundred spans per slider step, and would drop the
+// candidate popover mid-drag. Diff mode is left alone: its own two
+// sliders own the layers there.
+function onRunBlendInput() {
+  runBlend = Number(runBlendInput.value) / 100;
+  if (overlayMode !== "diff") {
+    applyRunBlendToLayers();
+  }
+  // Gated rather than drawn directly: the strip must stay hidden for
+  // a run that carries no entropy at all.
+  updateEntropyProfileVisibility();
+}
+
+function applyRunBlendToLayers() {
+  var original =
+    outputArea.querySelector(".token-layer-original");
+  var edited =
+    outputArea.querySelector(".token-layer-edited");
+  if (!original || !edited) {
+    return;
+  }
+  original.style.opacity = String(1 - runBlend);
+  edited.style.opacity = String(runBlend);
+  overlaysApplyLayerPointers(
+    outputArea, 1 - runBlend, runBlend
+  );
+}
+
+// Which run the crossfade currently favors. Drives the entropy
+// strip's readout and the candidate popover's opening page, so both
+// agree with the tokens the user is actually reading.
+function runBlendFavorsOriginal() {
+  return runBlend < 0.5;
 }
 
 // Reset the diff-overlay sliders/blend to defaults (called per run).
@@ -1773,11 +1904,9 @@ function updateDiffSummary() {
     diffSummary.hidden = true;
     return;
   }
-  if (diffData === null) {
-    diffData = computeDiff();
-  }
-  var total = diffData.totalCount;
-  var changed = diffData.changedCount;
+  var diff = currentDiffData();
+  var total = diff.totalCount;
+  var changed = diff.changedCount;
   var pct = total > 0
     ? Math.round((changed / total) * 100)
     : 0;
@@ -1918,11 +2047,20 @@ function buildAltsRows(alts, chosenId) {
   return fragment;
 }
 
+// Which run's candidates a pageable position opens on: the one the
+// crossfade is favoring, so the popover agrees with the tokens and
+// the entropy strip. Both pages stay reachable through the arrows
+// either way, so the midpoint picks a default rather than gating
+// access.
+function defaultAltsPage() {
+  return runBlendFavorsOriginal() ? "original" : "edited";
+}
+
 // Show the candidate popover for a token position, anchored to its
-// span. Opens on the branch, which is what the token view is showing;
-// the pager reaches the pre-edit set where one was retained.
+// span. The pager reaches the pre-edit set where one was retained.
 function showAltsPopover(pos, span) {
-  altsPopoverPage = altsPageable(pos) ? "edited" : null;
+  altsPopoverPage = altsPageable(pos)
+    ? defaultAltsPage() : null;
   renderAltsPopover(pos, span);
 }
 
@@ -1991,10 +2129,13 @@ function renderAltsPopover(pos, span) {
 
 // ---- Per-position entropy profile ----
 
-// Entropy per position, read off the final frame's token records
-// (each position is sampled once, so its entropy never changes).
-function entropyProfileValues() {
-  var tokens = frameTokens[frameTokens.length - 1];
+// The app's edit color, shared with .token-remasked in style.css and
+// with EDIT_COLOR in analytics.js, so an intervention reads the same
+// in the strip as it does in the tokens above it.
+var EDIT_MARKER_COLOR = "#ff9f1c";
+var EDIT_MARKER_TINT = "rgba(255, 159, 28, 0.15)";
+
+function entropyValuesFrom(tokens) {
   if (!tokens) {
     return [];
   }
@@ -2008,10 +2149,63 @@ function entropyProfileValues() {
   return values;
 }
 
+// Entropy per position, read off the final frame's token records
+// (each position is sampled once, so its entropy never changes).
+function entropyProfileValues() {
+  return entropyValuesFrom(
+    frameTokens[frameTokens.length - 1]
+  );
+}
+
+// The same for the retained pre-edit run, so the crossfade can mix
+// the two profiles. Empty unless a branch exists to compare against,
+// which collapses the strip back to a single series.
+function originalEntropyProfileValues() {
+  if (!runBlendActive()) {
+    return [];
+  }
+  return entropyValuesFrom(
+    originalFrameTokens[originalFrameTokens.length - 1]
+  );
+}
+
+// How many columns the strip spans: the longer of the two runs, so
+// the drawing and the pointer-to-position inverse agree on the step
+// even when a branch outran the original.
+function entropyProfileColumns() {
+  return Math.max(
+    entropyProfileValues().length,
+    originalEntropyProfileValues().length
+  );
+}
+
+// Every position an edit touched. Sequential What If rounds each push
+// their own entry, so a branch can carry more than one, and a
+// diffusion remask contributes a whole group at once. Sibling to
+// editDivergencePosition, which reduces the same records to their
+// minimum for the popover's pager.
+function editedProfilePositions() {
+  var seen = {};
+  var positions = [];
+  for (var e = 0; e < remaskEdits.length; e++) {
+    var group = remaskEdits[e].token_positions || [];
+    for (var p = 0; p < group.length; p++) {
+      var pos = group[p];
+      if (seen[pos] !== true) {
+        seen[pos] = true;
+        positions.push(pos);
+      }
+    }
+  }
+  return positions;
+}
+
 // Draw the profile: one column per position, height proportional to
 // normalized entropy, colored by the same ramp as the overlay. The
 // column for the frame under the scrubber is highlighted so the
-// profile and the canvas stay tied together.
+// profile and the canvas stay tied together. On an edited run the
+// pre-edit profile is drawn underneath and the two are mixed by the
+// run crossfade, exactly as the token layers above them are.
 function drawEntropyProfile() {
   if (!entropyProfileCanvas || !entropyProfileRow) {
     return;
@@ -2048,34 +2242,124 @@ function drawEntropyProfile() {
   // does not apply here.
   //
   // The scrubber's position is carried by the bar's own opacity
-  // rather than a drawn marker. A standing full-height guide reads as
-  // an artifact at rest, and drawEntropyProfileGlow already owns that
-  // visual language for the column under the pointer.
+  // rather than a drawn marker. A standing neutral guide reads as an
+  // artifact at rest, and drawEntropyProfileGlow already owns that
+  // visual language for the column under the pointer. The orange
+  // edit marker below is a different statement: it names a position
+  // the run was intervened at, which is true whether or not the
+  // pointer is anywhere near it.
   var current = currentScrubFrame;
-  var step = cssWidth / values.length;
-  var barWidth = Math.max(1, step - 0.5);
-  for (var i = 0; i < values.length; i++) {
-    var frac = overlaysEntropyFraction(values[i]);
-    var height = Math.max(1, frac * (cssHeight - 2));
-    ctx.globalAlpha = i === current ? 1 : 0.68;
-    ctx.fillStyle = entropyColor(values[i]);
+  var original = originalEntropyProfileValues();
+  // Stepped off the longer run so the two profiles stay
+  // position-aligned when a branch outran or fell short of the
+  // original.
+  var step = cssWidth / entropyProfileColumns();
+  var layout = {
+    step: step,
+    barWidth: Math.max(1, step - 0.5),
+    cssHeight: cssHeight,
+  };
+
+  // Tint under the bars, dashed guide over them, hover glow last:
+  // the same stacking the Analytics entropy chart gets from its
+  // plugin order, so the pointer's guide lays over the edit tint
+  // rather than under it.
+  var edits = editedProfilePositions();
+  drawEntropyProfileEditTint(ctx, layout, edits);
+
+  var paired = original.length > 0;
+  if (paired) {
+    drawEntropyProfileSeries(ctx, layout, {
+      values: original,
+      alpha: 1 - runBlend,
+      // The scrubber indexes the branch, so the pre-edit run gets no
+      // current-position emphasis of its own.
+      current: -1,
+    });
+  }
+  drawEntropyProfileSeries(ctx, layout, {
+    values: values,
+    alpha: paired ? runBlend : 1,
+    current: current,
+  });
+  drawEntropyProfileEditLines(ctx, layout, edits);
+
+  // The glow and the readout speak for one run, so they follow
+  // whichever the crossfade is favoring.
+  layout.values = (paired && runBlendFavorsOriginal())
+    ? original : values;
+  drawEntropyProfileGlow(ctx, layout);
+  updateEntropyReadout(
+    layout.values,
+    entropyHoverPos === null ? current : entropyHoverPos
+  );
+}
+
+// A faint column behind each edited position. Floored at 2px like
+// the hover guide: at a few hundred tokens a bar-width tint is too
+// thin to notice.
+function drawEntropyProfileEditTint(ctx, layout, positions) {
+  if (positions.length === 0) {
+    return;
+  }
+  ctx.save();
+  ctx.fillStyle = EDIT_MARKER_TINT;
+  for (var i = 0; i < positions.length; i++) {
     ctx.fillRect(
-      i * step,
-      cssHeight - height,
-      barWidth,
+      positions[i] * layout.step,
+      0,
+      Math.max(2, layout.barWidth),
+      layout.cssHeight
+    );
+  }
+  ctx.restore();
+}
+
+// The dashed guide, drawn over the bars and centered on the column
+// it marks so it reads as belonging to that position rather than to
+// the gap beside it. Mirrors substitutionMarkerPlugin in
+// analytics.js, down to the dash pattern.
+function drawEntropyProfileEditLines(ctx, layout, positions) {
+  if (positions.length === 0) {
+    return;
+  }
+  ctx.save();
+  ctx.strokeStyle = EDIT_MARKER_COLOR;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  for (var i = 0; i < positions.length; i++) {
+    var x = positions[i] * layout.step
+      + layout.barWidth / 2;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, layout.cssHeight);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// One profile's columns, at a shared alpha for the crossfade times
+// each bar's own emphasis. ``current`` is the position the scrubber
+// sits on, or -1 for a series the scrubber does not index.
+function drawEntropyProfileSeries(ctx, layout, series) {
+  if (series.alpha <= 0.01) {
+    return;
+  }
+  for (var i = 0; i < series.values.length; i++) {
+    var value = series.values[i];
+    var frac = overlaysEntropyFraction(value);
+    var height = Math.max(1, frac * (layout.cssHeight - 2));
+    var emphasis = i === series.current ? 1 : 0.68;
+    ctx.globalAlpha = emphasis * series.alpha;
+    ctx.fillStyle = entropyColor(value);
+    ctx.fillRect(
+      i * layout.step,
+      layout.cssHeight - height,
+      layout.barWidth,
       height
     );
   }
   ctx.globalAlpha = 1;
-  drawEntropyProfileGlow(ctx, {
-    values: values,
-    step: step,
-    barWidth: barWidth,
-    cssHeight: cssHeight
-  });
-  updateEntropyReadout(
-    values, entropyHoverPos === null ? current : entropyHoverPos
-  );
 }
 
 // Light up the column for the token under the pointer: a faint
@@ -2191,15 +2475,15 @@ function entropyProfilePosition(event) {
   if (!entropyProfileCanvas) {
     return null;
   }
-  var values = entropyProfileValues();
-  if (values.length === 0) {
+  var columns = entropyProfileColumns();
+  if (columns === 0) {
     return null;
   }
   var cssWidth = entropyProfileCanvas.clientWidth || 1;
-  var step = cssWidth / values.length;
+  var step = cssWidth / columns;
   var rect = entropyProfileCanvas.getBoundingClientRect();
   var index = Math.floor((event.clientX - rect.left) / step);
-  if (index < 0 || index >= values.length) {
+  if (index < 0 || index >= columns) {
     return null;
   }
   return index;
@@ -2471,6 +2755,94 @@ function maskOpacity(c) {
   return MASK_OPACITY_FLOOR + (1 - MASK_OPACITY_FLOOR) * frac;
 }
 
+// A user-remasked position draws the mask glyph even though its
+// token is still resolved: the selection is a statement about what
+// the next run will redraw, not about what this frame holds.
+function tokenMaskedFn(index) {
+  return remaskedPositions[index] === true;
+}
+
+// Beyond token-mask / token-resolved, a span can be a remask
+// selection, or invite the click that makes one, or invite the hover
+// that opens its candidates. The latter two are edit-mode
+// affordances, so they never appear on a stacked layer.
+function tokenClassFn(index, tok, masked) {
+  if (remaskedPositions[index] === true) {
+    return "token-remasked";
+  }
+  if (masked) {
+    return "";
+  }
+  var classes = [];
+  if (remaskMode === "edit") {
+    classes.push("token-clickable");
+  }
+  if (substitutionMode && positionAlts[index]) {
+    classes.push("token-substitutable");
+  }
+  return classes.join(" ");
+}
+
+// Mask opacity tracks the model's live predicted confidence for the
+// position (0 or absent gives the solid floor). A remask selection
+// is held fully opaque instead, so it reads as a choice rather than
+// as one more low-confidence mask.
+function tokenOpacityFn(index, tok, masked) {
+  if (!masked || remaskedPositions[index] === true) {
+    return null;
+  }
+  return maskOpacity(tok ? tok.c : null);
+}
+
+function tokenColorFn(isOriginal) {
+  return function (index, tok) {
+    if (!tok || tok.m || remaskedPositions[index] === true) {
+      return null;
+    }
+    return tokenColorAt(index, tok, isOriginal);
+  };
+}
+
+// The hover tooltip for a token in a layer of ``total`` positions.
+// Closed over the total because the two stacked runs can differ in
+// length, and each should count its own.
+function tokenTitleFn(total, isOriginal) {
+  return function (index, tok) {
+    var line = tokenLabel(index, total) + "\n";
+    if (remaskedPositions[index] === true || !tok) {
+      // Whatever confidence the old token carried says nothing about
+      // a position queued for remasking.
+      return line + "Confidence: 0";
+    }
+    if (tok.m) {
+      return line + "Confidence: " + confLabel(tok.c);
+    }
+    return line + "Confidence: " + confLabel(tok.c)
+      + tokenExtraLabel(tok)
+      + tokenTitleExtra(index, isOriginal);
+  };
+}
+
+// The full callback set for one layer of ``total`` tokens drawn from
+// either the branch or the retained pre-edit run.
+function tokenLayerOptions(total, isOriginal) {
+  return {
+    maskChar: MASK_CHAR,
+    maskedFor: tokenMaskedFn,
+    classFor: tokenClassFn,
+    opacityFor: tokenOpacityFn,
+    colorFor: tokenColorFn(isOriginal),
+    titleFor: tokenTitleFn(total, isOriginal),
+  };
+}
+
+// Whether the run crossfade governs the token view: only once a
+// branch exists to compare against, and never mid-edit, where the
+// tokens are a target for clicks rather than something to read.
+function runBlendActive() {
+  return diffAvailable() && remaskMode === null;
+}
+
 function renderFrameWithTokens(frameIndex) {
   var tokens = frameTokens[frameIndex];
   if (!tokens) {
@@ -2478,64 +2850,67 @@ function renderFrameWithTokens(frameIndex) {
     return;
   }
 
-  // Diff overlay takes over rendering (two stacked layers).
-  if (
-    overlayMode === "diff"
-    && remaskMode === null
-    && diffAvailable()
-  ) {
+  // Diff overlay takes over rendering (two stacked layers of its
+  // own, under two independent opacity sliders).
+  if (overlayMode === "diff" && runBlendActive()) {
     renderDiffOverlay(frameIndex);
     return;
   }
 
-  outputArea.classList.remove("token-layers");
   tokenHighlightPos = null;
-  var allowClick = remaskMode === "edit";
-  var fragment =
-    document.createDocumentFragment();
-
-  for (var i = 0; i < tokens.length; i++) {
-    var tok = tokens[i];
-    var span = document.createElement("span");
-    span.setAttribute("data-pos", String(i));
-
-    var tline = tokenLabel(i, tokens.length) + "\n";
-    var isUserRemasked =
-      remaskedPositions[i] === true;
-
-    if (isUserRemasked) {
-      // Orange edit-selection highlight: kept fully opaque so the
-      // selection reads clearly (distinct from output masks).
-      span.className =
-        "token-span token-remasked";
-      span.textContent = MASK_CHAR;
-      span.title = tline + "Confidence: 0";
-    } else if (tok.m) {
-      // Output mask opacity tracks the model's live predicted
-      // confidence for the position (0/absent -> solid floor).
-      span.className = "token-span token-mask";
-      span.textContent = MASK_CHAR;
-      span.style.opacity = String(maskOpacity(tok.c));
-      span.title = tline + "Confidence: " + confLabel(tok.c);
-    } else {
-      span.className =
-        "token-span token-resolved"
-        + (allowClick ? " token-clickable" : "")
-        + (
-          substitutionMode && positionAlts[i]
-            ? " token-substitutable"
-            : ""
-        );
-      span.textContent = tok.t;
-      span.title = tline + "Confidence: " + confLabel(tok.c)
-        + tokenExtraLabel(tok);
-      applyTokenColor(span, i, tok);
-    }
-    fragment.appendChild(span);
+  outputArea.textContent = "";
+  if (runBlendActive()) {
+    outputArea.classList.add("token-layers");
+    outputArea.appendChild(
+      buildCrossfadedLayers(frameIndex, tokens)
+    );
+    return;
   }
 
-  outputArea.textContent = "";
+  outputArea.classList.remove("token-layers");
+  var options = tokenLayerOptions(tokens.length, false);
+  var fragment = document.createDocumentFragment();
+  for (var i = 0; i < tokens.length; i++) {
+    fragment.appendChild(
+      overlaysBuildTokenSpan(i, tokens[i], MASK_CHAR, options)
+    );
+  }
   outputArea.appendChild(fragment);
+}
+
+// The pre-edit run and the branch drawn on top of each other, mixed
+// by the run crossfade. The original layer clamps to its final frame
+// past its own end, so a branch that outran it keeps a stable ghost
+// rather than emptying out.
+function buildCrossfadedLayers(frameIndex, editedTokens) {
+  var oIdx = Math.min(
+    frameIndex, originalFrameTokens.length - 1
+  );
+  var origTokens =
+    (oIdx >= 0 ? originalFrameTokens[oIdx] : null) || [];
+  var editedTakes = overlaysEditedOwnsPointer(
+    1 - runBlend, runBlend
+  );
+
+  var fragment = document.createDocumentFragment();
+  var origOptions = tokenLayerOptions(origTokens.length, true);
+  origOptions.layerClass = "token-layer-original";
+  origOptions.opacity = 1 - runBlend;
+  origOptions.interactive = !editedTakes;
+  fragment.appendChild(
+    overlaysBuildTokenLayer(origTokens, origOptions)
+  );
+
+  var editOptions = tokenLayerOptions(
+    editedTokens.length, false
+  );
+  editOptions.layerClass = "token-layer-edited";
+  editOptions.opacity = runBlend;
+  editOptions.interactive = editedTakes;
+  fragment.appendChild(
+    overlaysBuildTokenLayer(editedTokens, editOptions)
+  );
+  return fragment;
 }
 
 function renderTargetPlaceholder(frameIndex) {
@@ -2839,6 +3214,7 @@ function activateScrubber() {
   updateEditFramesLock();
   overlayMode = "none";
   resetDiffOverlay();
+  resetRunBlend();
   buildOverlaySelect();
   if (overlaySelectGroup) {
     overlaySelectGroup.hidden = false;
@@ -2846,6 +3222,7 @@ function activateScrubber() {
   setOverlayDrawerOpen(false);
   updateDiffSummary();
   updateDiffOverlayControls();
+  updateRunBlendControls();
   guidedEditControls.hidden = true;
   clearRemaskedPositions();
   unlockScrubberNav();
@@ -3128,8 +3505,7 @@ function restoreEditSnapshot() {
   remaskEdits.length = Math.min(
     remaskEdits.length, preEditSnapshot.remaskEditsLen
   );
-  commitSteps = null;
-  diffData = null;
+  invalidateRunMemos();
   preEditSnapshot = null;
 }
 
@@ -3287,8 +3663,7 @@ function doSubstitute(position, tokenId) {
   // Positions from the substituted one onward are about to be
   // resampled, so their captured candidates no longer apply.
   positionAlts.length = position;
-  commitSteps = null;
-  diffData = null;
+  invalidateRunMemos();
   isResuming = true;
 
   remaskMode = "generating";
@@ -3373,11 +3748,12 @@ function renoiseNote() {
 }
 
 function updateGuidedUI() {
-  // The diff-opacity row shares the scrubber area with the guided
-  // controls, so keep it hidden whenever a run is being edited
-  // (remaskMode !== null); updateDiffOverlayControls restores it on
-  // exit once remaskMode is null again.
+  // The two blend rows share the scrubber area with the guided
+  // controls, so keep them hidden whenever a run is being edited
+  // (remaskMode !== null); both updates restore the right one on exit
+  // once remaskMode is null again.
   updateDiffOverlayControls();
+  updateRunBlendControls();
 
   // Reset every phase button first so no stale state can survive a
   // transition (including the exit back to remaskMode === null). Only
@@ -3551,8 +3927,7 @@ function doGuidedResume(action) {
   remaskedPositions = {};
 
   truncateRunArraysAt(frameIndex);
-  commitSteps = null;
-  diffData = null;
+  invalidateRunMemos();
   isResuming = true;
 
   remaskMode = "generating";
@@ -3902,8 +4277,7 @@ function resetRunState() {
   perFrameElapsed = [];
   frameCanvasIndex = [];
   frameMeanConf = [];
-  commitSteps = null;
-  diffData = null;
+  invalidateRunMemos();
   overlayMode = "none";
   if (overlaySelectGroup) {
     overlaySelectGroup.hidden = true;
@@ -4534,6 +4908,10 @@ if (diffBlendToggle) {
   });
 }
 
+if (runBlendInput) {
+  runBlendInput.addEventListener("input", onRunBlendInput);
+}
+
 // Guided edit mode event listeners.
 btnEditFrames.addEventListener(
   "click", enterRemaskMode
@@ -5031,8 +5409,7 @@ function restoreSessionState() {
   // the save's canvas_index validation.
   frameCanvasIndex = s.frameCanvasIndex || [];
   frameMeanConf = s.frameMeanConf || [];
-  commitSteps = null;
-  diffData = null;
+  invalidateRunMemos();
   perFrameElapsed = s.perFrameElapsed || [];
   lastFinalText = s.finalText || "";
   lastRunParams = s.params || null;
