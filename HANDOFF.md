@@ -317,7 +317,14 @@ would otherwise have dropped it silently (a test pins this).
   future model that emits `e`.
 - **Entropy profile**: `#entropy-profile` canvas in `#scrubber-section`
   (`drawEntropyProfile` in `app.js`), one column per position with the current
-  frame's column highlighted and a nats readout. This is the **sequence
+  frame's column at full opacity against the others' 0.68, plus a nats readout.
+  That opacity is the *only* marking of the scrubber's position, deliberately:
+  a drawn marker standing there at rest reads as a rendering artifact (it did,
+  and was reported as one), and `drawEntropyProfileGlow` already owns the
+  guide-under-the-pointer language. Do not re-add a standing marker.
+  Frame index equals position here, since the AR worker emits no leading empty
+  frame; an earlier `currentScrubFrame - 1` put the marker, the bright bar, and
+  the resting readout one column short. This is the **sequence
   profile**, not a per-position trajectory: an AR model decides each position
   once. (Earlier roadmap notes said "trajectory"; corrected in `ROADMAP.md`.)
   Hovering a token lights its column (`entropyHoverPos` /
@@ -854,12 +861,13 @@ because runs saved before the previous pass carry no `original_alternatives`.
     remasked token and at the Heatmap's warm end, which is where the old orange
     disappeared. Analytics tokens should highlight on direct hover at all,
     which they previously did not.
-18c. **Entropy profile marker.** On the generator, scrub to the **last** frame:
-    the faint full-height guide should sit on the **final** column, not the
-    second-to-last, and the nats readout at the right should report that
-    position's value. Scrub to frame 0 and mid-run and confirm the guide
-    tracks. The old marker was a 2px white stub floating at the top of the
-    strip, one column to the left; both the position and the shape changed.
+18c. **Entropy profile: no standing marker.** The strip should carry **no**
+    drawn marker at rest, only the hover guide under the pointer. The 2px
+    white stub that used to float at the top near the last column is gone.
+    The scrubber's frame is still marked, but only by its bar sitting at full
+    opacity against the others' 0.68, and the nats readout at the right
+    should name that frame's own position: scrub to the **last** frame and
+    confirm the readout reports the final position, not the one before it.
 18d. **The highlight checkbox, and that nothing clobbers it.** The **Overlay**
     drawer on both pages should carry a **Highlight tokens** checkbox, ticked
     by default, taking effect the instant you toggle it. Untick it on the

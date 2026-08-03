@@ -1600,7 +1600,7 @@ function renderDiffOverlay(frameIndex) {
           }
           return tokenLabel(index, total) + "\n"
             + "Confidence: " + confLabel(tok.c)
-            + tokenExtraLabel(index, tok);
+            + tokenExtraLabel(tok);
         },
       },
       MASK_CHAR
@@ -1619,18 +1619,14 @@ function effectiveColorMode() {
   return overlayMode;
 }
 
-// Trailing tooltip lines for one token: entropy when captured, plus
-// a nudge that the position carries competing candidates.
-function tokenExtraLabel(index, tok) {
-  var extra = "";
-  if (typeof tok.e === "number") {
-    extra += "\nEntropy: " + String(+tok.e.toFixed(3))
-      + " nats";
+// Trailing tooltip lines for one token: entropy, when captured. No
+// nudge toward the candidates, since hovering is what opened this
+// tooltip and the popover arrives on the same gesture.
+function tokenExtraLabel(tok) {
+  if (typeof tok.e !== "number") {
+    return "";
   }
-  if (positionAlts[index]) {
-    extra += "\nHover for alternatives";
-  }
-  return extra;
+  return "\nEntropy: " + String(+tok.e.toFixed(3)) + " nats";
 }
 
 // Apply the effective color mode to one resolved-token span,
@@ -2050,18 +2046,14 @@ function drawEntropyProfile() {
   // The profile only renders for runs carrying per-token entropy,
   // which is autoregressive-only, so the diffusion all-mask frame 0
   // does not apply here.
+  //
+  // The scrubber's position is carried by the bar's own opacity
+  // rather than a drawn marker. A standing full-height guide reads as
+  // an artifact at rest, and drawEntropyProfileGlow already owns that
+  // visual language for the column under the pointer.
   var current = currentScrubFrame;
   var step = cssWidth / values.length;
   var barWidth = Math.max(1, step - 0.5);
-
-  // Behind the bars: a faint guide marking the scrubber's position,
-  // in the same language as the hover guide below so it reads as a
-  // marker rather than as a stray fragment.
-  if (current >= 0 && current < values.length) {
-    ctx.fillStyle = "rgba(255, 255, 255, 0.06)";
-    ctx.fillRect(current * step, 0, barWidth, cssHeight);
-  }
-
   for (var i = 0; i < values.length; i++) {
     var frac = overlaysEntropyFraction(values[i]);
     var height = Math.max(1, frac * (cssHeight - 2));
@@ -2536,7 +2528,7 @@ function renderFrameWithTokens(frameIndex) {
         );
       span.textContent = tok.t;
       span.title = tline + "Confidence: " + confLabel(tok.c)
-        + tokenExtraLabel(i, tok);
+        + tokenExtraLabel(tok);
       applyTokenColor(span, i, tok);
     }
     fragment.appendChild(span);
