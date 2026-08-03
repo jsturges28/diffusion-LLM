@@ -62,6 +62,8 @@ var validationHint =
   document.getElementById("validation-hint");
 var toggleExperimental =
   document.getElementById("toggle-experimental");
+var btnParamDefaults =
+  document.getElementById("btn-param-defaults");
 
 var modelSelect =
   document.getElementById("model-select");
@@ -896,8 +898,10 @@ function buildParamPanel(model) {
 
     if (s.type === "int" || s.type === "float") {
       input.addEventListener("input", validateAllParams);
+      input.addEventListener("input", onParamFormChanged);
     } else {
       input.addEventListener("change", validateAllParams);
+      input.addEventListener("change", onParamFormChanged);
     }
   }
   applyLimits();
@@ -3694,6 +3698,7 @@ function setGenerating(active) {
   for (var i = 0; i < keys.length; i++) {
     paramInputs[keys[i]].disabled = active;
   }
+  updateParamDefaultsButton();
 
   if (active) {
     deactivateScrubber();
@@ -4363,6 +4368,19 @@ if (btnHistCancel) {
 toggleExperimental.addEventListener(
   "change", applyLimits
 );
+toggleExperimental.addEventListener(
+  "change", onParamFormChanged
+);
+
+if (btnParamDefaults) {
+  btnParamDefaults.addEventListener(
+    "click", resetParamsToDefaults
+  );
+}
+
+// The prompt's only other listener is Enter-to-generate, so the draft
+// needs its own to reach the session snapshot as it is typed.
+promptInput.addEventListener("input", onParamFormChanged);
 
 if (modelSelect && modelSelectList) {
   modelSelect.addEventListener("click", function (e) {
@@ -5071,6 +5089,224 @@ function restoreSessionState() {
   return true;
 }
 
+// ---- Session-scoped form state (params + prompt draft) ----
+//
+// Leaving the page and coming back used to reset every
+// hyperparameter, because boot() rebuilds the panel from specDefault
+// and nothing put the user's values back. This restores them for the
+// life of the app.
+//
+// It cannot ride in SESSION_KEY: saveSessionState bails unless a run
+// completed, and clearSessionState fires at the *start* of every
+// generate, so params would be wiped by Generate and lost entirely if
+// you navigated mid-run. This is form state, not a run artifact, and
+// it gets its own key with its own lifetime.
+//
+// Keyed by model id, because param_specs differ per model and a model
+// switch ends in a location.reload() that sessionStorage survives, so
+// each model keeps its own values. Deliberately not in PERSIST_KEYS:
+// it is meant to die with the app, since a fresh launch should start
+// from the recommended defaults.
+
+var PARAM_STATE_KEY = "diffusion_param_state";
+
+function readParamStateAll() {
+  var raw = null;
+  try {
+    raw = sessionStorage.getItem(PARAM_STATE_KEY);
+  } catch (_e) {
+    return {};
+  }
+  if (!raw) {
+    return {};
+  }
+  try {
+    var parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      return parsed;
+    }
+  } catch (_e) {
+    // Corrupt storage: fall back to the defaults.
+  }
+  return {};
+}
+
+// Raw control values rather than getParamValues() output, so a
+// half-typed entry round-trips instead of being silently rewritten by
+// a parseFloat. validateAllParams does its usual job on the way back.
+function currentParamRawValues() {
+  var out = {};
+  var names = Object.keys(paramInputs);
+  for (var i = 0; i < names.length; i++) {
+    var input = paramInputs[names[i]];
+    if (input.type === "checkbox") {
+      out[names[i]] = input.checked;
+    } else {
+      out[names[i]] = input.value;
+    }
+  }
+  return out;
+}
+
+function saveParamState() {
+  if (!activeModelId) {
+    return;
+  }
+  var all = readParamStateAll();
+  all[activeModelId] = {
+    experimental: toggleExperimental.checked,
+    params: currentParamRawValues(),
+    prompt: promptInput.value,
+  };
+  try {
+    sessionStorage.setItem(
+      PARAM_STATE_KEY, JSON.stringify(all)
+    );
+  } catch (_e) {
+    // Quota or private mode: the form simply will not persist.
+  }
+}
+
+// Every path that mutates the form funnels through here, so the
+// stored snapshot and the Reset button's enabled state cannot drift
+// apart.
+function onParamFormChanged() {
+  saveParamState();
+  updateParamDefaultsButton();
+}
+
+function restoreParamState() {
+  if (!activeModelId) {
+    return;
+  }
+  var state = readParamStateAll()[activeModelId];
+  if (!state) {
+    return;
+  }
+  // Experimental goes first: specDefault and specBounds both read it,
+  // so the values have to land against the right set of bounds.
+  toggleExperimental.checked = !!state.experimental;
+  applyParamRawValues(state.params);
+  // Clamps the restored values, refreshes the range tooltips, and
+  // validates, all of which the new bounds require. This also covers
+  // the awkward case of the device changing between save and restore,
+  // where a stored value can fall outside the override's range.
+  applyLimits();
+  if (state.prompt) {
+    promptInput.value = state.prompt;
+  }
+}
+
+// Restore by spec name so a spec set that changed between sessions
+// degrades instead of breaking: stored names the model no longer has
+// are ignored, and specs with nothing stored keep the default that
+// buildParamPanel already applied.
+function applyParamRawValues(values) {
+  if (!values || !activeModel) {
+    return;
+  }
+  var specs = activeModel.param_specs;
+  for (var i = 0; i < specs.length; i++) {
+    var stored = values[specs[i].name];
+    if (stored !== undefined) {
+      applyParamRawValue(specs[i], stored);
+    }
+  }
+}
+
+// One control, one stored value. A select is checked against the
+// spec's current options, since an option removed since the value was
+// stored would otherwise be forwarded to the server verbatim.
+function applyParamRawValue(spec, stored) {
+  var input = paramInputs[spec.name];
+  if (!input) {
+    return;
+  }
+  if (spec.type === "bool") {
+    input.checked = !!stored;
+  } else if (spec.type === "select") {
+    if ((spec.options || []).indexOf(stored) >= 0) {
+      input.value = stored;
+    }
+  } else {
+    input.value = String(stored);
+  }
+}
+
+// ---- Reset to defaults ----
+
+// Whether every control already sits at its default, which is what
+// disables the Reset button. Experimental is part of the question,
+// since it moves the bounds the defaults are drawn from.
+function paramsAtDefaults() {
+  if (toggleExperimental.checked) {
+    return false;
+  }
+  if (!activeModel) {
+    return true;
+  }
+  var specs = activeModel.param_specs;
+  for (var i = 0; i < specs.length; i++) {
+    if (!paramAtDefault(specs[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function paramAtDefault(spec) {
+  var input = paramInputs[spec.name];
+  if (!input) {
+    return true;
+  }
+  if (spec.type === "bool") {
+    return input.checked === Boolean(specDefault(spec));
+  }
+  if (spec.type === "select") {
+    return input.value === spec.default;
+  }
+  // String comparison against the same String() the builder used, so
+  // a retyped "0.30" reads as changed. Harmless: Reset just
+  // normalizes it.
+  return input.value === String(specDefault(spec));
+}
+
+function resetParamsToDefaults() {
+  if (!activeModel || isGenerating) {
+    return;
+  }
+  toggleExperimental.checked = false;
+  var specs = activeModel.param_specs;
+  for (var i = 0; i < specs.length; i++) {
+    resetParamToDefault(specs[i]);
+  }
+  applyLimits();
+  // Re-save rather than clearing the entry: the prompt draft lives in
+  // the same record and is not the button's business.
+  onParamFormChanged();
+}
+
+function resetParamToDefault(spec) {
+  var input = paramInputs[spec.name];
+  if (!input) {
+    return;
+  }
+  if (spec.type === "bool") {
+    input.checked = Boolean(specDefault(spec));
+  } else if (spec.type === "select") {
+    input.value = spec.default;
+  } else {
+    input.value = String(specDefault(spec));
+  }
+}
+
+function updateParamDefaultsButton() {
+  if (!btnParamDefaults) {
+    return;
+  }
+  btnParamDefaults.disabled = isGenerating || paramsAtDefaults();
+}
+
 // ---- Boot ----
 
 function boot() {
@@ -5097,6 +5333,10 @@ function boot() {
       if (activeModel) {
         buildParamPanel(activeModel);
         applyUniformParamWidth(list);
+        // Before restoreSessionState, so a completed run's prompt
+        // still overwrites the draft with no special casing.
+        restoreParamState();
+        updateParamDefaultsButton();
       }
       setMaskChar();
       var restored = false;

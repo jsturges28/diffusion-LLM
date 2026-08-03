@@ -71,12 +71,17 @@ compare runs in an analytics suite.
 
 ## Recently shipped (this session)
 
-**Latest pass: the shared comparison layer.** No Python changed, so `pytest`
-(79/79) is a regression check only; `node --check`, ReadLints, and the 70-column
-audit are clean. Nothing needing a display was exercised; checklist items 16 to
-20 at the bottom cover them. The idea it implements: **the pre-edit run is a
-layer, not a mode.** It used to be one in exactly two places (the diff overlay's
-token stack, the entropy chart's crossfade), each with its own control.
+**Latest pass: the shared comparison layer, then two persistence changes.**
+Three commits. No Python changed in any of them, so `pytest` (79/79) is a
+regression check only; `node --check`, ReadLints, and the 70-column audit are
+clean. Nothing needing a display was exercised; checklist items 16 to 20 at the
+bottom cover them.
+
+The first commit's idea: **the pre-edit run is a layer, not a mode.** It used to
+be one in exactly two places (the diff overlay's token stack, the entropy
+chart's crossfade), each with its own control. Four refinements to that same
+surface are folded in, since three of them amend code the layer work introduced
+and splitting would have committed code the next commit rewrote.
 
 - **The layered spans were inert, which was the blocker.**
   `overlaysBuildDiffLayerSpans` emitted bare `<span>`s with no class and no
@@ -163,6 +168,34 @@ token stack, the entropy chart's crossfade), each with its own control.
   since the worker only holds the live run's state. Analytics also gained the
   generator's `matches(":hover")` keep-open guard, without which the arrows
   would be unclickable.
+
+- **Hyperparameters and the prompt draft survive navigation now.** `boot()`
+  rebuilt every control from `specDefault` and `restoreSessionState` never
+  touched `paramInputs`, so a trip to Analytics and back reset the form. New
+  `PARAM_STATE_KEY = "diffusion_param_state"` in sessionStorage, shaped
+  `{ "<modelId>": { experimental, params: { name: rawValue }, prompt } }`.
+  Points worth not relitigating:
+  - **It could not ride `SESSION_KEY`.** `saveSessionState` bails unless a run
+    completed, and `clearSessionState` fires at the *start* of every generate,
+    so params would be wiped by Generate and lost outright if you navigated
+    mid-run. Form state and run artifacts have different lifetimes.
+  - **Keyed by model id** because `param_specs` differ per model and a model
+    switch ends in `location.reload()`, which sessionStorage survives, so each
+    model keeps its own values across a switch.
+  - **Raw `input.value` / `input.checked`, not `getParamValues()`**, so a
+    half-typed entry round-trips instead of being rewritten by a `parseFloat`.
+  - **Deliberately not in `PERSIST_KEYS`.** It is supposed to die with the app;
+    a fresh launch should open on the recommended defaults.
+  - Restore order is Experimental, then values, then `applyLimits()` (which
+    clamps, refreshes the range tooltips, and validates in one call). It runs
+    before `restoreSessionState`, so a completed run's prompt still wins over
+    the draft with no special casing. Restoring by spec name means a changed
+    spec set degrades: unknown names are dropped, missing ones keep their
+    default, and a select value no longer among `spec.options` is refused
+    rather than forwarded to the server.
+  - Every mutation path goes through `onParamFormChanged`, so the store and the
+    Reset button's enabled state cannot drift. Reset re-saves rather than
+    clearing the record, because the prompt draft shares it.
 
 **Deferred deliberately:** the generator's own crossfade and two-layer stack.
 When scheduled, the crossfade goes in its own row below the frame scrubber.
@@ -821,6 +854,12 @@ because runs saved before the previous pass carry no `original_alternatives`.
     remasked token and at the Heatmap's warm end, which is where the old orange
     disappeared. Analytics tokens should highlight on direct hover at all,
     which they previously did not.
+18c. **Entropy profile marker.** On the generator, scrub to the **last** frame:
+    the faint full-height guide should sit on the **final** column, not the
+    second-to-last, and the nats readout at the right should report that
+    position's value. Scrub to frame 0 and mid-run and confirm the guide
+    tracks. The old marker was a 2px white stub floating at the top of the
+    strip, one column to the left; both the position and the shape changed.
 18d. **The highlight checkbox, and that nothing clobbers it.** The **Overlay**
     drawer on both pages should carry a **Highlight tokens** checkbox, ticked
     by default, taking effect the instant you toggle it. Untick it on the
@@ -833,12 +872,26 @@ because runs saved before the previous pass carry no `original_alternatives`.
     clobber here is the failure mode to watch. The status bar should no
     longer carry `Highlighted Tokens: On/Off`, and Settings' Appearance tab
     should be down to the diffusion-text rows.
-18c. **Entropy profile marker.** On the generator, scrub to the **last** frame:
-    the faint full-height guide should sit on the **final** column, not the
-    second-to-last, and the nats readout at the right should report that
-    position's value. Scrub to frame 0 and mid-run and confirm the guide
-    tracks. The old marker was a 2px white stub floating at the top of the
-    strip, one column to the left; both the position and the shape changed.
+18e. **Form state across a visit, and only a visit.** This is the reported bug:
+    turn on **Alternatives**, change a number or two, tick **Experimental**,
+    type into the prompt, then go to Analytics and come back. Everything
+    should be exactly as you left it. Repeat the round trip **before** running
+    anything and again **after** a completed run; both paths were broken, and
+    the second is where a completed run's prompt should override the draft
+    rather than the other way round. Then hit **Generate** and confirm the
+    params are still there afterward (they used to be cleared at the *start*
+    of a run). Switch models and back, confirming each model keeps its own
+    values across the reload. Finally close the app and relaunch: everything
+    should be back to the recommended defaults, which is the intended
+    boundary. Worth one look at a half-typed value (leave a trailing decimal
+    point), which should come back as typed rather than rounded.
+18f. **Reset to Defaults.** The **Reset** button at the right of the
+    Experimental row should start greyed out, light up the moment anything
+    differs, and grey out again once you undo the change by hand. Click it
+    with Experimental on and several params changed: everything returns to
+    the defaults, Experimental clears, and the range tooltips follow the
+    narrower bounds. It should leave the prompt alone, and it should be
+    unavailable while a generation is running.
 19. **Popover pagination.** On a branch saved this session, hover a token
     **past** the substitution: the heading should read "Position N: Edited" with
     a `‹ ›` pager, the current side disabled. Click `‹` for the pre-edit

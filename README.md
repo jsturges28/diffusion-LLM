@@ -95,6 +95,8 @@ Both overlays are derived from the recorded per-token frames. In the live genera
 
 All parameters are configurable in the web UI with recommended bounds enforced by default. An **Experimental** toggle lifts the bounds for exploratory use.
 
+Hyperparameters, the Experimental toggle, and the prompt draft persist for the life of the app, per model, so navigating to Analytics and back leaves the setup intact; values are stored as typed, so a half-finished number is not rounded off. Closing the app clears them, and a fresh launch starts from the recommended defaults. A **Reset** button on the Experimental row restores every hyperparameter and the toggle for the current model and device, and is disabled while nothing differs from the defaults.
+
 
 ## Architecture
 
@@ -402,6 +404,7 @@ Clicking **Save** writes a timestamped folder under `results/` containing `metad
 - [x] Candidate-popover pagination: positions at or past a What If substitution get Original/Edited arrows over the two runs' top-k sets, each page marking the token its own run drew
 - [x] One token-highlight look for both the pointer hover and the entropy-driven highlight, in neutral white so it survives the overlays' arbitrary backgrounds; Analytics gained the direct hover it never applied
 - [x] Highlight tokens moved out of Settings into each page's Overlay drawer, next to the tokens it acts on: applies immediately, defaults on, still server-persisted and shared across pages
+- [x] Session-scoped form state: hyperparameters, the Experimental toggle, and the prompt draft survive navigation and a model switch (per model, stored as typed) but reset when the app closes, with a Reset button that restores the defaults and disables itself when they already hold
 
 
 ## Roadmap

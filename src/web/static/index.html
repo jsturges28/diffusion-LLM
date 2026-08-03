@@ -99,6 +99,16 @@
           <span class="tooltip">Removes recommended parameter bounds. Values outside the default range may produce erratic or unstable results.</span>
         </span>
         <span id="mode-extra"></span>
+        <!-- Sits on this row rather than beside Save and Generate
+             because it resets Experimental along with every
+             hyperparameter, and because those two are destructive
+             enough to want distance from. -->
+        <button id="btn-param-defaults" type="button" disabled
+          title="Reset hyperparameters to their defaults"
+          aria-label="Reset hyperparameters to their defaults">
+          <span aria-hidden="true">&#8634;</span>
+          <span>Reset</span>
+        </button>
       </div>
 
       <div id="param-row">
@@ -440,6 +450,9 @@
         <p>It is disabled during generation and after a successful save (to prevent duplicates); while saving it shows a spinner, then a brief checkmark. Starting a new generation resets it.</p>
         <h3>Experimental mode</h3>
         <p>The toggle above the parameter controls removes the recommended bounds, allowing extreme values for exploratory purposes. The default bounds represent the range that produces more consistent, stable results.</p>
+        <h3>Hyperparameters between visits</h3>
+        <p>Your hyperparameters, the <strong>Experimental</strong> toggle, and whatever is in the prompt box are kept for as long as the app is open, so a trip to Analytics and back leaves your setup exactly as you left it. Each model remembers its own values, and a half-typed number is preserved as typed rather than rounded off. Closing the app clears all of it: a fresh launch starts from the recommended defaults, which is the state worth starting from.</p>
+        <p><strong>Reset</strong>, at the right of the Experimental row, puts every hyperparameter and the Experimental toggle back to their defaults for the current model and device. It is greyed out whenever nothing has been changed, so it doubles as a readout of whether you are on defaults. Your prompt is left alone, and the button is unavailable while a generation is running.</p>
       </div>
     </div>
   </div>

@@ -578,6 +578,37 @@ body {
   margin-bottom: 10px;
 }
 
+/* Restores every hyperparameter plus Experimental. Quiet by default
+   and disabled while they already match, so it reads as an escape
+   hatch rather than a fifth control competing for attention. */
+#btn-param-defaults {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  padding: 3px 9px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+#btn-param-defaults:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--text-dim);
+}
+
+#btn-param-defaults:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 .toggle-label {
   font-size: 11px;
   color: var(--text-secondary);

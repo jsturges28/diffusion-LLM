@@ -210,19 +210,34 @@ analytics suite.
   ownership between exactly overlapping layers is now stated once
   (`overlaysEditedOwnsPointer`: the more opaque layer takes it, ties to
   edited) rather than falling out of sibling order. In Analytics the entropy
-  chart's slider was promoted to a run-level crossfade in the detail modal
-  header, gated on the snapshot rather than on the entropy series, and
+  chart's slider was promoted to a run-level crossfade on the token overlay's
+  heading row, gated on the snapshot rather than on the entropy series, and
   `renderOverlayTokens` takes a `colorFor(index, token)` so **every** overlay
   mode stacks and blends the two runs, each layer colored by its own values.
   Commit Order needs a second memoized steps array, since a commit step is a
   property of a frame stream rather than of a token. Entropy bars and tokens
   cross-highlight in both directions on both pages (`setActiveElements` one
   way, a `token-cross-highlight` class the other; on the generator the missing
-  half was a `mousemove` on `#entropy-profile` inverting its own layout math),
-  ungated by the `highlightTokens` comfort setting. The candidate popover pages
-  between the two runs' top-k sets from the divergence point rightward, each
-  page marking the token its own run drew. The generator's own crossfade and
-  two-layer stack are deferred.
+  half was a `mousemove` on `#entropy-profile` inverting its own layout math).
+  The bar-to-token direction had to become a plugin `afterEvent` hook rather
+  than `options.onHover`, which Chart.js only fires inside `chartArea`, so
+  exiting through the axis gutter left the last token lit. The candidate
+  popover pages between the two runs' top-k sets from the divergence point
+  rightward, each page marking the token its own run drew. The generator's own
+  crossfade and two-layer stack are deferred.
+- Shipped (this session): **two persistence changes on opposite tiers.** The
+  pointer hover and the entropy cross-highlight collapsed into one neutral
+  white look (an accent tint disappears on an orange remask or the Heatmap's
+  warm end), and `highlightTokens` moved out of the Settings page into a
+  checkbox in each page's Overlay drawer: on by default, applied on tick, still
+  in the shared `diffusion_settings` blob so both pages agree across a restart.
+  `settings.js` keeps round-tripping the field it no longer shows, since Save
+  writes the blob wholesale. Separately, hyperparameters, the Experimental
+  toggle, and the prompt draft became **session**-scoped in a new
+  `diffusion_param_state` sessionStorage key keyed by model id, deliberately
+  outside `PERSIST_KEYS` so a fresh launch still starts from the recommended
+  defaults, with a `#btn-param-defaults` Reset on the Experimental row that
+  disables itself while everything already matches.
 - For the feature overview and architecture, see `README.md`. For the build
   history, see `.cursor/plans/`.
 
