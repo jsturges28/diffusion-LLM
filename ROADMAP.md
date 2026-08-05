@@ -28,13 +28,13 @@ analytics suite.
   canvas-boundary markers), reproducibility metadata, graceful VRAM handling, and
   the DiffusionGemma thinking-mode split view.
 - Shipped (latest session): DiffusionGemma single-canvas remask/resume (Phase 2
-  below, via seed-canvas re-entry); two xAI overlays: commit-order
+  below, via seed-canvas re-entry); two XAI overlays: commit-order
   (resolution-step) token coloring and the counterfactual "Diff vs Original"
   comparison (opacity sliders + difference blend); a grouped overlay picker
   (None / Heatmap / Diff) with persistent per-browser settings (highlight tokens,
   commit order) behind staged Save/Reset; and analytics run deletion (confirm
   modal + toast) with contained, toggleable chart tooltips (line burn-through).
-- Shipped (this session): durable xAI overlays. Per-token records (display
+- Shipped (this session): durable XAI overlays. Per-token records (display
   text, mask flag, vocab id, confidence) and the pre-edit snapshot are now
   persisted per run (`tokens.json` / `original_tokens.json`), the overlay math
   is shared between pages (`src/web/static/overlays.js`), and the Analytics
@@ -388,6 +388,63 @@ analytics suite.
   same message read `results/...` after a fresh save and an absolute path
   after an in-place update. `_display_run_path` normalizes where the branches
   meet, leaving the traversal guard alone.
+- Shipped (this session): a **polish pass** plus the **model-load progress
+  bar**. The polish, briefly: a model switch now clears the run snapshot
+  (keyed by device as well as model, and dropped by both activation paths,
+  since switching away and back lands on a matching pair that no identity
+  check can reject); the output placeholder names the resident model; the
+  Analytics "Edited" check lost its dot-pattern stroke and the three orphaned
+  rules behind it; the prompt label gained 3px, which is what sets the
+  clearance under the absolutely-positioned history control; the docs read as
+  an LLM visualizer with the depth in discrete diffusion, and `xAI` is `XAI`
+  throughout; the collapsed overlay drawer drags vertically via one shared
+  helper in `overlays.js`, moving `top` because the group already animates
+  `transform`, and owning the handle's click as well as its drag because at
+  the target node listeners fire in registration order regardless of the
+  capture flag; and AR **Alternatives** defaults on, with `smollm3_worker`
+  now reading every absent-key fallback from the registry spec instead of
+  keeping a second copy of each default.
+- The bar itself is `src/inference/load_progress.py`, the companion to
+  `hf_download.py`: getting weights onto disk had a readout, reading them into
+  memory did not, and it is often the longer wait. There is no hook to borrow,
+  so it samples memory counters the way `hf_download` samples the cache
+  directory. Two findings shaped it. LLaDA loads with `device_map="auto"`, so
+  accelerate streams shards straight to the GPU and RSS barely moves, while
+  SmolLM3 fills RAM and copies after: sequential CPU-then-GPU phases would
+  leave the bar at zero through half of one of them, so it reports
+  `max(rss_delta, cuda_allocated)` over one target and names whichever counter
+  it is reading. And LLaDA on CPU passes `torch_dtype=None`, which means
+  fp32 from a BF16 checkpoint, so the target is scaled by the **requested**
+  dtype, not the on-disk one. Anything unmeasurable (mixed dtypes, an
+  unreadable header, an unfamiliar layout) returns a zero target and renders
+  as the phase label with a spinner, because a confidently wrong bar is worse
+  than none. The reading is floored at its previous peak, since the CPU
+  allocator returns pages mid-load. The sampler runs on the helper thread and
+  the load stays on the caller's, the opposite of `download_with_progress`:
+  moving a heavyweight library-driven load between threads for a progress bar
+  would trade real risk for a cosmetic one. The boot path polls too, which is
+  what finally gave the slowest load of a session a bar.
+- Shipped (this session): the four items left open by the pass above.
+  **Re-selecting the resident model is navigation**: the server always treated
+  that activation as a no-op, so the only damage was the clear the pass above
+  had just added, which wiped the run on a path that spawns nothing. The menu
+  now reads `active_device` (it was being discarded), asks *Go back to the
+  Generation page?*, and uses the activate response's `state` as the
+  discriminator, so a worker that died since the menu was drawn still gets the
+  loading UI. **Dropdowns flip up when clipped**: the occluded rows were the
+  Overlay picker's list, not the drawer, and the flip lives in the shared
+  factory so every dropdown inherits it, flipping only when the list does not
+  fit below and there is more room above. **A reserved tail for the pickled
+  checkpoint**: DiffusionGemma unpickles the whole state dict into RAM before
+  copying, so its read filled the bar and left the copy nowhere to go. The
+  trap is that clamping is not enough, since the monotonic floor would jump
+  the tail in one step; the read is compressed into `[0, ceiling]` and the copy
+  scaled into the rest. Opt-in, defaulting to 1.0, so the two loads that
+  already tracked their wait are provably untouched. **The bar finishes**: the
+  closing 100% never reached the browser (the worker goes ready in the same
+  breath and `_apply_health` drops progress), so the reducer names `ready` and
+  both pages hold a full bar briefly, and three stacked 500ms polls came down
+  to 250ms.
 - For the feature overview and architecture, see `README.md`. For the build
   history, see `.cursor/plans/`.
 
@@ -400,7 +457,7 @@ Agreed with the maintainer (deliberate each in Ask mode before Plan). (The
 
 1. **State-space models: Mamba-3 (new model class).** Integrate a 1.5B Mamba-3
    SISO / MIMO checkpoint (`state-spaces` HF org, arXiv 2603.15569) as the first
-   SSM, opening a distinct xAI lens: the fixed-size recurrent state. Key open
+   SSM, opening a distinct XAI lens: the fixed-size recurrent state. Key open
    decision, base vs instruct (the `state-spaces` weights are base LMs, not
    instruction-tuned). Own `.venv-ssm`; native `mamba-ssm` / `causal-conv1d`
    CUDA kernels (GPU-only, custom decode loop); ~3 GB VRAM. The streaming
@@ -458,7 +515,7 @@ cleanly onto AR: frame N is the sequence after N generated tokens, every token
 - **Analytics**: convergence chart dropped for AR (would flatline); timing and
   confidence kept. `model_type` is persisted in each run's `metadata.json`.
 
-**Phase C (shipped this session).** The AR xAI trio, built in dependency order
+**Phase C (shipped this session).** The AR XAI trio, built in dependency order
 (read-only signals first, the intervention last):
 - **Entropy**, always on. `-(p log p)` over the untempered softmax
   (`_entropy_nats`), in nats, stored raw. Normalizing by `log(vocab)` was
@@ -605,7 +662,7 @@ grounded text, VRAM stays within budget, and the text-only path is unaffected.
 
 ---
 
-## Experimental / xAI feature backlog (to deliberate)
+## Experimental / XAI feature backlog (to deliberate)
 
 The suite is shaping up as an explainability playground, so these are candidate
 directions to scope together before building. None are committed. For any that

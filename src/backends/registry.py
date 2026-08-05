@@ -285,11 +285,18 @@ SMOLLM3 = ModelInfo(
             help="Enable the extended reasoning channel"
             " (shown in a separate panel).",
         ),
+        # On by default: it is what makes the hover popover and What
+        # If? substitution work at all, so leaving it off meant the
+        # model's two most interesting affordances were invisible
+        # until you found the toggle. The capture is a top-k over the
+        # logits already computed, and only the frame that introduces
+        # a position carries its candidates (see ar_sampler), so the
+        # cost is small and the payload grows linearly.
         ParamSpec(
             name="alternatives",
             label="Alternatives",
             type=ParamType.BOOL,
-            default=False,
+            default=True,
             help="Capture the top competing tokens at each"
             " position, shown on hover and required for"
             " What If substitution (slightly slower).",

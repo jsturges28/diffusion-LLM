@@ -76,6 +76,16 @@ RESULTS_DIR = Path("results")
 
 WORKER_START_TIMEOUT_S = 180.0
 WORKER_STOP_TIMEOUT_S = 30.0
+# How often the startup monitor reads the worker's /health. Two
+# cadences, because the two halves of startup want different things.
+# Before the worker answers at all, every poll is a refused connection
+# during its torch import, so there is nothing to gain by hurrying.
+# Once it is reporting progress, this is the client's only source of
+# it, and the browser polls on top of this: a slow read here plus a
+# slow read there is what left a short load looking like it stopped
+# part way.
+WORKER_HEALTH_POLL_S = 0.5
+WORKER_PROGRESS_POLL_S = 0.25
 # Grace period for a stopped worker's VRAM to be reclaimed
 # before the pre-flight check refuses the next activation.
 VRAM_SETTLE_TIMEOUT_S = 8.0
@@ -588,7 +598,11 @@ class ModelManager:
                             return
                 except Exception:  # noqa: BLE001 - worker still coming up
                     pass
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(
+                    WORKER_PROGRESS_POLL_S
+                    if responded
+                    else WORKER_HEALTH_POLL_S
+                )
 
     def _apply_health(self, body: Dict[str, Any]) -> bool:
         """Fold one /health body into load state. True when terminal."""
@@ -608,8 +622,12 @@ class ModelManager:
             self.load_state = "downloading"
             self.load_progress = body.get("progress")
         else:
+            # A load carries progress too, once the weights start
+            # arriving. Before that the worker sends none and this
+            # falls back to None, which the client shows as an
+            # indeterminate spinner.
             self.load_state = "loading"
-            self.load_progress = None
+            self.load_progress = body.get("progress")
         return False
 
     async def cancel_activation(self) -> None:

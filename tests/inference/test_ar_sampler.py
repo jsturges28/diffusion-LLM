@@ -1,4 +1,4 @@
-"""Tests for the autoregressive sampler's xAI signals.
+"""Tests for the autoregressive sampler's XAI signals.
 
 Strategy: the sampler's numeric core is pure torch, so these tests
 drive it on small CPU tensors with a stub tokenizer and a stub model,

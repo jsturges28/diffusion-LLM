@@ -21,6 +21,11 @@ from transformers import AutoTokenizer  # type: ignore[attr-defined]
 from src.backends.registry import DGEMMA
 from src.backends.worker_base import Backend, FrameStreamer
 from src.inference.dgemma_nf4 import load_quantized
+from src.inference.load_progress import (
+    HOST_STAGE_CEILING_PICKLED,
+    load_target_bytes,
+    sample_load_progress,
+)
 from src.inference.dgemma_sampler import (
     streaming_generate,
     streaming_resume,
@@ -47,6 +52,11 @@ class DgemmaBackend(Backend):
         self.model: Any = None
         self.tokenizer: Any = None
         self.last_run_state: Optional[Dict[str, Any]] = None
+        # No download phase here (the NF4 checkpoint is produced
+        # locally by scripts/quantize_diffusiongemma_nf4.py), but the
+        # read into memory is the longest of the three models, so it
+        # reports through the same attribute the others use.
+        self.load_progress: Optional[Dict[str, Any]] = None
 
     def load(self, *, device: str = "cuda") -> None:
         # The NF4 experts assume a CUDA compute path (bitsandbytes),
@@ -67,7 +77,20 @@ class DgemmaBackend(Backend):
         logger.info("loading tokenizer from %s", path)
         self.tokenizer = AutoTokenizer.from_pretrained(str(path))
         logger.info("loading NF4 model from %s", path)
-        self.model = load_quantized(str(path), device=device)
+        # The checkpoint is a single pickled state dict already in its
+        # packed NF4 form, so its size on disk is the target and there
+        # is no dtype conversion to scale by.
+        target = load_target_bytes(path)
+        # Alone among the three, this one unpickles the entire state
+        # dict into RAM before copying any of it across, so the read
+        # would otherwise fill the bar and leave the copy nowhere to
+        # go. The ceiling reserves it a tail.
+        with sample_load_progress(
+            target_bytes=target,
+            sink=lambda p: setattr(self, "load_progress", p),
+            host_stage_ceiling=HOST_STAGE_CEILING_PICKLED,
+        ):
+            self.model = load_quantized(str(path), device=device)
         logger.info("DiffusionGemma NF4 loaded")
 
     def _bounds(

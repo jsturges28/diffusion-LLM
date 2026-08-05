@@ -934,9 +934,11 @@ function renderTable() {
         tr.appendChild(td);
       }
 
-      // Edited marker: a checkmark filled with the diffusion dot
-      // pattern (a cutout of the mask glyph) for runs with a saved
-      // original; blank otherwise (no negative marker).
+      // Edited marker: a plain accent checkmark for runs with a saved
+      // original; blank otherwise (no negative marker). It was once
+      // filled with the diffusion dot pattern, but at 16px that
+      // texture only muddied the shape, and the column reads as a
+      // status flag rather than a piece of the diffusion metaphor.
       var tdDiff = document.createElement("td");
       tdDiff.className = "col-edited";
       if (run.has_diff) {
@@ -946,7 +948,7 @@ function renderTable() {
           + ' aria-label="Edited">'
           + '<title>Edited: diff vs original available</title>'
           + '<path d="M4.5 12.5 L9.5 17.5 L19.5 6.5" fill="none"'
-          + ' stroke="url(#edited-dots)" stroke-width="3.2"'
+          + ' stroke="var(--accent)" stroke-width="3.2"'
           + ' stroke-linecap="round" stroke-linejoin="round" />'
           + '</svg>';
       }
@@ -3912,13 +3914,15 @@ btnCloseDetail.addEventListener(
   "click", hideDetail
 );
 
-if (overlayDrawerHandle) {
-  overlayDrawerHandle.addEventListener("click", function () {
-    setOverlayDrawerOpen(
-      !overlaySelectGroup.classList.contains("open")
-    );
-  });
-}
+// The shared helper owns the handle click as well as the drag, so
+// this binds none of its own (see overlaysMakeDrawerDraggable).
+overlaysMakeDrawerDraggable({
+  group: overlaySelectGroup,
+  handle: overlayDrawerHandle,
+  container: document.getElementById("overlay-output-wrap"),
+  storageKey: "diffusion_overlay_drawer_top_analytics",
+  onToggle: setOverlayDrawerOpen,
+});
 
 // Close the detail modal when clicking the backdrop (outside the box).
 detailPanel.addEventListener("click", function (e) {

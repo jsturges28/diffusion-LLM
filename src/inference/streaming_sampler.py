@@ -2,7 +2,7 @@
 
 Yields decoded text frames one at a time so a WebSocket handler
 can stream them to the browser without waiting for the full run.
-Reuses helper functions from llada_sampler.py — the core sampling
+Reuses helper functions from llada_sampler.py; the core sampling
 file stays untouched.
 """
 

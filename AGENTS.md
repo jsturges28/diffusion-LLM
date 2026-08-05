@@ -6,11 +6,13 @@ Read this first, then `HANDOFF.md` (the living, per-session handoff), then
 
 ## What this project is
 
-A local FastAPI + WebSocket visual playground and analytics suite for **discrete
-diffusion LLMs** (LLaDA-8B-Instruct and DiffusionGemma-26B-A4B), oriented toward
-explainability (xAI). It runs in the browser (localhost) and as an optional
-native desktop app (`desktop.py`, pywebview). Architecture, features, and the
-public roadmap live in `README.md`; the deeper living roadmap in `ROADMAP.md`.
+A local FastAPI + WebSocket visual playground and analytics suite for **LLMs**,
+oriented toward explainability (XAI). The depth is in **discrete diffusion**
+(LLaDA-8B-Instruct and DiffusionGemma-26B-A4B), with SmolLM3-3B alongside as an
+autoregressive baseline and room for further model classes. It runs in the
+browser (localhost) and as an optional native desktop app (`desktop.py`,
+pywebview). Architecture, features, and the public roadmap live in `README.md`;
+the deeper living roadmap in `ROADMAP.md`.
 
 ## Environments (never touch system Python)
 

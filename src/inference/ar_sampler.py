@@ -11,7 +11,7 @@ softmax probability of the chosen token.
 Generic across autoregressive ``AutoModelForCausalLM`` checkpoints;
 the SmolLM3 worker is the first caller.
 
-Two xAI signals ride alongside confidence. Per-token **entropy** is
+Two XAI signals ride alongside confidence. Per-token **entropy** is
 always captured (one float, off the softmax the sampler already
 computes) and answers a different question than confidence: how
 undecided the model was over the whole vocabulary, not how likely

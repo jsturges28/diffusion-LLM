@@ -41,6 +41,55 @@ function sizeCustomSelect(widget) {
   widget.style.minWidth = Math.ceil(width) + 48 + "px";
 }
 
+// Gap between a select and its option list, mirroring the 4px in the
+// .custom-select-list rule.
+var CUSTOM_SELECT_GAP_PX = 4;
+// Ancestors walked looking for the box that would clip the list. A
+// bound rather than a while-true: a detached or cyclic tree must not
+// be able to hang a click.
+var CUSTOM_SELECT_ANCESTOR_MAX = 32;
+
+// Whether the option list should open upward instead of downward.
+//
+// Pure, and separated from the measuring, because this is the part
+// with a decision in it. Opening up is only an improvement when the
+// list genuinely does not fit below AND there is more room above:
+// when neither side fits, flipping would trade one clipped list for a
+// worse one.
+function customSelectShouldDropUp(box) {
+  var needed = box.listHeight + box.gap;
+  var below = box.boundBottom - box.wrapBottom;
+  var above = box.wrapTop - box.boundTop;
+  if (below >= needed) {
+    return false;
+  }
+  return above > below;
+}
+
+// Bottom/top of the nearest ancestor that would clip an overflowing
+// list, falling back to the viewport when nothing clips.
+//
+// The drawer this most affects sits inside an output area that hides
+// its overflow, so the list cannot simply spill out of it; the only
+// way to stay visible near the bottom edge is to open the other way.
+function customSelectClipBounds(el) {
+  var node = el.parentElement;
+  var steps = 0;
+  while (node && steps < CUSTOM_SELECT_ANCESTOR_MAX) {
+    if (node === document.body) {
+      break;
+    }
+    var overflow = window.getComputedStyle(node).overflowY;
+    if (overflow && overflow !== "visible") {
+      var rect = node.getBoundingClientRect();
+      return { top: rect.top, bottom: rect.bottom };
+    }
+    node = node.parentElement;
+    steps += 1;
+  }
+  return { top: 0, bottom: window.innerHeight };
+}
+
 // "low_confidence" -> "Low confidence"; "random" -> "Random".
 function prettifyOption(value) {
   var text = String(value).replace(/_/g, " ");
@@ -102,13 +151,29 @@ function createCustomSelect(options, current) {
     if (wrap.classList.contains("disabled")) {
       return;
     }
+    // Unhide before measuring: a hidden list has no height, so the
+    // decision has to be made on the laid-out element. Reset the flip
+    // first so the previous open's choice is not measured instead.
+    wrap.classList.remove("drop-up");
     list.hidden = false;
     wrap.classList.add("open");
+    var bounds = customSelectClipBounds(wrap);
+    var rect = wrap.getBoundingClientRect();
+    var flip = customSelectShouldDropUp({
+      boundTop: bounds.top,
+      boundBottom: bounds.bottom,
+      wrapTop: rect.top,
+      wrapBottom: rect.bottom,
+      listHeight: list.offsetHeight,
+      gap: CUSTOM_SELECT_GAP_PX,
+    });
+    wrap.classList.toggle("drop-up", flip);
   }
 
   function close() {
     list.hidden = true;
     wrap.classList.remove("open");
+    wrap.classList.remove("drop-up");
   }
 
   wrap.appendChild(valueEl);

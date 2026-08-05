@@ -321,14 +321,22 @@ var resumeElapsedOffset = 0;
 // ---- Output placeholder ----
 
 // The resting state of the output area before any generation and
-// after a New Run: the same hint index.html ships with. (The former
-// idle ASCII scene / donut animations were removed.)
+// after a New Run. (The former idle ASCII scene / donut animations
+// were removed.)
+//
+// Names the resident model rather than the modality, since the
+// playground hosts an autoregressive model too and "Diffusion output"
+// was simply wrong under it. The bare fallback matches what
+// index.html ships and covers boot's failure path, which paints the
+// placeholder with no model resolved.
 function showOutputPlaceholder() {
   outputArea.textContent = "";
   var placeholder = document.createElement("span");
   placeholder.id = "output-placeholder";
-  placeholder.textContent =
-    "Diffusion output will appear here...";
+  var name = activeModel ? activeModel.display_name : "";
+  placeholder.textContent = name
+    ? name + " output will appear here..."
+    : "Output will appear here...";
   outputArea.appendChild(placeholder);
 }
 
@@ -393,6 +401,101 @@ function isAutoregressive() {
 function setLoadingText(text) {
   if (loadingText) {
     loadingText.textContent = text;
+  }
+}
+
+// Draw the loading overlay's bar and phase line from one activation
+// poll. The headline stays on the model's name throughout, so the
+// only thing moving is the part that is actually changing.
+function setLoadingProgress(state, progress) {
+  var container = document.getElementById(
+    "load-progress-container"
+  );
+  var fill = document.getElementById("load-progress-fill");
+  var detail = document.getElementById("load-progress-detail");
+  if (!container || !fill || !detail) {
+    return;
+  }
+  var view = overlaysActivationProgress(state, progress);
+  if (view.determinate) {
+    container.hidden = false;
+    fill.style.width = view.percent + "%";
+    detail.hidden = false;
+    detail.textContent = view.label + ", " + view.percent + "%";
+    return;
+  }
+  container.hidden = true;
+  // The label still says which phase is running, which is the whole
+  // difference between a slow load and an apparently hung one.
+  detail.hidden = false;
+  detail.textContent = view.label + "\u2026";
+}
+
+// Fill the bar and let it be seen full before `done` navigates away.
+//
+// Whether a bar was ever on screen is read off the container rather
+// than tracked alongside it, so there is one source of truth. A
+// checkpoint whose size could not be worked out ran without a bar,
+// and must not have one appear for a fifth of a second at the end.
+function finishLoadingProgress(done) {
+  var container = document.getElementById(
+    "load-progress-container"
+  );
+  if (!container || container.hidden) {
+    done();
+    return;
+  }
+  setLoadingProgress("ready", null);
+  setTimeout(done, OVERLAYS_LOAD_COMPLETE_HOLD_MS);
+}
+
+// The boot path raises the same overlay without going through
+// switchModel, so until now nothing polled for progress there: the
+// first load of a session, reliably the slowest, was the one with no
+// bar. This drives it from the endpoint pollSwitch already uses.
+var loadProgressTimer = null;
+// Matched to the supervisor's own sampling of the worker, so the bar
+// is told as soon as there is anything to tell it. Both pollers here
+// use it; their 800ms error retries stay slower on purpose, since a
+// failing poll should back off rather than hammer.
+var ACTIVATION_POLL_MS = 250;
+
+function startLoadProgressPoll() {
+  if (loadProgressTimer !== null) {
+    return;
+  }
+
+  function tick() {
+    fetch("/api/models/activation")
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (status) {
+        if (loadProgressTimer === null) {
+          return;
+        }
+        setLoadingProgress(status.state, status.progress);
+      })
+      .catch(function () {
+        // One dropped poll leaves the last reading on screen; the
+        // next one corrects it. The load is unaffected either way.
+      })
+      .then(function () {
+        if (loadProgressTimer !== null) {
+          loadProgressTimer = setTimeout(
+            tick, ACTIVATION_POLL_MS
+          );
+        }
+      });
+  }
+
+  loadProgressTimer = setTimeout(tick, 0);
+}
+
+function stopLoadProgressPoll() {
+  if (loadProgressTimer !== null) {
+    clearTimeout(loadProgressTimer);
+    loadProgressTimer = null;
   }
 }
 
@@ -1197,6 +1300,13 @@ function switchModel(id, device) {
   if (id === activeModelId && (device || activeDevice) === activeDevice) {
     return;
   }
+  // A switch ends in location.reload(), which the restore path cannot
+  // tell from a trip to Analytics and back. Dropping the snapshot
+  // here, where the reload is known to be a switch, is what makes the
+  // new model start on a blank canvas. The identity check alone
+  // cannot do it: switching away and back lands on a matching
+  // (model, device) pair again, so the stale run would return.
+  clearSessionState();
   suppressReconnect = true;
   if (ws) {
     try {
@@ -1207,6 +1317,11 @@ function switchModel(id, device) {
   }
   var name = models[id] ? models[id].display_name : id;
   setLoadingText("Loading " + name + "\u2026");
+  // pollSwitch drives the bar from here on; stop the boot poller so
+  // the two are never writing the same overlay, and clear whatever a
+  // previous failed switch left in the track.
+  stopLoadProgressPoll();
+  setLoadingProgress("loading", null);
   loadingOverlay.classList.remove("hidden");
   setModelSelectDisabled(true);
 
@@ -1243,7 +1358,9 @@ function pollSwitch(name) {
     })
     .then(function (status) {
       if (status.state === "ready") {
-        location.reload();
+        finishLoadingProgress(function () {
+          location.reload();
+        });
         return;
       }
       if (status.state === "error") {
@@ -1252,21 +1369,11 @@ function pollSwitch(name) {
         );
         return;
       }
-      if (
-        status.state === "downloading"
-        && status.progress
-        && typeof status.progress.fraction === "number"
-      ) {
-        setLoadingText(
-          "Downloading " + name + " "
-          + Math.round(status.progress.fraction * 100) + "%"
-        );
-      } else {
-        setLoadingText("Loading " + name + "\u2026");
-      }
+      setLoadingText("Loading " + name + "\u2026");
+      setLoadingProgress(status.state, status.progress);
       setTimeout(function () {
         pollSwitch(name);
-      }, 500);
+      }, ACTIVATION_POLL_MS);
     })
     .catch(function () {
       setTimeout(function () {
@@ -1279,6 +1386,7 @@ function switchFailed(err) {
   suppressReconnect = false;
   setModelSelectDisabled(false);
   setModelSelectValue(activeModelId);
+  stopLoadProgressPoll();
   loadingOverlay.classList.add("hidden");
   statusMessage.textContent =
     "Model switch failed: " + err.message;
@@ -1379,12 +1487,23 @@ function handleModelStatus(data) {
       + "\u2026"
     );
     loadingOverlay.classList.remove("hidden");
+    startLoadProgressPoll();
     updateGenerateButton();
   } else if (data.status === "ready") {
     setBadge("ready");
     modelReady = true;
-    loadingOverlay.classList.add("hidden");
+    stopLoadProgressPoll();
     updateGenerateButton();
+    // Only the overlay waits. The model is usable the moment the
+    // worker says so, and holding the Generate button for a
+    // cosmetic beat would be the wrong trade. Re-checking readiness
+    // inside the hold keeps a status that flips back mid-beat from
+    // pulling the overlay off a load that is starting again.
+    finishLoadingProgress(function () {
+      if (modelReady) {
+        loadingOverlay.classList.add("hidden");
+      }
+    });
   }
 }
 
@@ -5082,12 +5201,15 @@ btnScrubEnd.addEventListener(
   }
 );
 
-if (overlayDrawerHandle) {
-  overlayDrawerHandle.addEventListener("click", function () {
-    var open = !overlaySelectGroup.classList.contains("open");
-    setOverlayDrawerOpen(open);
-  });
-}
+// The shared helper owns the handle click as well as the drag, so
+// this binds none of its own (see overlaysMakeDrawerDraggable).
+overlaysMakeDrawerDraggable({
+  group: overlaySelectGroup,
+  handle: overlayDrawerHandle,
+  container: document.getElementById("output-section"),
+  storageKey: "diffusion_overlay_drawer_top_generator",
+  onToggle: setOverlayDrawerOpen,
+});
 
 if (overlayHighlightCheckbox) {
   overlayHighlightCheckbox.addEventListener(
@@ -5545,7 +5667,9 @@ document.addEventListener(
 
 // ---- Session persistence (survives Analytics navigation) ----
 
-var SESSION_KEY = "diffusion_last_run";
+// Shared with the menu, which clears the same snapshot when it
+// activates a model (see overlaysClearLastRun for why both pages do).
+var SESSION_KEY = OVERLAYS_LAST_RUN_KEY;
 
 function saveSessionState() {
   if (
@@ -5557,6 +5681,12 @@ function saveSessionState() {
   }
   var base = {
     model: activeModelId,
+    // Part of the snapshot's identity, not decoration. The same model
+    // on the other device is a different worker with its own output,
+    // and every activation path (the header selector, the menu) ends
+    // in a reload, so this is the only thing that tells a CPU/GPU
+    // switch apart from a page navigation.
+    device: activeDevice,
     prompt: promptInput.value,
     frameHistory: frameHistory,
     perFrameElapsed: perFrameElapsed,
@@ -5604,11 +5734,7 @@ function saveSessionState() {
 }
 
 function clearSessionState() {
-  try {
-    sessionStorage.removeItem(SESSION_KEY);
-  } catch (_e) {
-    // ignore
-  }
+  overlaysClearLastRun();
 }
 
 function restoreSessionState() {
@@ -5630,9 +5756,18 @@ function restoreSessionState() {
   } catch (_e) {
     return false;
   }
+  if (!s) {
+    return false;
+  }
+  // Snapshots written before the device joined the identity have no
+  // `device` key at all. Treating that as a mismatch would silently
+  // drop one in-flight run per upgrade, so it is read as "matches",
+  // and the clear-on-switch covers the case it cannot.
+  var sameDevice =
+    s.device === undefined || s.device === activeDevice;
   if (
-    !s
-    || s.model !== activeModelId
+    s.model !== activeModelId
+    || !sameDevice
     || !s.frameHistory
     || s.frameHistory.length < 2
   ) {

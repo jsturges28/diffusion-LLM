@@ -36,6 +36,12 @@ UI_STATE_KEYS: Dict[str, int] = {
     "diffusion_prompt_history": 262_144,
     "diffusion_generate_teased": 64,
     "diffusion_download_toast_corner": 32,
+    # Overlay drawer vertical offset, one key per page: the two
+    # drawers sit in containers of different heights, so a shared
+    # offset would land sensibly on at most one of them. A plain
+    # number, so 32 characters is generous.
+    "diffusion_overlay_drawer_top_generator": 32,
+    "diffusion_overlay_drawer_top_analytics": 32,
 }
 
 # Serialize read-modify-write so concurrent PUTs cannot clobber each

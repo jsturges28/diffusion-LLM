@@ -11,6 +11,12 @@
 (function () {
   var GENERATE_URL = "/generate";
   var FLOATER_COUNT = 30;
+  // The supervisor samples the worker every 250ms, so reading at the
+  // same rate is the fastest the bar can actually be told anything.
+  // Anything slower stacks staleness on staleness, and a load that is
+  // over in a couple of seconds gets only one or two readings before
+  // the page moves on.
+  var ACTIVATION_POLL_MS = 250;
 
   var video = document.getElementById("menu-video");
   var systemBox = document.getElementById("menu-system");
@@ -48,6 +54,11 @@
   var pagedModels = [];
   var pagedGpuPresent = false;
   var currentPage = 0;
+  // Device the resident worker is running on, from /api/models. Only
+  // an AR row can disagree with it, since every other row offers one
+  // placement, so this is read solely to tell "the model you are
+  // already running" apart from "that model, on the other device".
+  var activeDevice = null;
 
   // Cross-page download navigation: the download is a global server task
   // (see download_toast.js), so the user can page/navigate away while it
@@ -646,6 +657,25 @@
 
   // ---- Selection -> activation -> generator ----
 
+  // Whether picking this row would land on the worker already
+  // serving. The server treats that activation as a no-op, so the
+  // only honest thing for the menu to do is navigate.
+  //
+  // Only an AR row carries a device toggle, so it is the only one
+  // that can name a placement the resident worker is not using.
+  // Everything else offers a single placement, which makes "this
+  // model is active" the whole answer, and avoids having to mirror
+  // the server's resolution of a device-less request.
+  function isResidentSelection(model, li) {
+    if (model.status !== "active") {
+      return false;
+    }
+    if (li._getDevice) {
+      return li._getDevice() === activeDevice;
+    }
+    return true;
+  }
+
   function setRowLoading(li) {
     document.body.classList.add("menu-busy");
     li.classList.add("is-loading");
@@ -743,6 +773,7 @@
     modelList.classList.add("is-confirming");
     li.classList.add("is-confirmed");
     var device = li._getDevice ? li._getDevice() : "cuda";
+    var resident = isResidentSelection(model, li);
     var box = document.createElement("div");
     box.className = "menu-model-confirm";
     // Clicks in the confirm box must not bubble to the row handler.
@@ -751,15 +782,23 @@
     });
     var msg = document.createElement("span");
     msg.className = "menu-model-confirm-msg";
-    msg.textContent = "Load " + (model.display_name || model.id)
-      + " on " + (device === "cpu" ? "CPU" : "GPU") + "?";
+    // Nothing is loaded when the worker is already serving this exact
+    // model, so promising a load would be describing work that is not
+    // going to happen.
+    msg.textContent = resident
+      ? "Go back to the Generation page?"
+      : "Load " + (model.display_name || model.id)
+        + " on " + (device === "cpu" ? "CPU" : "GPU") + "?";
     var actions = document.createElement("span");
     actions.className = "menu-model-confirm-actions";
     var yes = document.createElement("button");
     yes.type = "button";
     yes.className = "menu-confirm-yes";
     yes.title = "Confirm";
-    yes.setAttribute("aria-label", "Confirm and load");
+    yes.setAttribute(
+      "aria-label",
+      resident ? "Confirm and continue" : "Confirm and load"
+    );
     yes.textContent = "\u2713";
     yes.addEventListener("click", function (event) {
       event.stopPropagation();
@@ -1218,27 +1257,42 @@
       });
   }
 
-  // Show the download progress bar (only while downloading weights).
+  // Show the activation bar, for the download and for the read into
+  // memory that follows it. The phrasing comes from the shared
+  // reducer so this and the generator's overlay name the same moment
+  // the same way.
   function updateActivationProgress(state, progress) {
     if (!activationProgress) {
       return;
     }
-    if (
-      state === "downloading"
-      && progress
-      && typeof progress.fraction === "number"
-    ) {
-      var pct = Math.round(progress.fraction * 100);
-      activationProgress.hidden = false;
-      if (activationFill) {
-        activationFill.style.width = pct + "%";
-      }
-      if (activationPct) {
-        activationPct.textContent = "Downloading " + pct + "%";
-      }
-    } else {
+    var view = overlaysActivationProgress(state, progress);
+    if (!view.determinate) {
       activationProgress.hidden = true;
+      return;
     }
+    activationProgress.hidden = false;
+    if (activationFill) {
+      activationFill.style.width = view.percent + "%";
+    }
+    if (activationPct) {
+      activationPct.textContent =
+        view.label + " " + view.percent + "%";
+    }
+  }
+
+  // Fill the bar and let it be seen full before `done` navigates.
+  //
+  // Whether a bar was ever on screen is read off the element rather
+  // than tracked beside it, so there is one source of truth. A
+  // checkpoint whose size could not be worked out ran without a bar,
+  // and must not have one appear for a fifth of a second at the end.
+  function finishActivationProgress(done) {
+    if (!activationProgress || activationProgress.hidden) {
+      done();
+      return;
+    }
+    updateActivationProgress("ready", null);
+    setTimeout(done, OVERLAYS_LOAD_COMPLETE_HOLD_MS);
   }
 
   // Poll activation state until ready / error (or cancelled).
@@ -1255,7 +1309,9 @@
           return;
         }
         if (status.state === "ready") {
-          window.location.assign(GENERATE_URL);
+          finishActivationProgress(function () {
+            window.location.assign(GENERATE_URL);
+          });
           return;
         }
         if (status.state === "error") {
@@ -1270,7 +1326,9 @@
         updateActivationProgress(
           status.state, status.progress
         );
-        pollTimer = setTimeout(pollActivation, 500);
+        pollTimer = setTimeout(
+          pollActivation, ACTIVATION_POLL_MS
+        );
       })
       .catch(function () {
         if (!selecting) {
@@ -1280,16 +1338,33 @@
       });
   }
 
+  // Raise the "this is loading" UI: the row's cycling status and the
+  // activation panel with its bar and cancel button.
+  function beginLoadingUi(li) {
+    setRowLoading(li);
+    if (activationBox) {
+      activationBox.hidden = false;
+    }
+  }
+
   function selectModel(model, li) {
     if (selecting) {
       return;
     }
     selecting = true;
     activeSelection = { model: model, li: li };
+    var resident = isResidentSelection(model, li);
+    if (!resident) {
+      // Activating from here ends on the generator with a fresh
+      // worker, so the previous model's run must not be waiting
+      // there. The generator's own switch path does the same on its
+      // way out. Re-selecting the resident model spawns nothing, so
+      // its run is still the current one and has to survive.
+      overlaysClearLastRun();
+    }
     clearError();
-    setRowLoading(li);
-    if (activationBox) {
-      activationBox.hidden = false;
+    if (!resident) {
+      beginLoadingUi(li);
     }
     // AR rows carry a device toggle; send the choice so the worker
     // loads on CPU or GPU. Other rows post no body (server default).
@@ -1312,6 +1387,18 @@
         // Activation is non-blocking; the worker loads in the
         // background and we poll for progress until it is ready.
         if (result && result.ok) {
+          // A no-op activation answers "ready" in the same breath,
+          // which is the server confirming there was nothing to do.
+          // Anything else means the worker had died since the menu
+          // was drawn and this POST respawned it, so the load UI
+          // still has to come up.
+          if (resident && result.state === "ready") {
+            window.location.assign(GENERATE_URL);
+            return;
+          }
+          if (resident) {
+            beginLoadingUi(li);
+          }
           pollActivation();
           return;
         }
@@ -1376,6 +1463,7 @@
         return response.json();
       })
       .then(function (info) {
+        activeDevice = info.active_device || null;
         renderSystem(info);
         renderModels(info.models || [], !!info.gpu_name);
         reattachDownload();

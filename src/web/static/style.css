@@ -430,13 +430,18 @@ body {
   background: rgba(255, 68, 68, 0.14);
 }
 
+/* The gap here also sets the clearance under #prompt-history, which
+   is absolutely positioned against this row's top and so sits on the
+   label's line. Widening it moves the textarea down and gives both
+   the same breathing room, which moving the control alone would not.
+   */
 #prompt-row label {
   display: block;
   font-size: 11px;
   color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  margin-bottom: 4px;
+  margin-bottom: 7px;
 }
 
 #prompt-input {
@@ -1263,25 +1268,33 @@ button {
   to { transform: rotate(360deg); }
 }
 
-/* ---- Progress bar (inside status) ---- */
+/* ---- Model load progress bar (inside the loading overlay) ---- */
 
-#progress-bar-container {
-  display: none;
-  flex: 1;
-  max-width: 200px;
+#load-progress-container {
+  width: 200px;
   height: 4px;
+  margin: 14px auto 0;
   background: var(--border);
   border-radius: 2px;
   overflow: hidden;
-  align-self: center;
 }
 
-#progress-bar-fill {
+/* Eased rather than instant because the source is a memory counter
+   sampled a few times a second, so the raw values arrive in visible
+   steps. The easing is slower than the 250ms poll so each step reads
+   as travel instead of a jump. */
+#load-progress-fill {
   height: 100%;
   width: 0%;
   background: var(--accent);
   border-radius: 2px;
-  transition: width 0.15s;
+  box-shadow: 0 0 6px var(--accent-glow);
+  transition: width 0.3s ease-out;
+}
+
+/* The overlay centers its text, and this line sits under the bar. */
+#load-progress-detail {
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---- Modals (About / Help) ---- */
@@ -2108,6 +2121,16 @@ input[type="checkbox"].app-checkbox:checked::after {
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
 }
 
+/* Opened upward, for a select sitting low enough that its list would
+   be clipped by the box it lives in (see customSelectShouldDropUp).
+   The shadow flips with it so the list still reads as sitting above
+   the surface rather than lit from the wrong side. */
+.custom-select.drop-up .custom-select-list {
+  top: auto;
+  bottom: calc(100% + 4px);
+  box-shadow: 0 -6px 20px rgba(0, 0, 0, 0.5);
+}
+
 /* The model list carries name + family icon + device tag + headroom
    pill, so let it grow to its content rather than clip to the
    collapsed box width (options were overflowing). */
@@ -2449,6 +2472,9 @@ input[type="checkbox"].app-checkbox:checked::after {
   display: none;
 }
 
+/* Collapsed, the handle doubles as a vertical drag grip
+   (overlaysMakeDrawerDraggable). touch-action is what stops a touch
+   drag from scrolling the page instead of moving the drawer. */
 #overlay-drawer-handle {
   flex-shrink: 0;
   width: 26px;
@@ -2459,7 +2485,17 @@ input[type="checkbox"].app-checkbox:checked::after {
   font-size: 13px;
   line-height: 1;
   cursor: pointer;
+  touch-action: none;
   transition: color 0.15s;
+}
+
+#overlay-select-group.is-dragging {
+  cursor: grabbing;
+}
+
+#overlay-select-group.is-dragging #overlay-drawer-handle {
+  color: var(--accent);
+  cursor: grabbing;
 }
 
 #overlay-drawer-handle:hover {

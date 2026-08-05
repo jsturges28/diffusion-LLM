@@ -482,6 +482,10 @@ var PERSIST_KEYS = [
   "diffusion_prompt_history",
   "diffusion_generate_teased",
   "diffusion_download_toast_corner",
+  // One per page: the two drawers sit in containers of different
+  // heights, so a shared offset would land sensibly on at most one.
+  "diffusion_overlay_drawer_top_generator",
+  "diffusion_overlay_drawer_top_analytics",
 ];
 
 // Debounce PUTs per key so rapid writes (e.g. successive settings
@@ -717,4 +721,258 @@ function overlaysNewRunCount() {
 
 function overlaysIsNewRun(runId) {
   return overlaysReadNewRuns().indexOf(runId) !== -1;
+}
+
+// ---- Last-run snapshot (generator, session-scoped) ----
+//
+// The generator's completed-run snapshot, written and read by app.js
+// so a trip to Analytics and back restores the output. Only the key
+// and the clear live here, because two pages have to drop it:
+// activating a model ends in a location.reload() on the generator and
+// on the menu alike, and by the time the generator boots it can no
+// longer tell that reload from a navigation. The page that *starts*
+// the switch can, so each clears on its way out and neither needs to
+// know the other's storage.
+
+var OVERLAYS_LAST_RUN_KEY = "diffusion_last_run";
+
+function overlaysClearLastRun() {
+  try {
+    sessionStorage.removeItem(OVERLAYS_LAST_RUN_KEY);
+  } catch (_e) {
+    // Storage unavailable: there is nothing to clear.
+  }
+}
+
+// ---- Activation progress (generator overlay + menu bar) ----
+//
+// How long a completed bar is left at 100% before the page moves on.
+// Long enough to read as finishing rather than vanishing, and short
+// enough to disappear into a load measured in seconds.
+var OVERLAYS_LOAD_COMPLETE_HOLD_MS = 180;
+//
+// One poll of /api/models/activation, reduced to what the loading UI
+// should show. Pure and shared because two pages render the same
+// moment: the generator's full-screen overlay during a switch, and
+// the menu's inline bar during a first activation. They looked
+// different only because each had written its own wording.
+//
+// `determinate` false means show the label with a spinner and no bar.
+// That is the honest reading for a phase with no measurable target,
+// not an error: see load_progress.load_target_bytes, which returns a
+// zero total rather than guess at an unfamiliar checkpoint layout.
+function overlaysActivationProgress(state, progress) {
+  var out = { determinate: false, percent: 0, label: "Loading" };
+  // The worker reaches ready in the same breath as its last progress
+  // sample, and the supervisor drops progress on that transition, so
+  // the closing 100% never survives the trip to the browser. Naming
+  // the completed state here is what lets the bar finish instead of
+  // disappearing at whatever the last poll happened to catch.
+  if (state === "ready") {
+    return { determinate: true, percent: 100, label: "Ready" };
+  }
+  if (state === "downloading") {
+    out.label = "Downloading";
+  } else if (state === "loading" && progress) {
+    // The sampler names the counter it is reporting, so this tracks
+    // the weights whether they route through RAM first or stream
+    // straight to the GPU.
+    out.label =
+      progress.stage === "device"
+        ? "Moving to GPU"
+        : "Loading weights";
+  } else {
+    return out;
+  }
+  if (!progress || typeof progress.fraction !== "number") {
+    return out;
+  }
+  // A zero total is the "could not measure this checkpoint" signal.
+  // Keep the label, drop the bar.
+  if (!(progress.total_bytes > 0)) {
+    return out;
+  }
+  var fraction = progress.fraction;
+  if (fraction < 0) {
+    fraction = 0;
+  } else if (fraction > 1) {
+    fraction = 1;
+  }
+  out.determinate = true;
+  out.percent = Math.round(fraction * 100);
+  return out;
+}
+
+// ---- Draggable overlay drawer (generator + analytics) ----
+//
+// The drawer tucks against its container's top-right corner and
+// slides out when its handle is clicked. Where it sits vertically is
+// a matter of taste, since it can come to rest over whatever the run
+// happened to draw there, so the collapsed drawer can be dragged up
+// and down that edge. Open, it is a row of controls, and a stray drag
+// on the way to a checkbox would only be a nuisance, so dragging is
+// collapsed-only.
+//
+// Two things shape the implementation. The group already animates
+// `transform` for its slide, so the drag moves `top` instead: on an
+// absolutely positioned box that is a plain layout move, and the two
+// can never contend for the same property. And this owns the handle's
+// click as well as its drag, because only one listener can reliably
+// decide whether a release was a click or the end of a drag; split
+// across two, the answer would depend on registration order.
+
+var OVERLAYS_DRAG_THRESHOLD_PX = 5;
+
+// Largest `top` that still leaves the drawer fully inside its
+// container. Zero when the container is shorter than the drawer,
+// which pins it flush with the top rather than letting it hang out
+// the bottom where the handle would be unreachable.
+function overlaysDrawerMaxTop(group, container) {
+  var room = container.clientHeight - group.offsetHeight;
+  return room > 0 ? room : 0;
+}
+
+function overlaysClampDrawerTop(group, container, top) {
+  if (top < 0) {
+    return 0;
+  }
+  var max = overlaysDrawerMaxTop(group, container);
+  return top > max ? max : top;
+}
+
+function overlaysReadDrawerTop(storageKey) {
+  try {
+    var raw = localStorage.getItem(storageKey);
+    if (raw === null) {
+      return null;
+    }
+    var value = parseFloat(raw);
+    return isFinite(value) ? value : null;
+  } catch (_e) {
+    return null;
+  }
+}
+
+// Wire one drawer. `onToggle` receives the open state the click asked
+// for, so each page keeps its own open/close behavior while the
+// click-versus-drag question is answered here, once.
+function overlaysMakeDrawerDraggable(options) {
+  var group = options.group;
+  var handle = options.handle;
+  var container = options.container;
+  var storageKey = options.storageKey;
+  var onToggle = options.onToggle;
+  if (!group || !handle || !container) {
+    return;
+  }
+
+  var pointerDown = false;
+  var dragging = false;
+  var justDragged = false;
+  var startY = 0;
+  var grabY = 0;
+  // null means "wherever the stylesheet puts it". Kept here rather
+  // than re-read from style.top so the saved value is a number the
+  // whole time and never round-trips through a "123px" string.
+  var currentTop = overlaysReadDrawerTop(storageKey);
+
+  // Applied unclamped at startup on purpose: the group is `hidden` at
+  // that point, so every box metric reads 0 and a clamp would flatten
+  // any saved offset to zero. It was clamped when saved, and the
+  // resize handler re-clamps once the box is real.
+  if (currentTop !== null) {
+    group.style.top = currentTop + "px";
+  }
+
+  function isOpen() {
+    return group.classList.contains("open");
+  }
+
+  function setTop(top) {
+    currentTop = overlaysClampDrawerTop(group, container, top);
+    group.style.top = currentTop + "px";
+  }
+
+  handle.addEventListener("click", function () {
+    // A drag ends with a click on release. Swallow it, or moving the
+    // drawer would also open it.
+    if (justDragged) {
+      return;
+    }
+    if (typeof onToggle === "function") {
+      onToggle(!isOpen());
+    }
+  });
+
+  handle.addEventListener("pointerdown", function (event) {
+    if (event.button !== undefined && event.button !== 0) {
+      return;
+    }
+    if (isOpen()) {
+      return;
+    }
+    pointerDown = true;
+    dragging = false;
+    startY = event.clientY;
+    grabY = event.clientY - group.getBoundingClientRect().top;
+    try {
+      handle.setPointerCapture(event.pointerId);
+    } catch (_e) {
+      // Capture is best-effort; the move handler still tracks.
+    }
+  });
+
+  handle.addEventListener("pointermove", function (event) {
+    if (!pointerDown) {
+      return;
+    }
+    var moved = Math.abs(event.clientY - startY);
+    if (!dragging && moved > OVERLAYS_DRAG_THRESHOLD_PX) {
+      dragging = true;
+      group.classList.add("is-dragging");
+    }
+    if (!dragging) {
+      return;
+    }
+    var top =
+      event.clientY
+      - container.getBoundingClientRect().top
+      - grabY;
+    setTop(top);
+    event.preventDefault();
+  });
+
+  function endDrag(event) {
+    if (!pointerDown) {
+      return;
+    }
+    pointerDown = false;
+    try {
+      handle.releasePointerCapture(event.pointerId);
+    } catch (_e) {
+      // Capture may not be held; nothing to release.
+    }
+    if (!dragging) {
+      return;
+    }
+    dragging = false;
+    group.classList.remove("is-dragging");
+    persistSet(storageKey, String(currentTop));
+    justDragged = true;
+    setTimeout(function () {
+      justDragged = false;
+    }, 0);
+  }
+
+  handle.addEventListener("pointerup", endDrag);
+  handle.addEventListener("pointercancel", endDrag);
+
+  // A shrinking viewport can strand the drawer past its container's
+  // bottom edge, where the handle cannot be reached to drag it back.
+  window.addEventListener("resize", function () {
+    if (currentTop === null || !group.offsetHeight) {
+      return;
+    }
+    setTop(currentTop);
+  });
 }

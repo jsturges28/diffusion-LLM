@@ -62,10 +62,10 @@ def compute_convergence(
     """Compute mask-count convergence across frames.
 
     Returns one dict per frame with keys:
-      frame        — 0-based frame index
-      mask_count   — number of mask characters
-      total_chars  — total non-whitespace characters
-      resolved_ratio — fraction of tokens resolved
+      frame:          0-based frame index
+      mask_count:     number of mask characters
+      total_chars:    total non-whitespace characters
+      resolved_ratio: fraction of tokens resolved
     """
     assert len(frames) > 0
 

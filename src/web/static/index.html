@@ -160,8 +160,10 @@
         <div id="thinking-content"></div>
       </details>
       <div id="output-area">
+        <!-- Painted before /api/models resolves, so it cannot name the
+             model; showOutputPlaceholder fills that in once it can. -->
         <span id="output-placeholder">
-          Diffusion output will appear here...
+          Output will appear here...
         </span>
       </div>
     </section>
@@ -271,7 +273,7 @@
       <button class="modal-close" aria-label="Close">&times;</button>
       <h2><span class="title-accent">LLM</span> Visualizer</h2>
       <div class="modal-body">
-        <p>This tool visualizes <strong>discrete diffusion language modeling</strong> in real time. Instead of generating text one token at a time (left to right), a diffusion LLM starts from noise or masked tokens and iteratively refines an entire block over many denoising steps. The playground also hosts a compact <strong>autoregressive</strong> (left-to-right) model as a baseline for contrast. Use the <strong>Model</strong> selector in the header to switch between the available models (only one is resident in GPU memory at a time).</p>
+        <p>This tool visualizes how language models actually produce text, in real time. Its depth is in <strong>discrete diffusion</strong>: instead of generating one token at a time (left to right), a diffusion LLM starts from noise or masked tokens and iteratively refines an entire block over many denoising steps. A compact <strong>autoregressive</strong> (left-to-right) model runs alongside them as a baseline for contrast, and more model classes may join it. Use the <strong>Model</strong> selector in the header to switch between the available models (only one is resident in GPU memory at a time).</p>
         <h3>How diffusion LLMs work</h3>
         <p>The <strong>forward process</strong> corrupts text by independently replacing each token with a placeholder at a rate controlled by a noise schedule. The <strong>reverse process</strong> starts from a corrupted canvas and uses a Transformer with bidirectional attention to predict all positions simultaneously, then re-noises (re-masks) the least confident predictions. This repeats for <em>N</em> steps until the sequence converges. Unresolved positions are shown as <code>░</code> until they stabilize.</p>
         <h3>Models</h3>
@@ -313,6 +315,9 @@
         <p>Messages name what they are acting on rather than just what they are doing. A save says whether it is writing the <em>original</em> or the <em>edited</em> run, since entering What If? or Edit Frames saves the pre-edit run on your behalf and it is worth knowing that is what you are watching, and it reports where the run landed as a path relative to the project folder either way. A resume names the stretch it is regenerating, <em>Running edit from frame 12 to 40</em> when you resume to a chosen frame, or <em>&hellip; to end</em> when you resume all the way (which is always the case for a What If? substitution).</p>
         <p>The Main Menu model list is paginated: use the <strong>&lsaquo; i/N &rsaquo;</strong> arrows to browse it. If a model's weights are not cached yet, its row shows <strong>Click to Download</strong>, which fetches them (with a progress bar, no GPU needed) before the model can be selected. You can navigate freely (menu pages, Analytics, Settings) while a download runs; a small draggable <strong>download toast</strong> tracks its progress from any page and returns you to the menu when you click it. An interrupted download resumes where it left off the next time you click.</p>
         <p>Header links move between pages: <strong>Menu</strong> returns to model selection, and <strong>Analytics</strong> opens the analytics suite. From Analytics, a <strong>Generation</strong> link appears whenever a model is loaded. A <strong>gear icon</strong> in the header opens the shared <strong>Settings</strong> page.</p>
+        <p>Loading a model shows a <strong>progress bar</strong> with the phase underneath it: first <em>Loading weights</em> as they are read from disk, then <em>Moving to GPU</em> as they are copied across. The reading comes from watching how much memory the model has actually claimed against how much the checkpoint should need, so it tracks the real wait rather than counting files. For a checkpoint whose size cannot be worked out in advance, the phase is still named but the bar is left off rather than guessed at.</p>
+        <p>Switching models starts you on a clean slate: the previous run's output and metrics are cleared, because a new model is a new worker with nothing to say about the old run. This includes switching the same model between GPU and CPU. Your hyperparameters are kept, per model, until you close the app.</p>
+        <p>Picking the model that is <em>already</em> loaded is not a switch. Whether you choose it from the Main Menu or the header, nothing is unloaded and no weights are read again, so its run is still there when you arrive. The menu says as much: selecting the resident model asks <em>Go back to the Generation page?</em> rather than offering to load it.</p>
 
         <h3>Models</h3>
         <dl>
@@ -370,7 +375,7 @@
           <dt>Thinking</dt>
           <dd>Enables an extended step-by-step reasoning pass before the answer. When on, the model's reasoning is separated into a collapsible <em>Reasoning</em> panel above the output, keeping the final answer clean.</dd>
           <dt>Alternatives</dt>
-          <dd>Captures the five most likely tokens at every position, not just the one that was chosen. Hovering a token then shows what the model nearly said instead, and it is required for <strong>What If?</strong> substitution. Costs a little extra time per token, so it is off by default.</dd>
+          <dd>Captures the five most likely tokens at every position, not just the one that was chosen. Hovering a token then shows what the model nearly said instead, and it is required for <strong>What If?</strong> substitution. On by default, since it is what the hover popover and What If? both run on; turn it off to save a little time per token.</dd>
         </dl>
 
         <h3>Confidence &amp; the heatmap</h3>
@@ -391,7 +396,7 @@
         <p>Once a run has been edited, every position the edit touched is marked in the profile with a dashed <strong style="color:#ff9f1c;">orange</strong> line over a faint tint, the same marker the Analytics entropy chart uses and the same color the tokens use for a remask. Unlike the hover glow, it stays put: it names where the run was intervened on, which is true no matter where your cursor is, so you can scrub and crossfade without losing the place the branch was forced.</p>
         <p>The profile and the text <strong>cross-highlight</strong>, so you can read in either direction: hover a token to light its column, or sweep the profile to light the token behind any column that catches your eye. A token lit this way looks exactly like one under your cursor, since both mean the same thing. Sweeping the profile lights tokens whether or not <em>Highlight tokens</em> is ticked, because following a column back to its word is a way of reading the run rather than a comfort preference.</p>
         <p>After a <strong>What If?</strong> branch, the profile carries both runs: the pre-edit columns underneath and the branch's on top, mixed by the <strong>Original</strong> / <strong>Edited</strong> crossfade below the scrubber. It spans whichever run ran longer, so the columns stay aligned by position even when the branch came out a different length, and the nats readout reports whichever run the crossfade is favoring. Because a branch reproduces its prefix exactly, the two profiles only visibly differ to the right of the substitution, which is itself a reading of how far the intervention reached.</p>
-        <p>Turn on the <strong>Alternatives</strong> hyperparameter before generating to also capture the <strong>top five candidates</strong> at each position. Hovering a token then opens a popover listing them with a probability bar each, and the one the model actually chose is highlighted. Whitespace and control tokens are shown with visible stand-ins (<code>&middot;</code> for a space, <code>&crarr;</code> for a newline) so an invisible candidate is still legible.</p>
+        <p>The <strong>Alternatives</strong> hyperparameter, on by default, captures the <strong>top five candidates</strong> at each position as well as the chosen one. Hovering a token then opens a popover listing them with a probability bar each, and the one the model actually chose is highlighted. Whitespace and control tokens are shown with visible stand-ins (<code>&middot;</code> for a space, <code>&crarr;</code> for a newline) so an invisible candidate is still legible.</p>
 
         <h3>What If? (autoregressive counterfactuals)</h3>
         <p>Because a left-to-right model cannot be remasked, it gets a different intervention. After a SmolLM3 run generated with <strong>Alternatives</strong> on, a <strong>What If?</strong> button appears beside the scrubber.</p>
@@ -422,7 +427,7 @@
         <p>Click <strong>Exit</strong> at any time to leave guided editing; this discards any in-progress edits and restores the original run. All remask edits (frame indices and token positions) are recorded automatically and included in saved results.</p>
 
         <h3>Visual overlays &amp; settings</h3>
-        <p>A collapsible <strong>Overlay</strong> drawer in the top-right of the output area recolors the frame you are viewing. It defaults to <strong>None</strong>:</p>
+        <p>A collapsible <strong>Overlay</strong> drawer in the top-right of the output area recolors the frame you are viewing. While it is collapsed you can <strong>drag its handle up and down</strong> the right edge to move it off whatever the run has drawn underneath; each page remembers where you left it. Dragged near the bottom, its picker opens <em>upward</em> so the choices stay inside the output area instead of being cut off by its edge. It defaults to <strong>None</strong>:</p>
         <ul>
           <li><strong>Heatmap</strong>: recolor resolved tokens by confidence (see <em>Confidence &amp; the heatmap</em> above).</li>
           <li><strong>Entropy</strong>: recolor resolved tokens from cool blue (decisive) to hot amber (torn), by how spread the model's distribution was (see <em>Entropy &amp; alternatives</em> above). Listed for runs that carry the signal, which today means autoregressive runs.</li>
@@ -483,14 +488,17 @@
     </div>
   </div>
 
-  <!-- Model loading overlay -->
+  <!-- Model loading overlay. The bar stays hidden until a poll
+       reports a measurable phase, so an unmeasurable checkpoint
+       falls back to the spinner alone rather than an empty track. -->
   <div id="loading-overlay">
     <div id="loading-content">
       <div class="spinner"></div>
       <p id="loading-text">Loading model…</p>
-      <p class="loading-sub">
-        This may take ~30 seconds on first run.
-      </p>
+      <div id="load-progress-container" hidden>
+        <div id="load-progress-fill"></div>
+      </div>
+      <p class="loading-sub" id="load-progress-detail" hidden></p>
     </div>
   </div>
 

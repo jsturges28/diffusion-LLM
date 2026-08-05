@@ -1,4 +1,4 @@
-"""Tests that the new xAI signals survive the save request models.
+"""Tests that the new XAI signals survive the save request models.
 
 Strategy: ``TokenRecord`` and ``SaveRunRequest`` are strict pydantic
 models, so any field they do not declare is silently dropped on the

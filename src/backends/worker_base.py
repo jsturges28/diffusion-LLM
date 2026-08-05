@@ -121,6 +121,35 @@ class Backend(ABC):
         )
 
 
+def resolve_load_status(
+    *,
+    failed: bool,
+    ready: bool,
+    progress: Optional[Dict[str, Any]],
+) -> str:
+    """Pick the ``/health`` status from the worker's load signals.
+
+    Lifted out of the endpoint because it is the one real decision
+    there and it is worth testing on its own.
+
+    The Hub download and the read into memory both report through the
+    backend's one ``load_progress`` attribute, so the dict carries a
+    ``phase`` saying which it is. A missing phase means download:
+    ``hf_download`` predates the distinction and its payload has no
+    such key, and treating its absence as a load would relabel every
+    download.
+    """
+    if failed:
+        return "error"
+    if ready:
+        return "ready"
+    if not isinstance(progress, dict):
+        return "loading"
+    if str(progress.get("phase", "download")) == "load":
+        return "loading"
+    return "downloading"
+
+
 async def _send_busy(ws: WebSocket) -> None:
     await ws.send_json(
         {
@@ -172,15 +201,11 @@ def create_worker_app(
     @app.get("/health")
     async def _health() -> JSONResponse:
         progress = getattr(backend, "load_progress", None)
-        if load_failed.is_set():
-            status = "error"
-        elif model_ready.is_set():
-            status = "ready"
-        elif progress is not None:
-            # Weights are still downloading from the HF Hub.
-            status = "downloading"
-        else:
-            status = "loading"
+        status = resolve_load_status(
+            failed=load_failed.is_set(),
+            ready=model_ready.is_set(),
+            progress=progress,
+        )
         versions: Dict[str, str] = {}
         try:
             import torch
@@ -197,7 +222,10 @@ def create_worker_app(
             "id": backend.model_info.id,
             "versions": versions,
         }
-        if status == "downloading":
+        # "loading" is reported with or without progress: the sampler
+        # only attaches once the load starts and can measure the
+        # checkpoint, and everything before that is still a load.
+        if status in ("downloading", "loading") and progress:
             payload["progress"] = progress
         if status == "error":
             payload["message"] = load_error.get(

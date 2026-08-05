@@ -18,20 +18,6 @@
 <body>
   <div id="bg-grid"></div>
 
-  <!-- Reusable dot pattern for the "Edited" checkmark: a diffusion mask
-       glyph (U+2591 light shade) rendered as an accent dot grid so the
-       check reads as a cutout of the diffusion texture. Referenced by
-       each row's SVG via fill="url(#edited-dots)". -->
-  <svg class="svg-defs" aria-hidden="true" focusable="false">
-    <defs>
-      <pattern id="edited-dots" width="3" height="3"
-        patternUnits="userSpaceOnUse">
-        <rect class="edited-dots-bg" width="3" height="3" />
-        <circle class="edited-dots-fg" cx="1.5" cy="1.5" r="1.15" />
-      </pattern>
-    </defs>
-  </svg>
-
   <div id="analytics-app">
     <!-- Header -->
     <header id="header">

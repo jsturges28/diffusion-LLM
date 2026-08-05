@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -26,6 +27,10 @@ from src.backends.worker_base import (
     FrameStreamer,
 )
 from src.inference.hf_download import download_with_progress
+from src.inference.load_progress import (
+    load_target_bytes,
+    sample_load_progress,
+)
 from src.inference.streaming_sampler import (
     streaming_generate,
     streaming_resume,
@@ -81,7 +86,7 @@ class LladaBackend(Backend):
         # Fetch weights first (progress via /health) so the first
         # activation shows a download bar; a cache hit is a no-op.
         logger.info("ensuring weights for %s", name)
-        download_with_progress(
+        snapshot = download_with_progress(
             name, sink=lambda p: setattr(self, "load_progress", p)
         )
         self.load_progress = None
@@ -92,18 +97,35 @@ class LladaBackend(Backend):
         if tok.padding_side != "left":
             tok.padding_side = "left"
         logger.info("loading model %s", name)
-        mdl = AutoModel.from_pretrained(
-            name,
-            trust_remote_code=True,
-            torch_dtype=(
-                torch.bfloat16
-                if device.type == "cuda"
-                else None
+        load_dtype = (
+            torch.bfloat16 if device.type == "cuda" else None
+        )
+        # torch_dtype=None does not mean "leave it alone", it means
+        # torch's default, which is fp32. This checkpoint is BF16 on
+        # disk, so the CPU path takes twice its size in RAM and the
+        # target has to be told that or the bar would stall at half.
+        target = load_target_bytes(
+            Path(snapshot),
+            target_dtype=(
+                load_dtype
+                if load_dtype is not None
+                else torch.get_default_dtype()
             ),
-            device_map=(
-                "auto" if device.type == "cuda" else None
-            ),
-        ).eval()
+        )
+        with sample_load_progress(
+            target_bytes=target,
+            sink=lambda p: setattr(self, "load_progress", p),
+        ):
+            # device_map="auto" streams shards straight to the GPU, so
+            # there is no separate .to(device) to account for here.
+            mdl = AutoModel.from_pretrained(
+                name,
+                trust_remote_code=True,
+                torch_dtype=load_dtype,
+                device_map=(
+                    "auto" if device.type == "cuda" else None
+                ),
+            ).eval()
         self.model = mdl
         self.tokenizer = tok
         logger.info("LLaDA loaded on %s", device)

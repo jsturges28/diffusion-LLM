@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
@@ -36,6 +37,10 @@ from src.inference.ar_sampler import (
     streaming_substitute,
 )
 from src.inference.hf_download import download_with_progress
+from src.inference.load_progress import (
+    load_target_bytes,
+    sample_load_progress,
+)
 
 logger = logging.getLogger("smollm3_worker")
 
@@ -78,7 +83,7 @@ class Smollm3Backend(Backend):
         # Fetch weights first (reporting progress via /health) so the
         # first activation shows a download bar; a cache hit is a no-op.
         logger.info("ensuring weights for %s", name)
-        download_with_progress(
+        snapshot = download_with_progress(
             name, sink=lambda p: setattr(self, "load_progress", p)
         )
         self.load_progress = None
@@ -87,12 +92,23 @@ class Smollm3Backend(Backend):
         logger.info(
             "loading model %s on %s (bfloat16)", name, resolved
         )
-        # bfloat16 on both devices halves the ~12 GiB fp32 footprint
-        # (to ~6 GiB), which matters most for CPU/RAM-constrained hosts.
-        model = AutoModelForCausalLM.from_pretrained(
-            name, torch_dtype=torch.bfloat16
+        target = load_target_bytes(
+            Path(snapshot), target_dtype=torch.bfloat16
         )
-        self.model = model.to(resolved).eval()
+        # The .to() is inside the sampled block because it is half the
+        # wait on this model: from_pretrained fills RAM, then the copy
+        # fills VRAM, and the sampler follows whichever is climbing.
+        with sample_load_progress(
+            target_bytes=target,
+            sink=lambda p: setattr(self, "load_progress", p),
+        ):
+            # bfloat16 on both devices halves the ~12 GiB fp32
+            # footprint (to ~6 GiB), which matters most for
+            # CPU/RAM-constrained hosts.
+            model = AutoModelForCausalLM.from_pretrained(
+                name, torch_dtype=torch.bfloat16
+            )
+            self.model = model.to(resolved).eval()
         logger.info("SmolLM3 loaded on %s", resolved)
 
     def _bounds(
@@ -129,6 +145,30 @@ class Smollm3Backend(Backend):
                 return bounds
         return (float("-inf"), float("inf"))
 
+    def _spec_default(self, name: str) -> Any:
+        """Registry default for ``name``, honoring any override.
+
+        These are the values used when the client omits a key. They
+        were previously written out a second time here, which is one
+        copy too many: flipping ``alternatives`` on in the registry
+        would have left this branch still defaulting it off, and
+        nothing would have caught the disagreement because the
+        frontend always sends every key. Reading the spec means the
+        two cannot drift.
+        """
+        for spec in self.model_info.param_specs:
+            if spec.name != name:
+                continue
+            override = (
+                spec.overrides.get(self.device)
+                if spec.overrides
+                else None
+            )
+            if override is not None and override.default is not None:
+                return override.default
+            return spec.default
+        raise KeyError(f"no param spec named {name!r}")
+
     def _validate_generate(
         self, data: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -136,28 +176,30 @@ class Smollm3Backend(Backend):
         prompt = str(data.get("prompt", "")).strip()
         if not prompt:
             raise ValueError("prompt must not be empty")
+
+        def given(name: str) -> Any:
+            return data.get(name, self._spec_default(name))
+
         # Device-aware bounds (see _bounds) enforce the CPU token cap
         # transparently, matching what the frontend shows.
         max_new_tokens = _clamp_int(
-            data.get("max_new_tokens", 256),
+            given("max_new_tokens"),
             self._bounds("max_new_tokens", experimental),
         )
         return {
             "prompt": prompt,
             "max_new_tokens": max_new_tokens,
             "temperature": _clamp_float(
-                data.get("temperature", 0.6),
+                given("temperature"),
                 self._bounds("temperature", experimental),
             ),
             "top_p": _clamp_float(
-                data.get("top_p", 0.95),
+                given("top_p"),
                 self._bounds("top_p", experimental),
             ),
-            "thinking": bool(data.get("thinking", False)),
-            "alternatives": bool(
-                data.get("alternatives", False)
-            ),
-            "seed": int(data.get("seed", -1)),
+            "thinking": bool(given("thinking")),
+            "alternatives": bool(given("alternatives")),
+            "seed": int(given("seed")),
         }
 
     async def handle_generate(

@@ -7,8 +7,9 @@ first, then deliberate the work below with the maintainer before Plan mode
 
 ## What it is
 
-A local FastAPI + WebSocket visual playground and analytics suite for discrete
-diffusion LLMs, oriented toward explainability (xAI). Runs in the browser
+A local FastAPI + WebSocket visual playground and analytics suite for LLMs,
+deepest on discrete diffusion and built to take more model classes over time,
+oriented toward explainability (XAI). Runs in the browser
 (localhost) and as an optional native desktop app. Watch models denoise live:
 scrub frame history, remask tokens and resume, color tokens by confidence,
 entropy, or commit order, inspect the candidates a model nearly chose, diff an
@@ -71,9 +72,103 @@ compare runs in an analytics suite.
 
 ## Recently shipped (this session)
 
-**Latest pass: the status message row.** `pytest` (84/84, five of them new for
-`_display_run_path`), `node --check`, ReadLints, and the 70-column audit are
-clean. The chip lifecycle was exercised head-on with a throwaway Node harness
+**Latest pass: resident navigation, picker flip, and load-bar corrections.**
+The four items the maintainer left open after the polish pass below. `pytest`,
+`node --check`, ReadLints, and the 70-column audit are clean; two throwaway
+Node harnesses (7 checks on the drop-up geometry, 9 on the activation reducer)
+ran green and were deleted. Checklist items 48 to 57 carry the GPU and display
+work.
+
+- **Selecting the resident model no longer pretends to load it.** The server
+  has always treated that activation as a no-op
+  ([server.py](src/web/server.py), `activate`), so the only real damage was the
+  clear the polish pass had just added: `selectModel` wiped the run snapshot
+  unconditionally, including on the path that spawns nothing. The menu now
+  reads `active_device` off `/api/models` (it was being discarded) and asks
+  *Go back to the Generation page?* instead. Only an AR row can name a
+  placement the resident worker is not using, so that is the only case
+  `isResidentSelection` compares a device on; everything else offers one
+  placement, which sidesteps mirroring the server's resolution of a
+  device-less request. The POST still goes out, and its `state` is the
+  discriminator: `ready` means the no-op fired and this is navigation,
+  anything else means the worker had died since the menu was drawn and the
+  POST respawned it, so the loading UI still comes up.
+- **Dropdowns flip up when they would be clipped.** The rows the maintainer
+  saw occluded were the Overlay picker's option list, not the drawer.
+  `#output-section` hides its overflow and `.custom-select-list` was pinned to
+  `top: calc(100% + 4px)`, so a drawer dragged low had nowhere to put its
+  choices. `open()` now measures after unhiding (a hidden list has no height)
+  against the nearest ancestor that would clip it, and flips only when the
+  list does not fit below **and** there is more room above, so it never trades
+  one clipped list for a worse one. Shared by every dropdown in the app, and
+  Analytics loads `style.css`, so one rule covers both pages.
+- **DiffusionGemma's bar reserves a tail for the copy.** It is the only worker
+  that unpickles the whole state dict into anonymous RAM before copying any of
+  it, so RSS hit the target exactly while the copy had not started, leaving the
+  bar at 100% for the entire second half of the wait. See "The reserved tail"
+  below for why clamping was not enough and why the parameter is opt-in.
+- **The bar climbs and finishes.** Two causes, neither of them a fast load.
+  The sampler's closing 100% never reaches the browser, because the worker
+  reaches ready in the same breath and `_apply_health` drops progress on that
+  transition; the reducer now names the `ready` state and both pages hold the
+  full bar for `OVERLAYS_LOAD_COMPLETE_HOLD_MS` before navigating. And three
+  polls were stacked at 500ms, so the browser was up to a second stale at a
+  500ms refresh; the supervisor and both clients now read at 250ms. The
+  supervisor keeps 500ms until the worker first answers, since every poll
+  before that is a refused connection during its torch import.
+
+**Earlier this session: polish, plus a determinate model-load bar.** `pytest` (133/133,
+49 of them new), `node --check`, ReadLints, and the 70-column audit are clean.
+Two throwaway Node harnesses covered the parts pytest cannot reach, both run
+green and then deleted: 26 checks on the drawer drag (clamping, the swallowed
+click, the threshold boundary, the open-drawer lockout, resize rescue, corrupt
+storage) and 19 on the activation reducer. GPU and display work is on the
+checklist.
+
+Seven small items and one large one.
+
+- **A model switch now starts on a blank canvas.** Two independent holes.
+  `saveSessionState` recorded only the model id, so GPU-to-CPU on the same
+  model matched on restore and the old run came back; `device` is now part of
+  that identity (a snapshot predating the key is read as matching, so nobody
+  loses an in-flight run to the upgrade). That alone cannot fix switching away
+  and back, which lands on a genuinely matching pair, so both activation paths
+  now clear the snapshot on their way out. The key and its clear moved to
+  `overlaysClearLastRun` in [overlays.js](src/web/static/overlays.js) because
+  `menu.js` is an IIFE and could not see `app.js`'s copy.
+- **The placeholder names the model.** "Diffusion output will appear here" was
+  simply wrong under SmolLM3. The static string in `index.html` stays generic
+  since it paints before `/api/models` resolves, which is also the fallback for
+  boot's failure path.
+- **Cosmetics.** The Analytics "Edited" check lost its dot-pattern stroke (the
+  texture only muddied a 16px glyph) along with the now-orphaned `<pattern>`,
+  `.svg-defs` wrapper, and three CSS rules. `#prompt-row label` gained 3px of
+  `margin-bottom`, which is what sets the clearance under the
+  absolutely-positioned `#prompt-history`. The loading overlay's "~30 seconds"
+  guess is gone, replaced by the real bar below.
+- **Docs read as an LLM visualizer.** `xAI` to `XAI` in all 14 spots (the
+  desktop entry already said "LLM XAI Visualizer"), and the framing in
+  `README.md`, `AGENTS.md`, this file, and the About modal now leads with
+  language models generally while still saying the depth is in discrete
+  diffusion.
+- **The collapsed drawer drags vertically.** One shared helper,
+  `overlaysMakeDrawerDraggable`, wired from both pages. It moves `top`, not
+  `transform`, because the group already animates `transform` for its slide and
+  the box is absolutely positioned. It owns the handle's **click** as well as
+  its drag: at the target node, listeners fire in registration order regardless
+  of the capture flag, so a separate swallow-the-click listener would have been
+  a silent ordering dependency. Persisted per page.
+- **AR Alternatives defaults on.** It gates the hover popover and What If?
+  entirely, so off by default hid the model's two most interesting affordances
+  behind a toggle. `smollm3_worker` now reads every absent-key fallback from the
+  registry spec (`_spec_default`) instead of keeping a second copy of each
+  default, which is what would have let the two disagree. The sampler's own
+  Python defaults stay `False`; only the UI default moved.
+- **A real bar for the model load.** See "What the load bar samples" below.
+
+**Earlier this session: the status message row.** `pytest`, `node --check`,
+ReadLints, and the 70-column audit were clean at the time (84/84, five of them
+new for `_display_run_path`). The chip lifecycle was exercised head-on with a throwaway Node harness
 that located the real source region in `app.js` by content markers, evaluated
 it against a stub DOM and a fake clock, and asserted the coexistence case,
 independent dot timers, retirement, the cap, and timer leaks. The fourth pass
@@ -127,6 +222,96 @@ them. See the three "What the Nth pass changed" sections after the two traps.
   run; `saveRun` guards itself with `isSaving`), so a scroll region would
   have been dead code. The cap exists so an unforeseen caller cannot push an
   unbounded run of chips out under the fade, costing layout while unreadable.
+
+### What the load bar samples, and why it is shaped that way
+
+[load_progress.py](src/inference/load_progress.py) is the companion to
+`hf_download.py`: one covers getting weights onto disk, the other covers
+reading them into memory, which is often the longer wait and had no readout at
+all. There is no progress hook to borrow (`from_pretrained`'s shard counter is
+coarse, differs across the three pinned `transformers` versions, and says
+nothing about the host-to-device copy), so it samples memory counters the same
+way `hf_download` samples the cache directory. Four decisions carry the design.
+
+**One fraction, not two phases.** LLaDA loads with `device_map="auto"` on CUDA,
+so accelerate streams shards straight to the GPU and RSS barely moves, while
+SmolLM3 memory-maps its shards, so its two counters climb over the same stretch
+rather than one after the other. A sequential CPU-then-GPU bar would sit at
+zero through half of one of them. The reading is
+`max(rss_delta, device_delta)` against a single target, and the **stage label
+follows whichever counter is being reported**: any device bytes at all mean the
+copy has started. (That rule was originally `on_device >= resident`, which kept
+saying "weights" through nearly all of a copy that follows a full read into
+RAM; see the reserved tail below.) Both counters are baselined, so a fresh
+worker starts at zero on each.
+
+**Except one shape, which needs a reserved tail.** DiffusionGemma is a pickled
+state dict, so `torch.load` materializes every byte in anonymous RAM before one
+is copied across. Its RSS reaches the target *exactly* while the copy has not
+begun, which parked the bar at 100% for the whole second half of the wait.
+Such a load passes a `host_stage_ceiling`, which compresses the read into
+`[0, ceiling]` and scales the copy into what is left. **Clamping the combined
+reading is not enough**, and this is the trap: the monotonic floor would then
+jump the reserved tail in a single step the moment the copy started, since RSS
+already accounts for the whole target. The split is by expected *time*, not by
+bytes, because reading ~17 GiB off disk dominates the copy across PCIe and an
+even split would park the bar at half and then sprint. The parameter is opt-in
+and defaults to `1.0`, at which the arithmetic reduces to the single-counter
+one above, so the two loads that already tracked their wait are provably
+untouched by it: only [dgemma_worker.py](src/backends/dgemma_worker.py) passes
+a value.
+
+**The target comes from the requested dtype, not the disk dtype.** LLaDA on CPU
+passes `torch_dtype=None`, which means torch's default, which is fp32, so a
+BF16 checkpoint takes twice its on-disk size in RAM. The worker passes
+`torch.get_default_dtype()` in that case rather than `None`, or the bar would
+stall at 50%. Targets come from `metadata.total_size` in the shard index (LLaDA
+14.93 GiB / 6 shards, SmolLM3 5.73 GiB / 2, both uniform BF16), scaled by the
+dtype ratio; DiffusionGemma's single packed NF4 `model_nf4.pt` is its own size
+with no scaling.
+
+**Unmeasurable means no bar, never a guessed one.** A mixed-dtype checkpoint,
+an unreadable header, an unrecognized layout: all return target `0`, and the
+client renders the phase label with a spinner. `_index_dtype` reads *every*
+shard rather than sampling one, so a checkpoint keeping fp32 embeddings in a
+separate shard is caught instead of scaled by the wrong ratio.
+
+**The reading only goes up.** The CPU allocator hands pages back mid-load, and
+a bar that walks backwards reads as broken even when nothing is wrong, so each
+sample is floored at the previous peak. The floor is on the **fraction**, not
+the byte count, which is what the two-segment case needs and is also the thing
+the user actually sees; `loaded_bytes` stays honest about what is resident and
+is diagnostics only (no client reads it).
+
+Two smaller notes. The sampler runs on the helper thread and the **load stays on
+the caller's**, the opposite of `download_with_progress`: moving a heavyweight
+library-driven load between threads to gain a progress bar would trade real risk
+for a cosmetic one, and reading two counters is the safe thing to relocate. And
+the whole thing is a context manager, so the thread is joined and the bar
+completed even when the load raises. That completing frame carries the stage
+the load actually reached rather than naming one, or it would put "Moving to
+GPU" on the last frame of a load that never touched a GPU.
+
+The wiring is four layers: `sample_load_progress` writes the backend's
+`load_progress`, `resolve_load_status` in
+[worker_base.py](src/backends/worker_base.py) reads the dict's new `phase` key
+to tell a load from a download (**absent means download**, since `hf_download`
+predates the key), `_apply_health` in [server.py](src/web/server.py) now keeps
+progress for `loading` instead of nulling it, and
+`overlaysActivationProgress` reduces one poll to `{determinate, percent, label}`
+for both the generator's overlay and the menu's inline bar. The generator also
+polls on the **boot** path now (`startLoadProgressPoll`, driven from
+`handleModelStatus`): that path raises the same overlay without going through
+`switchModel`, so the first load of a session, reliably the slowest, was the one
+load with no bar.
+
+One thing that layering costs: the closing 100% the sampler emits **never
+reaches the browser**, because the worker sets ready in the same breath and
+`_apply_health` nulls progress on that transition. So the reducer names the
+`ready` state itself, and both pages hold a full bar briefly before navigating.
+Both gate that hold on whether a bar was on screen, read off the element rather
+than tracked beside it, so an unmeasurable checkpoint that ran indeterminate
+does not have one flash into existence at the end.
 
 ### Two things a future change here will trip over
 
@@ -1535,6 +1720,73 @@ The generator crossfade pass (all on the **generation** page, not Analytics):
     bottom-left it should not touch the row at bottom-right. Dragging the
     toast onto the row is expected to overlap and is not a bug.
 
+**Resident navigation, picker flip, and load-bar corrections (needs a GPU
+and a display).** The polish pass before this one was verified clean apart
+from the three items it left open, which are 50, 51, and 54 below; item 55
+is carried over untouched because it was never reported on.
+
+48. **Re-selecting the resident model is navigation.** Generate with a model,
+    go to the Main Menu, and pick that same model again. The confirm must read
+    *Go back to the Generation page?* rather than offering to load it, there
+    should be no loading animation or bar, and **the run must still be on the
+    canvas when you arrive**, hyperparameters included. Do the same from the
+    header selector, which should be a no-op there too. Then check the case
+    that must still clear: with SmolLM3 resident on GPU, pick its **CPU** row
+    from the menu. That is a real switch, so it must load properly and land on
+    an empty canvas.
+49. **A genuine switch still clears, from both paths.** Generate with SmolLM3,
+    switch to a diffusion model and back, from the header selector and then
+    from the menu. Only the run output should go; hyperparameters are keyed per
+    model on purpose and must survive. Then generate, visit Analytics, and come
+    back: that run must still be there, which is the case an over-eager clear
+    would break.
+50. **The overlay picker opens upward near the bottom.** Drag the collapsed
+    drawer handle to the bottom of the output area, open it, and open the
+    Overlay picker. The choices must appear **above** the drawer, fully inside
+    the output area, rather than being cut off by its border. Drag the handle
+    back to the top and confirm the picker opens downward again. Repeat on the
+    Analytics page and in its run-detail modal. Then check the drawer drag
+    itself still behaves: a drag must not open it, a plain click must, the
+    position must survive a reload, and the two pages must remember separate
+    positions.
+51. **DiffusionGemma reserves a tail for the copy.** Activate DiffusionGemma
+    and watch the sub-line. *Loading weights* should climb to roughly 90% and
+    stop there, then *Moving to GPU* should carry the last stretch to 100%.
+    The specific failure this replaced was the bar reaching 100% while still
+    reading *Loading weights*, with *Moving to GPU* flashing past at full.
+    Neither phase should jump: a leap from 90 to 100 in one step means the copy
+    is not being tracked.
+52. **LLaDA and SmolLM3 bars are unchanged.** These two take a different code
+    path from DiffusionGemma and are meant to be untouched by that fix, so this
+    is the regression check. Activate each on GPU: the bar should track the
+    wait the way it did before, with no stall at 90% and no jump.
+53. **"Moving to GPU" now arrives earlier.** This is an intended change. On
+    SmolLM3 the sub-line used to stay on *Loading weights* until VRAM overtook
+    RAM; it should now flip to *Moving to GPU* as soon as the copy starts, and
+    stay there. LLaDA streams straight to the GPU and should read *Moving to
+    GPU* almost immediately, as before.
+54. **The bar climbs and finishes rather than cutting off.** Activate a model
+    from the Main Menu, which is the fast path where this was worst, and watch
+    the inline bar: it should step up several times and be seen at **100%**
+    before the page moves to the generator, not vanish somewhere partway. Do
+    the same for a header switch (which reloads) and for the very first load
+    after a full restart (which comes up through the boot path). All three
+    should complete visibly.
+55. **A CPU load never claims a GPU.** Activate SmolLM3 with the device toggle
+    on CPU. The sub-line must stay on *Loading weights* for the whole load
+    **including the final frame**, and never say *Moving to GPU*. The bar
+    should still be roughly linear: this is the fp32-vs-BF16 target case, so a
+    bar that finishes at half is the scale factor being wrong.
+56. **The download bar still works.** Delete a model's cache (or use a model
+    you have never loaded) and activate it. The download phase must still read
+    "Downloading NN%" both in the menu's inline bar and in the generator
+    overlay, and must hand over cleanly to the load phase afterwards rather
+    than resetting or double-counting.
+57. **A failed load does not leave a bar behind.** Force an activation failure
+    (for example, request DiffusionGemma on CPU, which is refused). The overlay
+    must close, the error must surface, and a subsequent successful switch must
+    start from an empty track rather than the failed run's fill.
+
 **0. The comparison surfaces (agreed with the maintainer, partly shipped).** The
 timing foundation exists to serve these, and the unifying idea is settled: **the
 pre-edit run is a first-class layer everywhere**, driven by one shared
@@ -1581,7 +1833,7 @@ anywhere the mark type cannot show two runs at full opacity.
   though a user who drags it there can still overlap it; that was judged not
   worth constraining a drag surface over.
 
-**1. State-space models: Mamba-3 (new model class).** A genuinely new xAI
+**1. State-space models: Mamba-3 (new model class).** A genuinely new XAI
 direction: SSMs compress all context into a fixed-size recurrent state, so they
 unlock overlays no other model here can show. Target the 1.5B SISO / MIMO
 checkpoints on the `state-spaces` HF org (Mamba-3, arXiv 2603.15569). **Key open
@@ -1594,7 +1846,7 @@ and likely a custom decode loop rather than transformers `.generate`. VRAM is
 trivial (~3 GB weights + constant state). The **streaming baseline reuses the AR
 frame / token contract** and `model_type` gating (no Edit Frames; keep timing,
 confidence, Heatmap); reserve a distinct `ssm` capability flag for later.
-**Phase-2 xAI payoff:** SSM-native overlays on the recurrent state, per-token
+**Phase-2 XAI payoff:** SSM-native overlays on the recurrent state, per-token
 Δ / state-write intensity, a state-norm evolution sparkline, and fixed-state
 forgetting / retrieval probes, all gated on capturing kernel intermediates
 (forward hooks or the reference path). Its streaming baseline can lift the AR

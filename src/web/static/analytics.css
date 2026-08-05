@@ -438,26 +438,9 @@ html, body {
   text-align: center;
 }
 
-/* Edited marker: a checkmark whose stroke is filled with the diffusion
-   dot pattern (#edited-dots), so it reads as a cutout of the mask glyph.
-   Sized larger than a text glyph so the texture and shape are legible. */
-.svg-defs {
-  position: absolute;
-  width: 0;
-  height: 0;
-}
-
-/* Base tint a step above --accent-dim so the gaps between dots read
-   fuller, matching the medium shade glyph (U+2592) rather than the
-   sparsest light shade. */
-.edited-dots-bg {
-  fill: rgba(0, 255, 65, 0.3);
-}
-
-.edited-dots-fg {
-  fill: var(--accent);
-}
-
+/* Edited marker: a plain accent checkmark, sized larger than a text
+   glyph so the shape stays legible. The glow matches the accent glow
+   used elsewhere in the table. */
 .edited-check {
   vertical-align: middle;
   filter: drop-shadow(0 0 3px var(--accent-glow));
