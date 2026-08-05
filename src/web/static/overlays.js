@@ -95,15 +95,29 @@ function overlaysPopoverLeft(tokenRect, popoverBox) {
   );
 }
 
-// Place it vertically, preferring above the token. The browser draws
-// the native title tooltip below the cursor and we cannot move that,
-// so a popover below would sit underneath the tooltip. Falls back to
-// below when the token is too close to the top of the viewport.
-function overlaysPopoverTop(tokenRect, popoverBox) {
+// Place it vertically, preferring above the token. That preference
+// began as a workaround, since the browser drew a native title
+// tooltip below the cursor that nothing could move; the tooltip is
+// gone now (see overlaysRenderTokenMetrics) but above still reads
+// better, because it leaves the text you are pointing at uncovered.
+//
+// ``canvasTop`` is the viewport y of the token canvas's own top edge,
+// and it is what the popover has to clear, not the viewport's. The
+// canvas starts well down the page, so a viewport-only test let a
+// token in the first line or two push the popover up out of the
+// canvas and over the metrics strip above it. Overlapping the tokens
+// is the whole point; overlapping their readout is not.
+function overlaysPopoverTop(tokenRect, popoverBox, canvasTop) {
+  var ceiling = typeof canvasTop === "number"
+    ? Math.max(8, canvasTop)
+    : 8;
   var above = tokenRect.top - popoverBox.height - 6;
-  if (above >= 8) {
+  if (above >= ceiling) {
     return above;
   }
+  // Below is safe wherever this branch is reached: it is reached only
+  // for a token near the top of the canvas, which is the case with
+  // the most room underneath it.
   var below = Math.min(
     tokenRect.bottom + 6,
     window.innerHeight - popoverBox.height - 8
@@ -183,6 +197,161 @@ function overlaysAltDisplay(text) {
     .replace(/\n/g, "\u21B5")
     .replace(/\t/g, "\u21E5")
     .replace(/ /g, "\u00B7");
+}
+
+// ---- Token metrics strip ----
+//
+// The always-present readout above each page's token canvas. It
+// replaced a native ``title`` tooltip, which had three problems this
+// fixes: the browser delays it by around half a second and will not
+// let that be configured, it cannot be styled or positioned, and it
+// is bound to one element, so hovering the entropy chart could never
+// feed it. One strip serves both hover sources on both pages.
+//
+// The pages own every decision about *what* is under the pointer
+// (which frame, which overlay, which stacked layer) and hand this a
+// plain reading. Keeping the formatting here is what stops the two
+// pages drifting into two dialects of the same readout.
+//
+// A reading is null when nothing is hovered, or:
+//
+//   { position, total, tokenText, masked, maskChar,
+//     confidence, entropy, extra, runLabel }
+//
+// confidence and entropy are null when the run did not record them,
+// which is different from zero and is rendered differently.
+// maskChar is the caller's own glyph, because the generator swaps
+// MASK_CHAR per model and the strip has to draw what the canvas does.
+
+var OVERLAYS_METRIC_BLANK = "\u2013";
+
+// Build the strip's children once. Each page calls this at boot; the
+// markup carries only the empty container, so the structure is
+// defined in exactly one place.
+function overlaysBuildTokenMetrics(el) {
+  if (!el) {
+    return;
+  }
+  el.textContent = "";
+  var nodes = {
+    token: overlaysMetricToken(el),
+    position: overlaysMetricField(el, "Position", false),
+    confidence: overlaysMetricField(el, "Confidence", true),
+    entropy: overlaysMetricField(el, "Entropy", true),
+    extra: overlaysMetricTrailer(el, "token-metrics-extra"),
+    run: overlaysMetricTrailer(el, "token-metrics-run"),
+  };
+  // Cached rather than re-queried per hover. Mouseover fires on every
+  // token the pointer crosses, and this keeps that to attribute
+  // writes on nodes we already hold.
+  el.overlaysMetricNodes = nodes;
+  overlaysRenderTokenMetrics(el, null);
+}
+
+function overlaysMetricToken(el) {
+  var span = document.createElement("span");
+  span.className = "token-metrics-token";
+  el.appendChild(span);
+  return span;
+}
+
+// A label, its value, and optionally a bar that reuses the overlay
+// ramps, so the strip reads in the same colors as the canvas above
+// it rather than inventing a third language for the same numbers.
+function overlaysMetricField(el, label, withBar) {
+  var field = document.createElement("span");
+  field.className = "token-metrics-field";
+  var name = document.createElement("span");
+  name.className = "token-metrics-label";
+  name.textContent = label;
+  field.appendChild(name);
+  var value = document.createElement("span");
+  value.className = "token-metrics-value";
+  field.appendChild(value);
+  var fill = null;
+  if (withBar) {
+    var bar = document.createElement("span");
+    bar.className = "token-metrics-bar";
+    fill = document.createElement("span");
+    fill.className = "token-metrics-fill";
+    bar.appendChild(fill);
+    field.appendChild(bar);
+  }
+  el.appendChild(field);
+  return { value: value, fill: fill };
+}
+
+function overlaysMetricTrailer(el, className) {
+  var span = document.createElement("span");
+  span.className = className;
+  el.appendChild(span);
+  return span;
+}
+
+// Render a reading, or the idle state when it is null. Every field is
+// written on every call, so no stale value can survive a move onto a
+// token that lacks it.
+function overlaysRenderTokenMetrics(el, reading) {
+  if (!el || !el.overlaysMetricNodes) {
+    return;
+  }
+  var nodes = el.overlaysMetricNodes;
+  var idle = !reading;
+  el.classList.toggle("is-idle", idle);
+  nodes.token.textContent = idle
+    ? OVERLAYS_METRIC_BLANK
+    : overlaysMetricTokenText(reading);
+  nodes.position.value.textContent = idle
+    ? OVERLAYS_METRIC_BLANK
+    : (reading.position + 1) + " / " + reading.total;
+  overlaysMetricNumber(
+    nodes.confidence,
+    idle ? null : reading.confidence,
+    overlaysMetricConfidenceBar
+  );
+  overlaysMetricNumber(
+    nodes.entropy,
+    idle ? null : reading.entropy,
+    overlaysMetricEntropyBar
+  );
+  nodes.extra.textContent = idle ? "" : (reading.extra || "");
+  nodes.run.textContent = idle ? "" : (reading.runLabel || "");
+}
+
+// A masked position has no text of its own to show, so it reports the
+// glyph the canvas is drawing there rather than an empty slot.
+function overlaysMetricTokenText(reading) {
+  if (reading.masked) {
+    return reading.maskChar || OVERLAYS_MASK_CHAR;
+  }
+  return overlaysAltDisplay(reading.tokenText);
+}
+
+// Absent reads as a dash, not as zero: a run saved without the signal
+// is not a run that was certain, and the old tooltip conflated those.
+function overlaysMetricNumber(field, value, bar) {
+  var known = typeof value === "number" && isFinite(value);
+  field.value.textContent = known
+    ? value.toFixed(3)
+    : OVERLAYS_METRIC_BLANK;
+  if (!field.fill) {
+    return;
+  }
+  var shape = known ? bar(value) : { width: 0, color: "" };
+  field.fill.style.width = shape.width + "%";
+  field.fill.style.background = shape.color;
+}
+
+function overlaysMetricConfidenceBar(value) {
+  var clamped = Math.max(0, Math.min(1, value));
+  return { width: clamped * 100, color: heatColor(clamped) };
+}
+
+function overlaysMetricEntropyBar(value) {
+  return {
+    width: overlaysEntropyFraction(value) * 100,
+    color: entropyColor(value),
+  };
 }
 
 // Per-position commit step for a run: the step after which a position
@@ -294,16 +463,15 @@ function overlaysApplyLayerPointers(
 // cross-highlight, and the generator's remask click. A layer built
 // without them looks right and does nothing.
 //
-// Beyond the required colorFor, ``opts`` takes four optional
+// Beyond the required colorFor, ``opts`` takes three optional
 // callbacks, all defaulting to the plain Analytics behavior so that
 // page passes none of them:
 //
-//   titleFor(index, tok)            -> hover tooltip
 //   maskedFor(index, tok)           -> mask a resolved token
 //   classFor(index, tok, masked)    -> extra classes
 //   opacityFor(index, tok, masked)  -> inline opacity
 //
-// The generator needs all four. It draws the mask glyph over
+// The generator needs all three. It draws the mask glyph over
 // positions the user selected for remasking even though their tokens
 // are resolved (hence maskedFor), marks those and its clickable and
 // substitutable positions with their own classes (classFor), and
@@ -373,10 +541,6 @@ function overlaysSyncTokenSpan(span, index, tok, mask, opts) {
   if (span.style.opacity !== nextOpacity) {
     span.style.opacity = nextOpacity;
   }
-  var title = opts.titleFor ? opts.titleFor(index, tok) : "";
-  if (span.title !== title) {
-    span.title = title;
-  }
 }
 
 // Build one stacked layer of token spans. ``opts`` carries the layer
@@ -405,8 +569,7 @@ function overlaysBuildTokenLayer(tokens, opts) {
 // a DocumentFragment of two ``.token-layer`` nodes; the caller owns
 // the container (and must give it the stacking mode). ``diff`` is an
 // overlaysComputeDiff() result; ``opts`` carries opacities in [0,100]
-// (originalOpacity / editedOpacity), a ``blend`` flag, and an
-// optional titleFor(index, token).
+// (originalOpacity / editedOpacity) and a ``blend`` flag.
 function overlaysBuildDiffLayers(
   origTokens, editedTokens, diff, opts, maskChar
 ) {
@@ -428,7 +591,6 @@ function overlaysBuildDiffLayers(
     interactive: !editedTakes,
     maskChar: maskChar,
     colorFor: overlaysDiffColorFor(diff, true, blend),
-    titleFor: options.titleFor,
   });
 
   var editLayer = overlaysBuildTokenLayer(editedTokens || [], {
@@ -437,7 +599,6 @@ function overlaysBuildDiffLayers(
     interactive: editedTakes,
     maskChar: maskChar,
     colorFor: overlaysDiffColorFor(diff, false, blend),
-    titleFor: options.titleFor,
   });
   if (blend) {
     editLayer.style.mixBlendMode = "difference";

@@ -150,6 +150,12 @@
                     </div>
                   </div>
                 </div>
+                <!-- Per-token readout, filled by overlays.js. Same
+                     element and same renderer as the generator's, so
+                     the two pages read identically. Distinct id from
+                     #overlay-readout, which is the drawer's diff
+                     summary. -->
+                <div id="token-metrics" class="token-metrics"></div>
                 <!-- Bordered canvas; the overlay drawer tucks into
                      its top-right corner, like the generator's. -->
                 <div id="overlay-output-wrap">

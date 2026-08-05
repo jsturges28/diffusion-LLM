@@ -770,6 +770,15 @@ html, body {
   margin-left: auto;
 }
 
+/* The viewer header already leaves 10px beneath itself, so the strip
+   only has to space itself off the canvas below. Height is reserved
+   either way: #overlay-output-wrap is flex: 1 inside a column, so the
+   canvas gives up exactly this row and the modal does not grow. */
+#overlay-viewer .token-metrics {
+  padding-top: 0;
+  padding-bottom: 8px;
+}
+
 /* The token output's home: a bordered canvas whose top-right corner
    hosts the overlay drawer, mirroring the generator's output area. */
 #overlay-output-wrap {

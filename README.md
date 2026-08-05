@@ -46,7 +46,7 @@ Every resolved token carries a **confidence** value in [0, 1], and every frame c
 - **LLaDA:** the softmax probability of the token at the moment it was unmasked (fixed thereafter, since resolved tokens are never revisited).
 - **DiffusionGemma:** a lightweight **stability proxy** by default (how many consecutive steps a position has held the same prediction). Enabling the **Entropy signal** toggle switches to the true max-softmax probability from the model's logits (more faithful, but slower and heavier per step).
 
-After a run, hovering any token shows its position and confidence for that frame, and the **Heatmap** overlay recolors resolved tokens by confidence. Per-frame mean confidence and canvas indices are also persisted for the analytics charts.
+Hovering any token reads its position and confidence for that frame into the **metrics strip** above the canvas, and the **Heatmap** overlay recolors resolved tokens by confidence. Per-frame mean confidence and canvas indices are also persisted for the analytics charts.
 
 ### Commit order and counterfactual diff
 
@@ -330,7 +330,11 @@ The remaining persistent preferences live on a shared **Settings page** (`/setti
 - Sub-settings are indented under the preference they depend on, with no separator between them, and are dimmed rather than hidden when that preference is off, so what exists and what it belongs to stay visible.
 - **Interface** tab: **Device tag ticker** (the scrolling GPU/device readout).
 
-Hovering any token still shows its position (`Token X/total` for LLaDA, `Token: X` for DiffusionGemma) and confidence for that frame (masked tokens report 0).
+#### Metrics strip
+
+A single always-present row directly above the token canvas, on both the generator and the Analytics detail modal, reads out the hovered position: the token (with visible stand-ins for whitespace), `position / total`, confidence and entropy with a small bar each on the overlays' own ramps, the overlay-specific extra (`Resolved at step N` under Commit Order, `was: X` under Diff), and an `Original` / `Edited` tag while both runs are stacked. It replaced the native `title` tooltip, which the browser delayed, would not let us style or place, and could only ever be bound to one element, so it fed nothing from the entropy chart.
+
+Two sources drive it: a token hover, and an entropy hover (the generator's profile, the Analytics chart), so a tall bar can be read back to a word without moving the pointer to the text. It also follows the frame, so a held position updates while scrubbing and during live generation. Absent is distinguished from zero: a dash means the run does not carry the value (diffusion runs record no entropy) rather than that the model measured nothing. Height is reserved permanently rather than shown on hover, which would push the canvas down every time the pointer crossed into it.
 
 #### Analytics Suite
 
@@ -365,7 +369,7 @@ Clicking **Save** writes a timestamped folder under `results/` containing `metad
 - [x] Interactive remasking and resume: frame scrubber, click-to-remask, resume from any frame (LLaDA and single-canvas DiffusionGemma via seed-canvas re-entry)
 - [x] Guided multi-frame editing with faded original-run previews and partial resumes
 - [x] Per-token confidence: softmax at reveal (LLaDA), stability proxy or true entropy (DiffusionGemma)
-- [x] Grouped overlay picker (None / Heatmap / Commit Order / Diff vs Original, the latter two diffusion-only), per-token hover tooltips, and token-hover highlight option
+- [x] Grouped overlay picker (None / Heatmap / Commit Order / Diff vs Original, the latter two diffusion-only), per-token hover readouts, and token-hover highlight option
 - [x] Commit-order (resolution-step) token coloring; counterfactual "Diff vs Original" overlay with opacity sliders and difference blend
 - [x] Durable overlays: per-token records (text, mask, id, confidence) plus the pre-edit snapshot persisted per run, and a static commit-order / Diff-vs-Original viewer in the Analytics Suite
 - [x] Analytics run detail as a wide fade-in modal with a corner overlay drawer, a sortable Edited column, and streamlined grouping
@@ -433,6 +437,7 @@ Clicking **Save** writes a timestamped folder under `results/` containing `metad
 - [x] **Tokens per Second:** a click-to-toggle footer readout (run average or last step, persisted) plus an Analytics chart sharing the Timing slot behind a pager, both derived from data every saved run already carries; the footer's Elapsed was fixed in the same pass to report the cumulative total rather than the segment-local time that reset after an edit
 - [x] Both elapsed totals in the Analytics run summary for an edited run, original and edited, instead of one combined figure
 - [x] `ruff` pinned and configured (config-only `pyproject.toml` at 70 columns for both ruff and black, with `C901` and `PLR1702` selected), establishing a 159-finding baseline rather than mass-fixing
+- [x] **Token metrics strip:** one always-present readout above each token canvas, fed by both token hover and entropy hover, replacing the native `title` tooltip that could not be styled, placed, or bound to more than one element; deleting it removed the whole `titleFor` plumbing on both pages, gave live generation a readout it never had, and stopped a missing signal from rendering as a confident zero
 
 
 ## Roadmap

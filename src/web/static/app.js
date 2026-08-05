@@ -145,6 +145,8 @@ var entropyProfileCanvas =
   document.getElementById("entropy-profile");
 var entropyProfileReadout =
   document.getElementById("entropy-profile-readout");
+var tokenMetricsStrip =
+  document.getElementById("token-metrics");
 var diffOverlayControls =
   document.getElementById("diff-overlay-controls");
 var diffOriginalSlider =
@@ -1750,9 +1752,10 @@ function handleError(data) {
 var liveTokenSpans = [];
 
 // No hooks, on purpose. The streaming view draws plain masked and
-// resolved tokens with no overlay tint, no confidence grading, and no
-// hover tooltip, matching the character renderer exactly. Any of
-// those would be a visual change smuggled in with a refactor.
+// resolved tokens with no overlay tint and no confidence grading,
+// matching the character renderer exactly. Either would be a visual
+// change smuggled in with a refactor. The metrics strip still reads
+// these tokens: it works off data-pos, which every span carries.
 var LIVE_TOKEN_OPTIONS = {};
 
 function renderLiveFrame(tokens, revealed) {
@@ -1776,6 +1779,9 @@ function renderLiveFrame(tokens, revealed) {
     rebuildLiveTokens(tokens);
   }
   markTokenBirths(revealed);
+  // A held pointer keeps reading the same position while the text
+  // under it resolves, so the strip has to follow the frame.
+  refreshTokenMetrics();
 }
 
 function rebuildLiveTokens(tokens) {
@@ -1958,8 +1964,9 @@ function invalidateRunMemos() {
 
 // Compare the branch's final frame against the retained original
 // run's final frame, position-aligned on the shared canvas. Returns
-// per-position change flags, the original display text (for
-// tooltips), the remask-origin positions, and a divergence summary.
+// per-position change flags, the original display text (for the
+// metrics strip), the remask-origin positions, and a divergence
+// summary.
 function computeDiff() {
   var cur = frameTokens.length
     ? frameTokens[frameTokens.length - 1]
@@ -1987,7 +1994,6 @@ function renderDiffOverlay(frameIndex) {
   var origTokens =
     (oIdx >= 0 ? originalFrameTokens[oIdx] : null) || [];
 
-  var total = editedTokens.length;
   outputArea.textContent = "";
   tokenHighlightPos = null;
   outputArea.classList.add("token-layers");
@@ -2000,15 +2006,6 @@ function renderDiffOverlay(frameIndex) {
         originalOpacity: diffOriginalOpacity,
         editedOpacity: diffEditedOpacity,
         blend: diffBlend,
-        titleFor: function (index, tok) {
-          if (!tok || tok.m) {
-            return tokenLabel(index, total)
-              + "\nConfidence: 0";
-          }
-          return tokenLabel(index, total) + "\n"
-            + "Confidence: " + confLabel(tok.c)
-            + tokenExtraLabel(tok);
-        },
       },
       MASK_CHAR
     )
@@ -2026,19 +2023,9 @@ function effectiveColorMode() {
   return overlayMode;
 }
 
-// Trailing tooltip lines for one token: entropy, when captured. No
-// nudge toward the candidates, since hovering is what opened this
-// tooltip and the popover arrives on the same gesture.
-function tokenExtraLabel(tok) {
-  if (typeof tok.e !== "number") {
-    return "";
-  }
-  return "\nEntropy: " + String(+tok.e.toFixed(3)) + " nats";
-}
-
 // The divergence map, computed on first use and memoized. Both the
-// diff coloring and the diff tooltip lines need it, so the lazy
-// build lives here rather than in each.
+// diff coloring and the strip's diff line need it, so the lazy build
+// lives here rather than in each.
 function currentDiffData() {
   if (diffData === null) {
     diffData = computeDiff();
@@ -2075,9 +2062,9 @@ function tokenCommitStep(index, isOriginal) {
 }
 
 // The active overlay's color for one resolved token, or null to let
-// the token's own class color it. Kept separate from the tooltip
-// lines the same overlay contributes (tokenTitleExtra below) because
-// the span builder takes color and title as independent callbacks.
+// the token's own class color it. Kept separate from the line the
+// same overlay contributes to the metrics strip (metricsExtra), which
+// is read on hover rather than baked into the span.
 function tokenColorAt(index, tok, isOriginal) {
   var mode = effectiveColorMode();
   if (mode === "conf") {
@@ -2108,50 +2095,6 @@ function tokenColorAt(index, tok, isOriginal) {
     return diffColor(!!diff.changed[index]);
   }
   return null;
-}
-
-// The overlay-specific trailing tooltip lines for one resolved
-// token, on top of the confidence and entropy lines every token
-// carries.
-function tokenTitleExtra(index, isOriginal) {
-  var mode = effectiveColorMode();
-  if (mode === "commit") {
-    var step = tokenCommitStep(index, isOriginal);
-    if (step === null) {
-      return "";
-    }
-    return "\nResolved at step: " + step;
-  }
-  if (mode === "diff") {
-    var diff = currentDiffData();
-    if (diff.origins[index]) {
-      return "\n(remasked here)";
-    }
-    if (diff.changed[index]) {
-      return "\nwas: " + diff.origText[index];
-    }
-    return "";
-  }
-  return "";
-}
-
-// Format a token's confidence for the hover tooltip. Masked or
-// unlabeled tokens report 0.
-function confLabel(c) {
-  if (typeof c !== "number") {
-    return "0";
-  }
-  return String(+c.toFixed(3));
-}
-
-// First tooltip line: token position. LLaDA has a fixed token
-// budget (the gen-length canvas), so it shows X/total; other
-// models (DiffusionGemma) just show the index.
-function tokenLabel(index, total) {
-  if (activeModelId === "llada") {
-    return "Token " + (index + 1) + "/" + total;
-  }
-  return "Token: " + (index + 1);
 }
 
 // The per-token hover highlight, independent of any coloring overlay.
@@ -2243,6 +2186,7 @@ function onRunBlendInput() {
   // Gated rather than drawn directly: the strip must stay hidden for
   // a run that carries no entropy at all.
   updateEntropyProfileVisibility();
+  refreshTokenMetricsLayer();
 }
 
 function applyRunBlendToLayers() {
@@ -2510,7 +2454,9 @@ function renderAltsPopover(pos, span) {
     altsPopover.style.left =
       overlaysPopoverLeft(rect, box) + "px";
     altsPopover.style.top =
-      overlaysPopoverTop(rect, box) + "px";
+      overlaysPopoverTop(
+        rect, box, outputArea.getBoundingClientRect().top
+      ) + "px";
   }
   altsPopoverPos = pos;
 }
@@ -2854,6 +2800,179 @@ function clearTokenHighlight() {
   }
 }
 
+// ---- Token metrics strip ----
+//
+// The readout above the canvas, fed by both hover sources. It carries
+// its own position rather than reusing entropyHoverPos, which
+// setEntropyHoverPosition deliberately forces to null whenever the
+// profile row is hidden. That is exactly the live-generation case,
+// where the strip has something to say. The two answer different
+// questions: which column is lit, versus which position is being
+// read.
+var metricsHoverPos = null;
+
+// Which stacked run that reading came from. Recorded at hover time
+// from the span's own layer, so the strip reports what is on screen
+// rather than re-deriving it and risking a different answer.
+var metricsHoverOriginal = false;
+
+function setTokenMetricsHover(pos, target) {
+  metricsHoverPos = pos;
+  metricsHoverOriginal =
+    pos === null ? false : metricsLayerIsOriginal(target);
+  refreshTokenMetrics();
+}
+
+// Re-read the held position. Called from the render paths because
+// scrubbing, crossfading or switching overlays all change what a
+// stationary pointer is pointing at.
+function refreshTokenMetrics() {
+  overlaysRenderTokenMetrics(
+    tokenMetricsStrip, buildTokenMetricsReading()
+  );
+}
+
+function clearTokenMetrics() {
+  metricsHoverPos = null;
+  metricsHoverOriginal = false;
+  overlaysRenderTokenMetrics(tokenMetricsStrip, null);
+}
+
+// A crossfade hands the pointer to the other layer at the midpoint.
+// A stationary reading has no new span to ask, so it re-derives from
+// ownership, which is what the next hover would report anyway.
+function refreshTokenMetricsLayer() {
+  if (metricsHoverPos !== null) {
+    metricsHoverOriginal = metricsLayerIsOriginal(null);
+  }
+  refreshTokenMetrics();
+}
+
+// Ask the hovered span which layer it belongs to. Chart hover has no
+// span, so it falls back to whichever layer takes the pointer, which
+// is the one the user could have hovered instead.
+function metricsLayerIsOriginal(target) {
+  if (target && target.closest) {
+    var layer = target.closest(".token-layer");
+    if (layer) {
+      return layer.classList.contains("token-layer-original");
+    }
+  }
+  if (!metricsLayered()) {
+    return false;
+  }
+  if (overlayMode === "diff") {
+    return !overlaysEditedOwnsPointer(
+      diffOriginalOpacity, diffEditedOpacity
+    );
+  }
+  return !overlaysEditedOwnsPointer(1 - runBlend, runBlend);
+}
+
+// Whether both runs are on the canvas together. runBlendActive() is
+// the crossfade's own gate, but it is only ever consulted from
+// renderFrameWithTokens, so it can read true while the live view is
+// on screen; the live view is never layered.
+function metricsLayered() {
+  return scrubberActive && runBlendActive();
+}
+
+// The tokens the canvas is currently drawing for the hovered layer:
+// the scrubbed frame when the scrubber owns the view, otherwise the
+// newest frame, which is what the live renderer put on screen. The
+// pre-edit run clamps to its own final frame, matching the ghost
+// layer buildCrossfadedLayers draws past its end.
+function metricsFrameTokens() {
+  if (!scrubberActive) {
+    return frameTokens.length
+      ? frameTokens[frameTokens.length - 1]
+      : null;
+  }
+  if (!metricsHoverOriginal) {
+    return frameTokens[currentScrubFrame] || null;
+  }
+  var index = Math.min(
+    currentScrubFrame, originalFrameTokens.length - 1
+  );
+  return index >= 0 ? originalFrameTokens[index] : null;
+}
+
+// Assemble one reading, or null when the held position no longer
+// names a token (the frame changed, the run was cleared, or the view
+// is the target placeholder).
+function buildTokenMetricsReading() {
+  if (metricsHoverPos === null) {
+    return null;
+  }
+  if (scrubberActive && remaskMode === "select_target") {
+    return null;
+  }
+  var tokens = metricsFrameTokens();
+  if (!tokens || metricsHoverPos >= tokens.length) {
+    return null;
+  }
+  var index = metricsHoverPos;
+  var tok = tokens[index];
+  var remasked = remaskedPositions[index] === true;
+  var masked = !tok || !!tok.m || remasked;
+  return {
+    position: index,
+    total: tokens.length,
+    tokenText: tok ? tok.t : "",
+    masked: masked,
+    maskChar: MASK_CHAR,
+    confidence: metricsConfidence(tok, masked, remasked),
+    entropy:
+      tok && typeof tok.e === "number" ? tok.e : null,
+    extra: metricsExtra(index),
+    runLabel: metricsRunLabel(),
+  };
+}
+
+// A resolved token from a run that never recorded confidence reads as
+// a dash, since it was not a confident token, just an unmeasured one.
+// A mask keeps the zero it has always reported: for a position queued
+// for remasking, whatever the old token scored says nothing about it.
+function metricsConfidence(tok, masked, remasked) {
+  if (remasked || !tok) {
+    return 0;
+  }
+  if (typeof tok.c === "number") {
+    return tok.c;
+  }
+  return masked ? 0 : null;
+}
+
+// The overlay-specific line, the one part of the reading that depends
+// on which coloring is active.
+function metricsExtra(index) {
+  var mode = effectiveColorMode();
+  if (mode === "commit") {
+    var step = tokenCommitStep(index, metricsHoverOriginal);
+    return step === null ? "" : "Resolved at step: " + step;
+  }
+  if (mode === "diff" && diffAvailable()) {
+    var diff = currentDiffData();
+    if (diff.origins[index]) {
+      return "(remasked here)";
+    }
+    if (diff.changed[index]) {
+      return "was: " + diff.origText[index];
+    }
+  }
+  return "";
+}
+
+// Named only while both runs are on the canvas together. With one run
+// drawn there is nothing to disambiguate, and the tag would read as a
+// claim about the run rather than about the layer.
+function metricsRunLabel() {
+  if (!metricsLayered()) {
+    return "";
+  }
+  return metricsHoverOriginal ? "Original" : "Edited";
+}
+
 // Map a pointer x on the profile back to a token position by
 // inverting the layout drawEntropyProfile lays down. Columns are
 // contiguous at `step` (the half-pixel gap is taken out of the bar,
@@ -3191,36 +3310,15 @@ function tokenColorFn(isOriginal) {
   };
 }
 
-// The hover tooltip for a token in a layer of ``total`` positions.
-// Closed over the total because the two stacked runs can differ in
-// length, and each should count its own.
-function tokenTitleFn(total, isOriginal) {
-  return function (index, tok) {
-    var line = tokenLabel(index, total) + "\n";
-    if (remaskedPositions[index] === true || !tok) {
-      // Whatever confidence the old token carried says nothing about
-      // a position queued for remasking.
-      return line + "Confidence: 0";
-    }
-    if (tok.m) {
-      return line + "Confidence: " + confLabel(tok.c);
-    }
-    return line + "Confidence: " + confLabel(tok.c)
-      + tokenExtraLabel(tok)
-      + tokenTitleExtra(index, isOriginal);
-  };
-}
-
-// The full callback set for one layer of ``total`` tokens drawn from
-// either the branch or the retained pre-edit run.
-function tokenLayerOptions(total, isOriginal) {
+// The full callback set for one layer drawn from either the branch or
+// the retained pre-edit run.
+function tokenLayerOptions(isOriginal) {
   return {
     maskChar: MASK_CHAR,
     maskedFor: tokenMaskedFn,
     classFor: tokenClassFn,
     opacityFor: tokenOpacityFn,
     colorFor: tokenColorFn(isOriginal),
-    titleFor: tokenTitleFn(total, isOriginal),
   };
 }
 
@@ -3231,7 +3329,16 @@ function runBlendActive() {
   return diffAvailable() && remaskMode === null;
 }
 
+// Draw a scrubbed frame and re-read the metrics strip. The strip
+// refresh is here rather than at the two dozen call sites because
+// every one of them is a reason a stationary pointer now points at
+// something else: a new frame, a new overlay, a new remask.
 function renderFrameWithTokens(frameIndex) {
+  renderFrameWithTokensDraw(frameIndex);
+  refreshTokenMetrics();
+}
+
+function renderFrameWithTokensDraw(frameIndex) {
   // Leaving the live view: the mask glow this class restores is for
   // streaming only, and every branch below owns the container now.
   outputArea.classList.remove("live-tokens");
@@ -3259,7 +3366,7 @@ function renderFrameWithTokens(frameIndex) {
   }
 
   outputArea.classList.remove("token-layers");
-  var options = tokenLayerOptions(tokens.length, false);
+  var options = tokenLayerOptions(false);
   var fragment = document.createDocumentFragment();
   for (var i = 0; i < tokens.length; i++) {
     fragment.appendChild(
@@ -3284,7 +3391,7 @@ function buildCrossfadedLayers(frameIndex, editedTokens) {
   );
 
   var fragment = document.createDocumentFragment();
-  var origOptions = tokenLayerOptions(origTokens.length, true);
+  var origOptions = tokenLayerOptions(true);
   origOptions.layerClass = "token-layer-original";
   origOptions.opacity = 1 - runBlend;
   origOptions.interactive = !editedTakes;
@@ -3292,9 +3399,7 @@ function buildCrossfadedLayers(frameIndex, editedTokens) {
     overlaysBuildTokenLayer(origTokens, origOptions)
   );
 
-  var editOptions = tokenLayerOptions(
-    editedTokens.length, false
-  );
+  var editOptions = tokenLayerOptions(false);
   editOptions.layerClass = "token-layer-edited";
   editOptions.opacity = runBlend;
   editOptions.interactive = editedTakes;
@@ -3308,6 +3413,8 @@ function renderTargetPlaceholder(frameIndex) {
   outputArea.classList.remove("token-layers");
   outputArea.classList.remove("live-tokens");
   outputArea.textContent = "";
+  // Nothing on this view is a token, so a held pointer reads nothing.
+  refreshTokenMetrics();
 
   var editedFrames = [];
   for (
@@ -3635,6 +3742,7 @@ function deactivateScrubber() {
   }
   entropyHoverPos = null;
   clearTokenHighlight();
+  clearTokenMetrics();
   hideAltsPopover();
   clearRemaskedPositions();
 }
@@ -4859,6 +4967,7 @@ function resetStatus() {
   renderTpsFooter(null);
   statusMessage.textContent = "";
   statusMessage.style.color = "";
+  clearTokenMetrics();
 }
 
 // ---- Actions ----
@@ -4891,6 +5000,7 @@ function resetRunState() {
   positionAlts = [];
   entropyHoverPos = null;
   clearTokenHighlight();
+  clearTokenMetrics();
   hideAltsPopover();
   remaskEdits = [];
   editedRunSaved = false;
@@ -5519,6 +5629,7 @@ function applyDiffLayerPointers() {
   overlaysApplyLayerPointers(
     outputArea, diffOriginalOpacity, diffEditedOpacity
   );
+  refreshTokenMetricsLayer();
 }
 
 if (diffBlendToggle) {
@@ -5691,16 +5802,18 @@ outputArea.addEventListener(
   }
 );
 
-// Token hover, delegated like the click handler above. Drives two
-// things: the entropy profile's glowing column, which follows every
-// token, and the candidate popover, which is suppressed during guided
-// remask editing so it never covers the tokens being selected.
+// Token hover, delegated like the click handler above. Drives three
+// things: the metrics strip above the canvas, the entropy profile's
+// glowing column, which follows every token, and the candidate
+// popover, which is suppressed during guided remask editing so it
+// never covers the tokens being selected.
 outputArea.addEventListener(
   "mouseover",
   function (e) {
     var target = e.target;
     var pos = hoveredTokenPosition(target);
     setEntropyHoverPosition(pos);
+    setTokenMetricsHover(pos, target);
     if (pos === null || !scrubberActive || !altsPopover) {
       return;
     }
@@ -5726,6 +5839,7 @@ if (entropyProfileCanvas) {
       var pos = entropyProfilePosition(e);
       setEntropyHoverPosition(pos);
       setTokenHighlight(pos);
+      setTokenMetricsHover(pos, null);
     }
   );
   entropyProfileCanvas.addEventListener(
@@ -5733,6 +5847,7 @@ if (entropyProfileCanvas) {
     function () {
       setEntropyHoverPosition(null);
       setTokenHighlight(null);
+      clearTokenMetrics();
     }
   );
 }
@@ -5760,6 +5875,7 @@ outputArea.addEventListener(
       return;
     }
     setEntropyHoverPosition(null);
+    clearTokenMetrics();
     hideAltsPopover();
   }
 );
@@ -5767,6 +5883,7 @@ outputArea.addEventListener(
 if (altsPopover) {
   altsPopover.addEventListener("mouseleave", function () {
     setEntropyHoverPosition(null);
+    clearTokenMetrics();
     hideAltsPopover();
   });
   // Picking a candidate commits the substitution. Only armed in What
@@ -6341,6 +6458,7 @@ function boot() {
   loadPromptHistory();
   updatePromptHistoryUI();
   updateHoverHighlight();
+  overlaysBuildTokenMetrics(tokenMetricsStrip);
   refreshAnalyticsCue();
   fetchModels()
     .then(function (info) {

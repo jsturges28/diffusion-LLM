@@ -852,6 +852,108 @@ button {
   100% { transform: scale(1); opacity: 1; }
 }
 
+/* ---- Token metrics strip ---- */
+
+/* The per-token readout above each canvas, on both pages. Borrows the
+   status bar's idiom (11px, dim labels, bright values) because it is
+   the same kind of thing: a passive readout, not a control.
+
+   Permanently reserved rather than shown on hover. A row that appears
+   under the pointer would shove the canvas down by its own height
+   every time you crossed into the text, and the tokens would move out
+   from under the cursor as you read them. */
+.token-metrics {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-height: 22px;
+  padding: 2px 2px 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* Dimmed as a whole while nothing is hovered, so the labels stay
+   legible as a key to what the strip will say without competing with
+   the canvas for attention. */
+.token-metrics.is-idle {
+  opacity: 0.55;
+}
+
+.token-metrics-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.token-metrics-label::after {
+  content: ":";
+}
+
+.token-metrics-value {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Fixed width so the fields beside it hold still as the digits change
+   under a moving pointer. Wide enough for "0.000". */
+.token-metrics-field .token-metrics-value {
+  min-width: 34px;
+}
+
+.token-metrics-bar {
+  display: block;
+  width: 40px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.token-metrics-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+}
+
+/* The token itself, in the canvas's font so it looks like the thing
+   you are pointing at. Whitespace arrives here as a visible stand-in
+   from overlaysAltDisplay, hence the surface behind it: a lone middle
+   dot needs something to sit on to read as a token. */
+.token-metrics-token {
+  flex: 0 0 auto;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 1px 6px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0;
+}
+
+/* The overlay-specific line: which step a position committed at, or
+   what the original run had there. Present only under the overlays
+   that define it, so it stays out of the fixed-width group above. */
+.token-metrics-extra {
+  color: var(--text-secondary);
+}
+
+/* Which of the two stacked runs the reading came from. Last in the
+   row and accented, because it qualifies everything left of it. */
+.token-metrics-run {
+  margin-left: auto;
+  color: var(--accent);
+}
+
+.token-metrics-run:empty {
+  display: none;
+}
+
 /* ---- Output area ---- */
 
 #output-section {

@@ -41,6 +41,8 @@ var overlayHighlightCheckbox =
   document.getElementById("overlay-highlight-tokens");
 var overlayOutput =
   document.getElementById("overlay-output");
+var tokenMetricsStrip =
+  document.getElementById("token-metrics");
 var overlayReadout =
   document.getElementById("overlay-readout");
 var overlayLegend =
@@ -1288,9 +1290,11 @@ var tokenLinkPlugin = {
   id: "tokenLink",
   afterEvent: function (chart) {
     var active = chart.getActiveElements();
-    setTokenHighlight(
-      active.length > 0 ? active[0].index : null
-    );
+    var pos = active.length > 0 ? active[0].index : null;
+    setTokenHighlight(pos);
+    // The bar has no span behind it, so the strip takes the layer
+    // the crossfade favors: the one a token hover would land on.
+    setTokenMetricsHover(pos, null);
   },
 };
 
@@ -1821,13 +1825,6 @@ function overlayFrameAt(index) {
   return frames[index];
 }
 
-function overlayConfText(c) {
-  if (typeof c !== "number") {
-    return "0";
-  }
-  return String(+c.toFixed(3));
-}
-
 // Whether a frame series carries per-token entropy. Checked on the
 // final frame, which is the series' ground truth. Split out from
 // overlayEntropyAvailable so the pre-edit snapshot can be tested the
@@ -1886,17 +1883,6 @@ function altsPageable(pos) {
     original && original.length > 0
     && edited && edited.length > 0
   );
-}
-
-// Trailing tooltip lines: entropy when saved, plus a hover nudge for
-// positions that carry competing candidates.
-function overlayEntropyText(tok) {
-  var extra = "";
-  if (tok && typeof tok.e === "number") {
-    extra += "\nEntropy: " + String(+tok.e.toFixed(3))
-      + " nats";
-  }
-  return extra;
 }
 
 // ---- Candidate popover (read-only mirror of the generator's) ----
@@ -1977,7 +1963,9 @@ function renderAltsPopover(pos, span) {
     altsPopover.style.left =
       overlaysPopoverLeft(rect, box) + "px";
     altsPopover.style.top =
-      overlaysPopoverTop(rect, box) + "px";
+      overlaysPopoverTop(
+        rect, box, overlayOutput.getBoundingClientRect().top
+      ) + "px";
   }
   altsPopoverPos = pos;
 }
@@ -2128,6 +2116,7 @@ function showOverlayUnavailable() {
     overlayScrubber.hidden = true;
   }
   resetRunBlend(false);
+  clearTokenMetrics();
   overlayEmpty.hidden = false;
 }
 
@@ -2151,6 +2140,7 @@ function clearOverlay() {
     overlayScrubber.hidden = true;
   }
   resetRunBlend(false);
+  clearTokenMetrics();
   overlayEmpty.hidden = true;
 }
 
@@ -2233,7 +2223,9 @@ function setOverlayMode(mode) {
 }
 
 // Re-render the active overlay mode at the current scrubber frame.
-// Called on a mode change and on every scrubber move.
+// Called on a mode change and on every scrubber move. Both are
+// reasons a stationary pointer now reads something else, so the
+// metrics strip is refreshed here rather than at each call site.
 function renderCurrentOverlay() {
   if (overlayMode === "diff") {
     renderDiffOverlay();
@@ -2246,6 +2238,7 @@ function renderCurrentOverlay() {
   } else {
     renderNoneOverlay();
   }
+  refreshTokenMetrics();
 }
 
 // Plain tokens at the current scrubber frame, no coloring (None).
@@ -2319,12 +2312,8 @@ function renderCommitOverlay() {
     colorFor: commitColorFor(
       overlayCommitSteps, frames.length - 1
     ),
-    extraFor: commitExtraFor(overlayCommitSteps),
     originalColorFor: commitColorFor(
       overlayOriginalCommitSteps || [], original.length - 1
-    ),
-    originalExtraFor: commitExtraFor(
-      overlayOriginalCommitSteps || []
     ),
   });
 }
@@ -2339,24 +2328,13 @@ function commitColorFor(steps, maxStep) {
   };
 }
 
-function commitExtraFor(steps) {
-  return function (index) {
-    var step = steps[index];
-    if (typeof step === "number" && step >= 0) {
-      return "\nResolved at step: " + step;
-    }
-    return "";
-  };
-}
-
 // Render the active mode's tokens: one layer normally, two stacked
 // and crossfaded when the run carries a pre-edit snapshot. ``opts``
 // carries the edited ``frame``, a colorFor(index, token) that never
-// sees a masked position, an optional extraFor(index, token) appended
-// to the tooltip, and optional originalColorFor / originalExtraFor
-// for modes whose colors are not a function of the token alone.
+// sees a masked position, and an optional originalColorFor for modes
+// whose colors are not a function of the token alone.
 //
-// The default is to reuse the same callbacks for both layers, which
+// The default is to reuse the same callback for both layers, which
 // is what makes the comparison mean anything: the pre-edit layer is
 // colored by its own confidence or entropy, not the branch's.
 function renderOverlayTokens(opts) {
@@ -2364,16 +2342,12 @@ function renderOverlayTokens(opts) {
   tokenHighlightPos = null;
   var edited = {
     colorFor: overlayColorFn(opts.colorFor),
-    titleFor: overlayTitleFn(opts.extraFor),
   };
   var original = overlayComparisonFrame();
   if (original !== null) {
     renderOverlayLayers(original, opts.frame || [], edited, {
       colorFor: overlayColorFn(
         opts.originalColorFor || opts.colorFor
-      ),
-      titleFor: overlayTitleFn(
-        opts.originalExtraFor || opts.extraFor
       ),
     });
     return;
@@ -2407,7 +2381,6 @@ function renderOverlayLayers(
       opacity: 1 - compareBlend,
       interactive: !editedTakes,
       colorFor: original.colorFor,
-      titleFor: original.titleFor,
     })
   );
   overlayOutput.appendChild(
@@ -2416,7 +2389,6 @@ function renderOverlayLayers(
       opacity: compareBlend,
       interactive: editedTakes,
       colorFor: edited.colorFor,
-      titleFor: edited.titleFor,
     })
   );
 }
@@ -2530,19 +2502,163 @@ function overlayColorFn(colorFor) {
   };
 }
 
-// The per-token tooltip, shared by the single-layer modes and the
-// stacked layers so a token reads the same however it is drawn.
-function overlayTitleFn(extraFor) {
-  return function (index, tok) {
-    if (!tok || tok.m) {
-      return "Token: " + (index + 1) + "\nConfidence: 0";
+// ---- Token metrics strip ----
+//
+// The readout above the canvas, rendered by the same shared function
+// the generator uses so a token reads identically on both pages. Two
+// sources feed it here: a direct token hover, and the entropy chart
+// (through tokenLinkPlugin), which is what makes a tall bar readable
+// as a word without moving the pointer to the text.
+var metricsHoverPos = null;
+
+// Which stacked run the reading came from, taken from the hovered
+// span's own layer so the strip reports what is on screen.
+var metricsHoverOriginal = false;
+
+function setTokenMetricsHover(pos, target) {
+  metricsHoverPos = pos;
+  metricsHoverOriginal =
+    pos === null ? false : metricsLayerIsOriginal(target);
+  refreshTokenMetrics();
+}
+
+// Re-read the held position, for anything that changes what a
+// stationary pointer is pointing at: a new frame, a new overlay, a
+// different run.
+function refreshTokenMetrics() {
+  overlaysRenderTokenMetrics(
+    tokenMetricsStrip, buildTokenMetricsReading()
+  );
+}
+
+function clearTokenMetrics() {
+  metricsHoverPos = null;
+  metricsHoverOriginal = false;
+  overlaysRenderTokenMetrics(tokenMetricsStrip, null);
+}
+
+// A crossfade hands the pointer to the other layer at the midpoint.
+// A stationary reading has no new span to ask, so it re-derives from
+// ownership, which is what the next hover would report anyway.
+function refreshTokenMetricsLayer() {
+  if (metricsHoverPos !== null) {
+    metricsHoverOriginal = metricsLayerIsOriginal(null);
+  }
+  refreshTokenMetrics();
+}
+
+// Chart hover has no span, so it falls back to whichever layer takes
+// the pointer, which is the one the user could have hovered instead.
+function metricsLayerIsOriginal(target) {
+  if (target && target.closest) {
+    var layer = target.closest(".token-layer");
+    if (layer) {
+      return layer.classList.contains("token-layer-original");
     }
-    var extra = extraFor ? extraFor(index, tok) : "";
-    return "Token: " + (index + 1)
-      + "\nConfidence: " + overlayConfText(tok.c)
-      + overlayEntropyText(tok)
-      + extra;
+  }
+  if (!metricsLayered()) {
+    return false;
+  }
+  if (overlayMode === "diff") {
+    return !overlaysEditedOwnsPointer(
+      overlayDiffOrigOpacity, overlayDiffEditOpacity
+    );
+  }
+  return !overlaysEditedOwnsPointer(
+    1 - compareBlend, compareBlend
+  );
+}
+
+// Whether both runs are on the canvas together. Every layered mode
+// gates on the same thing the crossfade does.
+function metricsLayered() {
+  return !!(overlayData && overlayDiffAvailable(overlayData));
+}
+
+// The tokens the canvas is drawing for the hovered layer, both
+// clamped to their own final frame the way the render paths clamp
+// them.
+function metricsFrameTokens() {
+  if (metricsHoverOriginal) {
+    return overlayClampedFrame(
+      overlayData ? overlayData.original_frames : null
+    );
+  }
+  return overlayFrameAt(overlayFrameIndex);
+}
+
+// Assemble one reading, or null when the held position no longer
+// names a token in the frame now on screen.
+function buildTokenMetricsReading() {
+  if (metricsHoverPos === null || !overlayData) {
+    return null;
+  }
+  var tokens = metricsFrameTokens();
+  if (!tokens || metricsHoverPos >= tokens.length) {
+    return null;
+  }
+  var index = metricsHoverPos;
+  var tok = tokens[index];
+  var masked = !tok || !!tok.m;
+  return {
+    position: index,
+    total: tokens.length,
+    tokenText: tok ? tok.t : "",
+    masked: masked,
+    maskChar: OVERLAYS_MASK_CHAR,
+    confidence: metricsConfidence(tok, masked),
+    entropy:
+      tok && typeof tok.e === "number" ? tok.e : null,
+    extra: metricsExtra(index),
+    runLabel: metricsRunLabel(),
   };
+}
+
+// A resolved token from a run saved before confidence was recorded
+// reads as a dash rather than as zero, which would have claimed the
+// model was certain of nothing. A mask keeps the zero it reported.
+function metricsConfidence(tok, masked) {
+  if (!tok) {
+    return 0;
+  }
+  if (typeof tok.c === "number") {
+    return tok.c;
+  }
+  return masked ? 0 : null;
+}
+
+// The overlay-specific line. Computed at hover time from the same
+// memoized state the coloring uses, so no per-token callback has to
+// be threaded through the render paths to carry it.
+function metricsExtra(index) {
+  if (overlayMode === "commit") {
+    var steps = metricsHoverOriginal
+      ? overlayOriginalCommitSteps
+      : overlayCommitSteps;
+    var step = steps ? steps[index] : null;
+    if (typeof step !== "number" || step < 0) {
+      return "";
+    }
+    return "Resolved at step: " + step;
+  }
+  if (overlayMode === "diff" && overlayDiffData) {
+    if (overlayDiffData.origins[index]) {
+      return "(remasked here)";
+    }
+    if (overlayDiffData.changed[index]) {
+      return "was: " + overlayDiffData.origText[index];
+    }
+  }
+  return "";
+}
+
+// Named only while both runs are on the canvas together. With one run
+// drawn there is nothing to disambiguate.
+function metricsRunLabel() {
+  if (!metricsLayered()) {
+    return "";
+  }
+  return metricsHoverOriginal ? "Original" : "Edited";
 }
 
 // Layered diff (mirrors the generator): the original and edited final
@@ -2590,7 +2706,6 @@ function renderDiffOverlay() {
         originalOpacity: overlayDiffOrigOpacity,
         editedOpacity: overlayDiffEditOpacity,
         blend: overlayDiffBlendOn,
-        titleFor: overlayTitleFn(null),
       }
     )
   );
@@ -2603,27 +2718,31 @@ function wireOverlayDiffControls() {
   if (overlayDiffOrigInput) {
     overlayDiffOrigInput.addEventListener("input", function () {
       overlayDiffOrigOpacity = Number(overlayDiffOrigInput.value);
-      if (overlayMode === "diff") {
-        renderDiffOverlay();
-      }
+      rerenderDiffOverlay();
     });
   }
   if (overlayDiffEditInput) {
     overlayDiffEditInput.addEventListener("input", function () {
       overlayDiffEditOpacity = Number(overlayDiffEditInput.value);
-      if (overlayMode === "diff") {
-        renderDiffOverlay();
-      }
+      rerenderDiffOverlay();
     });
   }
   if (overlayDiffBlendInput) {
     overlayDiffBlendInput.addEventListener("change", function () {
       overlayDiffBlendOn = !!overlayDiffBlendInput.checked;
-      if (overlayMode === "diff") {
-        renderDiffOverlay();
-      }
+      rerenderDiffOverlay();
     });
   }
+}
+
+// The three controls above share one response: redraw the layers and
+// re-read the strip, which the opacity sliders can flip between runs.
+function rerenderDiffOverlay() {
+  if (overlayMode !== "diff") {
+    return;
+  }
+  renderDiffOverlay();
+  refreshTokenMetricsLayer();
 }
 
 // Wire the per-frame scrubber once: the slider and the prev/next
@@ -2664,6 +2783,7 @@ function wireOverlayScrubber() {
         }
         var pos = parseInt(raw, 10);
         setEntropyBarHighlight(pos);
+        setTokenMetricsHover(pos, target);
         if (pos === altsPopoverPos) {
           return;
         }
@@ -2675,16 +2795,20 @@ function wireOverlayScrubber() {
       function () {
         setEntropyBarHighlight(null);
         // Reaching into the popover keeps it open, so its pagination
-        // arrows are clickable (mirrors the generator).
+        // arrows are clickable (mirrors the generator). The strip
+        // holds its reading for the same reason: it describes the
+        // position whose candidates are being read.
         if (altsPopover && altsPopover.matches(":hover")) {
           return;
         }
+        clearTokenMetrics();
         hideAltsPopover();
       }
     );
   }
   if (altsPopover) {
     altsPopover.addEventListener("mouseleave", function () {
+      clearTokenMetrics();
       hideAltsPopover();
     });
   }
@@ -3611,6 +3735,7 @@ function onRunBlendInput() {
     chartEntropy.update("none");
   }
   applyTokenLayerBlend();
+  refreshTokenMetricsLayer();
   engageBlendScrub();
   if (scrubEngaged) {
     updateLineCharts();
@@ -4371,6 +4496,8 @@ fetchSystemInfo().then(function (info) {
 // reflect saved runs across restarts and the drawer's highlight
 // checkbox opens on the value the generator last wrote.
 // persistHydrate always runs its callback, even on failure.
+overlaysBuildTokenMetrics(tokenMetricsStrip);
+
 persistHydrate(function () {
   updateOverlayHoverHighlight();
   loadAndRender();

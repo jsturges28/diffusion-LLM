@@ -526,6 +526,35 @@ analytics suite.
   read by brightness instead of hue, since the accent green was on the
   *disabled* arrow: backwards twice over, being both the brightest thing in the
   row and camouflaged against the green chart title beside it.
+- Shipped (this session): the **token metrics strip**, one always-present
+  readout above each token canvas on both pages, replacing the native `title`
+  tooltip. Frontend-only, no Python touched. Three things were wrong with the
+  tooltip and only one of them was cosmetic: the browser delays it by around
+  half a second with no way to configure that, it cannot be styled or placed
+  (`overlaysPopoverTop` preferred above the token purely to dodge it, and now
+  takes the canvas's top edge as a ceiling so it clears the strip instead), and
+  it is
+  bound to one element, so the entropy chart could never feed it however
+  obviously it should have. The strip is fed by both hover sources on both
+  pages, which is the feature the tooltip structurally could not have.
+  It is a net deletion. The tooltip text was written in exactly one place
+  (`overlaysSyncTokenSpan`), and everything upstream existed only to feed it:
+  `tokenTitleFn`, `tokenTitleExtra`, `tokenExtraLabel`, `tokenLabel`, `confLabel`
+  and an inline `titleFor` on the generator; `overlayTitleFn`, `commitExtraFor`,
+  `overlayConfText`, `overlayEntropyText` and the `extraFor` / `originalExtraFor`
+  parameter chain on Analytics. The strip computes the same values at hover time
+  from the same memoized state, so none of that was rerouted.
+  Three decisions carry it. **Always present**, because anything that appears on
+  hover moves the canvas out from under the pointer that summoned it. **Its own
+  hover variable** (`metricsHoverPos`), because `setEntropyHoverPosition` forces
+  `entropyHoverPos` to null whenever the profile row is hidden, which is exactly
+  the live-generation case where the strip has something to say; they answer
+  different questions with different lifetimes. And **absent is not zero**: the
+  tooltip printed `Confidence: 0` for a run that never recorded the signal, which
+  is a claim about the model rather than about the record. A dash says the run
+  does not carry it. Live generation gained a readout it never had for free:
+  `LIVE_TOKEN_OPTIONS = {}` meant streaming tokens carried no title, but they
+  always carried `data-pos`.
 - For the feature overview and architecture, see `README.md`. For the build
   history, see `.cursor/plans/`.
 

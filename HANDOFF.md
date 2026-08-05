@@ -72,7 +72,82 @@ compare runs in an analytics suite.
 
 ## Recently shipped (this session)
 
-**Latest pass: per-class glow tuning, sub-setting grouping, and the load
+**Latest pass: the token metrics strip.** One always-present readout above each
+token canvas, on the generator and in the Analytics detail modal, replacing the
+native `title` tooltip on tokens. Entirely frontend; no Python module was
+touched. `pytest`, `node --check`, ReadLints, and the 70-column audit are clean.
+Checklist items 74 to 80 carry the display work.
+
+- **Why the tooltip had to go, beyond looks.** Three problems, and only one of
+  them was cosmetic. The browser delays a `title` by around half a second and
+  offers no way to configure that. It cannot be styled or positioned; the
+  candidate popover's above-the-token preference existed *to dodge it*
+  (`overlaysPopoverTop`), a workaround that is now just a choice. And it is
+  bound to one element, so the entropy chart could never feed it however
+  obviously it should have. The strip is fed by **both** hover sources on both
+  pages, which is the feature the tooltip structurally could not have had.
+- **It is a net deletion.** The tooltip text was written in exactly one place,
+  `overlaysSyncTokenSpan`, and everything upstream existed only to feed it:
+  `tokenTitleFn`, `tokenTitleExtra`, `tokenExtraLabel`, `tokenLabel` and
+  `confLabel` on the generator plus an inline `titleFor` in its diff overlay;
+  `overlayTitleFn`, `commitExtraFor`, `overlayConfText`, `overlayEntropyText`
+  and the `extraFor` / `originalExtraFor` parameter chain on Analytics. The
+  strip computes the same values at hover time from the same memoized state
+  (`currentDiffData`, `commitStepsFor`, `overlayDiffData`), so none of that was
+  rerouted, and `tokenLayerOptions` lost the `total` argument it only ever
+  passed to a title.
+- **One renderer, two callers.** `overlaysBuildTokenMetrics` builds the row's
+  children once at boot and caches them on the element; `overlaysRenderTokenMetrics`
+  writes a plain reading object into them. Each page owns every decision about
+  *what* is under the pointer (which frame, which overlay, which layer) and
+  hands over a flat object, which is what keeps the formatting from forking
+  into two dialects. Both bars reuse the existing ramps (`heatColor`,
+  `entropyColor` / `overlaysEntropyFraction`), so the strip speaks the same
+  colors as the canvas above it.
+- **Always present, ~28px reserved.** Anything that appears on hover pushes the
+  canvas down at the moment the pointer enters it, moving the tokens out from
+  under the cursor that summoned it. Idle it keeps every label and shows a dash
+  per value, dimmed as a whole, so it reads as a key to what it will say.
+- **`metricsHoverPos` is deliberately not `entropyHoverPos`.**
+  `setEntropyHoverPosition` forces its position to null whenever the profile row
+  is hidden, which is exactly the live-generation case where the strip has
+  something to say. They answer different questions with different lifetimes:
+  which column is lit, versus which position is being read. Both are set from
+  the same three call sites.
+- **Live generation gained a readout it never had, for free.**
+  `LIVE_TOKEN_OPTIONS = {}` means streaming tokens carry no hooks at all, but
+  they have always carried `data-pos`, so the strip works there once
+  `renderLiveFrame` refreshes it per frame.
+- **Absent is not zero.** The tooltip printed `Confidence: 0` when a run had
+  never recorded the signal, which is a claim about the model rather than about
+  the record. The strip shows a dash when the field is missing and a real number
+  when it is genuinely zero. Masks keep their zero, including positions queued
+  for remasking, where whatever the old token scored says nothing about it.
+- **Which stacked layer a reading came from** is taken from the hovered span's
+  own `.token-layer-original` / `.token-layer-edited` ancestor, so the strip
+  reports what is on screen. Chart hover has no span and falls back to
+  `overlaysEditedOwnsPointer`, which is the same answer by construction: exactly
+  one layer is interactive, so the hovered span is always in it. A crossfade
+  moved without the pointer moving has no new span to ask, so
+  `refreshTokenMetricsLayer` re-derives from ownership on a blend change.
+- **Where the refresh hooks live.** Both pages funnel it: the generator's
+  `renderFrameWithTokens` became a two-line wrapper over
+  `renderFrameWithTokensDraw` so every one of its two dozen callers refreshes,
+  and Analytics refreshes at the end of `renderCurrentOverlay`. That is the
+  point to extend, not the call sites.
+- **The candidate popover now clears the strip.** `overlaysPopoverTop` took a
+  third argument, the viewport y of the token canvas's own top edge, and
+  prefers "above" only while the box stays inside the canvas. It had tested
+  against the *viewport*, which the canvas starts far below, so a token in the
+  first line or two pushed the popover up over the strip (and, on the
+  generator, over the hyperparameter row). Overlapping the tokens is the whole
+  point of placing it above; overlapping their readout is not. The fallback is
+  safe by construction: the only tokens that reach it are near the top of the
+  canvas, which is the case with the most room underneath.
+- **No `aria-live`.** A region that re-announces on every hover would be
+  unusable with a screen reader, so this stays a visual readout.
+
+**Previous pass: per-class glow tuning, sub-setting grouping, and the load
 sweep.** Entirely frontend; no Python module was touched. `pytest` (157/157),
 `node --check`, ReadLints, and the 70-column audit are clean. Checklist items
 67 to 73 carry the GPU and display work.
@@ -804,7 +879,9 @@ the one place in the app not going through `overlays.js`.
   read from null.
   - `applyTokenColor` both tinted a span and appended to its tooltip, which the
     two-callback contract cannot express. Split into a pure `tokenColorAt` and
-    `tokenTitleExtra`, mirroring `overlayColorFn` / `overlayTitleFn`.
+    `tokenTitleExtra`, mirroring `overlayColorFn` / `overlayTitleFn`. (The
+    tooltip half is gone; the metrics-strip pass replaced `tokenTitleExtra`
+    with `metricsExtra`, read at hover time.)
   - `.token-remasked` (`style.css`) is declared after `.token-mask` at equal
     specificity, so a span now carrying both still renders orange. No CSS
     change was needed.
@@ -955,8 +1032,9 @@ and splitting would have committed code the next commit rewrote.
   and entropy highlighting were all dead in diff mode. Replaced by
   `overlaysBuildTokenSpan` / `overlaysBuildTokenLayer` in `overlays.js`, now the
   single span builder behind every path on both pages: `token-span` plus
-  `token-mask` / `token-resolved`, `data-pos`, and a caller-supplied
-  `titleFor(index, token)`. A null token renders as the mask glyph instead of
+  `token-mask` / `token-resolved`, `data-pos`, and (at the time) a
+  caller-supplied `titleFor(index, token)`, since removed with the native
+  tooltip. A null token renders as the mask glyph instead of
   being skipped, because two layers only line up if both emit a span per
   position. `.diff-layer` became `.token-layer` and the container class
   `.diff-overlay-mode` became `.token-layers`, since layering is no longer
@@ -1579,10 +1657,75 @@ end to end, reusing the frame/token contract.
 
 This session shipped the `results/` rename, all of **AR Phase C**, and the
 passes listed under "Recently shipped". Everything through checklist item 66 has
-been validated on hardware by the maintainer; **items 67 to 73 have not**, so
-they are the first task. After that, the agreed next candidates are Mamba-3,
-then extending entropy / top-k to the diffusion models. Deliberate each in Ask
-mode before Plan.
+been validated on hardware by the maintainer; **items 67 to 79 have not**, so
+they are the first task. After that, the next candidate is the **What If? typed
+token** (deliberated already, decisions recorded below), then Mamba-3, then
+extending entropy / top-k to the diffusion models. Deliberate each in Ask mode
+before Plan.
+
+**Deferred with its decisions already settled: the What If? typed token and an
+AR Top-K knob.** This was deliberated with the maintainer alongside the metrics
+strip and split off so the strip could ship on its own. Nothing below is open;
+it is ready to plan.
+
+- **The shape.** Under the popover's five candidates, a text box reading *Enter
+  your own*. Clicking it drops a green check and a red X out from behind its
+  right edge (the status chips' motion, without the fade); clicking outside is
+  a cancel. Confirming *solidifies* the entry into a row you then click to run,
+  exactly like a candidate, with a small retry icon at its right to redo it.
+- **Tokenization is a vocabulary lookup, not re-tokenization, and this is the
+  key insight.** `streaming_substitute` keeps `prefix_ids[:position]` verbatim
+  and continues decoding, so the sequence is never re-encoded and the boundary
+  effects that make BPE context-sensitive cannot arise here. Resolving the
+  typed text means encoding that string standalone and asking whether it is
+  exactly one vocabulary entry. The tokenizer is already loaded
+  (`self.tokenizer`, already used by `_capture_candidates`), and encoding a
+  short string is microseconds, so a live preview as the user types is
+  practical over the existing websocket.
+- **Ship exactly one token first.** The blocker for multi-token is not
+  validation, it is alignment: a substitution of length *n* shifts every
+  downstream index, and `overlaysComputeDiff`, the position-indexed entropy
+  chart, and the dashed edit marker are all index-based. Confirm stays disabled
+  until the resolved count is exactly 1 and re-enables live as the text
+  changes. When multi-token lands, cap on **resolved token count** (4) rather
+  than characters, so the live preview is already computing the limit and the
+  limit explains itself.
+- **Show the pieces, not the why.** The split visualizer is endorsed: render
+  each piece with its id and the count, hoverable, reusing the glow keyframes.
+  Do not promise causation. BPE reaches a split through a merge sequence that
+  fast tokenizers do not expose cheaply, so there is no short interpretable
+  reason available; the maintainer agreed to leave that rabbit hole alone.
+- **Name the tokenizer.** Surface which tokenizer produced the split, since it
+  is the one honest answer to "why these pieces" that is available for free,
+  and it is what makes the pieces comparable across models later. The worker
+  already holds the object, so `type(self.tokenizer).__name__` plus
+  `tokenizer.name_or_path` (and `is_fast`) costs nothing; the open question is
+  only whether it rides the existing model capabilities payload, which every
+  page already has, or the typed-token preview response, which is the only
+  place it is needed today. Prefer capabilities: it is a property of the model,
+  not of one keystroke, and putting it there is what lets the About or Help
+  copy and any later tokenizer-specific view read it without a new round trip.
+- **Color.** Single token in the app's normal green; multiple pieces in
+  alternating tints; the warning orange `#ff9f1c` **only** when the count
+  exceeds what is allowed, since that color already means edit/remask
+  everywhere else and would misread on the ordinary case.
+- **Leading space, decided by the token being replaced** rather than by a
+  sentence-position heuristic: if the original token at that position began
+  with a space, pre-seed one, and let a single backspace remove it. That is
+  exact where a rule about "mid-sentence" would only be usually right.
+- **`forced_conf` gets strictly better.** It currently comes from the captured
+  candidate's stored probability, which a typed token has none of, and logits
+  are not persisted. But `streaming_substitute` re-runs the prefix anyway, so
+  it can read the typed token's **true** probability from that distribution.
+  That is the most interesting number the feature produces: it can honestly
+  report a wild choice as 0.003. `_validate_substitute`'s current rejection
+  ("not among the captured candidates") is deliberate and needs a second,
+  explicitly typed path rather than loosening.
+- **Top-K for AR, with one correction to the framing.** Hugging Face applies
+  top-k *before* top-p, so they compose as a truncation followed by a nucleus
+  cut rather than as alternatives. The knob is still worth having. The
+  configurable *capture* count (how many candidates the popover lists) is
+  separately deferred until the typed token ships.
 
 **Held deliberately, pending the sweep.** The ambitious version of the load
 gap fix was to *measure* the unmeasurable phase: time the worker startup on
@@ -1615,15 +1758,17 @@ by accident. Then:
 
 1. **Alternatives off** (the default): a SmolLM3 run still streams normally, the
    **Entropy** overlay appears and recolors tokens, the entropy profile draws
-   under the scrubber and tracks the scrubber's frame, tooltips show an `Entropy`
-   line, hovering a token makes its profile column glow and swings the nats
-   readout to it, and **no** What If button or hover popover appears.
+   under the scrubber and tracks the scrubber's frame, the metrics strip shows
+   an `Entropy` value, hovering a token makes its profile column glow and swings
+   the nats readout to it, and **no** What If button or hover popover appears.
 2. **Alternatives on**: hovering a token opens the candidate popover with five
    rows, sane probabilities, the chosen token highlighted, and readable
-   whitespace/control candidates. It should sit **above** the token, clear of the
-   native tooltip below the cursor, and flip below only for tokens near the top of
-   the viewport. Reaching into the popover to click a candidate should keep it
-   open and keep the column glowing.
+   whitespace/control candidates. It should sit **above** the token (a
+   preference kept for readability now that the native tooltip it originally
+   dodged is gone) and flip **below** for a token near the top of the canvas,
+   where sitting above would put it over the metrics strip. Reaching into the
+   popover to click a candidate should keep it open and keep the column
+   glowing.
 3. **What If**: the button appears; clicking it underlines the captured positions;
    clicking a candidate truncates and regenerates from there; the run lands in
    the Confirm/Retry review; **Retry** re-enters substitution (not the diffusion
@@ -2199,6 +2344,60 @@ the raised concurrency cap.
     they act and dim when they do not, and that the thin bar above the
     Analytics **Original / Edited** slider is gone while the generator's own
     crossfade **keeps** its separator.
+
+*Items 74 to 80 cover the token metrics strip. None could be exercised
+in-sandbox (no display).*
+
+74. **Both pages idle correctly.** Open the generator before generating
+    anything: the strip sits directly above the output canvas, holds its
+    labels, shows a dash for each value, and the canvas below it is not
+    clipped or scrolled. Open an Analytics run detail: the same row sits
+    between the **Token overlay** heading and the bordered canvas, and the
+    modal is still `90vh` with no scrollbar it did not have before. Confirm
+    the reserved height does not shift when you hover in and out.
+75. **The two hover sources agree.** On an AR run, hover a token and note the
+    values, then move to the same column in the entropy profile below the
+    scrubber: the strip should read the identical position and numbers.
+    Leaving either surface returns it to idle, except that reaching *into* the
+    candidate popover must keep the reading, since that popover is about the
+    position you are still reading. Repeat both directions in the Analytics
+    modal against its Entropy chart.
+76. **It follows the frame, not just the pointer.** Park the pointer on one
+    token and drive the scrubber with the arrow buttons: position stays put
+    while the token, confidence and entropy change under it, and the strip
+    goes idle on a frame where that position does not exist (the target
+    placeholder during guided editing is the clearest case). Then hover a
+    token during a **live** run: the values update as the run streams, which
+    is new (streaming tokens never had a tooltip).
+77. **The crossfade names its run.** On a confirmed What If branch, drag the
+    **Original / Edited** slider: past the midpoint the tag at the right end
+    of the strip flips, and the confidence and entropy change to the other
+    run's values for positions right of the substitution. Do the same with the
+    Diff overlay's two opacity sliders. With no branch, the tag is absent
+    entirely rather than reading "Edited".
+78. **The overlay extras.** Under **Commit Order** on a diffusion run, hovering
+    a resolved token adds `Resolved at step: N`, and a position that never
+    settled adds nothing. Under **Diff vs Original**, a changed position reads
+    `was: X` and a remask origin reads `(remasked here)`. Switching overlays
+    with the pointer held still should swap the extra without moving anything
+    else in the row.
+79. **Dashes, whitespace, and no tooltips anywhere.** On a LLaDA or
+    DiffusionGemma run, entropy reads as a dash rather than 0, since diffusion
+    tokens carry no `e`. Hover a token that is a plain space: it shows as a
+    middle dot, not an empty box. Then rest the pointer on any token, on both
+    pages, for a couple of seconds: **no native tooltip should appear** over
+    any token, in any overlay, in either layer. (Buttons and table cells still
+    have their own titles; those are meant to stay.)
+80. **The popover clears the strip.** On an AR run with **Alternatives**,
+    hover a token in the **first line or two** of the output: the candidate
+    popover should open *below* the token rather than above it, leaving the
+    metrics strip and the hyperparameter row uncovered. Hover a token further
+    down and it should go back to opening above. Scroll the canvas so a
+    mid-run token sits at the very top and confirm it flips there too, since
+    the test is the token's position on screen and not its position in the
+    run. Repeat both in the Analytics detail modal, where the strip is the
+    thing being protected. Reaching down into a below-placed popover to click
+    a candidate should still keep it open.
 
 **0. The comparison surfaces (agreed with the maintainer, partly shipped).** The
 timing foundation exists to serve these, and the unifying idea is settled: **the
