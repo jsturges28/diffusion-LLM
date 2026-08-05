@@ -1,0 +1,33 @@
+# Tool configuration only. This project is run from source (see
+# README.md), not installed as a package, so there is deliberately no
+# [build-system] or [project] table here.
+#
+# Both tools are pinned to 70 columns because the Python sources are
+# hand-wrapped to 70 per the repo's style rules. Black defaults to 88,
+# so without this table a single `black .` would silently reflow every
+# file in the repo and bury the real history.
+
+[tool.black]
+line-length = 70
+
+[tool.ruff]
+line-length = 70
+target-version = "py311"
+extend-exclude = [".venv", ".venv-dgemma", ".venv-ar", "results"]
+
+[tool.ruff.lint]
+# E/F are the pyflakes and pycodestyle core. C901 and PLR1702 are the
+# two the style rules name explicitly: cyclomatic complexity and
+# nesting depth, which predict cognitive load better than line count.
+select = ["E", "F", "W", "C901", "PLR1702", "B", "SIM", "PTH"]
+# PLR1702 is still a preview rule. Pairing preview with
+# explicit-preview-rules turns on only the preview rules named in
+# `select` above, rather than every unstable rule ruff ships.
+preview = true
+explicit-preview-rules = true
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-nested-blocks = 3
