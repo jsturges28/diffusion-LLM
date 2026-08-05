@@ -922,14 +922,29 @@ button {
   border-bottom: 1px solid var(--border);
 }
 
-/* A preference that does not apply to the active model (e.g. Commit
-   Order for an autoregressive model): dimmed and non-interactive. */
+/* A preference that is present but inert: either it does not apply to
+   the active model (e.g. Commit Order for an autoregressive model),
+   or it is a sub-setting whose parent preference is switched off.
+   Dimmed rather than hidden, so the row keeps showing what exists
+   and what it belongs to. */
 .settings-row-disabled {
   opacity: 0.4;
 }
 
-.settings-row-disabled .toggle-switch {
+/* The controls a settings row can hold. Each control also takes its
+   own `disabled`, which is what covers the keyboard; this is the
+   pointer half. */
+.settings-row-disabled .toggle-switch,
+.settings-row-disabled .custom-select,
+.settings-row-disabled input[type="range"] {
   pointer-events: none;
+}
+
+/* The row already carries the dimming, and .custom-select.disabled
+   brings its own 0.5. Left to compound they multiply out to 0.2,
+   which reads as broken rather than inactive. */
+.settings-row-disabled .custom-select.disabled {
+  opacity: 1;
 }
 
 .modal-body .settings-row:first-child {
@@ -1065,6 +1080,24 @@ button {
   font-size: 11px;
   color: var(--text-secondary);
   letter-spacing: 0.04em;
+}
+
+/* Tokens per second is the only footer readout you can act on: a
+   click swaps the run average for the last step. Underlined on hover
+   rather than restyled, so at rest it still reads as one of the
+   metrics beside it rather than as a button parked in the status
+   bar. */
+#status-tps {
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s ease;
+}
+
+#status-tps:hover,
+#status-tps:focus-visible {
+  color: var(--text-primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 /* One right-anchored row: the resting message sits at the right end
@@ -1290,6 +1323,45 @@ button {
   border-radius: 2px;
   box-shadow: 0 0 6px var(--accent-glow);
   transition: width 0.3s ease-out;
+}
+
+/* An activation opens with work that cannot be measured: the worker
+   process spawning and importing torch, before any weight byte is
+   read or any target is known. A short bar sliding across the track
+   says that is underway without claiming a percentage it lacks.
+   Both of the app's activation bars share it, hence the paired
+   selectors: the generator's overlay and the menu's inline row.
+
+   `transition: none` because the sweep moves `transform` while a
+   measured bar animates `width`. Left armed, the handoff between them
+   would ease from a width the sweep never set. */
+#load-progress-fill.is-sweep,
+.menu-activation-fill.is-sweep {
+  width: 35%;
+  transition: none;
+  animation: load-bar-sweep 1.1s ease-in-out infinite;
+}
+
+@keyframes load-bar-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(286%);
+  }
+}
+
+/* Held still rather than dropped: while sweeping, the track is the
+   only thing on screen saying the activation is alive. A dim full bar
+   reads as waiting without moving. */
+@media (prefers-reduced-motion: reduce) {
+  #load-progress-fill.is-sweep,
+  .menu-activation-fill.is-sweep {
+    animation: none;
+    transform: none;
+    width: 100%;
+    opacity: 0.35;
+  }
 }
 
 /* The overlay centers its text, and this line sits under the bar. */
@@ -1907,6 +1979,64 @@ input[type="checkbox"].app-checkbox:checked::after {
    span, which was costly to scroll in the WebKitGTK desktop window. */
 .token-mask {
   color: var(--mask-color);
+}
+
+/* The streaming view gets the glow back. That cost was a scrolling
+   cost, and during generation the output is not being scrolled; the
+   character renderer this replaced had the same glow (.char-mask), so
+   dropping it here would have quietly changed how a run looks. */
+#output-area.live-tokens .token-mask {
+  text-shadow: 0 0 4px var(--mask-glow);
+}
+
+/* Birth glow: a token flashes at full strength the instant it is
+   denoised, then decays. No fade in, because the point is the moment
+   of arrival, not a transition into it.
+
+   Both blur radii are constant across the keyframes so only the alpha
+   animates. Animating the radius would re-rasterize a different-sized
+   blur on every tick, which is the expensive shape and the one the
+   scroll note above is about.
+
+   Keyed off an attribute rather than a class because
+   overlaysSyncTokenSpan owns className and rewrites it whenever a
+   position changes, which would cut a glow short mid-flash.
+
+   Both endpoints and the duration come from custom properties set in
+   JS (overlaysApplyGlowVars), because brightness and fade time are
+   per-model-class preferences. Each endpoint is one whole shadow list
+   rather than a value nested inside rgba(), which keeps the keyframes
+   plain substitutions. The fallbacks are the 100% / 500ms defaults,
+   so the effect still looks right if it runs before the properties
+   land. */
+@keyframes token-birth {
+  from {
+    text-shadow: var(
+      --token-birth-shadow,
+      0 0 6px rgba(255, 255, 255, 0.9),
+      0 0 12px rgba(255, 255, 255, 0.5)
+    );
+  }
+  to {
+    text-shadow: var(
+      --token-birth-shadow-off,
+      0 0 6px rgba(255, 255, 255, 0),
+      0 0 12px rgba(255, 255, 255, 0)
+    );
+  }
+}
+
+#output-area.live-tokens .token-span[data-born] {
+  animation: token-birth var(--token-birth-duration, 0.5s)
+    ease-out forwards;
+}
+
+/* The generator also checks this in JS before marking anything, so
+   the bookkeeping is skipped too. This is the backstop. */
+@media (prefers-reduced-motion: reduce) {
+  #output-area.live-tokens .token-span[data-born] {
+    animation: none;
+  }
 }
 
 .token-resolved {
@@ -2727,26 +2857,31 @@ input[type="checkbox"].app-checkbox:checked::after {
   flex: 0 0 auto;
 }
 
+/* Brightness tracks whether the arrow does anything: bright means
+   clickable, dim means you are already at that end. The accent was
+   here before, on the disabled arrow, which had it backwards twice
+   over. Green reads as a label everywhere else in the app, and these
+   arrows sit beside a green chart title, so the dead control was both
+   the brightest thing in the row and lost against its heading. */
 .alt-pager-btn {
   background: none;
   border: none;
   padding: 0 3px;
   font-size: 13px;
   line-height: 1;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   cursor: pointer;
   border-radius: 2px;
 }
 
+/* Colour already says "clickable" at rest, so hover has to say
+   something else: the wash deepens instead. */
 .alt-pager-btn:hover:not(:disabled) {
-  color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.12);
 }
 
-/* Disabled means "already on this page", so it reads as a position
-   indicator rather than a dead control. */
 .alt-pager-btn:disabled {
-  color: var(--accent);
+  color: var(--text-dim);
   cursor: default;
 }
 

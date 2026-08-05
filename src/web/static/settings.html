@@ -55,7 +55,7 @@
         <div id="settings-pane">
           <section class="settings-panel is-active"
             data-panel="appearance">
-            <div class="settings-row">
+            <div class="settings-row settings-row-parent">
               <div class="settings-label-group">
                 <label>Render diffusion-style text</label>
                 <span class="settings-desc">Status messages resolve from scrambled noise, like a denoising pass. Skipped automatically if your system prefers reduced motion.</span>
@@ -65,12 +65,72 @@
                 <span class="toggle-slider"></span>
               </label>
             </div>
-            <div class="settings-row" id="diffusion-mode-row" hidden>
+            <div class="settings-row settings-row-sub"
+              id="diffusion-mode-row">
               <div class="settings-label-group">
                 <label>Mode</label>
                 <span class="settings-desc">Default resolves the text once. Cycle keeps re-diffusing it while the status is active (Running, Saving, and so on).</span>
               </div>
               <span id="diffusion-mode-mount"></span>
+            </div>
+            <div class="settings-row settings-row-parent">
+              <div class="settings-label-group">
+                <label>Token birth glow</label>
+                <span class="settings-desc">Flash a soft white glow around each token the moment it is generated, then fade it out, so a run leaves a visible trail. Live generation only. Skipped automatically if your system prefers reduced motion.</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="setting-token-birth-glow" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="settings-row settings-row-sub"
+              id="glow-class-row">
+              <div class="settings-label-group">
+                <label>Tune for</label>
+                <span class="settings-desc">Which model class the settings below apply to. Tokens arrive far faster from an autoregressive model than from a diffusion step, so each class keeps its own pair.</span>
+              </div>
+              <span id="glow-class-mount"></span>
+            </div>
+            <div class="settings-row settings-row-sub"
+              id="glow-brightness-row">
+              <div class="settings-label-group">
+                <label for="setting-glow-brightness">Brightness</label>
+                <span class="settings-desc">How strong the flash is at its apex. Raise it when tokens arrive too quickly for the glow to register.</span>
+              </div>
+              <span class="settings-slider-group">
+                <input type="range" id="setting-glow-brightness"
+                  class="settings-slider" />
+                <output id="glow-brightness-value"
+                  class="settings-slider-value"></output>
+              </span>
+            </div>
+            <div class="settings-row settings-row-sub"
+              id="glow-fade-row">
+              <div class="settings-label-group">
+                <label for="setting-glow-fade">Fade time</label>
+                <span class="settings-desc">How long each flash takes to decay. Longer fades leave a longer trail, since more tokens are still glowing at once.</span>
+              </div>
+              <span class="settings-slider-group">
+                <input type="range" id="setting-glow-fade"
+                  class="settings-slider" />
+                <output id="glow-fade-value"
+                  class="settings-slider-value"></output>
+              </span>
+            </div>
+            <div class="settings-row settings-row-sub"
+              id="glow-preview-row">
+              <!-- Copy is written by settings.js: it describes the
+                   selected model class, and each word is its own span
+                   so the sequence can light them one group at a
+                   time. The aria-label stands in for that text, which
+                   is a demonstration of something a screen reader
+                   cannot perceive anyway. -->
+              <button type="button" id="glow-preview"
+                class="glow-preview"
+                aria-label="Replay the glow preview">
+                <span id="glow-preview-copy"
+                  class="glow-preview-copy"></span>
+              </button>
             </div>
           </section>
 

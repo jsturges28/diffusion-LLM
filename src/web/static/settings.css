@@ -80,6 +80,131 @@
   border-bottom: none;
 }
 
+/* Sub-settings depend on the preference above them, so a group reads
+   as one block: the parent drops its separator, the children are
+   indented, and no hairline runs between them. */
+.settings-panel .settings-row-parent {
+  padding-bottom: 8px;
+  border-bottom: none;
+}
+
+.settings-panel .settings-row-sub {
+  padding: 8px 0 8px 24px;
+  border-bottom: none;
+}
+
+/* What closes a group off: the hairline moves to the top of whatever
+   preference follows the last sub-row. Expressed this way rather than
+   by marking the final child so the markup carries no "I am last"
+   flag to fall out of date, and a group that ends the panel correctly
+   gets no line at all. */
+.settings-panel .settings-row-sub
+  + .settings-row:not(.settings-row-sub) {
+  border-top: 1px solid var(--border);
+}
+
+/* A slider and its readout share one row cell, so the row keeps the
+   label-left / control-right shape every other preference has. */
+.settings-slider-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.settings-slider {
+  width: 150px;
+  height: 3px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+/* Fixed width and tabular figures so the row does not shift as the
+   number changes width mid-drag. `inline-block` because `output` is
+   inline by default, and min-width does not apply to an inline
+   box. */
+.settings-slider-value {
+  display: inline-block;
+  min-width: 60px;
+  text-align: right;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+/* Sample text for the glow sliders. There is no generation on this
+   page, so without a preview the two values would be set blind. A
+   button rather than a span so it is reachable by keyboard and reads
+   as replayable.
+
+   It is far wider than the control column, because a trail only
+   reads as a trail if enough words are lit at once: at the longest
+   fade and the preview's pace that is twenty-eight out of
+   thirty-eight, which no control-sized box could hold. Capped short
+   of the panel width so the measure stays readable copy rather than
+   a paragraph, then pushed right by the auto margin so it still ends
+   where every other row's control ends. Right rather than left
+   because that is what makes it read as this group's control instead
+   of as a caption hanging off the copy above it. */
+/* By id because it is one unique row overriding the label-left /
+   control-right flex every other row wants, not a reusable kind. */
+#glow-preview-row {
+  display: block;
+}
+
+.glow-preview {
+  display: block;
+  width: 100%;
+  max-width: 560px;
+  margin-left: auto;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-mono);
+  transition: border-color 0.15s;
+}
+
+.glow-preview:hover:not(:disabled) {
+  border-color: var(--border-focus);
+}
+
+/* A disabled button still resolves a cursor, unlike a click, so the
+   pointer has to be taken back explicitly or the dimmed row would
+   still advertise itself as clickable. */
+.glow-preview:disabled {
+  cursor: default;
+}
+
+/* Loose leading so the halos of one line do not wash into the line
+   above it, which at 200% brightness they otherwise would. */
+.glow-preview-copy {
+  display: block;
+  font-size: 13px;
+  line-height: 1.85;
+  color: var(--text-primary);
+}
+
+/* Same keyframes and same custom properties as the live canvas (see
+   style.css), which is what keeps the preview honest. */
+.glow-preview-word[data-born] {
+  animation: token-birth var(--token-birth-duration)
+    ease-out forwards;
+}
+
+/* Reduced motion still gets to see what brightness does, just held
+   still: the constraint is on movement, not on the glow itself. The
+   sequence does not run at all in this mode (see settings.js), so
+   what is lit here is a fixed handful rather than the whole block. */
+@media (prefers-reduced-motion: reduce) {
+  .glow-preview-word[data-born] {
+    animation: none;
+    text-shadow: var(--token-birth-shadow);
+  }
+}
+
 /* Footer (Save/Reset) reuses .modal-footer; keep it out of the scroll. */
 #settings-footer {
   flex-shrink: 0;

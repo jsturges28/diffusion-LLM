@@ -72,7 +72,250 @@ compare runs in an analytics suite.
 
 ## Recently shipped (this session)
 
-**Latest pass: resident navigation, picker flip, and load-bar corrections.**
+**Latest pass: per-class glow tuning, sub-setting grouping, and the load
+sweep.** Entirely frontend; no Python module was touched. `pytest` (157/157),
+`node --check`, ReadLints, and the 70-column audit are clean. Checklist items
+67 to 73 carry the GPU and display work.
+
+- **The glow is tuned per model class.** **Brightness** (50-200%) and **Fade
+  time** (200-2000ms) are stored per `model_type` behind a **Tune for** picker,
+  so only two sliders are on screen at a time. The reason it has to be per
+  class is that the trail an eye can follow is roughly *rate times fade*: a GPU
+  autoregressive run outpaces a diffusion step by an order of magnitude, so the
+  default that reads perfectly on LLaDA is gone before it registers on SmolLM3.
+  Both defaults are the old fixed look (100%, 500ms), so an existing profile
+  sees no change. Three things are load-bearing:
+  - The values reach the keyframes as **whole shadow lists** in custom
+    properties (`--token-birth-shadow`, `--token-birth-shadow-off`,
+    `--token-birth-duration`), not as numbers nested inside `rgba()`. That
+    keeps each keyframe a plain substitution, which is the portable form; the
+    properties also carry the old literals as `var()` fallbacks, so the effect
+    still looks right if it runs before JS sets them.
+  - Brightness scales the **blur radii as well as the alphas**. Alpha alone
+    tops out barely above the default 0.9, which is not enough headroom to
+    make a fast run legible, so "brighter" has to mean bloomier too.
+  - The concurrency cap is **derived from the fade**, not fixed:
+    `clamp(round(fadeSeconds * 96), 48, 192)` in
+    [app.js](src/web/static/app.js). The 96 tokens/second ceiling is chosen so
+    the 500ms default still lands on the 48 the cap was hardcoded at, making
+    default behavior provably unchanged. Left fixed, a 2s fade at
+    autoregressive speeds would have the FIFO rather than the timer decide when
+    a flash ends: the trail would stop growing exactly when the user lengthened
+    it, and its tail would look cut rather than faded. This is the subtlety to
+    remember if the bounds ever widen.
+  - The Settings page has no generation on it, so the two sliders would
+    otherwise be set blind. The preview is **a block of copy whose words are
+    the tokens**, driven through the same `overlaysApplyGlowVars` and the same
+    keyframes as the live canvas, which is what stops it drifting from the real
+    thing. Under reduced motion it holds a fixed handful lit instead of
+    animating: the constraint is on movement, not on the glow, and brightness
+    is still legible where a fade is not.
+  - **Why the preview is copy and not one token.** Brightness is judgeable on a
+    single token; **fade is not**, because what a fade produces is a *trail*,
+    and a trail needs enough simultaneously lit tokens to have a head and a
+    tail. The count is roughly fade over tick, so the geometry and the pacing
+    are one decision, and both are pinned by the worst case (the 2000ms
+    maximum): 38 words of copy at 90ms per word autoregressive / 380ms per
+    burst diffusion peaks at 23 and 28 lit at that maximum, and 3 and 6 at the
+    200ms minimum. Change any one of the copy length, `GLOW_PREVIEW_TICK_MS`,
+    the burst range, or `max-width` and the others need rechecking, or the top
+    of the range saturates into a solid block and stops showing anything.
+  - The two classes are **paced to the same 3420ms total** so switching **Tune
+    for** compares the glow rather than the tempo, but they spend it in the
+    shape of the real thing: one word per tick left to right for
+    autoregressive, a scattered burst for diffusion. Note that 380ms is
+    *derived*, not chosen: the burst sizes are drawn, they come to nine ticks,
+    and 3420 / 9 is what equalises the totals. Reseeding moves the tick count,
+    so the interval has to be recomputed with it.
+  - **Burst sizes vary** (`GLOW_PREVIEW_BURST_MIN` to `_MAX`, uniform, mean 4),
+    because a real denoising step does not resolve the same count every time
+    and a metronome reads as synthetic. A guard absorbs a would-be final burst
+    of one so the sequence never ends on a lone flicker.
+  - The scatter order is a **seeded Fisher-Yates shuffle**
+    (`glowPreviewShuffled` over `glowPreviewRandom`, a mulberry32). One stream
+    drives both the order and the burst sizes, so the entire schedule follows
+    from `GLOW_PREVIEW_SEED` and is identical on every replay, reload, and
+    machine. Repeatability is the requirement, so that two settings are
+    compared against each other rather than against whichever draw looked
+    better; randomness is only how the shape is reached.
+  - **This replaced a golden-ratio stride, and the reason is worth keeping.**
+    `order[i] = (i * stride) % count` covers the block evenly, which is what a
+    low-discrepancy sequence is *for*, but it is an arithmetic progression: the
+    shipped 38-word/stride-23 version had **exactly one distinct step size
+    across the whole sequence**. Wrapped onto four rendered lines that read as a
+    rigid motif marching across the rows (line 1 lit as 0,8,1,9,2,10,3,4,5,6,7;
+    68% of within-line steps moved rightward), which is the opposite of
+    scattered. No stride fixes it, because every stride is an arithmetic
+    progression. **Even coverage and looking unordered are different
+    properties**, and the stride optimised for the wrong one.
+  - `GLOW_PREVIEW_SEED` is **chosen by measurement, so do not treat it as
+    arbitrary and do not "tidy" it to 1.** Across 800 candidates, seed 662 is
+    one of eleven that put no two adjacent words in the same burst while
+    landing on nine ticks, and it has the widest spread of those: 0.83 of the
+    words in a burst fall on different rendered lines, with a rightward bias of
+    exactly 50%, meaning none. Editing the copy changes the word count and
+    invalidates all of it, so rescan rather than assuming it carried over.
+  - Sliders replay on a **180ms debounce** (`replayGlowPreviewSoon`), not on
+    `input`. A 3.4s sequence restarted on every event of a drag would never get
+    past its first word. Discrete actions (click, class change, Reset) play
+    immediately.
+- **Sub-settings are grouped, not hidden.** A sub-row is indented and, when its
+  parent preference is off, **dimmed and inert** rather than hidden. That is
+  what makes the indent mean anything, and it also converted the existing
+  **Mode** row (under Render diffusion-style text) from `hidden` to the same
+  treatment. The group's closing hairline moved to the `border-top` of whatever
+  preference follows the last sub-row
+  ([settings.css](src/web/static/settings.css)). That form was chosen to avoid
+  both `:has()` (thin support in the WebKitGTK desktop window) and an "I am
+  last" class in the markup that would rot as rows are added; a group that ends
+  the panel correctly gets no line at all. `.settings-row-disabled` already
+  existed in `style.css` but was dead: it only covered `.toggle-switch`, so it
+  grew to cover the custom select and range inputs, plus an override cancelling
+  `.custom-select.disabled`'s own 0.5 opacity, which would otherwise compound
+  with the row's 0.4 down to 0.2 and read as broken.
+- **The load bar sweeps before it fills.** The gap the maintainer noticed
+  between the loading UI appearing and the bar starting is real work, not a
+  rendering delay: the worker process spawning, importing torch and
+  transformers in its own virtualenv, uvicorn coming up so `/health` answers at
+  all, and only then `load_target_bytes` reading the shard headers. None of it
+  is measurable, so the fix is **not** a bar parked at 0%, which reads as hung
+  and is exactly what `load_progress.py` refuses to draw. It is a sweeping
+  track plus the honest label **Starting worker**. No backend change was
+  needed: `starting` was already set in `activate()`
+  ([server.py](src/web/server.py)) and already returned as `state` by
+  `/api/models/activation`; the shared reducer simply fell through to its
+  generic branch.
+  - `overlaysActivationProgress` went from a boolean `determinate` to a
+    three-way `mode`: `hidden`, `sweep`, `fill`. `idle`, `error`, and any
+    unrecognised state map to `hidden`, which preserves today's behavior for
+    them and keeps the sweep off a page that is not loading anything.
+  - **Know this before touching the finish path.** Both
+    `finishLoadingProgress` ([app.js](src/web/static/app.js)) and
+    `finishActivationProgress` ([menu.js](src/web/static/menu.js)) read
+    `container.hidden` to mean "a bar was never on screen", which is how an
+    unmeasurable checkpoint used to finish with no bar at all. With a track
+    present for every activation, that check now only guards an overlay that
+    was never raised, and every activation closes on a brief full bar. The
+    menu gains the most: it used to hide the entire row, label included, so it
+    showed *nothing* during the gap.
+  - While sweeping, the width belongs to the CSS class and the inline width is
+    removed, because the sweep animates `transform` while a measured bar
+    animates `width`. Handing the property back on the way out is also what
+    makes the switch to a real reading one eased move instead of a jump.
+  - **`switchFailed` now tears the track down** rather than leaving the next
+    switch to re-sync it. Worth knowing why, because the reasoning is not
+    local: `#loading-overlay.hidden` is `opacity: 0`, **not** `display: none`,
+    so the element stays in the layout tree and a sweep left on it would keep
+    animating unseen for the rest of the session. Nothing was visible and it
+    self-healed on the next switch, but a permanently running compositor
+    animation is not something to leave lying around. It resets by calling
+    `setLoadingProgress("idle", null)`, which routes through the reducer's
+    `hidden` mode, so that mode is now load-bearing instead of purely
+    defensive. The menu needs no equivalent: it hides via the `hidden`
+    *attribute*, and `display: none` does stop animations.
+  - `switchModel` seeds the track with `starting` rather than `loading`, so the
+    opening frame already reads "Starting worker" instead of saying "Loading"
+    for one poll interval and then correcting itself.
+- **`prefersReducedMotion` is shared now.** It lived twice, identically, in
+  `app.js` and inside `menu.js`'s IIFE, and the preview needed a third. It
+  moved to [overlays.js](src/web/static/overlays.js) and both copies were
+  deleted; every page loads `overlays.js` ahead of its own script, so all
+  eleven call sites kept working untouched. Unprefixed, unlike its neighbours,
+  because it is a predicate about the environment rather than part of the
+  overlay model.
+- **Two CSS corrections.** The thin bar above the Analytics **Original /
+  Edited** crossfade was a **cascade leak**, not an Analytics style at all: the
+  row kept `margin-top`, `padding-top`, and `border-top` from `style.css` after
+  it moved onto the Token overlay heading row, and those are still correct on
+  the generator, where it stacks on its own line. So they are zeroed in
+  [analytics.css](src/web/static/analytics.css) rather than removed at the
+  source. And the **pager arrows** now read by brightness rather than hue
+  (`--text-primary` actionable, `--text-dim` not, hover deepening the wash
+  instead of changing colour). The accent green was on the *disabled* arrow,
+  which had it backwards twice over: the dead control was both the brightest
+  thing in the row and camouflaged against the green chart title beside it.
+  Nothing is lost by dropping it as a position indicator, since both pagers are
+  two-page and the page is always named next to them.
+
+**Previous pass: the reveal signal, the birth glow, and Tokens per Second.**
+One missing piece of data gated both features, so it landed first and
+everything else hangs off it. Checklist items 58 to 66 carry its GPU and
+display work.
+
+- **`ruff` is installed and configured.** There was no `pyproject.toml`,
+  `ruff.toml`, or `setup.cfg` anywhere in the repo, and `black` was pinned with
+  no config, so it defaulted to 88 columns against code hand-wrapped to 70: a
+  single `black .` would have reflowed every Python file in the tree. The new
+  config-only [pyproject.toml](pyproject.toml) pins both tools to 70 and selects
+  `C901` and `PLR1702`, the two gates the style rules name. `PLR1702` is still a
+  preview rule, so `preview` is paired with `explicit-preview-rules` to enable
+  only the preview rules actually named in `select` rather than every unstable
+  rule ruff ships. **Baseline: 159 findings**, all pre-existing and none fixed
+  (129 `E501`, mostly 71 to 73 column overruns concentrated in
+  `llada_sampler.py`; 10 `PLR1702`; 4 `C901`, the worst being
+  `create_worker_app` at 23 and `_save_run_blocking` at 21). The count after
+  this session's work is also 159, so nothing here added to it.
+- **Frames now say which positions were born.** `revealed` lists the positions
+  that became resolved in that frame and had not been resolved earlier in the
+  same canvas. The monotonicity is the load-bearing part and is documented once
+  in [reveal.py](src/inference/reveal.py): a signal that said "resolved right
+  now" would re-fire every frame for every settled token, and one that said
+  "changed since last frame" would flicker on DiffusionGemma, whose draft tokens
+  churn until they stabilize. The diff is a pure helper the caller folds back
+  into its own set, so the samplers keep a single place where that state moves,
+  and it unit tests without a model or a GPU.
+  - LLaDA ([streaming_sampler.py](src/inference/streaming_sampler.py)) seeds an
+    empty set in `streaming_generate`, but `streaming_resume` seeds from the
+    canvas it inherited. Starting it empty there would have reported the whole
+    surviving prefix as newborn on frame 0.
+  - DiffusionGemma ([dgemma_sampler.py](src/inference/dgemma_sampler.py)) keeps
+    the set per canvas and clears it beside `self._prev` in `put`, since the
+    next canvas restarts from fresh noise.
+  - SmolLM3 ([ar_sampler.py](src/inference/ar_sampler.py)) needs no state:
+    decoding is strictly left to right, so the frame that grows the sequence to
+    *n* tokens is the one that produced position *n-1*.
+- **Live generation renders tokens, not characters, and reuses the nodes.**
+  This is a performance win that happens to unblock the glow. `renderFrame`
+  built one span per *character* and tore the whole output down every frame,
+  which at LLaDA's default `gen_length` of 160 is roughly 640 inline boxes laid
+  out from scratch per step; `renderLiveFrame` keeps a constant ~160 spans and
+  writes only where something differs. `overlaysSyncTokenSpan`
+  ([overlays.js](src/web/static/overlays.js)) holds the property application the
+  builder used to inline, so both paths agree on what a token span looks like,
+  and every write there is guarded by a read because an unconditional
+  `textContent` assignment relayouts the block even when the text is identical.
+  Reuse is validated by reading the first span's `parentNode` back rather than
+  by trusting every other render path to announce itself. `renderFrame` stays as
+  the fallback for models that send no token metadata.
+- **Newly denoised tokens flash.** `#output-area.live-tokens .token-span
+  [data-born]` fades a constant-blur shadow's alpha over 0.5s with no fade in.
+  Constant blur because animating the radius re-rasterizes a different-sized
+  blur every tick, which is the shape the `.token-mask` scroll comment warns
+  about. It is keyed off an **attribute** rather than a class specifically
+  because `overlaysSyncTokenSpan` owns `className` and would otherwise cut a
+  glow short the moment its position changed. Concurrency is capped at 48 (LLaDA
+  at `steps=8` reveals about 20 at once) and `animationend` is delegated to the
+  container. Setting `tokenBirthGlow`, default on, under Settings > Appearance.
+- **Tokens per Second, in the footer and in Analytics.** `#status-tps` is the
+  one interactive footer readout: click or press Enter to swap the run average
+  for the last step, persisted in the settings blob as `tpsMode`. **Elapsed was
+  wrong and is fixed in the same place**: the footer printed the raw
+  `data.elapsed`, which is segment-local, so it jumped backwards after an edit;
+  it now reads the cumulative `perFrameElapsed` tail. In Analytics the Timing
+  slot became two pages behind a pager, Elapsed Time and Tokens per Second,
+  because they are the same two numbers read two ways and did not each deserve a
+  chart slot. **No new storage and no backfill gap**: a masked token renders as
+  exactly one mask glyph, so `compute_convergence`'s `mask_count` already is a
+  token count, and every run ever saved has its frame timings. The rate is
+  clamped at zero for DiffusionGemma, whose mask count can rise between drafts.
+  The pre-edit comparison is offered for autoregressive runs only, since a saved
+  run keeps the original's timings but not its canvas history, and a rate needs
+  both.
+- **Analytics shows both elapsed totals.** Closes the outstanding item: an
+  edited run now reports the original's end-to-end time and its own separately,
+  rather than one combined figure that hid whether the intervention cost time.
+
+**Previous pass: resident navigation, picker flip, and load-bar corrections.**
 The four items the maintainer left open after the polish pass below. `pytest`,
 `node --check`, ReadLints, and the 70-column audit are clean; two throwaway
 Node harnesses (7 checks on the drop-up geometry, 9 on the activation reducer)
@@ -1334,11 +1577,27 @@ end to end, reusing the frame/token contract.
 
 ## Where to pick up
 
-This session shipped the `results/` rename and all of **AR Phase C** (see
-"Recently shipped"), but **none of it has been validated on hardware**, so the
-first task is the checklist below. After that, the agreed next candidates are
-Mamba-3, then extending entropy / top-k to the diffusion models. Deliberate each
-in Ask mode before Plan.
+This session shipped the `results/` rename, all of **AR Phase C**, and the
+passes listed under "Recently shipped". Everything through checklist item 66 has
+been validated on hardware by the maintainer; **items 67 to 73 have not**, so
+they are the first task. After that, the agreed next candidates are Mamba-3,
+then extending entropy / top-k to the diffusion models. Deliberate each in Ask
+mode before Plan.
+
+**Held deliberately, pending the sweep.** The ambitious version of the load
+gap fix was to *measure* the unmeasurable phase: time the worker startup on
+first run, persist the figure per model, and drive a real bar from the previous
+run's timing. It was held on the maintainer's call unless the sweep proves
+unsatisfying in practice. Two things to weigh if it ever comes back. First,
+a cold start and a warm one differ by more than the estimate would tolerate
+(page cache, and whether the venv's imports are resident), so the bar would
+routinely stall at 90% or finish early, which is worse than admitting there is
+no number. Second, it would put per-model timing state in
+`results/ui_state.json`, which currently holds only user preferences. The
+cheaper middle ground, if the sweep alone reads as too vague, is to name the
+sub-phase rather than to measure it: the worker already knows when it has
+finished importing and when uvicorn is answering, so `starting` could split
+into two or three labeled sweeps without inventing a percentage.
 
 **0. Validate AR Phase C on hardware (do this first).** Nothing here could be
 exercised in-sandbox (no CUDA, no display).
@@ -1783,9 +2042,163 @@ is carried over untouched because it was never reported on.
     overlay, and must hand over cleanly to the load phase afterwards rather
     than resetting or double-counting.
 57. **A failed load does not leave a bar behind.** Force an activation failure
-    (for example, request DiffusionGemma on CPU, which is refused). The overlay
-    must close, the error must surface, and a subsequent successful switch must
-    start from an empty track rather than the failed run's fill.
+    (see the note below this list for how). The overlay must close, the error
+    must surface, and a subsequent successful switch must start from an empty
+    track rather than the failed run's fill.
+
+**How to force an activation failure.** Earlier revisions of items 57 and 73
+said to request DiffusionGemma on CPU, "which is refused". That is wrong twice
+over and cost the maintainer a session's worth of hunting, so it is written out
+here once. There is no CPU option for a diffusion model in the UI at all
+(`isAutoregressive` gates the device toggle in
+[menu.js](src/web/static/menu.js); diffusion rows get a static GPU tag), and
+reaching past the UI would not be refused either: `_resolve_device` accepts
+`cpu` for any model and `activate()` **skips** the VRAM pre-flight for it
+([server.py](src/web/server.py)), so the app would earnestly try to load LLaDA
+into host RAM. Three things do work, and the first two fail through different
+paths, which matters depending on what you are testing:
+
+- **Rename a venv** (fails *inside* `activate()`, so the POST returns non-ok
+  and the poll never runs). `mv .venv-dgemma .venv-dgemma.bak`, then activate
+  DiffusionGemma: it raises "venv python not found" before spawning anything.
+  Instant, no GPU, no weights touched, and a second `mv` puts it back. This is
+  the one for item 57.
+- **Kill the worker mid-load** (fails through the *poll*, which is the path
+  that matters for anything about the progress track, since the bar is on
+  screen when the error lands). `pkill -f "run_worker.*llada"` while it loads;
+  `_monitor_startup` sees the dead process and reports "worker exited during
+  startup". This is the one for item 73.
+- **Occupy the VRAM** from another process and activate LLaDA, which trips
+  `_preflight_vram`. The most realistic and the slowest to set up.
+
+**Reveal signal, birth glow, and Tokens per Second (needs a GPU and a
+display).** The case to press hardest is 58: it is the peak concurrent-glow
+scenario on the weakest renderer, and it exercises the rendering rewrite and the
+animation at the same time.
+
+58. **LLaDA at `steps=8`, `gen_length=160`, in the `desktop.py` window.** This
+    is the stress case: eight steps over 160 positions means roughly twenty
+    tokens are born at once, each drawing a blurred halo, on WebKitGTK. Watch
+    for stutter during the run and for glows that linger past half a second.
+    Then run the same prompt at `steps=64`, where reveals are sparse and each
+    flash should be individually legible.
+59. **The streaming view looks the way it always did.** This is the regression
+    check for the character-to-token rewrite, so compare against memory
+    carefully. Masked positions must still carry their soft glow (that is a
+    `live-tokens` rule restoring what `.token-mask` deliberately drops for the
+    scrubber), mask opacity must still track confidence, and line wrapping must
+    be unchanged. One difference is expected and is arguably a fix: the live
+    text is now the concatenation of per-token decodes rather than one decode of
+    the whole sequence, which is exactly what the scrubber has always shown, so
+    the text should no longer shift subtly the moment a run finishes.
+60. **Scrubbing does not retrigger the glow.** Finish a run, then drag the
+    scrubber back and forth. Nothing should flash: the glow fires only from the
+    live path. Then confirm the scrubber's own masked tokens do **not** glow,
+    which is the check that `live-tokens` was taken off the container when the
+    run ended.
+61. **The glow toggle.** Turn **Token birth glow** off in Settings, save, and
+    run: no flashes, and no stutter either. Turn it back on. Then set the OS to
+    prefer reduced motion and run again with the setting on; there should be no
+    animation at all.
+62. **DiffusionGemma does not strobe.** Its draft tokens churn before settling,
+    which is the case the monotone reveal set exists for. Each position should
+    flash **once**. Watch a multi-canvas run in particular: a new canvas is
+    fresh noise, so its positions are entitled to flash again, but positions
+    within one canvas are not.
+63. **Elapsed no longer jumps backwards.** Generate, note the footer Elapsed,
+    then run an Edit Frames resume (or a What If substitution on SmolLM3). The
+    number must keep climbing from where it was, not restart near zero. This is
+    the bug the fix targets, so it is worth doing before anything else on the
+    footer.
+64. **Tokens per Second in the footer.** It should climb and settle during a
+    run. Click it: the label swaps to the last step and the number gets noisier,
+    which is expected. Reload the page and confirm the mode stuck. Then check
+    that a Settings **Reset to defaults** does *not* flip it back, since its
+    control is the footer and not that page. Generate, go to Analytics, come
+    back: the readout should still be there and should honor the current mode.
+65. **The Timing pager in Analytics.** Open a run: the section reads **Elapsed
+    Time** with two small arrows beside the heading. The right arrow swaps to
+    **Tokens per Second**, which should be a smooth curve that settles rather
+    than a sawtooth, and the chart must be **correctly sized** rather than
+    squashed, since it was built while its section was briefly visible. Zoom,
+    pan, Reset, and the eye toggle should all work on it. Switch between two
+    runs without closing the modal to confirm no stale chart survives. On an
+    edited **SmolLM3** run the compare pins appear and the pre-edit line draws;
+    on an edited **diffusion** run they must stay hidden, which is deliberate.
+66. **Both elapsed totals.** Open an edited run's detail: the summary lists
+    *Elapsed (original)* and *Elapsed (edited)* rather than one figure. An
+    unedited run, and an edited run saved before the pre-edit signal existed,
+    should both still show the single *Elapsed* row.
+
+**Per-class glow tuning, sub-setting grouping, and the load sweep (needs a GPU
+and a display).** Press 68 hardest: maximum brightness against the longest fade
+is the worst case for paint cost, and it is the only combination that reaches
+the raised concurrency cap.
+
+67. **Defaults are unchanged.** Before touching a slider, run LLaDA and
+    SmolLM3 and confirm the glow looks exactly as it did last session. Both
+    classes default to 100% and 500ms, and the cap arithmetic is chosen to land
+    on the old fixed 48 at that fade, so any visible difference here means the
+    scaling or the fallbacks are wrong rather than merely mistuned.
+68. **The worst case: SmolLM3 on GPU at 200% and 2000ms.** This is the stress
+    test. Set **Tune for** to Autoregressive, push both sliders to maximum,
+    save, and run a long generation in the `desktop.py` window. Expect a long
+    bright meteor trail; watch for stutter, since doubled radii quadruple the
+    blurred area per token and up to 192 tokens can be glowing at once. Then
+    confirm the tail **fades** rather than being cut off partway, which is the
+    check that the cap followed the fade instead of staying at 48.
+69. **The two classes are independent.** With the autoregressive pair still at
+    maximum, switch **Tune for** to Diffusion: its sliders must snap back to
+    100% / 500ms, not inherit what you just set. Run LLaDA to confirm it still
+    uses its own pair, then run SmolLM3 again to confirm it kept the loud one.
+    Reload the page between the two to check both survived the save.
+70. **The preview matches the real thing.** Drag each slider and watch the copy
+    block replay a second or so after you let go. What it shows should be what
+    a run then does, since both go through the same function and the same
+    keyframes. Check the shape against the class: **Autoregressive** sweeps
+    left to right, **Diffusion** scatters with no marching or directional
+    pattern to it, and in bursts of visibly differing size. Push **Fade time**
+    to 2000ms and confirm the trail still has a **dark head ahead of it and a
+    faded tail behind it** rather than filling solid; this is the tightest
+    case, peaking at 28 of 38 lit, so it is the one to actually look at. Drop
+    it to 200ms and confirm only about six words are lit at a time. Replay
+    twice at one setting and confirm the scatter lights the **same words in the
+    same order** both times, which is what makes two settings comparable. Check
+    the block's **right edge lines up with the slider readouts** above it.
+    Click the block to replay
+    without moving a slider. Turn **Token birth glow** off: all four sub-rows
+    dim, become unclickable, and any sequence in flight stops immediately
+    rather than finishing into a dimmed row.
+71. **Sub-setting grouping.** In Settings, confirm there is no hairline between
+    a preference and its sub-settings, that the sub-rows are indented under it,
+    and that a single line closes each group off from the next preference (with
+    no line at all after the last group, since it ends the panel). Toggle
+    **Render diffusion-style text** off: **Mode** must now dim in place rather
+    than disappear, and must not be clickable or keyboard-reachable while dim.
+    Check the dim level reads as inactive rather than broken, which is the
+    override cancelling the custom select's own opacity.
+72. **The load sweep, on both surfaces.** Activate a model from the Main Menu
+    and watch the inline bar: a sweeping track labeled *Starting worker* should
+    appear immediately, where previously the row showed nothing for several
+    seconds. It must hand over to *Loading weights* with a real percentage in
+    one eased move rather than a jump, then to *Moving to GPU*, then hold a
+    brief full bar before the page moves on. Repeat as a **switch** from the
+    generator header, which uses the other renderer. DiffusionGemma is the one
+    to check for the handoff, since its reserved tail makes the fill behave
+    differently from the other two.
+73. **The sweep's edge cases.** Force a failed activation, using the **kill the
+    worker mid-load** recipe from the note under item 57 rather than either of
+    the others: it is the only one that fails while the sweep is on screen,
+    which is the transition being tested. The overlay must still close and
+    surface the error, and a later successful switch must start from a clean
+    track rather than the failed run's state. Then set the OS to prefer
+    reduced motion and activate
+    again: the track should show a dim, still bar rather than a moving one, and
+    the labels must still change phase. Finally confirm the pager arrows on the
+    Analytics charts and in the SmolLM3 candidate popover now read bright when
+    they act and dim when they do not, and that the thin bar above the
+    Analytics **Original / Edited** slider is gone while the generator's own
+    crossfade **keeps** its separator.
 
 **0. The comparison surfaces (agreed with the maintainer, partly shipped).** The
 timing foundation exists to serve these, and the unifying idea is settled: **the

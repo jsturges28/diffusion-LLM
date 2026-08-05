@@ -445,6 +445,87 @@ analytics suite.
   breath and `_apply_health` drops progress), so the reducer names `ready` and
   both pages hold a full bar briefly, and three stacked 500ms polls came down
   to 250ms.
+- Shipped (this session): the **reveal signal**, the **token birth glow**, and
+  **Tokens per Second**. One missing piece of data gated both features, so it
+  landed first: every sampler now stamps `revealed` on each frame, the
+  positions that became resolved in that frame and had not been resolved
+  earlier in the same canvas. The monotonicity is the whole design (see
+  `src/inference/reveal.py`): "resolved right now" would re-fire on every
+  settled token every frame, and "changed since last frame" would flicker on
+  DiffusionGemma, whose drafts churn before they settle. Each sampler owns that
+  differently: a **resume** seeds the set from the canvas it inherited, or the
+  entire surviving prefix reports as newborn on frame 0; DiffusionGemma clears
+  it per canvas, since the next one is fresh noise; and the autoregressive
+  sampler needs no state at all, because left-to-right decoding means the frame
+  that reaches *n* tokens produced position *n-1*.
+  The rendering change that consumed it is a **net performance win**: the live
+  path built one span per *character* and tore the whole output down every
+  frame, roughly 640 inline boxes at LLaDA's default length, where the token
+  view keeps a constant ~160 and writes only where something differs. That is
+  also what made the glow possible, since an animation needs a node that
+  survives the next frame. The glow itself animates a **constant-blur** shadow's
+  alpha (animating the radius re-rasterizes a different-sized blur every tick,
+  which is what the `.token-mask` scroll note warns about) and is keyed off a
+  **data attribute** rather than a class, because the span-sync function owns
+  `className` and would otherwise cut a glow short the moment its position
+  changed.
+  **Tokens per Second** needed no new storage and has no backfill gap: a masked
+  token renders as exactly one mask glyph, so `compute_convergence`'s
+  `mask_count` already is a token count, and every run ever saved carries its
+  frame timings. In Analytics it shares the Timing slot behind a pager rather
+  than claiming a chart of its own, since it is the same two numbers read as a
+  ratio. The footer's **Elapsed** was wrong and was fixed alongside it: it
+  printed the raw segment-local `data.elapsed`, so it jumped backwards after an
+  edit. `ruff` was pinned and configured in the same pass (config-only
+  `pyproject.toml`, 70 columns for both ruff and black, `C901` and `PLR1702`
+  selected), establishing a **159-finding baseline** that this session's work
+  did not add to; the findings were deliberately left unfixed.
+- Shipped (this session): **per-class glow tuning, sub-setting grouping, the
+  load sweep**, and two CSS corrections. Frontend-only, no Python touched.
+  The glow's **Brightness** and **Fade time** are stored per `model_type`
+  behind a class picker, because the trail an eye can follow is roughly rate
+  times fade and an autoregressive GPU run outpaces a diffusion step by an
+  order of magnitude: the default that reads perfectly on LLaDA is gone before
+  it registers on SmolLM3. Three details carry the design. The values reach the
+  keyframes as **whole shadow lists** in custom properties rather than as
+  numbers nested inside `rgba()`, which keeps each keyframe a plain
+  substitution. Brightness scales the **blur radii as well as the alphas**,
+  because alpha alone tops out barely above the default 0.9 and there is no
+  headroom in that. And the concurrency cap is now **derived from the fade**
+  (`clamp(round(fadeSeconds * 96), 48, 192)`, with 96 chosen so the 500ms
+  default still lands on the 48 it was fixed at): left fixed, a long fade at
+  autoregressive speeds would have the FIFO rather than the timer decide when a
+  flash ends, so the trail would stop growing exactly when the user lengthened
+  it and its tail would look cut rather than faded.
+  **Sub-settings** are indented and dimmed-when-inactive rather than hidden,
+  which is what makes the indent mean anything, and the group's closing
+  hairline moved to the `border-top` of the next preference. That avoids both
+  `:has()` (thin support on WebKitGTK) and an "I am last" class in the markup
+  that would rot; a group ending the panel correctly gets no line at all.
+  **The load sweep** closes the dead time the maintainer noticed between the
+  loading UI appearing and the bar starting. The gap is real work, not a
+  rendering delay: a worker process spawning, importing torch and transformers
+  in its own virtualenv, uvicorn coming up so `/health` answers at all, and
+  only then `load_target_bytes` reading the shard headers. Nothing can measure
+  it, so the fix is not a bar parked at 0% (which reads as hung, and is the
+  thing `load_progress.py` refuses to draw); it is a sweeping track plus the
+  honest label **Starting worker**. No backend change was needed: `starting`
+  was already set in `activate()` and already returned by
+  `/api/models/activation`; the shared reducer just fell through to its generic
+  branch. That reducer went from a boolean `determinate` to a three-way `mode`
+  (`hidden` / `sweep` / `fill`), since there are now three outcomes rather than
+  two. One consequence worth knowing: both `finish*Progress` functions used
+  `container.hidden` to mean "a bar was never shown", so an unmeasurable
+  checkpoint used to end with no bar at all; with a track always present, every
+  activation now closes on a brief full bar, and the menu in particular went
+  from showing *nothing* during the gap to showing the sweep.
+  The two corrections: the **Analytics crossfade separator** was a cascade
+  leak, not an Analytics style at all (the row kept `margin-top`,
+  `padding-top`, and `border-top` from `style.css`, where the generator still
+  stacks it on its own line and still wants them), and the **pager arrows** now
+  read by brightness instead of hue, since the accent green was on the
+  *disabled* arrow: backwards twice over, being both the brightest thing in the
+  row and camouflaged against the green chart title beside it.
 - For the feature overview and architecture, see `README.md`. For the build
   history, see `.cursor/plans/`.
 
@@ -758,6 +839,13 @@ without adding files. Triggers to make the switch: (a) the file count would
 exceed ~4-5, (b) a new incompatible environment is added (e.g. an autoregressive
 model class), or (c) the project is ever packaged/distributed. Until one of
 those, the flat files are simpler and reproducibility is already covered.
+
+A `pyproject.toml` now exists, but it is **tool configuration only**: no
+`[build-system]` and no `[project]` table, since the app runs from source. It
+holds ruff and black, both pinned to 70 columns so a stray `black .` cannot
+reflow the whole tree. If the consolidation above ever happens, that file is
+where the dependency groups would go, and the tool tables already there stay
+as they are.
 
 ## References
 

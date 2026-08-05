@@ -582,16 +582,6 @@
   var LOADING_HOLD_MS = 700;
   var loadingCycleTimer = null;
 
-  function prefersReducedMotion() {
-    try {
-      return window.matchMedia(
-        "(prefers-reduced-motion: reduce)"
-      ).matches;
-    } catch (_e) {
-      return false;
-    }
-  }
-
   function revealOnce(el, text, onDone) {
     if (el._denoiseTimer) {
       clearInterval(el._denoiseTimer);
@@ -1266,26 +1256,32 @@
       return;
     }
     var view = overlaysActivationProgress(state, progress);
-    if (!view.determinate) {
-      activationProgress.hidden = true;
-      return;
-    }
-    activationProgress.hidden = false;
+    var sweeping = view.mode === "sweep";
+    activationProgress.hidden = view.mode === "hidden";
     if (activationFill) {
-      activationFill.style.width = view.percent + "%";
+      activationFill.classList.toggle("is-sweep", sweeping);
+      // The sweep's width belongs to its class; see the same handoff
+      // in the generator's setLoadingProgress.
+      if (sweeping) {
+        activationFill.style.removeProperty("width");
+      } else {
+        activationFill.style.width = view.percent + "%";
+      }
     }
     if (activationPct) {
-      activationPct.textContent =
-        view.label + " " + view.percent + "%";
+      activationPct.textContent = sweeping
+        ? view.label + "\u2026"
+        : view.label + " " + view.percent + "%";
     }
   }
 
   // Fill the bar and let it be seen full before `done` navigates.
   //
-  // Whether a bar was ever on screen is read off the element rather
-  // than tracked beside it, so there is one source of truth. A
-  // checkpoint whose size could not be worked out ran without a bar,
-  // and must not have one appear for a fifth of a second at the end.
+  // Every activation now ends here, because the track is on screen
+  // for all of one: it sweeps through the phases that cannot be
+  // measured and fills through the ones that can. Before that, an
+  // unmeasurable load hid this row outright. The `hidden` check now
+  // only guards against a bar that was never raised at all.
   function finishActivationProgress(done) {
     if (!activationProgress || activationProgress.hidden) {
       done();

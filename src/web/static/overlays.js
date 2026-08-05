@@ -310,6 +310,26 @@ function overlaysApplyLayerPointers(
 // grades a mask's opacity by the model's live predicted confidence
 // (opacityFor). Analytics has no live run, so its masks are flat.
 function overlaysBuildTokenSpan(index, tok, mask, opts) {
+  var span = document.createElement("span");
+  overlaysSyncTokenSpan(span, index, tok, mask, opts);
+  return span;
+}
+
+// Apply a position's appearance to a span that may already be on the
+// page. Split out of the builder so the live generation path can keep
+// one node per position and update it in place: rebuilding the whole
+// output every frame meant laying out one inline box per *character*,
+// several hundred of them, on every step.
+//
+// Every write is guarded by a read, because the guard is the point.
+// An unconditional textContent assignment relayouts the block even
+// when the text is identical, which is the cost this exists to avoid.
+//
+// This owns the span's class attribute outright and will overwrite
+// anything else written there, so transient decoration a caller wants
+// to survive a resync belongs on its own attribute (the birth glow
+// uses data-born) rather than on the class list.
+function overlaysSyncTokenSpan(span, index, tok, mask, opts) {
   // A missing token is a hole in the canvas, drawn as the mask glyph
   // rather than skipped: two layers only line up if both emit a span
   // per position.
@@ -320,31 +340,43 @@ function overlaysBuildTokenSpan(index, tok, mask, opts) {
   if (!masked && opts.maskedFor) {
     masked = !!opts.maskedFor(index, tok);
   }
-  var span = document.createElement("span");
-  span.setAttribute("data-pos", String(index));
-  span.className = "token-span "
+  var pos = String(index);
+  if (span.getAttribute("data-pos") !== pos) {
+    span.setAttribute("data-pos", pos);
+  }
+  var className = "token-span "
     + (masked ? "token-mask" : "token-resolved");
   var extraClass = opts.classFor
     ? opts.classFor(index, tok, masked)
     : "";
   if (extraClass) {
-    span.className += " " + extraClass;
+    className += " " + extraClass;
   }
-  span.textContent = masked ? mask : tok.t;
-  var color = opts.colorFor(index, tok);
-  if (color) {
-    span.style.color = color;
+  if (span.className !== className) {
+    span.className = className;
+  }
+  var text = masked ? mask : tok.t;
+  if (span.textContent !== text) {
+    span.textContent = text;
+  }
+  // Cleared rather than skipped when absent: on a reused span the
+  // previous frame's value would otherwise stick.
+  var color = opts.colorFor ? opts.colorFor(index, tok) : null;
+  var nextColor = color ? color : "";
+  if (span.style.color !== nextColor) {
+    span.style.color = nextColor;
   }
   var opacity = opts.opacityFor
     ? opts.opacityFor(index, tok, masked)
     : null;
-  if (opacity !== null) {
-    span.style.opacity = String(opacity);
+  var nextOpacity = opacity !== null ? String(opacity) : "";
+  if (span.style.opacity !== nextOpacity) {
+    span.style.opacity = nextOpacity;
   }
-  if (opts.titleFor) {
-    span.title = opts.titleFor(index, tok);
+  var title = opts.titleFor ? opts.titleFor(index, tok) : "";
+  if (span.title !== title) {
+    span.title = title;
   }
-  return span;
 }
 
 // Build one stacked layer of token spans. ``opts`` carries the layer
@@ -588,11 +620,64 @@ function persistApplyHydrated(state) {
 
 var SETTINGS_KEY = "diffusion_settings";
 
+// ---- Token birth glow tuning ----
+//
+// Brightness is a percentage multiplier on the flash, fade is its
+// duration. Both are per model class, because the rate the tokens
+// arrive at decides what reads well: the trail an eye can follow is
+// roughly rate times fade, so a 40 token/second autoregressive run
+// needs a longer, brighter flash than a diffusion step does to leave
+// any trail at all. The defaults reproduce the single fixed look that
+// these replaced, so an existing profile sees no change.
+var GLOW_BRIGHTNESS_MIN = 50;
+var GLOW_BRIGHTNESS_MAX = 200;
+var GLOW_BRIGHTNESS_DEFAULT = 100;
+var GLOW_FADE_MS_MIN = 200;
+var GLOW_FADE_MS_MAX = 2000;
+var GLOW_FADE_MS_DEFAULT = 500;
+var GLOW_FADE_MS_STEP = 50;
+
+// The flash at 100% brightness: two blurred copies of the text.
+var GLOW_INNER_BLUR_PX = 6;
+var GLOW_OUTER_BLUR_PX = 12;
+var GLOW_INNER_ALPHA = 0.9;
+var GLOW_OUTER_ALPHA = 0.5;
+
+// The settings keys each model class reads, keyed on the model_type
+// from ModelCapabilities. Written out rather than derived from the
+// class name so every key is greppable as a literal; a new class
+// (state space is on the roadmap) is one entry here plus an option
+// in the Settings picker.
+var GLOW_KEYS = {
+  diffusion: {
+    brightness: "glowBrightnessDiffusion",
+    fadeMs: "glowFadeMsDiffusion",
+  },
+  autoregressive: {
+    brightness: "glowBrightnessAutoregressive",
+    fadeMs: "glowFadeMsAutoregressive",
+  },
+};
+
+var GLOW_CLASS_OPTIONS = [
+  { value: "diffusion", label: "Diffusion" },
+  { value: "autoregressive", label: "Autoregressive" },
+];
+
 var SETTINGS_DEFAULTS = {
   highlightTokens: true,
   diffusionText: false,
   diffusionTextMode: "default",
   gpuTicker: true,
+  tokenBirthGlow: true,
+  glowBrightnessDiffusion: GLOW_BRIGHTNESS_DEFAULT,
+  glowFadeMsDiffusion: GLOW_FADE_MS_DEFAULT,
+  glowBrightnessAutoregressive: GLOW_BRIGHTNESS_DEFAULT,
+  glowFadeMsAutoregressive: GLOW_FADE_MS_DEFAULT,
+  // "total" is the run average, "last" the most recent step. Lives
+  // here rather than on the Settings page because its control is the
+  // footer readout itself, like highlightTokens and the drawers.
+  tpsMode: "total",
 };
 
 // Parse a stored settings JSON string into a complete settings object,
@@ -604,6 +689,15 @@ function parseSettings(raw) {
     diffusionText: SETTINGS_DEFAULTS.diffusionText,
     diffusionTextMode: SETTINGS_DEFAULTS.diffusionTextMode,
     gpuTicker: SETTINGS_DEFAULTS.gpuTicker,
+    tokenBirthGlow: SETTINGS_DEFAULTS.tokenBirthGlow,
+    glowBrightnessDiffusion:
+      SETTINGS_DEFAULTS.glowBrightnessDiffusion,
+    glowFadeMsDiffusion: SETTINGS_DEFAULTS.glowFadeMsDiffusion,
+    glowBrightnessAutoregressive:
+      SETTINGS_DEFAULTS.glowBrightnessAutoregressive,
+    glowFadeMsAutoregressive:
+      SETTINGS_DEFAULTS.glowFadeMsAutoregressive,
+    tpsMode: SETTINGS_DEFAULTS.tpsMode,
   };
   if (!raw) {
     return settings;
@@ -619,11 +713,142 @@ function parseSettings(raw) {
       settings.diffusionTextMode =
         parsed.diffusionTextMode === "cycle" ? "cycle" : "default";
       settings.gpuTicker = parsed.gpuTicker !== false;
+      // Default on when absent, like highlightTokens: a profile
+      // saved before this setting existed should still meet the
+      // effect rather than having it silently off forever.
+      settings.tokenBirthGlow = parsed.tokenBirthGlow !== false;
+      parseGlowInto(settings, parsed);
+      settings.tpsMode =
+        parsed.tpsMode === "last" ? "last" : "total";
     }
   } catch (_e) {
     // Corrupt storage: keep the defaults.
   }
   return settings;
+}
+
+// Fold the four per-class glow values out of stored state, clamped to
+// their ranges. Clamped rather than rejected because the bounds can
+// tighten later and a value saved under the old ones is still a
+// coherent intent; only a non-number falls back to the default.
+function parseGlowInto(settings, parsed) {
+  var classes = Object.keys(GLOW_KEYS);
+  for (var i = 0; i < classes.length; i++) {
+    var keys = GLOW_KEYS[classes[i]];
+    settings[keys.brightness] = clampGlowValue(
+      parsed[keys.brightness],
+      GLOW_BRIGHTNESS_MIN,
+      GLOW_BRIGHTNESS_MAX,
+      GLOW_BRIGHTNESS_DEFAULT
+    );
+    settings[keys.fadeMs] = clampGlowValue(
+      parsed[keys.fadeMs],
+      GLOW_FADE_MS_MIN,
+      GLOW_FADE_MS_MAX,
+      GLOW_FADE_MS_DEFAULT
+    );
+  }
+}
+
+// A stored glow value as a whole number inside [min, max].
+function clampGlowValue(value, min, max, fallback) {
+  if (typeof value !== "number" || !isFinite(value)) {
+    return fallback;
+  }
+  var rounded = Math.round(value);
+  if (rounded < min) {
+    return min;
+  }
+  if (rounded > max) {
+    return max;
+  }
+  return rounded;
+}
+
+// The glow's two shadow layers at full strength, plus the same layers
+// at zero alpha for the animation to land on.
+//
+// Brightness scales the blur radii as well as the alphas: alpha alone
+// tops out barely above the default 0.9, which is nowhere near enough
+// headroom to make a fast autoregressive run legible.
+//
+// Both endpoints come back together because the "off" string has to
+// carry the peak's radii. Letting the radius differ between them
+// would have the browser interpolate the blur size and re-rasterize a
+// different-sized shadow on every tick, which is the expensive shape
+// this animation has always avoided.
+function overlaysGlowShadow(brightnessPercent) {
+  var scale = clampGlowValue(
+    brightnessPercent,
+    GLOW_BRIGHTNESS_MIN,
+    GLOW_BRIGHTNESS_MAX,
+    GLOW_BRIGHTNESS_DEFAULT
+  ) / 100;
+  var inner = (GLOW_INNER_BLUR_PX * scale).toFixed(1);
+  var outer = (GLOW_OUTER_BLUR_PX * scale).toFixed(1);
+  var innerAlpha = Math.min(GLOW_INNER_ALPHA * scale, 1);
+  var outerAlpha = Math.min(GLOW_OUTER_ALPHA * scale, 1);
+  return {
+    peak:
+      glowShadowLayer(inner, innerAlpha.toFixed(3))
+      + ", " + glowShadowLayer(outer, outerAlpha.toFixed(3)),
+    off:
+      glowShadowLayer(inner, "0")
+      + ", " + glowShadowLayer(outer, "0"),
+  };
+}
+
+function glowShadowLayer(blurPx, alpha) {
+  return (
+    "0 0 " + blurPx + "px rgba(255, 255, 255, " + alpha + ")"
+  );
+}
+
+// Write the glow's custom properties onto `el`, which is where the
+// keyframes read them from. Shared so the Settings page preview and
+// the live canvas cannot drift apart.
+function overlaysApplyGlowVars(el, brightnessPercent, fadeMs) {
+  if (!el) {
+    return;
+  }
+  var shadow = overlaysGlowShadow(brightnessPercent);
+  var duration = clampGlowValue(
+    fadeMs,
+    GLOW_FADE_MS_MIN,
+    GLOW_FADE_MS_MAX,
+    GLOW_FADE_MS_DEFAULT
+  );
+  el.style.setProperty("--token-birth-shadow", shadow.peak);
+  el.style.setProperty("--token-birth-shadow-off", shadow.off);
+  el.style.setProperty(
+    "--token-birth-duration", duration + "ms"
+  );
+}
+
+// Every page that animates anything has to ask this, so it lives
+// here rather than being reimplemented per page. Unprefixed because
+// it is a plain predicate about the environment, not part of the
+// overlay model. Total: an environment without matchMedia is treated
+// as having no preference, which is the same answer a browser that
+// does not know the query gives.
+function prefersReducedMotion() {
+  try {
+    return window.matchMedia(
+      "(prefers-reduced-motion: reduce)"
+    ).matches;
+  } catch (_e) {
+    return false;
+  }
+}
+
+// The glow pair a model class reads, falling back to the diffusion
+// pair for a class that has no entry yet.
+function overlaysGlowFor(settings, modelType) {
+  var keys = GLOW_KEYS[modelType] || GLOW_KEYS.diffusion;
+  return {
+    brightness: settings[keys.brightness],
+    fadeMs: settings[keys.fadeMs],
+  };
 }
 
 // The stored settings, or the defaults when storage is unavailable
@@ -646,10 +871,20 @@ function overlaysReadHighlightTokens() {
 
 // Write it back through the whole blob, since the Settings page saves
 // the same key wholesale and a partial write would drop its fields.
-function overlaysWriteHighlightTokens(on) {
+function overlaysWriteSetting(key, value) {
   var settings = overlaysLoadSettings();
-  settings.highlightTokens = !!on;
+  settings[key] = value;
   persistSet(SETTINGS_KEY, JSON.stringify(settings));
+}
+
+function overlaysWriteHighlightTokens(on) {
+  overlaysWriteSetting("highlightTokens", !!on);
+}
+
+function overlaysWriteTpsMode(mode) {
+  overlaysWriteSetting(
+    "tpsMode", mode === "last" ? "last" : "total"
+  );
 }
 
 // Field-wise equality, driving the Settings page Save/Reset enablement.
@@ -659,6 +894,13 @@ function settingsEqual(a, b) {
     && a.diffusionText === b.diffusionText
     && a.diffusionTextMode === b.diffusionTextMode
     && a.gpuTicker === b.gpuTicker
+    && a.tokenBirthGlow === b.tokenBirthGlow
+    && a.glowBrightnessDiffusion === b.glowBrightnessDiffusion
+    && a.glowFadeMsDiffusion === b.glowFadeMsDiffusion
+    && a.glowBrightnessAutoregressive
+      === b.glowBrightnessAutoregressive
+    && a.glowFadeMsAutoregressive === b.glowFadeMsAutoregressive
+    && a.tpsMode === b.tpsMode
   );
 }
 
@@ -757,38 +999,65 @@ var OVERLAYS_LOAD_COMPLETE_HOLD_MS = 180;
 // the menu's inline bar during a first activation. They looked
 // different only because each had written its own wording.
 //
-// `determinate` false means show the label with a spinner and no bar.
-// That is the honest reading for a phase with no measurable target,
-// not an error: see load_progress.load_target_bytes, which returns a
-// zero total rather than guess at an unfamiliar checkpoint layout.
+// `mode` is one of:
+//   "fill"  a real measurement: draw the track filled to `percent`.
+//   "sweep" a phase with no measurable target: draw the track with an
+//           indeterminate sweep and no number.
+//   "hidden" nothing to show.
+//
+// The sweep is why there are three modes rather than a determinate
+// flag. An activation opens with several seconds of work that cannot
+// be measured at all: a worker process spawning, importing torch and
+// transformers in its own virtualenv, and only then reading the
+// checkpoint headers that give the bar its target. Parking a real bar
+// at 0% through that reads as hung, and showing nothing (which is
+// what the menu used to do) reads as nothing happening. A sweep is
+// honest about having no number while still saying work is underway.
+//
+// A "loading" state with no usable progress is the same situation:
+// see load_progress.load_target_bytes, which returns a zero total
+// rather than guess at an unfamiliar checkpoint layout.
 function overlaysActivationProgress(state, progress) {
-  var out = { determinate: false, percent: 0, label: "Loading" };
   // The worker reaches ready in the same breath as its last progress
   // sample, and the supervisor drops progress on that transition, so
   // the closing 100% never survives the trip to the browser. Naming
   // the completed state here is what lets the bar finish instead of
   // disappearing at whatever the last poll happened to catch.
   if (state === "ready") {
-    return { determinate: true, percent: 100, label: "Ready" };
+    return { mode: "fill", percent: 100, label: "Ready" };
   }
+  // Named rather than folded into "Loading" because it is a different
+  // wait with a different cause, and saying which one is running is
+  // the difference between a slow start and an apparently hung one.
+  if (state === "starting") {
+    return {
+      mode: "sweep", percent: 0, label: "Starting worker",
+    };
+  }
+  var out = { mode: "sweep", percent: 0, label: "Loading" };
   if (state === "downloading") {
     out.label = "Downloading";
-  } else if (state === "loading" && progress) {
+  } else if (state === "loading") {
     // The sampler names the counter it is reporting, so this tracks
     // the weights whether they route through RAM first or stream
-    // straight to the GPU.
-    out.label =
-      progress.stage === "device"
-        ? "Moving to GPU"
-        : "Loading weights";
+    // straight to the GPU. Before the first sample there is no stage
+    // to name yet, and the generic label stands in.
+    if (progress) {
+      out.label =
+        progress.stage === "device"
+          ? "Moving to GPU"
+          : "Loading weights";
+    }
   } else {
-    return out;
+    // idle, error, or a state this build does not know about: no
+    // activation is in flight to draw one way or the other.
+    return { mode: "hidden", percent: 0, label: "Loading" };
   }
   if (!progress || typeof progress.fraction !== "number") {
     return out;
   }
   // A zero total is the "could not measure this checkpoint" signal.
-  // Keep the label, drop the bar.
+  // Keep the label, keep sweeping.
   if (!(progress.total_bytes > 0)) {
     return out;
   }
@@ -798,10 +1067,11 @@ function overlaysActivationProgress(state, progress) {
   } else if (fraction > 1) {
     fraction = 1;
   }
-  out.determinate = true;
+  out.mode = "fill";
   out.percent = Math.round(fraction * 100);
   return out;
 }
+
 
 // ---- Draggable overlay drawer (generator + analytics) ----
 //

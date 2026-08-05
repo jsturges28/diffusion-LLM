@@ -54,6 +54,8 @@ var statusStep =
   document.getElementById("status-step");
 var statusElapsed =
   document.getElementById("status-elapsed");
+var statusTps =
+  document.getElementById("status-tps");
 var statusMessage =
   document.getElementById("status-message");
 var statusStack =
@@ -232,6 +234,10 @@ var reconnectTimer = null;
 var frameHistory = [];
 var frameTokens = [];
 var perFrameElapsed = [];
+// How many positions each frame produced, from the sampler's reveal
+// signal. Kept per frame rather than as a running total so the
+// footer can report the last step as well as the run average.
+var frameRevealed = [];
 var frameCanvasIndex = [];
 var frameMeanConf = [];
 var lastRunParams = null;
@@ -417,26 +423,38 @@ function setLoadingProgress(state, progress) {
     return;
   }
   var view = overlaysActivationProgress(state, progress);
-  if (view.determinate) {
-    container.hidden = false;
+  var sweeping = view.mode === "sweep";
+  container.hidden = view.mode === "hidden";
+  fill.classList.toggle("is-sweep", sweeping);
+  // While sweeping, the width belongs to the class: the sweep is a
+  // short bar sliding across the track, so an inline width would
+  // fight it. Handing back on the way out is also what makes the
+  // switch to a real measurement one eased move rather than a jump.
+  if (sweeping) {
+    fill.style.removeProperty("width");
+  } else {
     fill.style.width = view.percent + "%";
-    detail.hidden = false;
-    detail.textContent = view.label + ", " + view.percent + "%";
-    return;
   }
-  container.hidden = true;
-  // The label still says which phase is running, which is the whole
-  // difference between a slow load and an apparently hung one.
-  detail.hidden = false;
-  detail.textContent = view.label + "\u2026";
+  // The label always says which phase is running, which is the whole
+  // difference between a slow load and an apparently hung one. The
+  // percentage only joins it once there is a real one to show, and
+  // both go away with the track, since "hidden" means no activation
+  // is in flight and so there is no phase to name.
+  detail.hidden = view.mode === "hidden";
+  detail.textContent = sweeping
+    ? view.label + "\u2026"
+    : view.label + ", " + view.percent + "%";
 }
 
 // Fill the bar and let it be seen full before `done` navigates away.
 //
-// Whether a bar was ever on screen is read off the container rather
-// than tracked alongside it, so there is one source of truth. A
-// checkpoint whose size could not be worked out ran without a bar,
-// and must not have one appear for a fifth of a second at the end.
+// Every activation now ends here, because the track is on screen for
+// all of one: it sweeps through the phases that cannot be measured
+// and fills through the ones that can. That is a change from when an
+// unmeasurable checkpoint ran with no bar and this had to avoid
+// conjuring one for a fifth of a second at the end. A sweep resolving
+// into a full bar is the better close, so the `hidden` check below
+// now only guards against the overlay never having been raised.
 function finishLoadingProgress(done) {
   var container = document.getElementById(
     "load-progress-container"
@@ -1318,10 +1336,12 @@ function switchModel(id, device) {
   var name = models[id] ? models[id].display_name : id;
   setLoadingText("Loading " + name + "\u2026");
   // pollSwitch drives the bar from here on; stop the boot poller so
-  // the two are never writing the same overlay, and clear whatever a
-  // previous failed switch left in the track.
+  // the two are never writing the same overlay. Seeding with the same
+  // state the first poll will report keeps the opening frame from
+  // saying "Loading" for a poll interval before correcting itself to
+  // "Starting worker".
   stopLoadProgressPoll();
-  setLoadingProgress("loading", null);
+  setLoadingProgress("starting", null);
   loadingOverlay.classList.remove("hidden");
   setModelSelectDisabled(true);
 
@@ -1387,6 +1407,12 @@ function switchFailed(err) {
   setModelSelectDisabled(false);
   setModelSelectValue(activeModelId);
   stopLoadProgressPoll();
+  // Tear the track down rather than leaving it to the next switch to
+  // re-sync. The overlay hides by going transparent, not by leaving
+  // the layout, so a sweep left on it would keep animating unseen for
+  // the rest of the session. "idle" is the reducer's way of saying no
+  // activation is in flight, which is exactly the state after this.
+  setLoadingProgress("idle", null);
   loadingOverlay.classList.add("hidden");
   statusMessage.textContent =
     "Model switch failed: " + err.message;
@@ -1529,6 +1555,9 @@ function handleFrame(data) {
       +(data.elapsed + resumeElapsedOffset).toFixed(2)
     );
   }
+  frameRevealed.push(
+    data.revealed ? data.revealed.length : 0
+  );
   frameCanvasIndex.push(
     typeof data.canvas_index === "number"
       ? data.canvas_index
@@ -1540,7 +1569,13 @@ function handleFrame(data) {
       : null
   );
 
-  renderFrame(data.text);
+  // The token view needs per-position metadata; a model that does not
+  // send it still gets the character renderer.
+  if (data.tokens) {
+    renderLiveFrame(data.tokens, data.revealed);
+  } else {
+    renderFrame(data.text);
+  }
 
   var prefix = isResuming ? "Resuming " : "Step ";
   var displayStep;
@@ -1558,11 +1593,80 @@ function handleFrame(data) {
       + ", Canvas " + (canvas + 1);
   }
   statusStep.textContent = displayStep;
+  updateRunRateFooter();
+}
 
-  if (typeof data.elapsed === "number") {
-    statusElapsed.textContent =
-      "Elapsed: " + data.elapsed.toFixed(1) + "s";
+// ---- Elapsed and tokens per second ----
+
+// Both readouts come off perFrameElapsed rather than off the frame in
+// hand. data.elapsed is segment-local: after an edit the worker times
+// the branch from zero, so reading it directly made the footer's
+// Elapsed jump backwards mid-run. perFrameElapsed is already carrying
+// the pre-edit total (see handleFrame), so its tail is the real
+// wall-clock time of everything generated so far.
+function updateRunRateFooter() {
+  var frames = perFrameElapsed.length;
+  if (frames === 0) {
+    return;
   }
+  var seconds = perFrameElapsed[frames - 1];
+  statusElapsed.textContent =
+    "Elapsed: " + seconds.toFixed(1) + "s";
+  renderTpsFooter(currentTokensPerSecond());
+}
+
+// null whenever the rate would be meaningless rather than merely
+// zero: no tokens yet, or a window too short to have been timed. The
+// first frame after an edit is the second case, since it lands at the
+// pre-edit total and so shares a timestamp with the frame before it.
+function currentTokensPerSecond() {
+  var frames = perFrameElapsed.length;
+  if (frames === 0) {
+    return null;
+  }
+  if (appSettings.tpsMode === "last") {
+    var stepSeconds = frames > 1
+      ? perFrameElapsed[frames - 1] - perFrameElapsed[frames - 2]
+      : perFrameElapsed[0];
+    if (!(stepSeconds > 0)) {
+      return null;
+    }
+    return (frameRevealed[frames - 1] || 0) / stepSeconds;
+  }
+  var total = perFrameElapsed[frames - 1];
+  if (!(total > 0)) {
+    return null;
+  }
+  var produced = 0;
+  for (var i = 0; i < frames; i++) {
+    produced += frameRevealed[i] || 0;
+  }
+  return produced / total;
+}
+
+function renderTpsFooter(rate) {
+  var label = appSettings.tpsMode === "last"
+    ? "Last step"
+    : "Run average";
+  statusTps.title = "Tokens per second (" + label.toLowerCase()
+    + "). Click to switch.";
+  if (rate === null) {
+    statusTps.textContent = "T/s: -";
+    return;
+  }
+  // One decimal below 100, none above: past that the fraction is
+  // noise and the extra digit only makes the footer jitter.
+  var shown = rate < 100
+    ? rate.toFixed(1)
+    : String(Math.round(rate));
+  statusTps.textContent = "T/s: " + shown;
+}
+
+function toggleTpsMode() {
+  appSettings.tpsMode =
+    appSettings.tpsMode === "last" ? "total" : "last";
+  overlaysWriteTpsMode(appSettings.tpsMode);
+  renderTpsFooter(currentTokensPerSecond());
 }
 
 function handleDone(data) {
@@ -1637,8 +1741,164 @@ function handleError(data) {
 
 // ---- Rendering ----
 
+// Live rendering keeps one span per token position and updates those
+// spans in place. The character-by-character renderer below it is
+// still the fallback, but it rebuilt the whole output every step: at
+// LLaDA's default length that is several hundred inline boxes torn
+// down and laid out again per frame, where a token view needs a
+// constant ~160 and touches only the ones that actually changed.
+var liveTokenSpans = [];
+
+// No hooks, on purpose. The streaming view draws plain masked and
+// resolved tokens with no overlay tint, no confidence grading, and no
+// hover tooltip, matching the character renderer exactly. Any of
+// those would be a visual change smuggled in with a refactor.
+var LIVE_TOKEN_OPTIONS = {};
+
+function renderLiveFrame(tokens, revealed) {
+  outputArea.classList.remove("token-layers");
+  outputArea.classList.add("live-tokens");
+  // Reuse only while our spans are still the ones on the page. Any
+  // other render path wipes the container, which detaches them, so
+  // reading the parent back is what keeps this self-healing instead
+  // of depending on every one of those paths to tell us.
+  var reusable = liveTokenSpans.length === tokens.length
+    && liveTokenSpans.length > 0
+    && liveTokenSpans[0].parentNode === outputArea;
+  if (reusable) {
+    for (var i = 0; i < tokens.length; i++) {
+      overlaysSyncTokenSpan(
+        liveTokenSpans[i], i, tokens[i], MASK_CHAR,
+        LIVE_TOKEN_OPTIONS
+      );
+    }
+  } else {
+    rebuildLiveTokens(tokens);
+  }
+  markTokenBirths(revealed);
+}
+
+function rebuildLiveTokens(tokens) {
+  var fragment = document.createDocumentFragment();
+  liveTokenSpans = new Array(tokens.length);
+  for (var i = 0; i < tokens.length; i++) {
+    var span = overlaysBuildTokenSpan(
+      i, tokens[i], MASK_CHAR, LIVE_TOKEN_OPTIONS
+    );
+    liveTokenSpans[i] = span;
+    fragment.appendChild(span);
+  }
+  // The spans the queue was tracking are about to be detached, so
+  // their glows end here whether or not they had finished.
+  tokenBirthQueue = [];
+  outputArea.textContent = "";
+  outputArea.appendChild(fragment);
+}
+
+// ---- Birth glow ----
+
+// A token flashes once, at apex, the instant it is denoised. Capped
+// because a low-step LLaDA run reveals a couple of dozen positions in
+// one frame, and each is a blurred repaint region on a renderer with
+// a documented history of struggling with exactly that. Past the cap
+// the oldest flash is cut short, which is invisible in practice: it
+// is already most of the way decayed.
+//
+// The cap has to follow the fade rather than being fixed. How many
+// tokens glow at once is roughly the generation rate times the fade,
+// so a long fade at autoregressive speeds would otherwise have the
+// queue, not the timer, decide when a flash ends: the trail would
+// stop growing exactly when the user lengthened it, and its tail
+// would look cut rather than faded.
+//
+// The rate ceiling is picked so the 500ms default lands on 48, which
+// is what this was before it became a function of the fade.
+var TOKEN_BIRTH_RATE_CEILING = 96;
+var TOKEN_BIRTH_CONCURRENT_MIN = 48;
+var TOKEN_BIRTH_CONCURRENT_MAX = 192;
+var TOKEN_BIRTH_ANIMATION = "token-birth";
+var tokenBirthQueue = [];
+var tokenBirthMaxConcurrent = TOKEN_BIRTH_CONCURRENT_MIN;
+
+// Set the live canvas' glow to the active model class' preferences,
+// and size the concurrency cap to the fade it asks for. Called once
+// per page load: a model switch ends in location.reload(), so the
+// active model cannot change under a live canvas.
+function applyTokenBirthGlow() {
+  var modelType =
+    activeModel
+    && activeModel.capabilities
+    && activeModel.capabilities.model_type;
+  var glow = overlaysGlowFor(appSettings, modelType);
+  overlaysApplyGlowVars(
+    outputArea, glow.brightness, glow.fadeMs
+  );
+  tokenBirthMaxConcurrent = tokenBirthConcurrentCap(glow.fadeMs);
+}
+
+function tokenBirthConcurrentCap(fadeMs) {
+  var expected = Math.round(
+    (fadeMs / 1000) * TOKEN_BIRTH_RATE_CEILING
+  );
+  if (expected < TOKEN_BIRTH_CONCURRENT_MIN) {
+    return TOKEN_BIRTH_CONCURRENT_MIN;
+  }
+  if (expected > TOKEN_BIRTH_CONCURRENT_MAX) {
+    return TOKEN_BIRTH_CONCURRENT_MAX;
+  }
+  return expected;
+}
+
+function markTokenBirths(revealed) {
+  if (!revealed || revealed.length === 0) {
+    return;
+  }
+  if (!appSettings.tokenBirthGlow) {
+    return;
+  }
+  if (prefersReducedMotion()) {
+    return;
+  }
+  for (var i = 0; i < revealed.length; i++) {
+    var span = liveTokenSpans[revealed[i]];
+    if (span) {
+      startTokenBirth(span);
+    }
+  }
+}
+
+function startTokenBirth(span) {
+  if (span.hasAttribute("data-born")) {
+    // Already mid-flash. Restarting the animation would need a
+    // forced reflow per span, which is the cost this whole path
+    // exists to avoid, and a token that is already glowing looks
+    // the same either way.
+    return;
+  }
+  span.setAttribute("data-born", "");
+  tokenBirthQueue.push(span);
+  while (tokenBirthQueue.length > tokenBirthMaxConcurrent) {
+    tokenBirthQueue.shift().removeAttribute("data-born");
+  }
+}
+
+// Delegated: animationend bubbles, so one listener on the container
+// serves every span and none of them needs its own.
+function onTokenBirthEnd(e) {
+  if (e.animationName !== TOKEN_BIRTH_ANIMATION) {
+    return;
+  }
+  var span = e.target;
+  span.removeAttribute("data-born");
+  var at = tokenBirthQueue.indexOf(span);
+  if (at !== -1) {
+    tokenBirthQueue.splice(at, 1);
+  }
+}
+
 function renderFrame(text) {
   outputArea.classList.remove("token-layers");
+  outputArea.classList.remove("live-tokens");
   var fragment =
     document.createDocumentFragment();
   for (var i = 0; i < text.length; i++) {
@@ -1664,6 +1924,7 @@ function renderFrame(text) {
 }
 
 function renderFinalText(text) {
+  outputArea.classList.remove("live-tokens");
   outputArea.textContent = "";
   var span = document.createElement("span");
   span.className = "char-resolved";
@@ -2971,6 +3232,9 @@ function runBlendActive() {
 }
 
 function renderFrameWithTokens(frameIndex) {
+  // Leaving the live view: the mask glow this class restores is for
+  // streaming only, and every branch below owns the container now.
+  outputArea.classList.remove("live-tokens");
   var tokens = frameTokens[frameIndex];
   if (!tokens) {
     renderFrame(frameHistory[frameIndex]);
@@ -3042,6 +3306,7 @@ function buildCrossfadedLayers(frameIndex, editedTokens) {
 
 function renderTargetPlaceholder(frameIndex) {
   outputArea.classList.remove("token-layers");
+  outputArea.classList.remove("live-tokens");
   outputArea.textContent = "";
 
   var editedFrames = [];
@@ -3607,6 +3872,7 @@ function captureEditSnapshot() {
     frameCanvasIndex: frameCanvasIndex.slice(),
     frameMeanConf: frameMeanConf.slice(),
     perFrameElapsed: perFrameElapsed.slice(),
+    frameRevealed: frameRevealed.slice(),
     resumeElapsedOffset: resumeElapsedOffset,
     positionAlts: positionAlts.slice(),
     finalText: lastFinalText,
@@ -3625,6 +3891,7 @@ function restoreEditSnapshot() {
   frameCanvasIndex = preEditSnapshot.frameCanvasIndex.slice();
   frameMeanConf = preEditSnapshot.frameMeanConf.slice();
   perFrameElapsed = preEditSnapshot.perFrameElapsed.slice();
+  frameRevealed = preEditSnapshot.frameRevealed.slice();
   resumeElapsedOffset = preEditSnapshot.resumeElapsedOffset;
   positionAlts = preEditSnapshot.positionAlts.slice();
   lastFinalText = preEditSnapshot.finalText;
@@ -3653,6 +3920,7 @@ function truncateRunArraysAt(offset) {
   frameCanvasIndex.length = offset;
   frameMeanConf.length = offset;
   perFrameElapsed.length = offset;
+  frameRevealed.length = offset;
 }
 
 function unlockScrubberNav() {
@@ -4207,17 +4475,9 @@ function setGenerating(active) {
 // Block glyphs for the optional "diffusion-style text" reveal.
 var DENOISE_GLYPHS = "\u2591\u2592\u2593";
 
-function prefersReducedMotion() {
-  try {
-    return window.matchMedia(
-      "(prefers-reduced-motion: reduce)"
-    ).matches;
-  } catch (_e) {
-    return false;
-  }
-}
-
 // True when the diffusion-text effect should actually animate.
+// prefersReducedMotion comes from overlays.js, which every page
+// loads ahead of its own script.
 function diffusionEffectActive() {
   return !!appSettings.diffusionText && !prefersReducedMotion();
 }
@@ -4596,6 +4856,7 @@ function resetStatus() {
     "Step -/-";
   statusElapsed.textContent =
     "Elapsed: -";
+  renderTpsFooter(null);
   statusMessage.textContent = "";
   statusMessage.style.color = "";
 }
@@ -4611,6 +4872,7 @@ function resetRunState() {
   frameHistory = [];
   frameTokens = [];
   perFrameElapsed = [];
+  frameRevealed = [];
   frameCanvasIndex = [];
   frameMeanConf = [];
   invalidateRunMemos();
@@ -5390,6 +5652,20 @@ btnExitEdit.addEventListener(
   "click", exitRemaskMode
 );
 
+outputArea.addEventListener(
+  "animationend", onTokenBirthEnd
+);
+
+statusTps.addEventListener("click", toggleTpsMode);
+statusTps.addEventListener("keydown", function (e) {
+  // It is exposed as a button, so it owes the keyboard the two keys
+  // a real button answers to.
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    toggleTpsMode();
+  }
+});
+
 // Token click delegation on the output area.
 outputArea.addEventListener(
   "click",
@@ -5690,6 +5966,10 @@ function saveSessionState() {
     prompt: promptInput.value,
     frameHistory: frameHistory,
     perFrameElapsed: perFrameElapsed,
+    // Carried so the footer can still answer a mode switch after a
+    // round trip. Restoring only the rendered text would leave the
+    // first click with nothing to recompute from.
+    frameRevealed: frameRevealed,
     finalText: lastFinalText,
     params: lastRunParams,
     thinking:
@@ -5784,6 +6064,7 @@ function restoreSessionState() {
   frameMeanConf = s.frameMeanConf || [];
   invalidateRunMemos();
   perFrameElapsed = s.perFrameElapsed || [];
+  frameRevealed = s.frameRevealed || [];
   lastFinalText = s.finalText || "";
   lastRunParams = s.params || null;
   remaskEdits = s.remaskEdits || [];
@@ -5825,6 +6106,10 @@ function restoreSessionState() {
   if (s.statusElapsed) {
     statusElapsed.textContent = s.statusElapsed;
   }
+  // Recomputed rather than replayed from stored text, so it honors
+  // the mode in effect now: the setting is global and may have been
+  // switched on another page since this run finished.
+  renderTpsFooter(currentTokensPerSecond());
   if (s.statusMessage) {
     statusMessage.textContent = s.statusMessage;
   }
@@ -6080,6 +6365,11 @@ function boot() {
         restoreParamState();
         updateParamDefaultsButton();
       }
+      // Needs the active model, since the glow is tuned per model
+      // class. Outside the guard above because it falls back to the
+      // diffusion pair, which is the right reading when the active
+      // model could not be identified at all.
+      applyTokenBirthGlow();
       setMaskChar();
       var restored = false;
       try {
