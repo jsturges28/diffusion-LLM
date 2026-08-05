@@ -537,6 +537,15 @@ html, body {
   margin-bottom: 0;
 }
 
+/* Keeps a chart's pager arrows tight against its title instead of
+   letting the header row's space-between push them to the far side,
+   where they would read as belonging to the zoom controls. */
+.chart-title-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .zoom-controls {
   display: flex;
   gap: 4px;
@@ -883,11 +892,19 @@ html, body {
    the same cyan in both places; the accent on Edited is scoped here
    because the generator's two-slider row distinguishes its ends by
    slider color instead, which a single slider cannot do. */
+/* Here the crossfade rides on the Token overlay heading row rather
+   than sitting on its own line as it does on the generator, so it
+   sheds the separator style.css gives it. Zeroed rather than removed
+   at the source: the generator still stacks the row and still wants
+   the rule above it. */
 #run-blend-row {
   display: flex;
   align-items: center;
   gap: 10px;
   flex: 0 0 auto;
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
   font-size: 10px;
   letter-spacing: 0.05em;
   color: var(--text-secondary);

@@ -467,6 +467,7 @@ var burnThroughPlugin = {
 var tooltipEnabled = {
   convergence: true,
   timing: true,
+  tps: true,
   confidence: true,
   entropy: true,
 };
@@ -482,6 +483,9 @@ var gpuName = null;
 
 var chartConvergence = null;
 var chartTiming = null;
+// Shares the Timing slot with chartTiming; timingPage says which of
+// the two is on screen.
+var chartTps = null;
 var chartConfidence = null;
 // Per-position, so it is built from the frames payload in
 // loadRunOverlays rather than the metrics payload in loadRunCharts.
@@ -501,6 +505,10 @@ var COMPARE_COLORS = [
 var TIMING_COLOR = "#00aaff";
 var TIMING_RESUMED = "#66ccff";
 var CONFIDENCE_COLOR = "#ffb400";
+// Tokens per second shares Timing's slot and is derived from the
+// same series, so it keeps the same hue rather than claiming a new
+// one for what is the same measurement read a second way.
+var TPS_COLOR = TIMING_COLOR;
 
 // The pre-edit run's line on the timing and confidence charts.
 // Neutral grey rather than a second hue: timing already spends blue
@@ -1044,20 +1052,40 @@ function showDetail(runId) {
 
   html += processorMetaRow(run);
 
-  if (run.elapsed_seconds !== undefined
-    && run.elapsed_seconds !== null) {
-    html += '<div class="meta-row">'
-      + '<span class="meta-label">Elapsed:</span> '
-      + '<span class="meta-value">'
-      + Number(run.elapsed_seconds).toFixed(2)
-      + 's</span></div>';
-  }
+  html += elapsedMetaRows(run);
 
   detailMeta.innerHTML = html;
 
   renderTable();
   loadRunCharts(runId, run);
   loadRunOverlays(runId, run);
+}
+
+// An edited run has two totals worth reading: how long the run it
+// branched from took end to end, and how long this one took, meaning
+// the prefix it inherited up to the edit plus everything generated
+// after. Reporting only the combined figure left no way to see
+// whether an intervention cost time or saved it, which is the whole
+// question an edit raises.
+function elapsedMetaRows(run) {
+  var edited = run.elapsed_seconds;
+  if (edited === undefined || edited === null) {
+    return "";
+  }
+  var original = run.original_elapsed_seconds;
+  if (original === undefined || original === null) {
+    return elapsedMetaRow("Elapsed", edited);
+  }
+  return elapsedMetaRow("Elapsed (original)", original)
+    + elapsedMetaRow("Elapsed (edited)", edited);
+}
+
+function elapsedMetaRow(label, seconds) {
+  return '<div class="meta-row">'
+    + '<span class="meta-label">' + label + ':</span> '
+    + '<span class="meta-value">'
+    + Number(seconds).toFixed(2)
+    + 's</span></div>';
 }
 
 // Which processor produced the run, on its own summary line. The
@@ -1394,6 +1422,9 @@ function chartSeriesAlpha(chart, index) {
   if (id === "chart-timing") {
     return seriesBlendAlpha("timing", index);
   }
+  if (id === "chart-tps") {
+    return seriesBlendAlpha("tps", index);
+  }
   if (id === "chart-confidence") {
     return seriesBlendAlpha("confidence", index);
   }
@@ -1421,6 +1452,9 @@ function isEditedDataset(ctx) {
 function updateLineCharts() {
   if (chartTiming) {
     chartTiming.update("none");
+  }
+  if (chartTps) {
+    chartTps.update("none");
   }
   if (chartConfidence) {
     chartConfidence.update("none");
@@ -1511,6 +1545,7 @@ function setEyeSlash(btn, show) {
 function resetTooltipToggles() {
   tooltipEnabled.convergence = true;
   tooltipEnabled.timing = true;
+  tooltipEnabled.tps = true;
   tooltipEnabled.confidence = true;
   tooltipEnabled.entropy = true;
   var btns = document.querySelectorAll(
@@ -1529,6 +1564,7 @@ function resetTooltipToggles() {
 // pin cannot be turned off.
 var linePinState = {
   timing: { original: true, edited: true },
+  tps: { original: true, edited: true },
   confidence: { original: true, edited: true },
 };
 
@@ -1584,6 +1620,88 @@ function updateComparePins(name, hasOriginal) {
   refreshComparePins(name);
 }
 
+// ---- The Timing slot's two pages ----
+//
+// Elapsed time and tokens per second are the same measurement read
+// two ways, so they share one section's worth of vertical space and a
+// pager rather than each claiming a chart slot of its own.
+var timingPage = "elapsed";
+// Which pages the open run can actually draw. A run saved before a
+// signal existed may have one and not the other, and flipping to a
+// blank panel would read as a bug rather than as an absence.
+var timingPageReady = { elapsed: false, tps: false };
+
+function setTimingPage(page) {
+  if (page !== "elapsed" && page !== "tps") {
+    return;
+  }
+  timingPage = page;
+  applyTimingPage();
+}
+
+function timingPageActive() {
+  if (timingPageReady[timingPage]) {
+    return timingPage;
+  }
+  if (timingPageReady.elapsed) {
+    return "elapsed";
+  }
+  if (timingPageReady.tps) {
+    return "tps";
+  }
+  return null;
+}
+
+function applyTimingPage() {
+  var active = timingPageActive();
+  var tpsSection = document.getElementById("tps-section");
+  timingSection.hidden = active !== "elapsed";
+  if (tpsSection) {
+    tpsSection.hidden = active !== "tps";
+  }
+  refreshTimingPagers(active);
+  // Both charts were built while both sections were visible; hiding
+  // one changes the height the survivor has to fill.
+  var chart = active === "tps" ? chartTps : chartTiming;
+  if (chart) {
+    chart.resize();
+  }
+}
+
+function refreshTimingPagers(active) {
+  var both =
+    timingPageReady.elapsed && timingPageReady.tps;
+  var pagers = document.querySelectorAll(
+    ".chart-title-group .alt-pager"
+  );
+  for (var i = 0; i < pagers.length; i++) {
+    pagers[i].hidden = !both;
+  }
+  var buttons = document.querySelectorAll(
+    "[data-timing-page]"
+  );
+  for (var j = 0; j < buttons.length; j++) {
+    buttons[j].disabled =
+      buttons[j].getAttribute("data-timing-page") === active;
+  }
+}
+
+function wireTimingPager() {
+  var buttons = document.querySelectorAll(
+    "[data-timing-page]"
+  );
+  for (var i = 0; i < buttons.length; i++) {
+    buttons[i].addEventListener(
+      "click",
+      function (event) {
+        setTimingPage(
+          event.currentTarget.getAttribute("data-timing-page")
+        );
+      }
+    );
+  }
+}
+
 // Autoregressive runs have no masked canvas, so the convergence chart
 // (percent resolved per frame) would flatline at 100%; it is hidden
 // for them while timing and confidence stay, and Entropy by Position
@@ -1614,7 +1732,10 @@ function loadRunCharts(runId, run) {
       chartConvergence
     );
     chartTiming = destroyChart(chartTiming);
+    chartTps = destroyChart(chartTps);
     chartConfidence = destroyChart(chartConfidence);
+    timingPageReady.elapsed = false;
+    timingPageReady.tps = false;
 
     var remaskEdits = data.remask_edits || [];
     var remaskSet = buildRemaskFrameSet(
@@ -1635,6 +1756,10 @@ function loadRunCharts(runId, run) {
       renderConvergenceChart(data, remaskSet);
     }
     renderTimingChart(data, remaskSet);
+    renderTpsChart(data, remaskSet, runIsAutoregressive(run));
+    // Last, so both charts have been sized while visible and the
+    // slot settles on one page in the same paint.
+    applyTimingPage();
     renderConfidenceChart(data);
     // The fourth chart, Entropy by Position, is built in
     // loadRunOverlays instead: it needs per-token records from the
@@ -2697,7 +2822,12 @@ function renderTimingChart(data, remaskSet) {
     timingSection.hidden = true;
     return;
   }
+  // Shown before the chart is constructed, and possibly hidden again
+  // by applyTimingPage once its sibling has been built too: Chart.js
+  // sizes itself off the canvas it is handed, and a canvas in a
+  // hidden section measures zero.
   timingSection.hidden = false;
+  timingPageReady.elapsed = true;
 
   var canvas = document.getElementById(
     "chart-timing"
@@ -2742,6 +2872,216 @@ function renderTimingChart(data, remaskSet) {
   );
   chartInstances.timing = chartTiming;
   updateComparePins("timing", !!original);
+}
+
+// ---- Tokens per second ----
+//
+// The running average, not the instantaneous rate: tokens produced so
+// far over seconds spent so far. It shares the Timing slot because it
+// is the same two numbers read as a ratio, and reading it as a
+// running total keeps it level with the elapsed line beside it. A
+// per-step rate on a diffusion run is mostly the sampler's reveal
+// schedule sawtoothing, which says more about the schedule than about
+// throughput.
+//
+// Nothing new is stored for this. Every run already has its frame
+// timings, and mask counts fall out of the convergence series the
+// endpoint computes from history.txt, so it works on runs saved long
+// before the metric existed.
+function renderTpsChart(data, remaskSet, isAutoregressive) {
+  var section = document.getElementById("tps-section");
+  var elapsed = tpsElapsedValues(data, remaskSet);
+  var produced = tokensProducedSeries(
+    data, elapsed.length, isAutoregressive
+  );
+  if (!elapsed.length || !produced) {
+    if (section) { section.hidden = true; }
+    return;
+  }
+  // See renderTimingChart on why this is shown before building.
+  if (section) { section.hidden = false; }
+  timingPageReady.tps = true;
+
+  var values = tokenRateSeries(produced, elapsed);
+  var original = tpsOriginalValues(data, isAutoregressive);
+  var labels = compareFrameLabels(values, original);
+
+  // Original first, so it draws beneath the branch it produced and
+  // so dataset index 0 is the one the pins and crossfade fade out.
+  var datasets = [];
+  if (original) {
+    datasets.push(compareOriginalDataset(original));
+  }
+  datasets.push(tpsEditedDataset(values, !!original));
+
+  chartTps = new Chart(
+    document.getElementById("chart-tps").getContext("2d"),
+    {
+      type: "line",
+      data: { labels: labels, datasets: datasets },
+      options: tpsOptions(remaskSet),
+      plugins: [
+        canvasBoundaryPlugin(data.canvas_boundaries || []),
+        burnThroughPlugin,
+        seriesBlendPlugin("tps"),
+      ],
+    }
+  );
+  chartInstances.tps = chartTps;
+  updateComparePins("tps", !!original);
+}
+
+// The same stitched cumulative series the elapsed chart draws, so the
+// two charts in this slot cannot disagree about when a frame landed.
+function tpsElapsedValues(data, remaskSet) {
+  var raw = data.per_frame_elapsed;
+  if (!raw || raw.length === 0) {
+    return [];
+  }
+  return buildCumulativeTiming(raw, remaskSet).values;
+}
+
+// Tokens resolved by frame i, counted from the start of the run.
+//
+// Autoregressive runs emit exactly one token per frame, so the frame
+// index is the count. Diffusion runs get it from the convergence
+// series: a masked token renders as exactly one mask glyph, so
+// mask_count is a token count, and frame 0 (all masked) gives the
+// canvas length to subtract from.
+//
+// Returns null when the run carries nothing to count from, which
+// hides the chart rather than drawing a flat zero.
+function tokensProducedSeries(data, frames, isAutoregressive) {
+  if (frames === 0) {
+    return null;
+  }
+  var produced = [];
+  var i;
+  if (isAutoregressive) {
+    for (i = 0; i < frames; i++) {
+      produced.push(i + 1);
+    }
+    return produced;
+  }
+  var convergence = data.convergence;
+  if (!convergence || convergence.length === 0) {
+    return null;
+  }
+  var start = convergence[0].mask_count;
+  for (i = 0; i < frames; i++) {
+    var point = convergence[i];
+    var masked = point ? point.mask_count : 0;
+    // Clamped because DiffusionGemma's mask count can rise between
+    // drafts, which would otherwise read as negative production.
+    produced.push(Math.max(0, start - masked));
+  }
+  return produced;
+}
+
+function tokenRateSeries(produced, elapsed) {
+  var values = [];
+  for (var i = 0; i < produced.length; i++) {
+    var seconds = elapsed[i];
+    // A frame that shares a timestamp with the run's start has no
+    // window to average over. null rather than zero, so the line
+    // skips the point instead of diving to the axis.
+    if (!(seconds > 0)) {
+      values.push(null);
+    } else {
+      values.push(+(produced[i] / seconds).toFixed(2));
+    }
+  }
+  return values;
+}
+
+// Only autoregressive runs can show the pre-edit run here. A saved
+// run keeps the original's frame timings but not its canvas history,
+// and a rate needs both; an autoregressive run needs no history,
+// because one token per frame is structural. So a diffusion
+// comparison would have to invent the numerator.
+function tpsOriginalValues(data, isAutoregressive) {
+  if (!isAutoregressive) {
+    return null;
+  }
+  var raw = data.original_per_frame_elapsed;
+  if (!raw || raw.length === 0) {
+    return null;
+  }
+  var elapsed = buildCumulativeTiming(raw, {}).values;
+  var produced = [];
+  for (var i = 0; i < elapsed.length; i++) {
+    produced.push(i + 1);
+  }
+  return tokenRateSeries(produced, elapsed);
+}
+
+// See timingEditedDataset for what ``paired`` switches and why.
+function tpsEditedDataset(values, paired) {
+  return {
+    label: paired ? "Edited" : "Tokens/s",
+    data: values,
+    borderColor: TPS_COLOR,
+    backgroundColor: withAlpha(TPS_COLOR, 0.08),
+    fill: paired
+      ? compareBandFill("tps", TPS_COLOR)
+      : true,
+    borderDash: paired ? COMPARE_EDITED_DASH : [],
+    tension: 0.2,
+    pointRadius: 0,
+    borderWidth: 1.5,
+    spanGaps: true,
+  };
+}
+
+function tpsOptions(remaskSet) {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    layout: chartGutterLayout(),
+    interaction: {
+      mode: "index",
+      intersect: false,
+    },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        position: "smart",
+        caretSize: 0,
+        xAlign: "left",
+        yAlign: "top",
+        filter: function (item) {
+          return seriesRowVisible("tps", item);
+        },
+        callbacks: {
+          title: tooltipTitle,
+          labelColor: lineLabelColor,
+          label: function (ctx) {
+            return ctx.dataset.label + ": "
+              + ctx.formattedValue + " T/s";
+          },
+          afterLabel: function (ctx) {
+            if (!isEditedDataset(ctx)) { return ""; }
+            var pos = remaskSet[ctx.dataIndex];
+            if (!pos) { return ""; }
+            return "Resume point ("
+              + pos.length
+              + " tokens remasked)";
+          },
+        },
+      },
+      zoom: zoomPluginOptions(),
+    },
+    scales: {
+      x: {
+        title: { display: true, text: "Frame" },
+        ticks: { maxTicksLimit: 12 },
+      },
+      y: {
+        title: { display: true, text: "Tokens/second" },
+        beginAtZero: true,
+      },
+    },
+  };
 }
 
 // Cumulative elapsed for the pre-edit run, or null when this run
@@ -3978,6 +4318,7 @@ modalDelete.addEventListener("click", function (e) {
 
 wireOverlayDiffControls();
 wireOverlayScrubber();
+wireTimingPager();
 
 if (overlayHighlightCheckbox) {
   overlayHighlightCheckbox.addEventListener(

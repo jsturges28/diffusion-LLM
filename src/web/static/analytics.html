@@ -239,10 +239,26 @@
                 </div>
               </div>
 
+              <!-- Timing is two charts in one slot: elapsed time and
+                   the rate that falls out of it. The pager beside
+                   each heading swaps which one is shown, so the pair
+                   costs the page one section's height. -->
               <div class="chart-section" id="timing-section"
                 hidden>
                 <div class="chart-header-row">
-                  <h3>Timing</h3>
+                  <div class="chart-title-group">
+                    <h3>Elapsed Time</h3>
+                    <span class="alt-pager">
+                      <button type="button" class="alt-pager-btn"
+                        data-timing-page="elapsed" disabled
+                        title="Elapsed time"
+                        aria-label="Elapsed time">&#8249;</button>
+                      <button type="button" class="alt-pager-btn"
+                        data-timing-page="tps"
+                        title="Tokens per second"
+                        aria-label="Tokens per second">&#8250;</button>
+                    </span>
+                  </div>
                   <div class="zoom-controls">
                     <button class="zoom-btn tooltip-toggle-btn" data-chart="timing"
                       title="Toggle tooltip box" aria-label="Toggle tooltip box">
@@ -273,6 +289,58 @@
                     <button class="zoom-btn" data-chart="timing"
                       data-action="out" title="Zoom out">&minus;</button>
                     <button class="zoom-btn" data-chart="timing"
+                      data-action="reset" title="Reset zoom">&#8634;</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="chart-section" id="tps-section"
+                hidden>
+                <div class="chart-header-row">
+                  <div class="chart-title-group">
+                    <h3>Tokens per Second</h3>
+                    <span class="alt-pager">
+                      <button type="button" class="alt-pager-btn"
+                        data-timing-page="elapsed"
+                        title="Elapsed time"
+                        aria-label="Elapsed time">&#8249;</button>
+                      <button type="button" class="alt-pager-btn"
+                        data-timing-page="tps" disabled
+                        title="Tokens per second"
+                        aria-label="Tokens per second">&#8250;</button>
+                    </span>
+                  </div>
+                  <div class="zoom-controls">
+                    <button class="zoom-btn tooltip-toggle-btn" data-chart="tps"
+                      title="Toggle tooltip box" aria-label="Toggle tooltip box">
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" /><circle cx="12" cy="12" r="3" /><line class="eye-slash" x1="3" y1="3" x2="21" y2="21" /></svg>
+                    </button>
+                    <!-- Only ever shown for autoregressive runs; a
+                         diffusion run's saved history has no pre-edit
+                         mask counts to build a rate from. -->
+                    <div class="compare-pins" data-chart="tps"
+                      hidden>
+                      <button class="zoom-btn compare-pin-btn"
+                        data-chart="tps" data-series="original"
+                        title="Show the original run"
+                        aria-label="Show the original run"
+                        aria-pressed="true">1</button>
+                      <button class="zoom-btn compare-pin-btn"
+                        data-chart="tps" data-series="edited"
+                        title="Show the edited run"
+                        aria-label="Show the edited run"
+                        aria-pressed="true">2</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="chart-wrap">
+                  <canvas id="chart-tps"></canvas>
+                  <div class="chart-zoom-dock">
+                    <button class="zoom-btn" data-chart="tps"
+                      data-action="in" title="Zoom in">+</button>
+                    <button class="zoom-btn" data-chart="tps"
+                      data-action="out" title="Zoom out">&minus;</button>
+                    <button class="zoom-btn" data-chart="tps"
                       data-action="reset" title="Reset zoom">&#8634;</button>
                   </div>
                 </div>

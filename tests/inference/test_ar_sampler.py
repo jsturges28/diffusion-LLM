@@ -223,6 +223,32 @@ def test_build_frame_carries_entropy_per_token() -> None:
     assert frame["index"] == 2
 
 
+def test_build_frame_reveals_only_the_newest_position() -> None:
+    # Decoding is left to right, so growing the sequence to n tokens
+    # births position n-1 and cannot disturb anything before it.
+    frame = _build_frame(
+        StubTokenizer(),
+        [4, 5, 6],
+        [0.9, 0.5, 0.7],
+        [0.25, 1.5, 0.8],
+        frame_index=2,
+        total_steps=8,
+    )
+    assert frame["revealed"] == [2]
+
+
+def test_build_frame_reveals_nothing_on_an_empty_sequence() -> None:
+    frame = _build_frame(
+        StubTokenizer(),
+        [],
+        [],
+        [],
+        frame_index=0,
+        total_steps=8,
+    )
+    assert frame["revealed"] == []
+
+
 def test_build_frame_omits_alternatives_by_default() -> None:
     frame = _build_frame(
         StubTokenizer(),

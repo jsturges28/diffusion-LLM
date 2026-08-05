@@ -24,6 +24,7 @@ from src.inference.llada_sampler import (
     add_gumbel_noise,
     get_num_transfer_tokens,
 )
+from src.inference.reveal import newly_revealed
 
 MASK_ID: int = 126336
 
@@ -81,6 +82,14 @@ def _build_token_list(
             token["c"] = round(float(conf[i]), 4)
         tokens.append(token)
     return tokens
+
+
+def _resolved_flags(
+    x: torch.Tensor,
+    prompt_len: int,
+) -> List[bool]:
+    """Per-position "no longer a mask" over the generated region."""
+    return (x[0, prompt_len:] != MASK_ID).tolist()
 
 
 def _mean_conf(
@@ -228,8 +237,10 @@ async def streaming_generate(
     Yields
     ------
     {"type": "frame", "index": int, "total_steps": int,
-     "text": str, "tokens": list}
+     "text": str, "tokens": list, "revealed": list[int]}
         After each diffusion step (including initial masked state).
+        ``revealed`` holds the positions unmasked by this step and
+        never seen before; see src/inference/reveal.py.
     {"type": "done", "final_text": str}
         After the last step with skip_special_tokens decoding.
 
@@ -293,6 +304,9 @@ async def streaming_generate(
         )
 
     reveal_conf = torch.zeros(gen_length, device=x.device)
+    # Positions already counted as born, so a token is only ever
+    # revealed once. Empty here because the canvas starts all masked.
+    seen_revealed: set[int] = set()
 
     initial_text = tokenizer.batch_decode(
         x[:, prompt_len:], skip_special_tokens=False
@@ -307,6 +321,7 @@ async def streaming_generate(
         "tokens": _build_token_list(
             x, prompt_len, tokenizer, reveal_conf
         ),
+        "revealed": [],
     }
 
     frame_index = 1
@@ -362,6 +377,10 @@ async def streaming_generate(
                 x[:, prompt_len:],
                 skip_special_tokens=False,
             )[0]
+            born = newly_revealed(
+                _resolved_flags(x, prompt_len), seen_revealed
+            )
+            seen_revealed.update(born)
             yield {
                 "type": "frame",
                 "index": frame_index,
@@ -375,6 +394,7 @@ async def streaming_generate(
                     x, prompt_len, tokenizer, reveal_conf,
                     gen_step_conf,
                 ),
+                "revealed": born,
             }
             frame_index += 1
 
@@ -461,6 +481,14 @@ async def streaming_resume(
             x[:, prompt_len:].clone().cpu()
         )
 
+    # A resume starts with most of the canvas already written by the
+    # run it branched from. Seeding from that state (rather than
+    # starting empty, as generate does) is what stops the whole
+    # surviving prefix from being reported as born on frame 0.
+    seen_revealed: set[int] = set(
+        newly_revealed(_resolved_flags(x, prompt_len), set())
+    )
+
     initial_text = tokenizer.batch_decode(
         x[:, prompt_len:], skip_special_tokens=False
     )[0]
@@ -474,6 +502,7 @@ async def streaming_resume(
         "tokens": _build_token_list(
             x, prompt_len, tokenizer, reveal_conf
         ),
+        "revealed": [],
     }
 
     for i in range(remaining_steps):
@@ -513,6 +542,10 @@ async def streaming_resume(
             x[:, prompt_len:],
             skip_special_tokens=False,
         )[0]
+        born = newly_revealed(
+            _resolved_flags(x, prompt_len), seen_revealed
+        )
+        seen_revealed.update(born)
         yield {
             "type": "frame",
             "index": i + 1,
@@ -526,6 +559,7 @@ async def streaming_resume(
                 x, prompt_len, tokenizer, reveal_conf,
                 gen_step_conf,
             ),
+            "revealed": born,
         }
 
     final_text = tokenizer.batch_decode(

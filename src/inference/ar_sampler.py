@@ -304,6 +304,10 @@ def _build_frame(
         ),
         "text": "".join(text_parts),
         "tokens": tokens,
+        # Decoding is strictly left to right, so the frame that grows
+        # the sequence to n tokens is the one that just produced
+        # position n-1, and no earlier position can change.
+        "revealed": [count - 1] if count else [],
     }
     if newest_alternatives is not None:
         # A position's candidate set is fixed the moment it is

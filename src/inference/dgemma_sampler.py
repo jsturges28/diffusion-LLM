@@ -21,6 +21,8 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 import torch
 from transformers.generation.streamers import BaseStreamer
 
+from src.inference.reveal import newly_revealed
+
 MASK_CHAR = "\u2591"
 
 # Consecutive stable steps for a proxy-confidence of 1.0.
@@ -81,6 +83,11 @@ class FrameQueueStreamer(BaseStreamer):
         self._queue = out_queue
         self._prev: Optional[List[int]] = None
         self._stable: Optional[List[int]] = None
+        # Positions already reported as born on this canvas. Unlike
+        # LLaDA, a draft token here can settle, change again, and
+        # settle a second time; without this the same position would
+        # be reported born repeatedly and flicker.
+        self._seen_revealed: set[int] = set()
         self._index = 0
         self._canvas_index = 0
         self._prompt_seen = False
@@ -121,6 +128,7 @@ class FrameQueueStreamer(BaseStreamer):
             self._stable = [0] * count
         tokens: List[Dict[str, Any]] = []
         text_parts: List[str] = []
+        resolved: List[bool] = []
         conf_sum = 0.0
         for i, token_id in enumerate(ids):
             changed = (
@@ -155,9 +163,12 @@ class FrameQueueStreamer(BaseStreamer):
             if not unresolved:
                 token["c"] = round(conf, 4)
             tokens.append(token)
+            resolved.append(not unresolved)
             text_parts.append(
                 MASK_CHAR if unresolved else display
             )
+        born = newly_revealed(resolved, self._seen_revealed)
+        self._seen_revealed.update(born)
         self._prev = ids
         self._queue.put(
             {
@@ -170,6 +181,7 @@ class FrameQueueStreamer(BaseStreamer):
                 ),
                 "text": "".join(text_parts),
                 "tokens": tokens,
+                "revealed": born,
             }
         )
         self._index += 1
@@ -179,9 +191,11 @@ class FrameQueueStreamer(BaseStreamer):
             self._prompt_seen = True
             return
         self._emit(self._canvas_ids(value), committed=True)
-        # Next canvas restarts from fresh noise.
+        # Next canvas restarts from fresh noise, so its positions are
+        # unrelated to this one's and start unborn again.
         self._prev = None
         self._stable = None
+        self._seen_revealed = set()
         self._canvas_index += 1
 
     def put_draft(
