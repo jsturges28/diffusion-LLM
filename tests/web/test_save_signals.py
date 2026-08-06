@@ -7,10 +7,13 @@ error, so these tests pin the serialized shape directly: entropy is
 kept for resolved tokens, omitted for masked ones, per-position
 candidate sets keep their index alignment (including the gaps), and
 the pre-edit run's own signals survive alongside the edited run's.
+The context block gets the same treatment, plus its own boundary: a
+prompt of zero tokens is a measurement and must stay distinguishable
+from a run that measured nothing.
 
 Passing proves a saved run carries everything the durable Entropy
-overlay, the candidate popover, and the original-versus-edited
-comparison need to replay it post-hoc.
+overlay, the candidate popover, the original-versus-edited comparison,
+and the context rows need to replay it post-hoc.
 """
 
 from __future__ import annotations
@@ -28,8 +31,10 @@ from src.web.server import (
     SaveRunRequest,
     TokenAlternative,
     TokenRecord,
+    _context_metadata,
     _dump_alternatives,
     _dump_frame_tokens,
+    manager,
 )
 
 
@@ -305,3 +310,86 @@ def test_malformed_original_candidate_file_is_rejected(
 
     with pytest.raises(ValueError):
         load_run_frames(run_dir)
+
+
+# -- The context block --
+
+
+def test_the_prompt_length_survives_the_request() -> None:
+    body = SaveRunRequest(
+        prompt="p",
+        frames=["f"],
+        final_text="hello",
+        prompt_len=1240,
+    )
+    assert body.prompt_len == 1240
+
+
+def test_a_negative_prompt_length_is_rejected() -> None:
+    """The boundary. A length is a count, and a negative one would
+    mean the sampler reported something impossible."""
+    with pytest.raises(ValidationError):
+        SaveRunRequest(
+            prompt="p",
+            frames=["f"],
+            final_text="hello",
+            prompt_len=-1,
+        )
+
+
+def test_the_prompt_length_defaults_to_absent() -> None:
+    """Runs whose sampler predates the field send none, so absent has
+    to stay distinguishable from a prompt of zero tokens."""
+    body = SaveRunRequest(
+        prompt="p", frames=["f"], final_text="hello"
+    )
+    assert body.prompt_len is None
+
+
+def test_the_context_block_pairs_the_prompt_with_the_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both figures, because either alone answers nothing: a length
+    means one thing in a 4k window and another in a 128k one."""
+    monkeypatch.setattr(
+        manager, "active_context_length", 65_536
+    )
+
+    block = _context_metadata(1240)
+
+    assert block == {
+        "prompt_tokens": 1240,
+        "context_length": 65_536,
+    }
+
+
+def test_the_window_is_omitted_when_unreadable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A checkpoint that reported no window still records what its
+    prompt cost; inventing a ceiling would be worse than none."""
+    monkeypatch.setattr(
+        manager, "active_context_length", None
+    )
+
+    block = _context_metadata(1240)
+
+    assert block == {"prompt_tokens": 1240}
+
+
+def test_no_context_block_without_a_measured_length() -> None:
+    """An older run gets no block at all, which is what lets the
+    Analytics rows stay absent rather than reading zero."""
+    assert _context_metadata(None) == {}
+
+
+def test_an_empty_prompt_still_records_its_length(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The boundary that makes None and 0 different: zero tokens is a
+    measurement, and it must not be mistaken for a missing one."""
+    monkeypatch.setattr(
+        manager, "active_context_length", None
+    )
+
+    assert _context_metadata(0) == {"prompt_tokens": 0}

@@ -321,6 +321,9 @@ async def _run_streamed(
         "type": "done",
         "final_text": final_text,
         "thinking": thinking_text,
+        # The templated length this run actually built, so the saved
+        # run records a measurement rather than the client's estimate.
+        "prompt_len": prompt_len,
     }
 
 

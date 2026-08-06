@@ -29,6 +29,51 @@ from src.inference.reveal import newly_revealed
 MASK_ID: int = 126336
 
 
+def build_llada_inputs(
+    tokenizer: Any, prompt: str
+) -> Dict[str, torch.Tensor]:
+    """Encode a chat prompt the way a LLaDA run does.
+
+    The single definition of "what tokens does this prompt become",
+    shared by generation, the resume state, and the prompt token
+    count. It was previously written out three times, and the count is
+    what made one copy insufficient: a readout telling the user their
+    prompt is N tokens has to be N tokens of the same encode the run
+    performs, not of a lookalike that could drift from it.
+
+    Templated to a string and then encoded separately, rather than
+    ``tokenize=True`` in one call, because the canvas is built around
+    ``attention_mask`` and this shape returns both. ``padding=True``
+    is kept for the same reason the batch dimension is: the loop
+    indexes ``[1, seq]`` throughout.
+
+    ``add_special_tokens=False`` because the template has already
+    placed every special token this sequence should carry, and letting
+    the tokenizer add another BOS would shift every position by one.
+
+    No ``enable_thinking``: LLaDA exposes no reasoning channel, and
+    passing the flag to a template that does not declare it is a
+    silent no-op on some versions and an error on others.
+    """
+    assert isinstance(prompt, str), "prompt must be a string"
+    message = {"role": "user", "content": prompt}
+    chat_text = tokenizer.apply_chat_template(
+        [message],
+        add_generation_prompt=True,
+        tokenize=False,
+    )
+    encoded = tokenizer(
+        [chat_text],
+        add_special_tokens=False,
+        padding=True,
+        return_tensors="pt",
+    )
+    assert encoded["input_ids"].dim() == 2, (
+        "expected (batch, seq) ids"
+    )
+    return encoded
+
+
 def sanitize_frame(text: str) -> str:
     """Replace raw mask / special tokens with display chars."""
     text = text.replace("<|mdm_mask|>", "░")
@@ -258,18 +303,7 @@ async def streaming_generate(
 
     total_steps = steps_per_block * num_blocks
 
-    message = {"role": "user", "content": prompt}
-    chat_text = tokenizer.apply_chat_template(
-        [message],
-        add_generation_prompt=True,
-        tokenize=False,
-    )
-    encoded = tokenizer(
-        [chat_text],
-        add_special_tokens=False,
-        padding=True,
-        return_tensors="pt",
-    )
+    encoded = build_llada_inputs(tokenizer, prompt)
     input_ids = encoded["input_ids"].to(model.device)
     attention_mask = encoded["attention_mask"].to(
         model.device
@@ -401,7 +435,13 @@ async def streaming_generate(
     final_text = tokenizer.batch_decode(
         x[:, prompt_len:], skip_special_tokens=True
     )[0]
-    yield {"type": "done", "final_text": final_text}
+    yield {
+        "type": "done",
+        "final_text": final_text,
+        # The templated length this run actually built, so the saved
+        # run records a measurement rather than the client's estimate.
+        "prompt_len": prompt_len,
+    }
 
 
 async def streaming_resume(
@@ -565,4 +605,8 @@ async def streaming_resume(
     final_text = tokenizer.batch_decode(
         x[:, prompt_len:], skip_special_tokens=True
     )[0]
-    yield {"type": "done", "final_text": final_text}
+    yield {
+        "type": "done",
+        "final_text": final_text,
+        "prompt_len": prompt_len,
+    }

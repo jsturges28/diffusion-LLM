@@ -17,6 +17,11 @@ var activeDevice = null; // "cuda" | "cpu": the active model's device
 // boot beside activeDevice, which is sound because a model switch
 // reloads the page, so the two can never describe different models.
 var activeTokenizer = {};
+// Tokens the resident checkpoint can attend to at once, or null when
+// it reported none readable (see describe_context_length). Captured at
+// boot beside activeTokenizer, for the same reason: a model switch
+// reloads the page, so this can never describe a different model.
+var activeContextLength = null;
 var gpuPresent = false; // whether a usable GPU was detected
 var suppressReconnect = false;
 
@@ -28,6 +33,12 @@ var paramTooltips = {}; // name -> tooltip span
 
 var promptInput =
   document.getElementById("prompt-input");
+var promptContextRow =
+  document.getElementById("prompt-context");
+var promptContextCount =
+  document.getElementById("prompt-context-count");
+var promptContextNote =
+  document.getElementById("prompt-context-note");
 var promptHistoryGroup =
   document.getElementById("prompt-history");
 var btnPromptHistory =
@@ -248,6 +259,11 @@ var frameCanvasIndex = [];
 var frameMeanConf = [];
 var lastRunParams = null;
 var lastFinalText = null;
+// Tokens the last run's templated prompt occupied, as the sampler
+// reported it on the done frame, or null when it reported none. Saved
+// with the run so the record is a measurement rather than the
+// readout's count of whatever is in the box at save time.
+var lastRunPromptLen = null;
 var originalTotalFrames = 0;
 var originalFrameHistory = [];
 var originalFrameTokens = [];
@@ -1555,6 +1571,9 @@ function handleMessage(data) {
     case "probe_result":
       handleProbeResult(data);
       break;
+    case "count_prompt_result":
+      handleCountPromptResult(data);
+      break;
   }
 }
 
@@ -1577,6 +1596,10 @@ function handleModelStatus(data) {
     modelReady = true;
     stopLoadProgressPoll();
     updateGenerateButton();
+    // The first count the page can make: the prompt was there from
+    // boot (a default, a restored session, or a saved draft), but only
+    // a ready worker can tokenize it.
+    promptTextChanged();
     // Only the overlay waits. The model is usable the moment the
     // worker says so, and holding the Generate button for a
     // cosmetic beat would be the wrong trade. Re-checking readiness
@@ -1737,6 +1760,9 @@ function handleDone(data) {
   });
   if (data.final_text) {
     lastFinalText = data.final_text;
+  }
+  if (typeof data.prompt_len === "number") {
+    lastRunPromptLen = data.prompt_len;
   }
   if (thinkingPanel && thinkingContent) {
     if (data.thinking) {
@@ -3919,6 +3945,7 @@ function enterPromptHistory() {
   promptHistoryIndex = 0;
   promptInput.value = promptHistory[0];
   promptInput.readOnly = true;
+  promptTextChanged();
   if (btnPromptHistory) {
     btnPromptHistory.classList.add("is-active");
   }
@@ -3938,6 +3965,9 @@ function cyclePromptHistory(delta) {
     (((promptHistoryIndex + delta) % n) + n) % n;
   promptInput.value = promptHistory[promptHistoryIndex];
   _setPromptHistoryCounter();
+  // Browsing swaps the text without an input event, so the readout has
+  // to be told; otherwise it describes the prompt left behind.
+  promptTextChanged();
 }
 
 // Reset the browse UI without changing the box text. Shared by commit
@@ -3969,6 +3999,159 @@ function cancelPromptHistory() {
     promptInput.value = promptHistoryDraft;
   }
   _exitPromptHistoryUI();
+  promptTextChanged();
+}
+
+// ---- Context window readout ----
+
+// How long the prompt has to sit still before a count goes out.
+// Slower than the typed-token preview's debounce because nothing waits
+// on this: the readout is a running total the user glances at, not a
+// step in an interaction they are mid-way through.
+var PROMPT_COUNT_DEBOUNCE_MS = 350;
+
+// Monotonic request id and the pending timer. Its own counter rather
+// than the typed preview's, because the two are answered independently
+// and either can outrun the other.
+var promptCountRequest = 0;
+var promptCountTimer = null;
+// The newest accepted answer: {count, truncated, thinking}, or null
+// when nothing has been counted yet. Null is distinct from a count of
+// zero: one means "unknown", the other means "the box is empty".
+// ``thinking`` records which template the count was taken under, so a
+// later toggle can tell a stale number from a current one.
+var promptCountLatest = null;
+// The flag the in-flight request went out with, carried into the
+// answer. Only the newest request is ever accepted, so the newest sent
+// value is the one that describes it.
+var promptCountThinkingSent = false;
+
+// The prompt text changed by any route: typing, history, import, or a
+// restored session. Schedules a count and clears the stale one, since
+// the old number describes text no longer on screen.
+function promptTextChanged() {
+  promptCountLatest = null;
+  renderPromptContext();
+  if (promptCountTimer !== null) {
+    clearTimeout(promptCountTimer);
+  }
+  promptCountTimer = setTimeout(
+    requestPromptCount, PROMPT_COUNT_DEBOUNCE_MS
+  );
+}
+
+// Ask the worker how many tokens the templated prompt occupies. The
+// count has to come from the worker rather than be estimated here:
+// only it holds the tokenizer and the chat template, and the template
+// is most of what separates a character count from the truth.
+function requestPromptCount() {
+  promptCountTimer = null;
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  var text = promptInput ? promptInput.value : "";
+  // The flag changes which template is applied, so the count has to be
+  // taken under the one the next run will actually use.
+  var thinking = !!getParamValues().thinking;
+  if (text === "") {
+    promptCountLatest = {
+      count: 0,
+      truncated: false,
+      thinking: thinking,
+    };
+    renderPromptContext();
+    return;
+  }
+  promptCountRequest += 1;
+  promptCountThinkingSent = thinking;
+  ws.send(JSON.stringify({
+    type: "count_prompt",
+    text: text,
+    thinking: thinking,
+    request_id: promptCountRequest,
+  }));
+}
+
+// Accept only the newest request's answer. An older reply arriving
+// late describes a prompt that has since been edited, and showing it
+// would leave the readout disagreeing with the box above it.
+function handleCountPromptResult(msg) {
+  if (msg.request_id !== promptCountRequest) {
+    return;
+  }
+  promptCountLatest = {
+    count: Number(msg.count) || 0,
+    truncated: !!msg.truncated,
+    thinking: promptCountThinkingSent,
+  };
+  renderPromptContext();
+}
+
+// The tokens this run will generate, which the prompt has to share the
+// window with. Named per model: LLaDA sizes a fixed canvas with
+// gen_length, the other two decode up to max_new_tokens.
+//
+// Returns 0 when unreadable, so the warning falls back to comparing
+// the prompt alone against the window rather than vanishing.
+function outputBudgetTokens() {
+  var values = getParamValues();
+  var budget = values.gen_length;
+  if (typeof budget !== "number" || !isFinite(budget)) {
+    budget = values.max_new_tokens;
+  }
+  if (typeof budget !== "number" || !isFinite(budget)) {
+    return 0;
+  }
+  return Math.max(0, Math.round(budget));
+}
+
+// Paint the readout from the cached count. Split from requesting one
+// because the warning also depends on the output budget, so changing a
+// parameter must move it without re-counting an unchanged prompt.
+function renderPromptContext() {
+  if (!promptContextRow || !promptContextCount) {
+    return;
+  }
+  if (promptCountLatest === null) {
+    promptContextRow.hidden = true;
+    return;
+  }
+  var count = promptCountLatest.count;
+  var text = count.toLocaleString();
+  if (promptCountLatest.truncated) {
+    // The worker capped what it read, so the count is a floor.
+    text = "\u2265 " + text;
+  }
+  if (activeContextLength !== null) {
+    text += " / " + activeContextLength.toLocaleString();
+  }
+  text += count === 1 ? " token" : " tokens";
+  promptContextCount.textContent = text;
+  promptContextRow.hidden = false;
+  applyPromptContextWarning(count);
+}
+
+// Warn when the prompt plus the output budget will not fit. Two
+// distinct failures, worth distinct wording: a prompt that already
+// exceeds the window cannot run at all, while one that only exceeds it
+// once the output is added will run and be truncated part-way.
+function applyPromptContextWarning(count) {
+  var note = "";
+  if (activeContextLength !== null) {
+    var budget = outputBudgetTokens();
+    if (count > activeContextLength) {
+      note = "over the context window";
+    } else if (count + budget > activeContextLength) {
+      note =
+        "prompt + "
+        + budget.toLocaleString()
+        + " output exceeds the window";
+    }
+  }
+  if (promptContextNote) {
+    promptContextNote.textContent = note;
+  }
+  promptContextRow.classList.toggle("is-warning", note !== "");
 }
 
 // ---- Persistent UI settings (localStorage) ----
@@ -5759,6 +5942,7 @@ function resetRunState() {
   }
   lastRunParams = null;
   lastFinalText = null;
+  lastRunPromptLen = null;
   originalTotalFrames = 0;
   originalFrameHistory = [];
   originalFrameTokens = [];
@@ -5798,6 +5982,7 @@ function startNewRun() {
   setGenerating(false);
   // Return to the pre-generation resting state.
   showOutputPlaceholder();
+  promptTextChanged();
   promptInput.focus();
 }
 
@@ -6058,6 +6243,13 @@ function saveRun() {
     mean_conf: frameMeanConf.slice(),
   };
 
+  // The sampler's own figure, not the readout's. Omitted rather than
+  // guessed when the run reported none, so the saved run either
+  // carries a measured length or carries nothing.
+  if (lastRunPromptLen !== null) {
+    payload.prompt_len = lastRunPromptLen;
+  }
+
   // canvas_index must be a clean List[int] matching the frame count.
   // If it is sparse or misaligned (e.g. a resumed run whose pre-resume
   // indices were not restored), omit it rather than send nulls that
@@ -6250,6 +6442,7 @@ if (btnParamDefaults) {
 // The prompt's only other listener is Enter-to-generate, so the draft
 // needs its own to reach the session snapshot as it is typed.
 promptInput.addEventListener("input", onParamFormChanged);
+promptInput.addEventListener("input", promptTextChanged);
 
 if (modelSelect && modelSelectList) {
   modelSelect.addEventListener("click", function (e) {
@@ -6920,6 +7113,7 @@ function saveSessionState() {
     frameRevealed: frameRevealed,
     finalText: lastFinalText,
     params: lastRunParams,
+    promptLen: lastRunPromptLen,
     thinking:
       thinkingPanel && !thinkingPanel.hidden
         ? thinkingContent.textContent
@@ -7015,6 +7209,8 @@ function restoreSessionState() {
   frameRevealed = s.frameRevealed || [];
   lastFinalText = s.finalText || "";
   lastRunParams = s.params || null;
+  lastRunPromptLen =
+    typeof s.promptLen === "number" ? s.promptLen : null;
   remaskEdits = s.remaskEdits || [];
   originalTotalFrames =
     s.originalTotalFrames || frameHistory.length;
@@ -7148,6 +7344,17 @@ function saveParamState() {
 function onParamFormChanged() {
   saveParamState();
   updateParamDefaultsButton();
+  // The output budget moves the warning without changing the count, so
+  // the cached number is repainted. The thinking flag changes the
+  // count itself, so that one needs a fresh request.
+  if (
+    promptCountLatest !== null
+    && promptCountLatest.thinking !== !!getParamValues().thinking
+  ) {
+    promptTextChanged();
+    return;
+  }
+  renderPromptContext();
 }
 
 function restoreParamState() {
@@ -7305,6 +7512,10 @@ function boot() {
         models[activeModelId] || list[0] || null;
       activeDevice = info.active_device || null;
       activeTokenizer = info.active_tokenizer || {};
+      activeContextLength =
+        typeof info.active_context_length === "number"
+          ? info.active_context_length
+          : null;
       gpuPresent = !!info.gpu_name;
       renderModelSelector(list, activeModelId);
       if (activeModel) {

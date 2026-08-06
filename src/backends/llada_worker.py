@@ -32,6 +32,7 @@ from src.inference.load_progress import (
     sample_load_progress,
 )
 from src.inference.streaming_sampler import (
+    build_llada_inputs,
     streaming_generate,
     streaming_resume,
 )
@@ -249,25 +250,39 @@ class LladaBackend(Backend):
                 {"type": "error", "message": str(exc)}
             )
 
+    def prompt_token_count(
+        self, prompt: str, *, thinking: bool = False
+    ) -> int:
+        """Tokens LLaDA's own encode produces for this prompt.
+
+        Overridden because the base class templates and tokenizes in
+        one call with ``enable_thinking``, and LLaDA does neither: it
+        templates to a string and encodes separately, and it has no
+        reasoning channel for the flag to select. Sharing
+        ``build_llada_inputs`` with the generator is what makes this
+        the run's real count rather than an approximation of it.
+
+        ``thinking`` is accepted and ignored to keep one signature
+        across backends; the client sends whatever the active model
+        declares and this model declares no such parameter.
+        """
+        assert isinstance(prompt, str), "prompt must be a string"
+        if prompt == "":
+            return 0
+        encoded = build_llada_inputs(self.tokenizer, prompt)
+        count = int(encoded["input_ids"].shape[-1])
+        assert count > 0, "a templated prompt has tokens"
+        return count
+
     def _store_state(
         self,
         params: Dict[str, Any],
         tensor_history: List[torch.Tensor],
     ) -> None:
-        message = {
-            "role": "user",
-            "content": params["prompt"],
-        }
-        chat_text = self.tokenizer.apply_chat_template(
-            [message],
-            add_generation_prompt=True,
-            tokenize=False,
-        )
-        encoded = self.tokenizer(
-            [chat_text],
-            add_special_tokens=False,
-            padding=True,
-            return_tensors="pt",
+        # The generator's own encode, so a resumed run re-enters the
+        # exact prefix it produced rather than a re-derivation of it.
+        encoded = build_llada_inputs(
+            self.tokenizer, params["prompt"]
         )
         prompt_ids = encoded["input_ids"].cpu()
         gen_length = params["gen_length"]

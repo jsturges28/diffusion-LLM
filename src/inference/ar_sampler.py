@@ -581,13 +581,21 @@ def _stream_tokens(
 
 
 def _finalize(
-    tokenizer: Any, trace: _Trace, result: Dict[str, Any]
+    tokenizer: Any,
+    trace: _Trace,
+    result: Dict[str, Any],
+    prompt_len: Optional[int] = None,
 ) -> None:
     """Record the decoded text and the full trace for the caller.
 
     The trace is what a later substitution needs: the worker keeps it
     so a counterfactual can re-enter at any position without replaying
     the run.
+
+    ``prompt_len`` is the templated prompt's token count, recorded so
+    the saved run keeps the length the run really built. Optional
+    because a substitution re-enters an existing sequence and reports
+    the length its original run already recorded.
     """
     raw = tokenizer.decode(
         trace.ids, skip_special_tokens=False
@@ -595,6 +603,8 @@ def _finalize(
     thinking_text, final_text = _split_thinking(raw)
     result["final_text"] = final_text
     result["thinking"] = thinking_text
+    if prompt_len is not None:
+        result["prompt_len"] = prompt_len
     result["ids"] = list(trace.ids)
     result["confidences"] = list(trace.confs)
     result["entropies"] = list(trace.entropies)
@@ -634,9 +644,10 @@ def _decode_loop(
         out_queue=out_queue,
         cancel_event=cancel_event,
     )
-    _finalize(tokenizer, trace, result)
+    prompt_len = int(inputs["input_ids"].shape[-1])
+    _finalize(tokenizer, trace, result, prompt_len)
     result["cache"] = _cache_record(
-        past, int(inputs["input_ids"].shape[-1]), trace.ids
+        past, prompt_len, trace.ids
     )
 
 
@@ -743,7 +754,12 @@ def _substitute_loop(
         cancel_event=cancel_event,
         past=past,
     )
-    _finalize(tokenizer, trace, result)
+    _finalize(
+        tokenizer,
+        trace,
+        result,
+        int(prompt_ids.shape[-1]),
+    )
 
 
 def _emit_seed_frame(
@@ -1400,8 +1416,14 @@ async def _drain_frames(
         # without the other could not check that they agree.
         state_sink["cache"] = result.get("cache")
 
-    yield {
+    done: Dict[str, Any] = {
         "type": "done",
         "final_text": result.get("final_text", ""),
         "thinking": result.get("thinking", ""),
     }
+    # Omitted rather than zeroed when the loop reported none, so a
+    # saved run either carries a measured length or carries none.
+    prompt_len = result.get("prompt_len")
+    if isinstance(prompt_len, int):
+        done["prompt_len"] = prompt_len
+    yield done

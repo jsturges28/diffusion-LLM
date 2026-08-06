@@ -1060,6 +1060,8 @@ function showDetail(runId) {
 
   html += modelVocabMetaRow(run);
 
+  html += contextMetaRows(run);
+
   html += elapsedMetaRows(run);
 
   detailMeta.innerHTML = html;
@@ -1161,6 +1163,32 @@ function modelVocabMetaRow(run) {
     "Model vocab",
     Number(tok.model_vocab_size).toLocaleString()
   );
+}
+
+// What the prompt cost and what it had to fit inside. Two rows rather
+// than one ratio, because the ratio is only interesting when both
+// numbers are visible: a 400-token prompt means one thing in a 4k
+// window and another in a 128k one.
+//
+// The whole block is absent on runs saved before it existed, and the
+// window alone is absent for a checkpoint that reported none, so each
+// row is guarded separately rather than as a pair.
+function contextMetaRows(run) {
+  var context = run.context || {};
+  var html = "";
+  if (typeof context.prompt_tokens === "number") {
+    html += metaRowHtml(
+      "Prompt tokens",
+      Number(context.prompt_tokens).toLocaleString()
+    );
+  }
+  if (typeof context.context_length === "number") {
+    html += metaRowHtml(
+      "Context window",
+      Number(context.context_length).toLocaleString()
+    );
+  }
+  return html;
 }
 
 function runTokenizer(run) {

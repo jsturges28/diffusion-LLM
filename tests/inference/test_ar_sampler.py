@@ -535,6 +535,17 @@ def test_generate_emits_one_frame_per_token() -> None:
     assert out["frames"][-1]["type"] == "done"
 
 
+def test_the_done_frame_reports_the_prompts_length() -> None:
+    """The templated length this run built, which is what a saved run
+    records. Measured here rather than counted by the client, so the
+    figure cannot describe a prompt that was edited after the run."""
+    out = _run_generate(alternatives=False, budget=3)
+    done = out["frames"][-1]
+    assert done["type"] == "done"
+    # The stub templates every prompt to three ids.
+    assert done["prompt_len"] == 3
+
+
 def test_generate_sends_each_candidate_set_once() -> None:
     """Candidates ride only the frame introducing their position."""
     out = _run_generate(alternatives=True, budget=4)

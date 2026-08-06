@@ -117,3 +117,11 @@ MSG_TOKENIZE_RESULT = "tokenize_result"
 # a real forward pass, so it does take the generation lock.
 MSG_PROBE = "probe"
 MSG_PROBE_RESULT = "probe_result"
+# How many tokens a prompt becomes once the chat template has wrapped
+# it, for the context-window readout. Kept separate from MSG_TOKENIZE
+# rather than folded in as a flag, for two reasons: that path caps at
+# a couple of hundred characters because it previews one token, and it
+# answers with one object per token, which for an imported file would
+# be tens of thousands of objects to deliver a single integer.
+MSG_COUNT_PROMPT = "count_prompt"
+MSG_COUNT_PROMPT_RESULT = "count_prompt_result"

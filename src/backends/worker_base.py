@@ -20,6 +20,8 @@ from fastapi.responses import JSONResponse
 
 from src.backends.protocol import (
     MSG_CANCEL,
+    MSG_COUNT_PROMPT,
+    MSG_COUNT_PROMPT_RESULT,
     MSG_ERROR,
     MSG_GENERATE,
     MSG_MODEL_STATUS,
@@ -39,6 +41,20 @@ logger = logging.getLogger("diffusion_worker")
 # do work. Truncating beats rejecting: the preview still shows the
 # user what their first few tokens would be.
 TOKENIZE_TEXT_MAX_CHARS = 200
+
+# Upper bound on a prompt being counted. Far larger than the preview
+# cap above, because the whole point is to answer for a file somebody
+# imported, and a bound that rejected those would leave the readout
+# silent exactly when it matters. Still bounded: this is a per-request
+# encode on the worker, and the client caps imports well below it, so
+# reaching this means something is wrong rather than large. Truncating
+# beats rejecting, and the reply reports that it truncated so the
+# readout can say the count is a floor.
+COUNT_PROMPT_MAX_CHARS = 200_000
+
+assert COUNT_PROMPT_MAX_CHARS > TOKENIZE_TEXT_MAX_CHARS, (
+    "counting a prompt must allow more than previewing a token"
+)
 
 
 class FrameStreamer:
@@ -168,6 +184,84 @@ class Backend(ABC):
             }
         )
 
+    async def handle_count_prompt(
+        self, ws: WebSocket, data: Dict[str, Any]
+    ) -> None:
+        """Report how many tokens a prompt becomes.
+
+        Implemented on the base class like ``handle_tokenize``,
+        because every backend templates a prompt and the answer is
+        just an encode. The per-model part is
+        ``prompt_token_count``.
+        """
+        tokenizer = getattr(self, "tokenizer", None)
+        if tokenizer is None:
+            await ws.send_json(
+                {
+                    "type": MSG_ERROR,
+                    "message": "No tokenizer is loaded.",
+                }
+            )
+            return
+        raw = data.get("text", "")
+        text = raw[:COUNT_PROMPT_MAX_CHARS] if (
+            isinstance(raw, str)
+        ) else ""
+        count = self.prompt_token_count(
+            text, thinking=bool(data.get("thinking", False))
+        )
+        await ws.send_json(
+            {
+                "type": MSG_COUNT_PROMPT_RESULT,
+                # Echoed for the same reason the tokenize reply echoes
+                # them: a later keystroke makes an in-flight answer
+                # wrong rather than merely late.
+                "request_id": int(data.get("request_id", 0)),
+                "chars": len(text),
+                "truncated": len(text) < len(raw) if (
+                    isinstance(raw, str)
+                ) else False,
+                "count": count,
+            }
+        )
+
+    def prompt_token_count(
+        self, prompt: str, *, thinking: bool = False
+    ) -> int:
+        """Tokens the templated prompt occupies before generation.
+
+        Counts the *templated* sequence, not the raw text, which is
+        the whole point of doing this on the worker instead of in the
+        browser. A chat template wraps the prompt in system and role
+        markers, and ``enable_thinking`` changes that wrapping, so a
+        count of the user's characters would understate what actually
+        reaches the model, by a margin that grows with the template
+        rather than with the prompt.
+
+        The default mirrors ``_build_inputs`` in the autoregressive
+        and DiffusionGemma samplers exactly, minus the device move
+        this does not need, so SmolLM3 and DiffusionGemma inherit a
+        count of the tokens their runs really build. LLaDA templates
+        in two steps and takes no thinking flag, so it overrides.
+        """
+        assert isinstance(prompt, str), "prompt must be a string"
+        if prompt == "":
+            return 0
+        tokenizer = getattr(self, "tokenizer", None)
+        assert tokenizer is not None, "no tokenizer loaded"
+        chat = [{"role": "user", "content": prompt}]
+        encoded = tokenizer.apply_chat_template(
+            chat,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=True,
+            return_tensors="pt",
+            enable_thinking=thinking,
+        )
+        count = int(encoded["input_ids"].shape[-1])
+        assert count > 0, "a templated prompt has tokens"
+        return count
+
     async def handle_probe(
         self, ws: WebSocket, data: Dict[str, Any]
     ) -> None:
@@ -289,6 +383,59 @@ def describe_output_width(model: Any) -> Optional[int]:
         return None
     assert width > 0, "model vocab_size must be positive"
     return width
+
+
+def describe_context_length(
+    model: Any, tokenizer: Any = None
+) -> Optional[int]:
+    """How many tokens the checkpoint can attend to at once.
+
+    Read off the loaded objects for the same reason
+    ``describe_tokenizer`` is: a figure declared in the registry is a
+    hand-maintained string free to drift from whatever the checkpoint
+    actually loads, and this one is used to tell the user their prompt
+    will not fit, which is a claim that has to be true.
+
+    The config comes first because it is the architectural fact.
+    ``model_max_length`` is a tokenizer-side convention and is
+    frequently a sentinel rather than a measurement: a checkpoint
+    shipping no ``model_max_length`` gets ``int(1e30)`` from
+    transformers, and older ones sometimes carry a stale small number
+    from a predecessor. So it is consulted only as a fallback, and
+    only when it lands inside ``CONTEXT_LENGTH_SANE_MAX``.
+
+    Returns None rather than a guess when neither source is usable.
+    A missing readout is honest; an invented ceiling would silently
+    approve a prompt that overflows or refuse one that fits.
+    """
+    for candidate in (
+        getattr(getattr(model, "config", None),
+                "max_position_embeddings", None),
+        getattr(tokenizer, "model_max_length", None),
+    ):
+        if _is_sane_context_length(candidate):
+            return int(candidate)
+    return None
+
+
+# Above this, a reported context length is a sentinel rather than a
+# measurement. transformers uses int(1e30) for "unspecified", and no
+# real checkpoint is within orders of magnitude of this bound, so it
+# separates the two cases without having to name the sentinel.
+CONTEXT_LENGTH_SANE_MAX = 1 << 25
+
+assert CONTEXT_LENGTH_SANE_MAX > 1_000_000, (
+    "the ceiling must clear every real context length"
+)
+
+
+def _is_sane_context_length(value: Any) -> bool:
+    """Whether a reported length is a measurement, not a sentinel."""
+    if not isinstance(value, int) or isinstance(value, bool):
+        return False
+    if value < 1:
+        return False
+    return value <= CONTEXT_LENGTH_SANE_MAX
 
 
 def resolve_load_status(
@@ -450,6 +597,15 @@ def create_worker_app(
                 getattr(backend, "tokenizer", None),
                 getattr(backend, "model", None),
             )
+            # Omitted rather than sent as null when unreadable, so the
+            # client's "is there a ceiling to check against" test is a
+            # plain key check and cannot mistake null for zero.
+            context = describe_context_length(
+                getattr(backend, "model", None),
+                getattr(backend, "tokenizer", None),
+            )
+            if context is not None:
+                payload["context_length"] = context
         # "loading" is reported with or without progress: the sampler
         # only attaches once the load starts and can measure the
         # checkpoint, and everything before that is still a load.
@@ -477,6 +633,15 @@ def create_worker_app(
             MSG_GENERATE: backend.handle_generate,
             MSG_RESUME: backend.handle_resume,
             MSG_SUBSTITUTE: backend.handle_substitute,
+        }
+        # Answered without gen_lock: both are tokenizer reads costing
+        # microseconds, and the lock exists to serialize generation,
+        # not to guard the tokenizer. Taking it would stall a preview
+        # or a prompt count behind a running model, which is exactly
+        # when the user is still typing.
+        lockless = {
+            MSG_TOKENIZE: backend.handle_tokenize,
+            MSG_COUNT_PROMPT: backend.handle_count_prompt,
         }
         try:
             ready = await _await_model_ready(
@@ -506,19 +671,14 @@ def create_worker_app(
                         )
                     continue
 
-                # Deliberately outside gen_lock: a vocabulary lookup
-                # is microseconds, and the lock exists to serialize
-                # generation, not to guard the tokenizer. Taking it
-                # would stall the preview behind a running model and
-                # make typing feel broken.
-                if mtype == MSG_TOKENIZE:
-                    await backend.handle_tokenize(ws, data)
+                if mtype in lockless:
+                    await lockless[mtype](ws, data)
                     continue
 
-                # Inside gen_lock, unlike the tokenize above it: this
-                # one runs a forward pass, so letting it in alongside
-                # a generation would have two passes contending for
-                # the same device and its memory.
+                # Inside gen_lock, unlike the two above it: this one
+                # runs a forward pass, so letting it in alongside a
+                # generation would have two passes contending for the
+                # same device and its memory.
                 if mtype == MSG_PROBE:
                     if gen_lock.locked():
                         await _send_busy(ws)

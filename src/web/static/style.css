@@ -21,6 +21,10 @@
   --mask-color: #00ff41;
   --mask-glow: rgba(0, 255, 65, 0.08);
   --danger: #ff4444;
+  /* Amber: the "this will not work as you expect" tier between the
+     accent and --danger. Already the edit-mark hue, kept as one
+     variable so a warning reads the same wherever it appears. */
+  --warn: #ff9f1c;
   --font-mono: "JetBrains Mono", "Fira Code",
     "Cascadia Code", "Consolas", monospace;
   --radius: 6px;
@@ -462,6 +466,37 @@ body {
 
 #prompt-input:focus {
   border-color: var(--border-focus);
+}
+
+/* Context-window readout, under the prompt box. Right-aligned so it
+   reads as a meter on the box rather than as a caption competing with
+   the label above it. */
+.prompt-context {
+  display: flex;
+  justify-content: flex-end;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  min-height: 13px;
+}
+
+.prompt-context[hidden] {
+  display: none;
+}
+
+.prompt-context-note {
+  color: var(--text-secondary);
+}
+
+.prompt-context.is-warning {
+  color: var(--warn);
+}
+
+.prompt-context.is-warning .prompt-context-note {
+  color: var(--warn);
 }
 
 #param-row {

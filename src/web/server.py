@@ -420,6 +420,12 @@ class ModelManager:
         # beside the versions because it is the same kind of fact: a
         # property of what is loaded right now, not of the registry.
         self.active_tokenizer: Dict[str, Any] = {}
+        # How many tokens the resident checkpoint can attend to, or
+        # None when it could not be read (see
+        # describe_context_length). None rather than a default, so the
+        # prompt readout can say nothing instead of quoting a ceiling
+        # nobody measured.
+        self.active_context_length: Optional[int] = None
         # Activation is non-blocking: activate() spawns the worker and
         # returns; a background monitor task tracks these until ready,
         # and the client polls them. States: idle | starting |
@@ -554,6 +560,7 @@ class ModelManager:
             self.active_device = device
             self.active_versions = {}
             self.active_tokenizer = {}
+            self.active_context_length = None
             self.load_state = "starting"
             self.load_progress = None
             self.load_error = None
@@ -622,6 +629,7 @@ class ModelManager:
         if status == "ready":
             self.active_versions = body.get("versions", {})
             self.active_tokenizer = body.get("tokenizer", {})
+            self.active_context_length = _read_context_length(body)
             self.load_progress = None
             self.load_state = "ready"
             return True
@@ -772,9 +780,28 @@ class ModelManager:
         self.active_device = None
         self.active_versions = {}
         self.active_tokenizer = {}
+        self.active_context_length = None
         self.load_state = "idle"
         self.load_progress = None
         self.load_error = None
+
+
+def _read_context_length(
+    body: Dict[str, Any],
+) -> Optional[int]:
+    """The context length from a ready /health body, if it sent one.
+
+    Validated here rather than trusted, because the worker is a
+    separate process on its own transformers version: this is a
+    boundary, and a malformed value should degrade to "unknown" the
+    way a missing key does rather than reach the UI as a ceiling.
+    """
+    value = body.get("context_length")
+    if not isinstance(value, int) or isinstance(value, bool):
+        return None
+    if value < 1:
+        return None
+    return value
 
 
 manager = ModelManager()
@@ -894,6 +921,10 @@ def _models_snapshot() -> Dict[str, Any]:
         # on each model's capabilities because it describes the one
         # resident load, which is the only tokenizer that exists.
         "active_tokenizer": dict(manager.active_tokenizer),
+        # None when the checkpoint did not report a readable one. The
+        # prompt readout treats that as "no ceiling to check against"
+        # and shows a bare count rather than inventing a denominator.
+        "active_context_length": manager.active_context_length,
         "default": DEFAULT_MODEL,
         "gpu_name": gpu,
         "free_vram_gib": free_vram_gib,
@@ -1185,6 +1216,11 @@ class SaveRunRequest(BaseModel):
     # the edited (bundled) run replaces its pre-edit original so it is a
     # single Analytics row rather than two.
     run_id: Optional[str] = None
+    # Tokens the templated prompt occupied, as reported by the sampler
+    # on its ``done`` frame rather than counted by the client, so the
+    # saved figure is the one the run really built. None for a run
+    # whose sampler predates the field.
+    prompt_len: Optional[int] = Field(default=None, ge=0)
 
 
 def _make_run_dir(base: Path, model_id: str) -> Path:
@@ -1285,6 +1321,29 @@ def _dump_alternatives(
     return dumped
 
 
+def _context_metadata(
+    prompt_len: Optional[int],
+) -> Dict[str, Any]:
+    """The context block for a saved run, or empty when unknowable.
+
+    Two figures, together because either alone answers nothing useful:
+    a prompt length means little without the window it competed for,
+    and the window means little without a prompt to place inside it.
+
+    The window is the resident model's, which is sound because a save
+    always follows a run on the model that is still loaded; a switch
+    reloads the page and discards the unsaved run.
+    """
+    if prompt_len is None:
+        return {}
+    assert prompt_len >= 0, "prompt_len must be non-negative"
+    block: Dict[str, Any] = {"prompt_tokens": prompt_len}
+    window = manager.active_context_length
+    if window is not None:
+        block["context_length"] = window
+    return block
+
+
 def _save_run_blocking(body: SaveRunRequest) -> str:
     model_id = body.model or DEFAULT_MODEL
     checkpoint = ""
@@ -1356,6 +1415,12 @@ def _save_run_blocking(body: SaveRunRequest) -> str:
         metadata["remask_edits"] = [
             edit.model_dump() for edit in body.remask_edits
         ]
+    # Absent, not zeroed, when the length is unknown: an older run and
+    # a run with an empty prompt must stay distinguishable, and the
+    # Analytics rows are built to skip a missing block.
+    context = _context_metadata(body.prompt_len)
+    if context:
+        metadata["context"] = context
     metadata["reproducibility"] = {
         "seed": body.params.get("seed"),
         "gpu": _gpu_name(),
