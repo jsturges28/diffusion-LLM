@@ -2236,6 +2236,36 @@ input[type="checkbox"].app-checkbox:checked::after {
   background: rgba(255, 159, 28, 0.25);
 }
 
+/* A permanent record of where a run was intervened, distinct from
+   .token-remasked above it, which is the transient in-edit selection.
+
+   The outline does most of the work, not the wash. This mark has to
+   survive being scanned for across a screen of text, and a flat wash
+   has to get loud before it reads at a glance, at which point dozens
+   of them after a diffusion remask turn the output into a highlighter
+   accident. An edge is locatable at an alpha a fill is not, so the
+   ring carries the signal and the fill stays quiet behind it.
+
+   Still quieter overall than .token-remasked, which recolors the
+   glyphs themselves and adds a glow. The two say different things and
+   should not be confusable: that one is "selected, about to be
+   redrawn", this one is "the run was intervened here".
+
+   No text color and no text-decoration, both deliberately. The
+   overlays set color inline (Heatmap, Confidence and Entropy all do),
+   so a recolor here would either lose to them or fight them for
+   legibility, and text-decoration is already spoken for by
+   .token-substitutable's dotted underline, which an edited position
+   still needs while What If is armed. Background and inset shadow
+   compose under every one of them and cost no layout. The hover
+   highlight's white glow replaces the ring outright, which is
+   correct: "the pointer is here" is the more immediate fact. */
+.token-edited {
+  background: rgba(255, 159, 28, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(255, 159, 28, 0.45);
+  border-radius: 2px;
+}
+
 /* ---- Original-run preview (faded) ---- */
 
 .preview-notice {

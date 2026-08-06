@@ -3172,22 +3172,49 @@ function entropyProfileColumns() {
   );
 }
 
-// Every position an edit touched. Sequential What If rounds each push
-// their own entry, so a branch can carry more than one, and a
-// diffusion remask contributes a whole group at once. Sibling to
-// editDivergencePosition, which reduces the same records to their
-// minimum for the popover's pager.
-function editedProfilePositions() {
-  var seen = {};
-  var positions = [];
+// Every position an edit touched, as a lookup. Sequential What If
+// rounds each push their own entry, so a branch can carry more than
+// one, and a diffusion remask contributes a whole group at once.
+// Sibling to editDivergencePosition, which reduces the same records
+// to their minimum for the popover's pager.
+//
+// Held rather than rebuilt because the token layer asks about every
+// position it draws, and a diffusion remask can hold dozens against
+// a canvas of hundreds. The memo keys on the log's identity and its
+// length, which between them cover every way it changes: a push and
+// the rollback's truncation move the length, and a new run or a
+// restored session replaces the array outright.
+var editedMarksCache = { log: null, count: -1, marks: {} };
+
+function editedPositionMarks() {
+  if (
+    editedMarksCache.log === remaskEdits
+    && editedMarksCache.count === remaskEdits.length
+  ) {
+    return editedMarksCache.marks;
+  }
+  var marks = {};
   for (var e = 0; e < remaskEdits.length; e++) {
     var group = remaskEdits[e].token_positions || [];
     for (var p = 0; p < group.length; p++) {
-      var pos = group[p];
-      if (seen[pos] !== true) {
-        seen[pos] = true;
-        positions.push(pos);
-      }
+      marks[group[p]] = true;
+    }
+  }
+  editedMarksCache = {
+    log: remaskEdits,
+    count: remaskEdits.length,
+    marks: marks,
+  };
+  return marks;
+}
+
+// The same positions as a list, for the profile's dashed markers.
+function editedProfilePositions() {
+  var marks = editedPositionMarks();
+  var positions = [];
+  for (var key in marks) {
+    if (marks[key] === true) {
+      positions.push(Number(key));
     }
   }
   return positions;
@@ -3266,14 +3293,19 @@ function drawEntropyProfile() {
       values: original,
       alpha: 1 - runBlend,
       // The scrubber indexes the branch, so the pre-edit run gets no
-      // current-position emphasis of its own.
+      // current-position emphasis of its own. It shares the branch's
+      // filled boundary, though: the positions align, so a column
+      // dimmed in one run and lit in the other would read as a
+      // difference between them rather than as a scrub.
       current: -1,
+      filled: current,
     });
   }
   drawEntropyProfileSeries(ctx, layout, {
     values: values,
     alpha: paired ? runBlend : 1,
     current: current,
+    filled: current,
   });
   drawEntropyProfileEditLines(ctx, layout, edits);
 
@@ -3334,6 +3366,12 @@ function drawEntropyProfileEditLines(ctx, layout, positions) {
 // One profile's columns, at a shared alpha for the crossfade times
 // each bar's own emphasis. ``current`` is the position the scrubber
 // sits on, or -1 for a series the scrubber does not index.
+//
+// ``filled`` is the last position the scrubbed frame has reached.
+// Past it the bars fade back, so the profile says the same thing the
+// canvas above it does: those tokens do not exist yet at this frame.
+// A separate field from ``current`` because the pre-edit series takes
+// no bright column but does share the boundary.
 function drawEntropyProfileSeries(ctx, layout, series) {
   if (series.alpha <= 0.01) {
     return;
@@ -3342,7 +3380,7 @@ function drawEntropyProfileSeries(ctx, layout, series) {
     var value = series.values[i];
     var frac = overlaysEntropyFraction(value);
     var height = Math.max(1, frac * (layout.cssHeight - 2));
-    var emphasis = i === series.current ? 1 : 0.68;
+    var emphasis = entropyProfileEmphasis(series, i);
     ctx.globalAlpha = emphasis * series.alpha;
     ctx.fillStyle = entropyColor(value);
     ctx.fillRect(
@@ -3353,6 +3391,29 @@ function drawEntropyProfileSeries(ctx, layout, series) {
     );
   }
   ctx.globalAlpha = 1;
+}
+
+// Three tiers: the scrubber's own column, the positions the frame has
+// reached, and the ones it has not. Kept low enough to still read as
+// a bar, since the shape of the tail is the useful part of scrubbing
+// back through a run.
+var ENTROPY_PROFILE_CURRENT = 1;
+var ENTROPY_PROFILE_FILLED = 0.68;
+var ENTROPY_PROFILE_UNFILLED = 0.2;
+
+function entropyProfileEmphasis(series, index) {
+  if (index === series.current) {
+    return ENTROPY_PROFILE_CURRENT;
+  }
+  // A series without a boundary is fully filled, which is what the
+  // profile looks like while a run is still streaming.
+  if (typeof series.filled !== "number" || series.filled < 0) {
+    return ENTROPY_PROFILE_FILLED;
+  }
+  if (index <= series.filled) {
+    return ENTROPY_PROFILE_FILLED;
+  }
+  return ENTROPY_PROFILE_UNFILLED;
 }
 
 // Light up the column for the token under the pointer: a faint
@@ -3962,6 +4023,12 @@ function tokenMaskedFn(index) {
 // selection, or invite the click that makes one, or invite the hover
 // that opens its candidates. The latter two are edit-mode
 // affordances, so they never appear on a stacked layer.
+// The two orange marks are different claims and must not be confused.
+// token-remasked means "selected, about to be redrawn", which is true
+// for the length of one edit; token-edited means "this run was
+// intervened here", which stays true for as long as the run exists.
+// The in-edit selection wins where they overlap, since it is the one
+// the user is acting on.
 function tokenClassFn(index, tok, masked) {
   if (remaskedPositions[index] === true) {
     return "token-remasked";
@@ -3970,6 +4037,9 @@ function tokenClassFn(index, tok, masked) {
     return "";
   }
   var classes = [];
+  if (editedPositionMarks()[index] === true) {
+    classes.push("token-edited");
+  }
   if (remaskMode === "edit") {
     classes.push("token-clickable");
   }
@@ -6225,22 +6295,16 @@ if (modelSelect && modelSelectList) {
 }
 
 // Scrubber event listeners.
+//
+// Dragging goes through navigateToFrame, the same path the arrow
+// buttons and the keyboard take. It used to have its own copy of that
+// body, which drifted: the copy never hid the candidate popover and
+// never repainted the entropy profile, so a drag left the profile
+// showing the frame the arrows had last selected.
 scrubberSlider.addEventListener(
   "input",
   function () {
-    saveFrameSelections(currentScrubFrame);
-    var val = parseInt(scrubberSlider.value, 10);
-    currentScrubFrame = val;
-    updateScrubberLabel();
-    restoreFrameSelections(val);
-    if (remaskMode === "select_target") {
-      renderTargetPlaceholder(val);
-    } else if (val < frameHistory.length) {
-      renderFrameWithTokens(val);
-    } else {
-      renderTargetPlaceholder(val);
-    }
-    updateGuidedUI();
+    navigateToFrame(parseInt(scrubberSlider.value, 10));
   }
 );
 

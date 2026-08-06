@@ -84,6 +84,24 @@ function entropyGlowColor(e) {
   return "hsl(" + overlaysEntropyHue(e) + ", 100%, 74%)";
 }
 
+// Faded twin, for positions a scrubbed frame has not reached yet.
+// Alpha rather than a darker hue, so the ramp is still legible and
+// the bar still reads as itself: the shape of the tail is what makes
+// scrubbing back through a run worth doing.
+//
+// Its own function because withAlpha takes hex and this ramp is
+// generated in HSL. Baked into the per-bar fill on the Analytics
+// chart, since Chart.js has no per-bar opacity of its own.
+var ENTROPY_DIM_ALPHA = 0.2;
+
+function entropyDimColor(e) {
+  var frac = overlaysEntropyFraction(e);
+  var sat = Math.round(55 + 30 * frac);
+  var light = Math.round(52 + 8 * frac);
+  return "hsla(" + overlaysEntropyHue(e) + ", " + sat + "%, "
+    + light + "%, " + ENTROPY_DIM_ALPHA + ")";
+}
+
 // Place the candidate popover horizontally: aligned to the token's
 // left edge, pulled back inside the viewport when the token sits near
 // the right margin. Both arguments are viewport-space rects (the

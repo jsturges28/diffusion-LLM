@@ -72,7 +72,291 @@ compare runs in an analytics suite.
 
 ## Recently shipped (this session)
 
-**Latest pass: the token metrics strip.** One always-present readout above each
+**Latest pass: rank everywhere, the chosen row, the edit tint, scrub dimming,
+and the retained KV cache.** Started as one reported discrepancy and ended in
+the sampler's attention state. `pytest` (226/226, up from 192), `node --check`,
+ReadLints and the 70-column audit are clean; `ruff` is at 156 findings against
+the 159 baseline, with `_substitute_loop` brought back under the 70-line soft
+target by lifting `_emit_seed_frame` out of it. Checklist items 102 to 113
+carry the GPU and display work.
+
+- **The discrepancy was real arithmetic, not a display bug.** A typed token the
+  position *had* captured measured 38.3% against a recorded 39.8%. Neither is
+  wrong. A run samples position *n* from one decode step against a cache built
+  incrementally; the probe rebuilt the same prefix as one prefill. Same values,
+  different order of accumulation, and `bf16` has 8 mantissa bits, so the two
+  part company by about an ulp, which is a percentage point down here. The
+  maintainer's own diagnostic pinned it: position 0 agreed (both prefill,
+  nothing cached to differ over) and position 1 did not. Rounding the display
+  to hide it would have been a lie about a genuine difference.
+- **Two fixes, and the order matters.** `fillMeasureFromRecord` runs *before*
+  `requestTypedProbe` sends anything: if the typed token is one of the five the
+  position recorded, the stored probability is the answer, and it is better
+  information than a measurement rather than merely cheaper. That alone closes
+  the reported case. The cache is what makes a *genuine* measurement agree,
+  and is worth having for its own sake.
+- **`DynamicCache.crop` mutates in place.** This is the trap in the whole cache
+  change. Slicing the retained cache with it would consume the object a later
+  probe still needs, and the failure would look like a wrong number rather than
+  an exception. `_sliced_cache` builds fresh views instead, and the record is
+  never handed to a caller directly.
+- **Every disagreement falls back to a fresh prefill.** `_reuse_cache` returns
+  None unless the requested prefix matches what the cache was built from, ids
+  included. Answering confidently from the wrong sequence is exactly the
+  failure mode that still returns a plausible number, which is the worst kind
+  here. Position 0 prefills unconditionally: there is no cached token to decode
+  against.
+- **Residency is bounded at `AR_CACHE_BYTES_MAX` (512 MiB)**, and an oversized
+  cache is *dropped* rather than trimmed, since a run large enough to pass the
+  ceiling was never worth holding for a session. Invalidation rides
+  `last_run_state = None` in `handle_generate`, the one place the pinned run
+  changes, so the cache cannot outlive the run it describes.
+- **Rank needed the model's output width, not the tokenizer's vocabulary.**
+  128,256 against 128,000 for SmolLM3, because the embedding is padded for
+  alignment. A rank is a place among the tokens that could have been ranked, so
+  `describe_tokenizer` grew `model_vocab_size` from `model.config.vocab_size`
+  and rides the plumbing tokenizer identity already had. Read from the config
+  rather than `lm_head.out_features`, since a tied-embedding checkpoint may
+  expose no linear head to measure.
+- **The captured five store no rank at all.** `torch.topk` returns them in
+  descending order, so a row's index *is* its rank, and `overlaysAltRank`
+  prefers an explicit `alt.rank` and falls back to `index + 1`. `rank` is set
+  on exactly one entry, the appended sixth, and `_dump_alternatives` uses
+  `exclude_none` so five nulls per position do not accumulate in a file already
+  running to tens of kilobytes.
+- **The sixth row is appended, never swapped for the fifth.** The five are a
+  statement about what the model preferred; dropping one to make room would
+  quietly falsify it. `alt-row-outside` also makes the row inert under What If,
+  because forcing the token already sitting there would spend a full
+  regeneration arriving where it started.
+- **`.token-edited` is a background, not a color**, so it composes under the
+  Heatmap and Entropy overlays rather than competing for the token's color. It
+  is deliberately softer than `.token-remasked`, which means something else:
+  one is "selected, about to be redrawn", the other is "this run was intervened
+  on here", which stays true afterwards. Both pages memoize the edit positions
+  into a lookup map keyed on the edit log's identity, since the class function
+  runs per token per render.
+- **Scrub dimming needed two mechanisms, not one.** The generator draws its own
+  canvas, so it took a third emphasis tier in `drawEntropyProfileSeries` with
+  its own `filled` boundary. Chart.js has no per-bar opacity, so the Analytics
+  chart bakes alpha into each bar's fill (`entropyDimColor`, returning `hsla`)
+  and multiplies with the crossfade's whole-dataset alpha, refreshed through
+  `refreshEntropyFills` with `update("none")` rather than a redraw.
+- **A stub that returns an integer for `past_key_values` cannot test a cache.**
+  The sampler suite's `StubModel` did exactly that, so `_cache_bytes` failed on
+  it and the cache path was untestable. It now records each call's width and
+  whether it was cached, and `StubCache` mimics the `DynamicCache` surface,
+  which is what lets the tests assert the *shape* of the call (one token, cache
+  present) rather than only its result.
+- **One test hung the machine before it was fixed.** `_stub_cache` takes a
+  sequence length and the oversized-cache test passed it `AR_CACHE_BYTES_MAX`,
+  a byte count, asking for roughly 68 GB. It now lowers the ceiling with
+  `monkeypatch` instead, which is both instant and clearer about what is being
+  measured. If you add a cache test, size the stub, not the bound.
+
+**Previous pass: the probe, the rank, and the strip's candidate readout.** Closes
+the gap left by the typed row having no figure to show. `pytest` (192/192, up
+from 180), `node --check`, ReadLints and the 70-column audit are clean, and
+`ruff` is now installed, so its gates were actually run: 156 findings against
+the documented 159 baseline, with `create_worker_app` down from complexity 23
+to 20 and `_ws` below the gate entirely. Checklist items 93 to 101 carry the
+GPU and display work.
+
+- **The probe takes `gen_lock`; the tokenize beside it does not.** A vocabulary
+  lookup is microseconds and the lock exists to serialize generation, but a
+  probe is a real forward pass, and admitting one alongside a generation would
+  put two passes on the same device and its memory. Same busy reply as the
+  streaming handlers.
+- **`Backend.handle_probe` raises by default** rather than being implemented on
+  the base class the way `handle_tokenize` is. Answering needs a committed
+  prefix to prefill up to; a diffusion run reveals positions out of order and
+  has no such thing, so a base implementation would be a promise it cannot
+  keep. It is validated through the same `_substitute_position` the
+  substitution uses, because a probe that answered for a position the
+  substitution would refuse is worse than no answer.
+- **`probe_token` shares its prefill with the substitution** through
+  `_position_distribution`, extracted from `_probe_forced_position`. That
+  sharing is the point rather than a tidiness win: the strip quotes a figure
+  before you run and the branch reports one after, and they cannot diverge
+  because they are one read of one distribution.
+  `test_probe_agrees_with_a_typed_substitution` pins it, and
+  `test_probe_reproduces_a_recorded_probability` uses a *captured* candidate as
+  an independent oracle, so an off-by-one in the prefill boundary fails loudly
+  instead of returning a plausible number.
+- **Rank is `(probs > p).sum() + 1`**, a comparison and a sum on a distribution
+  already in hand, so it is free next to the pass that produced it. Its
+  denominator is `probs.numel()`, the model's output width, deliberately *not*
+  the tokenizer's `vocab_size`: a padded embedding makes those differ (128,256
+  against 128,000 for SmolLM3), and what was ranked is what could have been
+  ranked. Bracketed at both ends by tests, since the stub never favors EOS:
+  the run's own greedy token must come back 1 and EOS must come back last.
+- **Run off the event loop.** `handle_probe` goes through
+  `run_in_executor`, because the loop still has a socket to serve while a
+  forward pass happens, and on CPU that is not a short wait.
+- **The precision problem is why the readout landed in the strip.** A typed
+  token is most interesting where it is improbable, and the popover row is
+  320px: it holds `<0.1%` and no more. The strip had half its length idle.
+  Hovering any candidate row now fills the right half with three significant
+  figures plus, for a typed token, the rank. The left group keeps reporting the
+  hovered token throughout, since the longest left readings barely reach the
+  midpoint and holding both makes the two chips a legend: grey for the token
+  the run committed, green for one it merely weighed. The right group hides
+  entirely while idle, unlike the left, which stays visible as a key to what
+  the strip reports.
+- **Rows bind `mouseenter` / `mouseleave`, not `mouseover`.** Those do not
+  bubble, so crossing the bar and the percentage inside a single row cannot
+  retrigger the readout.
+- **`renderAltsPopover` clears the candidate before discarding its rows.** A
+  removed node never fires the `mouseleave` that would have cleared it, so
+  without this a readout for a row that no longer exists sits in the strip
+  until the next hover. Cleared in the one function every rebuild comes
+  through, not per caller.
+- **The typed row reads its measurement at hover time**, so it binds its own
+  handlers rather than reusing `overlaysBindAltHover`, which captures its
+  candidate when the row is built. The probe can land after the row is drawn,
+  and a build-time capture would never see it.
+- **`typedProbeRequest` is a second counter, separate from
+  `typedEntryRequest`.** A retry after a confirm has to invalidate the
+  outstanding probe without disturbing the preview sequence, which is still
+  counting keystrokes. The reply is also matched against the confirmed token,
+  because a retry between request and reply would otherwise label the new
+  token with the old one's odds.
+- **`overlaysMetricProbability` types its argument rather than coercing it.**
+  A pending measurement arrives as `null` and `Number(null)` is `0`, which
+  would report a token the model has not been asked about yet as one it gave no
+  weight to. The solidified row shows `…` for the same reason.
+- **`overlaysBuildAltRow` was lifted into `overlays.js`.** Both pages had a
+  copy identical but for returning a row against a fragment, and both needed
+  the same hover wiring, which is the same argument that put the strip there.
+- **The worker's dispatch was simplified while ruff was to hand.** Adding the
+  probe branch pushed `create_worker_app` and `_ws` further past a gate they
+  were already over, so the load gate moved into `_await_model_ready` and the
+  three byte-identical streaming branches collapsed into one dispatch through a
+  dict of bound methods. Behavior-identical; `_ws` is now under the gate.
+
+**Earlier pass: tokenizer identity, the typed token, and an AR top-k knob.**
+Three commits, sequenced. `pytest` (180/180, up from 157), `node --check`,
+ReadLints, and the 70-column audit are clean. Checklist items 81 to 92 carry
+the GPU and display work.
+
+### Commit 1: the tokenizer's identity
+
+- **Read off the loaded object, not declared in the registry.**
+  `describe_tokenizer` in `worker_base.py` reports `class`, `name_or_path`,
+  `is_fast` and `vocab_size` from the live tokenizer in `/health`'s ready
+  payload. It must not ride `ModelCapabilities`: that is static registry data,
+  served with no worker running, so a name there is a hand-maintained string
+  free to drift from whatever the checkpoint actually loads. For a readout
+  shown to the user as fact, drift is the only failure that matters.
+- **`vocab_size`, not `len(tokenizer)`.** The latter includes the special
+  tokens grafted on after the base vocabulary. The base figure is the one the
+  entropy scale refers to, since its natural log is the most a position can
+  carry, so it is the one worth showing beside a nats reading.
+- **Every field is optional and the whole dict degrades.** An unrecognizable
+  tokenizer reports only its class rather than failing a health check;
+  `describe_tokenizer(None)` is `{}`. On the client, `tokenizerMetaRow` returns
+  `""` when the key is absent, so the runs saved before this existed render
+  exactly as they did. No endpoint changed: `list_runs` returns raw metadata
+  dicts, so a new key flows through on its own.
+- **Cached where `active_versions` is** (`ModelManager._apply_health`, the
+  `status == "ready"` branch), cleared in both `activate()` and
+  `_stop_locked()` beside it, exposed on `/api/models` as `active_tokenizer`,
+  and written into `metadata["reproducibility"]["tokenizer"]` at save time so a
+  run keeps its own answer after its checkpoint moves on.
+
+### Commit 2: the typed token
+
+- **The real work was making the popover pinnable**, and that is a change to
+  what the popover *is*, not a detail of the text field. It was hover-scoped
+  and destructive: `hideAltsPopover` blanks `textContent`, and it fired on the
+  popover's `mouseleave`, the output area's `mouseleave`, any capture-phase
+  `scroll`, and `resize`. Four ways to erase a half-typed word.
+- **Two halves, and the second is the one that matters.** The closers stand
+  down while `altsPopoverPinned()`, *and* the entry's state lives outside the
+  DOM (`typedEntryDraft`, `typedEntryActive`, `typedEntryPreview`,
+  `typedEntryToken`, `typedEntrySeeded`) so `buildTypedEntry` rehydrates the
+  field after any rebuild. That is what makes a re-render harmless rather than
+  merely rare, which matters because `renderAltsPopover` rebuilds every child
+  on each hover *and* each page flip.
+- **The pin cannot test "the draft is non-empty".** The field arrives
+  pre-seeded with a leading space, so that test would pin the popover the
+  instant the pointer crossed a mid-sentence token and it would never close
+  again. It tests `typedEntryActive`, set on focus and cleared only by a
+  deliberate exit. Blur is deliberately not an exit: clicking confirm blurs
+  the input.
+- **A cancel decides what to leave behind by where the pointer is.** Over the
+  popover (the cancel button) it re-renders to the candidates. Anywhere else
+  (Escape, a click outside) it closes, because nothing will ever come along to
+  close a box the pointer has already left, and it would sit there stranded.
+- **Typing refreshes in place; only structure rebuilds.** `onTypedInput` and
+  the preview reply call `refreshTypedControls`, which touches the confirm
+  state and the pieces and nothing else. Only confirming, retrying, and
+  cancelling go through `redrawTypedEntry`. Rebuilding on each keystroke was
+  the first version and it is wrong: recreating the input tears the focused
+  element out from under the caret, and characters typed before it is put back
+  go nowhere. The rehydration in `buildTypedEntry` is the safety net for the
+  rebuilds that do happen (a page flip, a retry), not the per-keystroke path.
+- **The preview is dispatched outside `gen_lock`.** `MSG_TOKENIZE` /
+  `MSG_TOKENIZE_RESULT`, answered by a default `Backend.handle_tokenize` on the
+  base class using `getattr(self, "tokenizer", None)`, so diffusion What If
+  inherits a working preview whenever it arrives. Taking the lock would stall
+  typing behind a running model; it exists to serialize generation, not to
+  guard a microsecond vocabulary lookup.
+- **The client carries a monotonic `request_id` and also compares the echoed
+  text.** Debouncing does not guarantee ordering, and the draft can change
+  without a new request going out.
+- **A standalone encode is the honest question.** `tokenize_pieces` uses
+  `add_special_tokens=False` because this is a fragment spliced into an
+  existing sequence. Substitution keeps the prefix ids verbatim and continues
+  from them, so the sequence is never re-encoded and the boundary effects that
+  make BPE context-sensitive cannot arise. All that is left to ask is whether
+  the text is exactly one entry.
+- **Server-side re-resolution is the contract, not a duplicate check.**
+  `_check_typed_token` re-encodes and requires both exactly one id *and* that
+  it matches the id the client sent, which is what stops a preview that went
+  stale mid-keystroke from forcing a token the user never saw. The
+  captured-candidate branch was left strict rather than loosened, so an
+  unflagged request still cannot smuggle in an arbitrary id.
+- **The leading space is read from the token being replaced**, not guessed
+  from sentence position. Most tokenizers carry the space inside the word
+  token, so replacing a mid-sentence word without it welds the result onto the
+  previous one. Reading the original is exact where a heuristic is only usually
+  right, and one backspace overrides it. `typedEntrySeeded` makes the offer
+  once per position, so a deliberate backspace is not helpfully undone by the
+  next rebuild.
+- **True confidence needed no extra compute, only a moved boundary.**
+  `_substitute_loop` used to prefill prompt + prefix + forced token together;
+  `_probe_forced_position` now stops just short of the forced token, so the
+  last position's logits *are* the distribution that position was sampled from
+  and `probs[forced_id]` is the honest answer. The forced token is then
+  forwarded against that cache through a new optional `past` on
+  `_stream_tokens`. Same total work, two calls instead of one, and it survives
+  `budget == 0` where `_stream_tokens` never runs. The seed frame moved after
+  the probe so it can carry the measured value.
+- **`forced_entropy` stays `state["entropies"][position]` in both branches.**
+  Entropy describes the distribution at that position, which does not change
+  with the token you force into it. This is the line someone would plausibly
+  "fix" by mistake.
+
+### Commit 3: AR sampling top-k
+
+- **Distinct from `TOP_K_ALTERNATIVES = 5`**, which is the capture count and
+  stays fixed. The default is `-1`, not `0`: both disable the filter, but `0`
+  reads as "no candidates at all", which is the one thing a sampling
+  truncation cannot mean. `_top_k_filter` still disables on `<= 0`, so runs
+  saved under the older `0` default replay unchanged, and
+  `test_top_k_off_changes_nothing` pins both spellings.
+- **Applied before top-p**, matching Hugging Face. The order is observable, not
+  academic: top-k renormalizes over what it kept, so a nucleus measured against
+  that inflated distribution bites harder.
+  `test_top_k_runs_before_top_p` pins it with an input where the two orders
+  keep different numbers of tokens. Finding one took two attempts, because both
+  filters are "keep a prefix of the sorted order and renormalize" and they
+  coincide unless top-k removes something top-p would have kept.
+- **The substitution path is greedy**, and argmax is immune to both filters, so
+  it passes `top_k=-1` explicitly rather than relying on a default.
+
+**Previous pass: the token metrics strip.** One always-present readout above each
 token canvas, on the generator and in the Analytics detail modal, replacing the
 native `title` tooltip on tokens. Entirely frontend; no Python module was
 touched. `pytest`, `node --check`, ReadLints, and the 70-column audit are clean.
@@ -329,7 +613,8 @@ display work.
   (129 `E501`, mostly 71 to 73 column overruns concentrated in
   `llada_sampler.py`; 10 `PLR1702`; 4 `C901`, the worst being
   `create_worker_app` at 23 and `_save_run_blocking` at 21). The count after
-  this session's work is also 159, so nothing here added to it.
+  this session's work is 156, since the probe pass brought `create_worker_app`
+  to 20 and `_ws` under the gate.
 - **Frames now say which positions were born.** `revealed` lists the positions
   that became resolved in that frame and had not been resolved earlier in the
   same canvas. The monotonicity is the load-bearing part and is documented once
@@ -1656,76 +1941,65 @@ end to end, reusing the frame/token contract.
 ## Where to pick up
 
 This session shipped the `results/` rename, all of **AR Phase C**, and the
-passes listed under "Recently shipped". Everything through checklist item 66 has
-been validated on hardware by the maintainer; **items 67 to 79 have not**, so
-they are the first task. After that, the next candidate is the **What If? typed
-token** (deliberated already, decisions recorded below), then Mamba-3, then
-extending entropy / top-k to the diffusion models. Deliberate each in Ask mode
-before Plan.
+passes listed under "Recently shipped". Everything through checklist item 101
+has been validated on hardware by the maintainer; **items 102 to 113 have not**,
+so they are the first task. After that, the agreed order is the **Analytics run
+collections** (favorites, tabs, and storage-pressure eviction, still
+un-deliberated), then **Mamba-3**, then extending entropy / top-k to the
+diffusion models. Deliberate each in Ask mode before Plan.
 
-**Deferred with its decisions already settled: the What If? typed token and an
-AR Top-K knob.** This was deliberated with the maintainer alongside the metrics
-strip and split off so the strip could ship on its own. Nothing below is open;
-it is ready to plan.
+**KV cache retention: shipped, with one thing left unmeasured.** The cache is
+retained on `last_run_state` and reused by both the probe and the substitution
+(`_reuse_cache` / `_sliced_cache` / `_cache_record` in `ar_sampler.py`). What
+was *not* done is the measurement: the claim that the prefill dominates a
+substitution's cost is well-founded but was never timed on hardware, since the
+sandbox has no GPU. Checklist item 104 asks for the qualitative version on the
+CPU build. If a future session wants the number, time a substitution at a late
+position in a several-hundred-token run with the cache present and with
+`state.get("cache")` forced to None.
 
-- **The shape.** Under the popover's five candidates, a text box reading *Enter
-  your own*. Clicking it drops a green check and a red X out from behind its
-  right edge (the status chips' motion, without the fade); clicking outside is
-  a cancel. Confirming *solidifies* the entry into a row you then click to run,
-  exactly like a candidate, with a small retry icon at its right to redo it.
-- **Tokenization is a vocabulary lookup, not re-tokenization, and this is the
-  key insight.** `streaming_substitute` keeps `prefix_ids[:position]` verbatim
-  and continues decoding, so the sequence is never re-encoded and the boundary
-  effects that make BPE context-sensitive cannot arise here. Resolving the
-  typed text means encoding that string standalone and asking whether it is
-  exactly one vocabulary entry. The tokenizer is already loaded
-  (`self.tokenizer`, already used by `_capture_candidates`), and encoding a
-  short string is microseconds, so a live preview as the user types is
-  practical over the existing websocket.
-- **Ship exactly one token first.** The blocker for multi-token is not
-  validation, it is alignment: a substitution of length *n* shifts every
-  downstream index, and `overlaysComputeDiff`, the position-indexed entropy
-  chart, and the dashed edit marker are all index-based. Confirm stays disabled
-  until the resolved count is exactly 1 and re-enables live as the text
-  changes. When multi-token lands, cap on **resolved token count** (4) rather
-  than characters, so the live preview is already computing the limit and the
-  limit explains itself.
-- **Show the pieces, not the why.** The split visualizer is endorsed: render
-  each piece with its id and the count, hoverable, reusing the glow keyframes.
-  Do not promise causation. BPE reaches a split through a merge sequence that
-  fast tokenizers do not expose cheaply, so there is no short interpretable
-  reason available; the maintainer agreed to leave that rabbit hole alone.
-- **Name the tokenizer.** Surface which tokenizer produced the split, since it
-  is the one honest answer to "why these pieces" that is available for free,
-  and it is what makes the pieces comparable across models later. The worker
-  already holds the object, so `type(self.tokenizer).__name__` plus
-  `tokenizer.name_or_path` (and `is_fast`) costs nothing; the open question is
-  only whether it rides the existing model capabilities payload, which every
-  page already has, or the typed-token preview response, which is the only
-  place it is needed today. Prefer capabilities: it is a property of the model,
-  not of one keystroke, and putting it there is what lets the About or Help
-  copy and any later tokenizer-specific view read it without a new round trip.
-- **Color.** Single token in the app's normal green; multiple pieces in
-  alternating tints; the warning orange `#ff9f1c` **only** when the count
-  exceeds what is allowed, since that color already means edit/remask
-  everywhere else and would misread on the ordinary case.
-- **Leading space, decided by the token being replaced** rather than by a
-  sentence-position heuristic: if the original token at that position began
-  with a space, pre-seed one, and let a single backspace remove it. That is
-  exact where a rule about "mid-sentence" would only be usually right.
-- **`forced_conf` gets strictly better.** It currently comes from the captured
-  candidate's stored probability, which a typed token has none of, and logits
-  are not persisted. But `streaming_substitute` re-runs the prefix anyway, so
-  it can read the typed token's **true** probability from that distribution.
-  That is the most interesting number the feature produces: it can honestly
-  report a wild choice as 0.003. `_validate_substitute`'s current rejection
-  ("not among the captured candidates") is deliberate and needs a second,
-  explicitly typed path rather than loosening.
-- **Top-K for AR, with one correction to the framing.** Hugging Face applies
-  top-k *before* top-p, so they compose as a truncation followed by a nucleus
-  cut rather than as alternatives. The knob is still worth having. The
-  configurable *capture* count (how many candidates the popover lists) is
-  separately deferred until the typed token ships.
+**Follow-ons left open by the typed token.** Nothing
+here blocks anything; each is a deliberate stopping point with its reasoning
+recorded, so a later session does not have to rediscover why the line was drawn
+where it was.
+
+- **Multi-token substitution.** Shipped at exactly one token, and the blocker
+  was never validation, it is **alignment**: a substitution of length *n*
+  shifts every downstream index, and `overlaysComputeDiff`, the
+  position-indexed entropy chart, and the dashed edit marker are all
+  index-based. When it lands, cap on **resolved token count** (4 was the
+  agreed figure) rather than on characters, so the live preview is already
+  computing the limit and the limit explains itself. The server-side check in
+  `_check_typed_token` is the one place that hard-codes `len(pieces) != 1`.
+- **The "why" behind a split stays out of scope**, and this was a deliberate
+  call rather than an omission. BPE reaches a split through a merge sequence
+  that fast tokenizers do not expose cheaply, so there is no short
+  interpretable reason available to show. Naming the tokenizer is the honest
+  answer that *is* available for free, which is what the Analytics row does.
+  Do not reopen this without a concrete plan for getting merge ranks out of
+  the fast tokenizers.
+- **A configurable capture count** (how many candidates the popover lists,
+  currently `TOP_K_ALTERNATIVES = 5`) is still deferred. It is distinct from
+  the sampling `top_k` that shipped, and would need a decision about what
+  happens to already-saved runs whose `alternatives.json` holds five.
+- **Diffusion What If** would inherit the typed preview for free:
+  `Backend.handle_tokenize` is a default on the base class reading
+  `getattr(self, "tokenizer", None)`, so all three workers already answer it.
+  What is missing is the substitution path itself, not the tokenization.
+- **The popover pin is generator-only.** Analytics needs none of it, because
+  its popover is read-only: substitution only ever applies to the live run. If
+  Analytics ever gains an interactive popover, the pin has to come with it,
+  and the two halves to copy are the closer suppression *and* the
+  state-outside-the-DOM rehydration, not just the first.
+- **Two probabilities for the same position will disagree unless they are the
+  same call.** This cost a debugging pass and is worth carrying forward. In
+  `bf16` a prefill and an incremental decode over identical values differ by
+  about an ulp, which is a visible percentage point at these magnitudes. Any
+  future readout that recomputes something a run already measured has this
+  problem, and the answers, in order, are: prefer the recorded figure, then
+  reuse the run's own cache, and only then measure afresh. Do not round the
+  display to paper over it; that hides a real arithmetic difference rather
+  than resolving it.
 
 **Held deliberately, pending the sweep.** The ambitious version of the load
 gap fix was to *measure* the unmeasurable phase: time the worker startup on
@@ -2398,6 +2672,174 @@ in-sandbox (no display).*
     run. Repeat both in the Analytics detail modal, where the strip is the
     thing being protected. Reaching down into a below-placed popover to click
     a candidate should still keep it open.
+81. **The tokenizer row.** Do a fresh SmolLM3 run and save it, then open it in
+    Analytics: the detail panel should carry a **Tokenizer** row naming the
+    class with its vocabulary size in parentheses. Open any run saved before
+    this session and confirm the row is simply **absent** rather than blank or
+    "unknown". Repeat the save on LLaDA and on DiffusionGemma, since the field
+    is reported by the shared worker base and each of the three loads its
+    tokenizer differently. `results/<run>/metadata.json` should carry
+    `reproducibility.tokenizer` with `class`, `name_or_path`, `is_fast` and
+    `vocab_size`.
+82. **The pin survives pointer drift.** On an AR run with **Alternatives**,
+    arm **What If?**, hover a token, and click into **Enter your own**. Now
+    move the pointer well off the popover, across other tokens, and out of the
+    output area entirely. The popover must stay open, keep your text, and stop
+    retargeting to whatever you pass over. Type a few more characters from
+    where the pointer now sits to confirm the field still has focus.
+83. **The pin survives a scroll and a resize.** With a draft live, scroll the
+    page and resize the window. The box should stay put with the draft intact
+    rather than closing or re-anchoring. (Staying put is intended: re-anchoring
+    would slide the field out from under the pointer.)
+84. **The three cancels.** With a draft live, press **Escape**: the popover
+    closes and the draft is gone. Do it again and click the red cross instead:
+    the popover stays open on the candidates. Do it a third time and click
+    somewhere else on the page: the popover closes. In all three cases hovering
+    a token afterwards should open a fresh, empty entry.
+85. **The leading space.** Hover a **mid-sentence** token (one whose text
+    starts with a space) and click into the field: it should already contain a
+    single space. Hover a token at the very start of a sentence and it should
+    be empty. Backspace the seeded space away, then move the pointer around
+    inside the popover to force a redraw: the space must **not** come back.
+86. **Confirm gates at exactly one token.** Type something that resolves to
+    several pieces (`unfortunatelyy` is a good bet): the pieces render in
+    alternating tints with their ids, the count reads orange, and the green
+    check is disabled. Delete a character until it resolves to one: the count
+    goes green and the check enables, live, without needing to blur the field.
+    Confirm and check the solidified row appears with a **yours** tag.
+87. **A typed token reports an honest probability.** Confirm a deliberately
+    unlikely word, click the solidified row to run it, and read the metrics
+    strip at that position: the confidence should be genuinely low (well under
+    the captured candidates' probabilities) rather than a placeholder. Then do
+    the same with a word that *was* one of the five captured candidates: the
+    measured value should match what the popover showed for it. Both cases:
+    the position's **entropy** must be unchanged from the original run.
+88. **Retry on a solidified row.** After confirming, click the small
+    counter-clockwise icon at the row's right. It must return you to an empty,
+    re-seeded field **without** running the substitution it is sitting inside.
+89. **The typed path still lands as a real edit.** Run a typed substitution to
+    completion, Confirm, and check the branch behaves like any other: the edit
+    marker at that position, **Diff vs Original** available, the entropy
+    profile carrying both runs, and the saved run opening cleanly in Analytics.
+90. **Top-k does something, and nothing by default.** Generate with Top-k at
+    its default -1 and a fixed seed, then repeat: the output should be
+    identical to what the same seed produced before this session. Now set
+    Top-k to 1 with a temperature above 0: the run should become effectively
+    greedy. Set it to 5 with a high temperature and confirm the output is more
+    conservative than the same temperature at Top-k -1. Also try 0 explicitly:
+    it should behave exactly like -1, which is what keeps runs saved under the
+    old default replaying unchanged.
+91. **Top-k does not disturb What If.** With Top-k set to something small, run
+    a substitution: the continuation is greedy by design, so the branch should
+    look exactly as it would have with Top-k off.
+92. **The preview does not stall behind a run.** Start a long generation, and
+    while it is streaming, open the entry on a *previous* completed run's
+    popover if one is available. Typing should still preview without waiting
+    for the generation to finish. (If the UI does not allow reaching a popover
+    mid-run, this is satisfied by construction and can be skipped.)
+93. **The typed row carries a figure.** Confirm a token and watch the right end
+    of the solidified row, left of the retry icon: a dim `…` while the probe is
+    out, then a percentage. On GPU that may be too fast to see, so check it on
+    the CPU build where the pass is slow enough to catch. A deliberately wild
+    word should read `<0.1%` rather than `0.0%`.
+94. **The figure and the run agree.** Confirm a word that *was* one of the five
+    captured candidates: the typed row's percentage must match the percentage
+    that candidate's own row shows. Then click it to run, and the metrics strip
+    at that position afterwards must report the same number again. Three
+    surfaces, one distribution.
+95. **The candidate readout fills the strip's right half.** Hover any row of
+    the popover: a green-tinted chip with that candidate's text should appear
+    to the right of the Entropy field, followed by its probability to three
+    significant figures. The left group must keep reporting the token you are
+    hovering rather than going blank. Move off the row and the green group
+    should disappear entirely, not blank out to dashes.
+96. **The typed row's readout carries a rank.** Hover the solidified row: the
+    strip should show the probability *and* something like `#41,203 of
+    128,256`. The captured five deliberately show no rank, since their rank is
+    their order in the list you are already looking at. Confirm the denominator
+    is the model's output width (128,256 for SmolLM3), not the tokenizer's
+    128,000.
+97. **Hovering across one row does not flicker.** Sweep the pointer slowly
+    across a single candidate row, over its bar and its percentage: the strip's
+    right half must hold steady rather than blinking as you cross the children.
+98. **A retry does not leave a stale readout.** Hover the solidified row so the
+    strip fills, then click retry. The green group must clear rather than
+    keeping the token you just abandoned. Same check after flipping the
+    popover's **Original** / **Edited** pager while a row is hovered.
+99. **A probe cannot arrive for the wrong token.** On the CPU build, where the
+    pass is slow: confirm a token, and while the `…` is still showing, click
+    retry and confirm a *different* token. The row must not briefly show the
+    first token's odds.
+100. **The probe waits for a generation rather than colliding with it.** If you
+    can reach a popover while a generation is streaming, confirming there
+    should report that a generation is already running rather than starting a
+    second forward pass. (Satisfied by construction if the UI blocks it.)
+101. **Nothing regressed in the worker's dispatch.** The load gate and the
+    streaming handlers were refactored, so exercise all three plainly: a cold
+    model load (progress bar, then ready), a normal generation, a diffusion
+    resume, and a What If substitution. Then cancel a run mid-flight, and try
+    to start a second generation while one is running: it should still refuse
+    with "A generation is already running."
+102. **Item 94 is closed.** Repeat it exactly: confirm a word that *was* one of
+    the five captured candidates. The typed row's percentage must now equal
+    that candidate's own row to the digit, not merely approach it, because the
+    figure is read from the record rather than measured again. Then run it and
+    check the strip afterwards. This is the check the whole pass exists for.
+103. **A genuine measurement also agrees.** Type something the position did
+    *not* capture, note the percentage, then click it to run and read the
+    strip at that position. Those must match, which is what says the probe and
+    the substitution are using the same cache rather than two reconstructions
+    of it. Do this on a run of at least a few dozen tokens, where the prefix is
+    long enough for the cache to matter.
+104. **The cache actually speeds up a substitution.** On the CPU build, where
+    the difference is legible: run a long generation, then substitute at a late
+    position. It should begin producing tokens noticeably sooner than the same
+    substitution did before this pass, since the prefix is no longer prefilled
+    from scratch. GPU may be too fast to feel.
+105. **A stale cache cannot be used.** Generate, then generate *again* with a
+    different prompt, then substitute in the new run. The fallback is a fresh
+    prefill, so the only visible failure would be a wrong probability or a
+    branch that reads as though it continued the old prompt. Also substitute
+    twice in a row in the same run: the second must behave exactly like the
+    first, since slicing must not have consumed the cache.
+106. **Position 0 still works.** Substitute at the very first generated
+    position, which has no cached token to decode against and takes the prefill
+    path. Both the probe figure and the branch should be normal.
+107. **A sixth row appears when the run reached outside the five.** Set
+    Temperature high (1.2 or so), generate, then hover tokens: positions where
+    sampling picked outside the top five should show a sixth row below a dashed
+    rule, marked as the chosen one, with a rank in the hundreds or thousands.
+    The five above it must be unchanged, still five. At Temperature 0 or a
+    greedy run, no position should show a sixth row.
+108. **The sixth row is not clickable.** Arm What If and hover a position that
+    has one: the sixth row should not highlight as a target or respond to a
+    click, while the five above it still do.
+109. **Every row shows a rank on hover.** Hover each of the five in turn: the
+    strip's right half should read `#1 of 128,256` through `#5 of 128,256`,
+    matching their order in the list. Check an *old* run in Analytics too, saved
+    before `model_vocab_size` existed: the rank should still show its number,
+    with the denominator omitted rather than the whole reading suppressed.
+110. **Edited positions stay tinted.** Run a What If substitution, confirm it,
+    and scan the output: the position you forced should keep a soft orange wash
+    for as long as the run is on screen, distinguishable from the brighter mark
+    a position wears while being edited. Switch to the Heatmap and the Entropy
+    overlays and confirm both still read normally on top of it. Repeat on a
+    LLaDA run with several remask edits, and check the same run in Analytics.
+111. **Entropy bars dim behind the scrubber.** Drag the frame scrubber back to
+    the middle of an AR run: columns past that frame should fade while the
+    current one stays highlighted. Then do the same in the Analytics detail
+    modal, and while there, drag the **Original** / **Edited** crossfade: the
+    dimming must survive the crossfade rather than being overwritten by it, and
+    the bars should not flash or fully redraw as you scrub.
+112. **Nothing regressed in a plain run.** The sampler's inner loop changed, so
+    generate normally on both the GPU and CPU builds and confirm the output,
+    the per-token confidences, and the entropy profile all look as they did.
+    Cancel a run mid-flight, and start a fresh run immediately after a
+    substitution.
+113. **Memory does not creep.** The cache is now held across a run. Generate
+    several long runs back to back on GPU, watching the VRAM headroom pill: it
+    should return to the same figure after each, since a new generation
+    releases the previous run's cache before building its own.
 
 **0. The comparison surfaces (agreed with the maintainer, partly shipped).** The
 timing foundation exists to serve these, and the unifying idea is settled: **the

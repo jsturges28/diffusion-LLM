@@ -2156,10 +2156,27 @@ function setOverlayFrame(index) {
     overlayScrubSlider.value = String(clamped);
   }
   updateOverlayScrubLabel();
+  refreshEntropyFills();
   // The spans are about to be replaced, so an open popover would be
   // anchored to a detached element.
   hideAltsPopover();
   renderCurrentOverlay();
+}
+
+// Recolor the entropy bars for the frame the scrubber now sits on.
+// Only the fills change, so the datasets are edited in place and the
+// chart is updated with animation off: the slider fires continuously
+// while dragged, and an animated color transition per tick would lag
+// behind the pointer.
+function refreshEntropyFills() {
+  if (!chartEntropy) {
+    return;
+  }
+  var sets = chartEntropy.data.datasets;
+  for (var i = 0; i < sets.length; i++) {
+    sets[i].backgroundColor = entropyFillColors(sets[i].data);
+  }
+  chartEntropy.update("none");
 }
 
 function updateOverlayScrubLabel() {
@@ -2416,6 +2433,7 @@ function renderOverlayTokens(opts) {
   tokenHighlightPos = null;
   var edited = {
     colorFor: overlayColorFn(opts.colorFor),
+    classFor: editedClassFn,
   };
   var original = overlayComparisonFrame();
   if (original !== null) {
@@ -2439,6 +2457,17 @@ function renderOverlayTokens(opts) {
     );
   }
   overlayOutput.appendChild(fragment);
+}
+
+// Mark the positions a saved edit touched, so a run's interventions
+// can be found by looking rather than by remembering. Only ever given
+// to the branch layer: the pre-edit run below it is what the model
+// did on its own, and marking it would claim otherwise.
+function editedClassFn(index) {
+  if (editedPositionMarks(overlayData)[index] === true) {
+    return "token-edited";
+  }
+  return "";
 }
 
 // Stack the pre-edit run under the branch at the crossfade's mix.
@@ -3657,20 +3686,36 @@ function entropySeriesFrom(frames) {
 // If branch that is the single substituted position; for a diffusion
 // run it is the remasked set, so the marker generalizes.
 function editedPositions(data) {
-  var edits = data.remask_edits || [];
-  var seen = {};
+  var marks = editedPositionMarks(data);
   var positions = [];
-  for (var i = 0; i < edits.length; i++) {
-    var group = edits[i].token_positions || [];
-    for (var j = 0; j < group.length; j++) {
-      var pos = group[j];
-      if (seen[pos] !== true) {
-        seen[pos] = true;
-        positions.push(pos);
-      }
+  for (var key in marks) {
+    if (marks[key] === true) {
+      positions.push(Number(key));
     }
   }
   return positions;
+}
+
+// The same set as a lookup, for the token layer, which asks about
+// every position it draws. Keyed on the run payload itself, which is
+// replaced wholesale when a run is selected and never mutated in
+// place, so switching runs rebuilds this and staying on one does not.
+var editedMarksCache = { data: null, marks: {} };
+
+function editedPositionMarks(data) {
+  if (editedMarksCache.data === data) {
+    return editedMarksCache.marks;
+  }
+  var edits = (data && data.remask_edits) || [];
+  var marks = {};
+  for (var i = 0; i < edits.length; i++) {
+    var group = edits[i].token_positions || [];
+    for (var j = 0; j < group.length; j++) {
+      marks[group[j]] = true;
+    }
+  }
+  editedMarksCache = { data: data, marks: marks };
+  return marks;
 }
 
 // The position where the two runs part ways, or null when the run
@@ -3700,22 +3745,42 @@ function divergencePosition(data) {
 // Chart.js sits the two runs side by side and halves every bar,
 // where the whole point is to superimpose them and crossfade.
 function entropyDataset(label, series) {
-  var colors = [];
   var glowColors = [];
   for (var i = 0; i < series.values.length; i++) {
-    colors.push(entropyColor(series.values[i]));
     glowColors.push(entropyGlowColor(series.values[i]));
   }
   return {
     label: label,
     data: series.values,
-    backgroundColor: colors,
+    backgroundColor: entropyFillColors(series.values),
     hoverBackgroundColor: glowColors,
     borderWidth: 0,
     barPercentage: 1,
     categoryPercentage: 1,
     grouped: false,
   };
+}
+
+// Per-bar fills, faded past the position the scrubbed frame reached,
+// so the chart and the canvas above it agree about which tokens exist
+// at this frame. Position and frame index are the same number here:
+// this chart is autoregressive-only, and frame k is the frame that
+// introduced position k.
+//
+// Baked into the color because Chart.js has no per-bar opacity. It
+// multiplies with the whole-dataset globalAlpha the crossfade sets in
+// compareBlendPlugin, which is the wanted composition: a dim bar in
+// the receding run is dimmer still.
+function entropyFillColors(values) {
+  var colors = [];
+  for (var i = 0; i < values.length; i++) {
+    colors.push(
+      i <= overlayFrameIndex
+        ? entropyColor(values[i])
+        : entropyDimColor(values[i])
+    );
+  }
+  return colors;
 }
 
 // The pre-edit run's entropy, or null when there is nothing to
