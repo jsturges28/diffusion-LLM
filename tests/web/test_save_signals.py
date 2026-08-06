@@ -94,6 +94,30 @@ def test_alternative_requires_all_three_fields() -> None:
         TokenAlternative(id=5, t="he")  # type: ignore[call-arg]
 
 
+def test_a_captured_candidate_carries_no_rank() -> None:
+    """The captured set's rank is its order in the list, so writing it
+    would be five nulls and a repetition per position."""
+    dumped = _dump_alternatives(_request().alternatives)
+    assert all("rank" not in c for c in dumped[0])
+
+
+def test_an_appended_candidate_keeps_its_rank() -> None:
+    """The entry for a token chosen from outside the set: its place
+    in the list says nothing, so the rank has to be stored."""
+    positions = [
+        [
+            TokenAlternative(id=5, t="he", p=0.9),
+            TokenAlternative(
+                id=91, t="ec", p=0.0000042, rank=41203
+            ),
+        ]
+    ]
+    dumped = _dump_alternatives(positions)
+    assert "rank" not in dumped[0][0]
+    assert dumped[0][1]["rank"] == 41203
+    assert dumped[0][1]["p"] == pytest.approx(0.0000042)
+
+
 def test_alternatives_default_to_absent() -> None:
     body = SaveRunRequest(
         prompt="p", frames=["f"], final_text="hello"

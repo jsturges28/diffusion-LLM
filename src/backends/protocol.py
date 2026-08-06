@@ -107,3 +107,13 @@ MSG_GENERATE = "generate"
 MSG_RESUME = "resume"
 MSG_SUBSTITUTE = "substitute"
 MSG_CANCEL = "cancel"
+# Resolve a typed string against the loaded vocabulary, for the
+# What If typed-token preview. A read-only lookup, not a generation
+# request, so it is answered without the generation lock.
+MSG_TOKENIZE = "tokenize"
+MSG_TOKENIZE_RESULT = "tokenize_result"
+# Measure what the model actually gave a token at one position of the
+# last run, for the What If typed row. Unlike the pair above this is
+# a real forward pass, so it does take the generation lock.
+MSG_PROBE = "probe"
+MSG_PROBE_RESULT = "probe_result"

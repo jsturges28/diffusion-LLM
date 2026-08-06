@@ -267,6 +267,30 @@ SMOLLM3 = ModelInfo(
             experimental=(0.0, 1.0),
             help="Nucleus sampling probability mass.",
         ),
+        # Applied before top-p, matching Hugging Face, so the two
+        # compose as a hard truncation followed by a nucleus cut
+        # within it rather than as competing choices. Unrelated to
+        # the fixed five candidates the Alternatives capture
+        # records; that count is a separate knob.
+        #
+        # Off is -1, not Hugging Face's 0. A k of 0 reads as "keep
+        # zero tokens", which in a tool built to explain sampling is
+        # a worse first impression than matching an upstream default
+        # nobody here sees. It also puts this in line with Seed
+        # below, which already spends -1 on "unset". The filter
+        # disables on anything <= 0, so runs saved with 0 still mean
+        # what they meant.
+        ParamSpec(
+            name="top_k",
+            label="Top-k",
+            type=ParamType.INT,
+            default=-1,
+            step=1,
+            recommended=(-1, 100),
+            experimental=(-1, 1000),
+            help="Keep only the k likeliest tokens before"
+            " top-p. -1 keeps all of them.",
+        ),
         ParamSpec(
             name="seed",
             label="Seed",

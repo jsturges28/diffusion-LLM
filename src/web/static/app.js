@@ -13,6 +13,10 @@ var models = {}; // id -> ModelInfo
 var activeModelId = null;
 var activeModel = null; // ModelInfo of the active model
 var activeDevice = null; // "cuda" | "cpu": the active model's device
+// describe_tokenizer's payload for the resident model. Captured at
+// boot beside activeDevice, which is sound because a model switch
+// reloads the page, so the two can never describe different models.
+var activeTokenizer = {};
 var gpuPresent = false; // whether a usable GPU was detected
 var suppressReconnect = false;
 
@@ -266,6 +270,51 @@ var positionAlts = [];
 // captured candidates and there is nothing to page between.
 var altsPopoverPos = null;
 var altsPopoverPage = null;
+
+// ---- Typed token entry state (What If) ----
+//
+// Held outside the DOM on purpose. The popover rebuilds all of its
+// children on every hover and page flip, so a draft stored only in
+// the input element would be destroyed by a pointer twitch. Keeping
+// it here lets buildTypedRow rehydrate the field after any rebuild,
+// which is what makes the popover safe to type into at all.
+//
+// Position the draft belongs to. A draft is meaningless at any
+// other position, so this is also how a stale one is detected.
+var typedEntryPos = null;
+var typedEntryDraft = "";
+// Whether the user has engaged with the field at all. Set on focus
+// and never cleared by blur, because blur is not an exit: clicking
+// confirm blurs the input, and so does clicking anywhere in the
+// popover. The deliberate exits clear it instead.
+//
+// Note this is not "the draft is non-empty". The field arrives
+// pre-seeded with a leading space, so a draft-based test would pin
+// the popover the instant the pointer crossed a mid-sentence token.
+var typedEntryActive = false;
+// Whether the leading space has been offered for this position yet.
+// One offer only, so a backspace that removes it stays removed
+// through the next rebuild instead of being helpfully undone.
+var typedEntrySeeded = false;
+// Last preview from the worker: {pieces: [{id, t}], count} for the
+// text in typedEntryDraft, or null while none has arrived.
+var typedEntryPreview = null;
+// The confirmed single token, {id, t}, once the user solidifies it.
+// Clicking it runs the substitution, exactly like a candidate row.
+var typedEntryToken = null;
+// What the model gave that token at this position, measured on
+// confirm: {probability, rank, vocabSize}, or null while the probe is
+// still out. Separate from typedEntryToken because the token is
+// clickable immediately and the figure arrives a forward pass later;
+// waiting for it would make confirm feel like it had failed.
+var typedEntryMeasure = null;
+// Monotonic, so a slow reply for an older draft can be discarded.
+// Debouncing alone does not guarantee replies arrive in order.
+var typedEntryRequest = 0;
+// Separate counter for probes. A retry after a confirm has to be able
+// to invalidate the outstanding probe without disturbing the preview
+// sequence, which is still counting keystrokes.
+var typedProbeRequest = 0;
 // Token position under the pointer, or null. Drives the glowing
 // column in the entropy profile, so it is tracked for every token,
 // independent of whether that position captured alternatives.
@@ -1500,6 +1549,12 @@ function handleMessage(data) {
     case "error":
       handleError(data);
       break;
+    case "tokenize_result":
+      handleTokenizeResult(data);
+      break;
+    case "probe_result":
+      handleProbeResult(data);
+      break;
   }
 }
 
@@ -2312,6 +2367,21 @@ function editDivergencePosition() {
 
 // ---- Top-k alternatives popover ----
 
+// Whether the popover is currently a surface the user is working
+// in rather than a readout they are passing over. True from the
+// first keystroke (or focus) until the entry is confirmed, cancelled
+// or run.
+//
+// This is the whole reason the typed token needed groundwork: the
+// popover is hover-scoped, and four separate listeners tear it down
+// when the pointer or the viewport moves. Every one of them would
+// otherwise erase a half-typed word. While pinned they stand down,
+// and the only ways out are deliberate: Escape, the cancel button,
+// a click outside, or running the substitution.
+function altsPopoverPinned() {
+  return typedEntryActive || typedEntryToken !== null;
+}
+
 function hideAltsPopover() {
   if (!altsPopover) {
     return;
@@ -2320,6 +2390,29 @@ function hideAltsPopover() {
   altsPopover.textContent = "";
   altsPopoverPos = null;
   altsPopoverPage = null;
+  // Same reason as in renderAltsPopover: the rows go without firing
+  // the mouseleave that would have cleared their readout. Needed here
+  // too, because scroll and resize close the popover on their own
+  // rather than through a pointer leaving it.
+  setCandidateMetricsHover(null);
+  // The popover is the draft's only home, so closing it discards
+  // the draft. Callers that must not do that check altsPopoverPinned
+  // first; the rest (a new run, a frame change, a mode reset) are
+  // meant to clear everything.
+  clearTypedEntry();
+}
+
+// Drop the draft and any confirmed token, without touching the
+// popover itself. Split from hideAltsPopover so cancelling an entry
+// can leave the candidates on screen.
+function clearTypedEntry() {
+  typedEntryPos = null;
+  typedEntryDraft = "";
+  typedEntryActive = false;
+  typedEntrySeeded = false;
+  typedEntryPreview = null;
+  typedEntryToken = null;
+  typedEntryMeasure = null;
 }
 
 // Whether this position has a candidate set from each run to page
@@ -2344,37 +2437,11 @@ function altsPageable(pos) {
 function buildAltsRows(alts, chosenId) {
   var fragment = document.createDocumentFragment();
   for (var i = 0; i < alts.length; i++) {
-    var alt = alts[i];
-    var row = document.createElement("div");
-    row.className = "alt-row";
-    if (alt.id === chosenId) {
-      row.classList.add("alt-row-chosen");
-    }
-    row.setAttribute("data-alt-id", String(alt.id));
-
-    var text = document.createElement("span");
-    text.className = "alt-text";
-    text.textContent = overlaysAltDisplay(alt.t);
-    row.appendChild(text);
-
-    var bar = document.createElement("span");
-    bar.className = "alt-bar";
-    var fill = document.createElement("span");
-    fill.className = "alt-bar-fill";
-    fill.style.width =
-      Math.round(Math.max(0, Math.min(1, alt.p)) * 100)
-      + "%";
-    bar.appendChild(fill);
-    row.appendChild(bar);
-
-    var prob = document.createElement("span");
-    prob.className = "alt-prob";
-    prob.textContent =
-      (Math.max(0, Math.min(1, alt.p)) * 100).toFixed(1)
-      + "%";
-    row.appendChild(prob);
-
-    fragment.appendChild(row);
+    fragment.appendChild(
+      overlaysBuildAltRow(
+        alts[i], chosenId, setCandidateMetricsHover, i
+      )
+    );
   }
   return fragment;
 }
@@ -2429,6 +2496,11 @@ function renderAltsPopover(pos, span) {
     : frameTokens[currentScrubFrame];
   var chosen = tokens && tokens[pos] ? tokens[pos].id : null;
 
+  // Discarding the rows discards their pending mouseleave: a removed
+  // node never fires one, so a readout for a row that no longer
+  // exists would sit in the strip until the next hover. Cleared here
+  // rather than per caller, since every rebuild comes through here.
+  setCandidateMetricsHover(null);
   altsPopover.textContent = "";
   altsPopover.appendChild(
     overlaysBuildAltHeading(pos, altsPopoverPage, setAltsPage)
@@ -2438,10 +2510,15 @@ function renderAltsPopover(pos, span) {
   // page is read-only even while What If is armed.
   var pickable = substitutionMode && !original;
   if (pickable) {
+    altsPopover.appendChild(buildTypedEntry(pos));
     var hint = document.createElement("div");
     hint.className = "alt-hint";
     hint.textContent = "Click a candidate to substitute";
     altsPopover.appendChild(hint);
+  }
+  var tokenizer = overlaysBuildAltTokenizer(activeTokenizer);
+  if (tokenizer) {
+    altsPopover.appendChild(tokenizer);
   }
   altsPopover.classList.toggle("alt-pickable", pickable);
 
@@ -2459,6 +2536,588 @@ function renderAltsPopover(pos, span) {
       ) + "px";
   }
   altsPopoverPos = pos;
+}
+
+// ---- Typed token entry ----
+//
+// The row under the candidates that lets you force a token the model
+// never offered. Everything it shows is derived from the state block
+// near the top of this file rather than from its own DOM, so the
+// popover can rebuild around it without losing a draft.
+//
+// Debounce for the preview. Long enough that a normal typing burst
+// sends one request instead of one per key, short enough that the
+// pieces feel like they track the text.
+var TYPED_PREVIEW_DEBOUNCE_MS = 120;
+
+// Matches TOKENIZE_TEXT_MAX_CHARS in worker_base.py. Enforced here
+// too so the field simply stops accepting rather than silently
+// diverging from what the worker would resolve.
+var TYPED_INPUT_MAX_CHARS = 200;
+
+var typedPreviewTimer = null;
+
+// Build whatever the entry should look like right now: the confirmed
+// token if there is one, otherwise the input.
+function buildTypedEntry(pos) {
+  if (typedEntryPos !== pos) {
+    clearTypedEntry();
+    typedEntryPos = pos;
+  }
+  if (typedEntryToken !== null) {
+    return buildTypedSolidified();
+  }
+  return buildTypedInput(pos);
+}
+
+// A leading space is decided by the token being replaced, not by
+// guessing at sentence position. Mid-sentence words carry their
+// space inside the token, so replacing one without it silently
+// welds the result onto the previous word. Reading the original is
+// exact where a "looks mid-sentence" rule would only be usually
+// right, and a single backspace overrides it.
+function typedEntrySeedText(pos) {
+  var tokens = frameTokens[currentScrubFrame];
+  var token = tokens && tokens[pos] ? tokens[pos] : null;
+  var text = token && typeof token.t === "string" ? token.t : "";
+  return text.charAt(0) === " " ? " " : "";
+}
+
+function buildTypedInput(pos) {
+  var wrap = document.createElement("div");
+  wrap.className = "typed-entry";
+
+  if (!typedEntrySeeded) {
+    typedEntrySeeded = true;
+    typedEntryDraft = typedEntrySeedText(pos);
+  }
+
+  var field = document.createElement("input");
+  field.type = "text";
+  field.className = "typed-input";
+  field.maxLength = TYPED_INPUT_MAX_CHARS;
+  field.value = typedEntryDraft;
+  field.spellcheck = false;
+  field.autocomplete = "off";
+  field.addEventListener("input", onTypedInput);
+  field.addEventListener("focus", onTypedFocus);
+
+  // The field and its drawn hint share a positioning context, so the
+  // hint can sit over the text origin without measuring the wrap's
+  // own border and padding.
+  var box = document.createElement("div");
+  box.className = "typed-field";
+  box.appendChild(field);
+  box.appendChild(buildTypedPlaceholder());
+  wrap.appendChild(box);
+
+  wrap.appendChild(buildTypedActions());
+
+  var preview = document.createElement("div");
+  preview.className = "typed-preview";
+  wrap.appendChild(preview);
+  renderTypedPieces(preview);
+
+  // Deferred: the popover is still being assembled, and focusing a
+  // node mid-build scrolls it into view before it has been placed.
+  if (typedEntryActive) {
+    setTimeout(function () {
+      if (!typedEntryActive || !document.contains(field)) {
+        return;
+      }
+      field.focus();
+      var end = field.value.length;
+      field.setSelectionRange(end, end);
+    }, 0);
+  }
+  return wrap;
+}
+
+// The greyed hint inside the field, drawn rather than delegated to a
+// native ``placeholder``. The native one renders only on the empty
+// string, and a mid-sentence position seeds the field with a leading
+// space, so it was invisible in precisely the case that needed it.
+function buildTypedPlaceholder() {
+  var hint = document.createElement("span");
+  hint.className = "typed-placeholder";
+  syncTypedPlaceholder(hint);
+  return hint;
+}
+
+// Derived from the live draft, not from whether the field was seeded.
+// That is what makes the dot a lesson rather than a label: backspace
+// the space away and the dot goes with it, type it back and it
+// returns, so the hint keeps saying whether a leading space is
+// currently there.
+function typedPlaceholderText() {
+  if (typedEntryDraft === "") {
+    return "Enter your own";
+  }
+  // The same stand-in overlaysAltDisplay gives a space, so the hint
+  // reads continuously with the candidate rows above it.
+  if (typedEntryDraft === " ") {
+    return "\u00B7Enter your own";
+  }
+  return "";
+}
+
+function syncTypedPlaceholder(hint) {
+  var text = typedPlaceholderText();
+  hint.textContent = text;
+  hint.hidden = text === "";
+}
+
+// Confirm and cancel, which slide down from behind the field's right
+// edge once it is in use. Present in the DOM either way so the drop
+// is a CSS state change rather than an insertion.
+function buildTypedActions() {
+  var actions = document.createElement("div");
+  actions.className = "typed-actions";
+  if (typedEntryActive) {
+    actions.classList.add("is-open");
+  }
+
+  var confirm = document.createElement("button");
+  confirm.type = "button";
+  confirm.className = "typed-confirm";
+  confirm.textContent = "\u2713";
+  syncTypedConfirm(confirm);
+  confirm.addEventListener("click", confirmTypedEntry);
+  actions.appendChild(confirm);
+
+  var cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "typed-cancel";
+  cancel.textContent = "\u2715";
+  cancel.title = "Discard";
+  cancel.addEventListener("click", cancelTypedEntry);
+  actions.appendChild(cancel);
+
+  return actions;
+}
+
+// Only exactly one token can be confirmed. Everything downstream of
+// a substitution is position-indexed (overlaysComputeDiff, the
+// entropy chart, the edit marker), so a replacement of any other
+// length would shift every index after it.
+function typedEntryResolvesToOne() {
+  return (
+    typedEntryPreview !== null
+    && typedEntryPreview.count === 1
+    && typedEntryDraft !== ""
+  );
+}
+
+function syncTypedConfirm(confirm) {
+  confirm.disabled = !typedEntryResolvesToOne();
+  confirm.title = confirm.disabled
+    ? "Type text that resolves to exactly one token"
+    : "Use this token";
+}
+
+// Update the parts of a live entry that change as you type, in
+// place. Deliberately not a rebuild: recreating the input on every
+// keystroke would tear the focused element out from under the
+// caret, and the characters typed before it was put back would go
+// nowhere. Only a structural change (confirming, retrying,
+// cancelling) goes through redrawTypedEntry.
+function refreshTypedControls() {
+  if (!altsPopover) {
+    return;
+  }
+  var actions = altsPopover.querySelector(".typed-actions");
+  if (actions) {
+    actions.classList.toggle("is-open", typedEntryActive);
+  }
+  var confirm = altsPopover.querySelector(".typed-confirm");
+  if (confirm) {
+    syncTypedConfirm(confirm);
+  }
+  var hint = altsPopover.querySelector(".typed-placeholder");
+  if (hint) {
+    syncTypedPlaceholder(hint);
+  }
+  var preview = altsPopover.querySelector(".typed-preview");
+  if (preview) {
+    renderTypedPieces(preview);
+  }
+}
+
+// The pieces the draft resolves to, with their vocabulary ids. Shown
+// rather than merely counted: a rejection that says "3 tokens" is a
+// verdict, while showing which three is an explanation.
+function renderTypedPieces(host) {
+  host.textContent = "";
+  var preview = typedEntryPreview;
+  if (preview === null || typedEntryDraft === "") {
+    return;
+  }
+  for (var i = 0; i < preview.pieces.length; i++) {
+    host.appendChild(buildTypedPiece(preview.pieces[i], i));
+  }
+  var note = document.createElement("span");
+  note.className = "typed-count";
+  if (preview.count === 1) {
+    note.textContent = "1 token";
+  } else if (preview.count === 0) {
+    note.textContent = "no tokens";
+    note.classList.add("typed-count-over");
+  } else {
+    note.textContent = preview.count + " tokens";
+    // Orange only here. It means edit or remask everywhere else in
+    // the app, so spending it on the ordinary multi-piece case would
+    // read as a state rather than as a problem.
+    note.classList.add("typed-count-over");
+  }
+  host.appendChild(note);
+}
+
+function buildTypedPiece(piece, index) {
+  var el = document.createElement("span");
+  el.className = "typed-piece";
+  // Alternating tints so adjacent pieces stay distinguishable when
+  // a split falls inside a word and the boundary is the whole point.
+  if (index % 2 === 1) {
+    el.classList.add("typed-piece-alt");
+  }
+  var text = document.createElement("span");
+  text.className = "typed-piece-text";
+  text.textContent = overlaysAltDisplay(piece.t);
+  el.appendChild(text);
+  var id = document.createElement("span");
+  id.className = "typed-piece-id";
+  id.textContent = String(piece.id);
+  el.appendChild(id);
+  return el;
+}
+
+// The confirmed token, dressed as a candidate row so it clicks the
+// same way. data-typed tells the click handler to send it down the
+// worker's typed path rather than the captured one.
+function buildTypedSolidified() {
+  var row = document.createElement("div");
+  row.className = "alt-row typed-solid";
+  row.setAttribute(
+    "data-alt-id", String(typedEntryToken.id)
+  );
+  row.setAttribute("data-typed", "1");
+
+  var text = document.createElement("span");
+  text.className = "alt-text";
+  text.textContent = overlaysAltDisplay(typedEntryToken.t);
+  row.appendChild(text);
+
+  var tag = document.createElement("span");
+  tag.className = "typed-tag";
+  tag.textContent = "yours";
+  row.appendChild(tag);
+
+  // Left of the retry icon, where the candidate rows keep theirs, so
+  // the six rows read as one column of odds rather than five plus an
+  // exception.
+  var prob = document.createElement("span");
+  prob.className = "typed-prob";
+  renderTypedMeasure(prob);
+  row.appendChild(prob);
+
+  var retry = document.createElement("button");
+  retry.type = "button";
+  retry.className = "typed-retry";
+  retry.textContent = "\u21BA";
+  retry.title = "Type a different token";
+  retry.addEventListener("click", retryTypedEntry);
+  row.appendChild(retry);
+
+  // Bound directly rather than through overlaysBindAltHover, which
+  // captures its candidate when the row is built. This one has to be
+  // read at hover time, because the probe can land after the row is
+  // drawn and would otherwise never reach the strip.
+  row.addEventListener("mouseenter", function () {
+    setCandidateMetricsHover(typedCandidateReading());
+  });
+  row.addEventListener("mouseleave", function () {
+    setCandidateMetricsHover(null);
+  });
+  return row;
+}
+
+// The typed token in the shape a candidate row hands the strip. The
+// rank arrives with the measurement here rather than from the row's
+// position, since a typed token has no position in a sorted list.
+function typedCandidateReading() {
+  if (typedEntryToken === null) {
+    return null;
+  }
+  var reading = { t: typedEntryToken.t, p: null };
+  if (typedEntryMeasure !== null) {
+    reading.p = typedEntryMeasure.probability;
+    reading.rank = typedEntryMeasure.rank;
+    reading.vocab_size = typedEntryMeasure.vocabSize;
+  }
+  return reading;
+}
+
+// The measured odds, or a pending mark while the probe is out. The
+// mark matters on CPU, where the pass takes long enough that a blank
+// slot would read as "this row has no number" rather than "not yet".
+function renderTypedMeasure(slot) {
+  if (typedEntryMeasure === null) {
+    slot.textContent = "\u2026";
+    slot.classList.add("is-pending");
+    slot.title = "Measuring what the model gave this token";
+    return;
+  }
+  slot.classList.remove("is-pending");
+  slot.textContent = typedProbabilityText(
+    typedEntryMeasure.probability
+  );
+  slot.title = typedMeasureTitle(typedEntryMeasure);
+}
+
+// One decimal, like the candidate rows, but never a bare "0.0%". A
+// typed token is most interesting precisely where it is improbable,
+// so the one reading this must not produce is a flat zero for
+// something the model did give a little weight to.
+function typedProbabilityText(probability) {
+  var p = Number(probability);
+  if (!isFinite(p) || p <= 0) {
+    return "0.0%";
+  }
+  if (p < 0.001) {
+    return "<0.1%";
+  }
+  return (p * 100).toFixed(1) + "%";
+}
+
+// The precision the row has no width for. Rank is the honest answer
+// where the percentage has collapsed: "one of 41,203 the model liked
+// better" says what "<0.1%" cannot.
+function typedMeasureTitle(measure) {
+  var text = "Probability "
+    + Number(measure.probability).toPrecision(3);
+  if (measure.rank) {
+    text += ", rank "
+      + Number(measure.rank).toLocaleString();
+  }
+  if (measure.rank && measure.vocabSize) {
+    text += " of "
+      + Number(measure.vocabSize).toLocaleString();
+  }
+  return text;
+}
+
+function onTypedFocus() {
+  if (typedEntryActive) {
+    return;
+  }
+  typedEntryActive = true;
+  refreshTypedControls();
+}
+
+function onTypedInput(e) {
+  typedEntryDraft = e.target.value;
+  // The old pieces describe text that is no longer on screen, so
+  // they go immediately rather than lingering until the reply.
+  typedEntryPreview = null;
+  refreshTypedControls();
+  if (typedPreviewTimer !== null) {
+    clearTimeout(typedPreviewTimer);
+  }
+  typedPreviewTimer = setTimeout(
+    requestTypedPreview, TYPED_PREVIEW_DEBOUNCE_MS
+  );
+}
+
+// Ask the worker what the draft resolves to. Fire and forget: the
+// reply is matched by request id, since a slow answer for an earlier
+// draft must not overwrite a newer one.
+function requestTypedPreview() {
+  typedPreviewTimer = null;
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  if (typedEntryDraft === "") {
+    typedEntryPreview = null;
+    refreshTypedControls();
+    return;
+  }
+  typedEntryRequest += 1;
+  ws.send(JSON.stringify({
+    type: "tokenize",
+    text: typedEntryDraft,
+    request_id: typedEntryRequest,
+  }));
+}
+
+// Accept a preview only if it is both the newest request and still
+// about the text on screen. The second test matters because the
+// draft can change without a new request going out.
+function handleTokenizeResult(msg) {
+  if (msg.request_id !== typedEntryRequest) {
+    return;
+  }
+  if (msg.text !== typedEntryDraft) {
+    return;
+  }
+  typedEntryPreview = {
+    pieces: msg.pieces || [],
+    count: msg.count || 0,
+  };
+  refreshTypedControls();
+}
+
+function confirmTypedEntry() {
+  if (!typedEntryResolvesToOne()) {
+    return;
+  }
+  typedEntryToken = typedEntryPreview.pieces[0];
+  typedEntryMeasure = null;
+  redrawTypedEntry();
+  requestTypedProbe();
+}
+
+// Ask the model what it actually gave this token here. Fired on
+// confirm rather than while typing: it is a forward pass, not a
+// vocabulary lookup, so one per decision is the right budget where
+// one per keystroke would not be.
+//
+// The same figure the substitution will report, because both read the
+// same distribution, so the row cannot promise a number the run then
+// contradicts.
+function requestTypedProbe() {
+  if (typedEntryToken === null || typedEntryPos === null) {
+    return;
+  }
+  if (fillMeasureFromRecord()) {
+    return;
+  }
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  typedProbeRequest += 1;
+  ws.send(JSON.stringify({
+    type: "probe",
+    position: typedEntryPos,
+    token_id: typedEntryToken.id,
+    request_id: typedProbeRequest,
+  }));
+}
+
+// Answer from what the run already recorded, when it can. Typing a
+// token that is one of the candidates on screen is the common case,
+// and the stored figure is better than a measured one, not merely
+// cheaper: the run sampled position n from a single decode step, and
+// a probe rebuilds that with a fresh prefill, which in bf16 lands an
+// ulp away. Two paths to one number is one number too many when the
+// row sits directly above the rows it would disagree with.
+//
+// Returns whether it answered, so the caller knows to send nothing.
+function fillMeasureFromRecord() {
+  var alts = positionAlts[typedEntryPos];
+  if (!alts) {
+    return false;
+  }
+  for (var i = 0; i < alts.length; i++) {
+    if (alts[i].id !== typedEntryToken.id) {
+      continue;
+    }
+    typedEntryMeasure = {
+      probability: alts[i].p,
+      rank: overlaysAltRank(alts[i], i),
+      vocabSize: metricsVocabSize(),
+    };
+    refreshTypedMeasure();
+    return true;
+  }
+  return false;
+}
+
+// Accept a measurement only for the newest probe and only while the
+// token it describes is still the confirmed one. A retry between
+// request and reply would otherwise label the new token with the old
+// token's odds, which is worse than showing nothing.
+function handleProbeResult(msg) {
+  if (msg.request_id !== typedProbeRequest) {
+    return;
+  }
+  if (typedEntryToken === null) {
+    return;
+  }
+  if (msg.token_id !== typedEntryToken.id) {
+    return;
+  }
+  typedEntryMeasure = {
+    probability: msg.probability,
+    rank: msg.rank,
+    vocabSize: msg.vocab_size,
+  };
+  refreshTypedMeasure();
+}
+
+// Fill the figure in place rather than rebuilding the row. The row is
+// a click target, and replacing the node the pointer is resting on
+// would drop the hover that says so.
+function refreshTypedMeasure() {
+  if (!altsPopover) {
+    return;
+  }
+  var slot = altsPopover.querySelector(".typed-prob");
+  if (slot) {
+    renderTypedMeasure(slot);
+  }
+}
+
+// Back to an empty field, keeping the position. Distinct from
+// cancel: the user wants a different token, not to stop.
+function retryTypedEntry(e) {
+  // The retry icon lives inside a row that clicks through to
+  // doSubstitute. Without this, changing your mind would run the
+  // very substitution you were backing out of.
+  e.stopPropagation();
+  typedEntryToken = null;
+  typedEntryMeasure = null;
+  typedEntryPreview = null;
+  typedEntryDraft = "";
+  // Back to a fresh field, leading space and all, which is what the
+  // user gets on a first visit and so what they expect on a redo.
+  typedEntrySeeded = false;
+  typedEntryActive = true;
+  redrawTypedEntry();
+}
+
+function cancelTypedEntry() {
+  var pos = altsPopoverPos;
+  clearTypedEntry();
+  if (typedPreviewTimer !== null) {
+    clearTimeout(typedPreviewTimer);
+    typedPreviewTimer = null;
+  }
+  if (pos === null || !altsPopover) {
+    return;
+  }
+  // Where the pointer is decides what a cancel leaves behind. Over
+  // the popover (the cancel button) it goes back to showing the
+  // candidates. Anywhere else (Escape, a click outside) the pointer
+  // has already left, so nothing would ever come along to close the
+  // box, and it would sit there stranded.
+  if (altsPopover.matches(":hover")) {
+    renderAltsPopover(pos, null);
+    return;
+  }
+  setEntropyHoverPosition(null);
+  clearTokenMetrics();
+  hideAltsPopover();
+}
+
+// Rebuild the popover around a structural change: the entry
+// becoming a solidified row, or going back to a field. Unanchored on
+// purpose, since re-placing the box against its token would walk it
+// around under the pointer.
+function redrawTypedEntry() {
+  if (altsPopoverPos === null) {
+    return;
+  }
+  renderAltsPopover(altsPopoverPos, null);
 }
 
 // ---- Per-position entropy profile ----
@@ -2816,11 +3475,39 @@ var metricsHoverPos = null;
 // rather than re-deriving it and risking a different answer.
 var metricsHoverOriginal = false;
 
+// The candidate under the pointer in the popover, or null. A second,
+// independent hover source: the left group answers "what is at this
+// position" and this answers "what about the one I am reading".
+var metricsCandidate = null;
+
 function setTokenMetricsHover(pos, target) {
   metricsHoverPos = pos;
   metricsHoverOriginal =
     pos === null ? false : metricsLayerIsOriginal(target);
   refreshTokenMetrics();
+}
+
+// Fed by every candidate row, including the typed one. The reading
+// carries the rank, which is the row's own business, and the width it
+// is measured against comes from the page, which is the one thing a
+// row cannot know. A reading may still override the width when it has
+// a better source, which the probe does: its figure comes off the
+// very tensor that was ranked.
+function setCandidateMetricsHover(reading) {
+  metricsCandidate = reading === null ? null : {
+    text: reading.t,
+    probability: reading.p,
+    rank: reading.rank || null,
+    vocabSize: reading.vocab_size || metricsVocabSize(),
+  };
+  refreshTokenMetrics();
+}
+
+// The resident model's output width, deliberately not the tokenizer's
+// vocab_size beside it: a padded embedding makes those differ, and a
+// rank is a place among the tokens that could have been ranked.
+function metricsVocabSize() {
+  return activeTokenizer.model_vocab_size || null;
 }
 
 // Re-read the held position. Called from the render paths because
@@ -2835,6 +3522,7 @@ function refreshTokenMetrics() {
 function clearTokenMetrics() {
   metricsHoverPos = null;
   metricsHoverOriginal = false;
+  metricsCandidate = null;
   overlaysRenderTokenMetrics(tokenMetricsStrip, null);
 }
 
@@ -2925,6 +3613,7 @@ function buildTokenMetricsReading() {
     entropy:
       tok && typeof tok.e === "number" ? tok.e : null,
     extra: metricsExtra(index),
+    candidate: metricsCandidate,
     runLabel: metricsRunLabel(),
   };
 }
@@ -4140,7 +4829,11 @@ function beginSubstitutionSession() {
 // the worker regenerate from the forced token. Reuses the diffusion
 // resume splice path (resumeFrameOffset + isResuming), so handleFrame
 // appends the branch onto the truncation unchanged.
-function doSubstitute(position, tokenId) {
+// ``typedText`` is the raw string for a token the user typed, or
+// null for one the model actually offered. The worker validates the
+// two differently on purpose, so the distinction has to survive the
+// trip rather than being inferred from the id.
+function doSubstitute(position, tokenId, typedText) {
   if (!substitutionMode || remaskMode !== "substitute") {
     return;
   }
@@ -4178,11 +4871,16 @@ function doSubstitute(position, tokenId) {
   // A substitution always resamples to the end of the run.
   startRunStatus(editRunLabel(position, null));
 
-  ws.send(JSON.stringify({
+  var request = {
     type: "substitute",
     position: position,
     token_id: tokenId,
-  }));
+  };
+  if (typedText) {
+    request.typed = true;
+    request.typed_text = typedText;
+  }
+  ws.send(JSON.stringify(request));
 }
 
 // Edit Frames entry point. The current run is the "original": if it
@@ -5166,11 +5864,17 @@ function alternativeRecordsFrom(positions) {
     }
     var records = [];
     for (var k = 0; k < alts.length; k++) {
-      records.push({
+      var record = {
         id: alts[k].id,
         t: alts[k].t,
         p: alts[k].p,
-      });
+      };
+      // Only the appended entry has one, and only it needs one: the
+      // rest are ranked by the order they are already stored in.
+      if (typeof alts[k].rank === "number") {
+        record.rank = alts[k].rank;
+      }
+      records.push(record);
     }
     out.push(records);
   }
@@ -5812,15 +6516,30 @@ outputArea.addEventListener(
   function (e) {
     var target = e.target;
     var pos = hoveredTokenPosition(target);
+    // The canvas's own padding and the leading between lines are not
+    // tokens, and the trip from a token up into the popover crosses
+    // them. Reporting that as "nothing hovered" wiped the readout
+    // mid-journey, so the last token stands until the pointer leaves
+    // the canvas, which the mouseleave below handles. Analytics has
+    // always behaved this way; this brought the generator in line.
+    if (pos === null) {
+      return;
+    }
     setEntropyHoverPosition(pos);
     setTokenMetricsHover(pos, target);
-    if (pos === null || !scrubberActive || !altsPopover) {
+    if (!scrubberActive || !altsPopover) {
       return;
     }
     if (remaskMode !== null && !substitutionMode) {
       return;
     }
     if (pos === altsPopoverPos) {
+      return;
+    }
+    // A live draft owns the popover. Retargeting it to whatever the
+    // pointer wandered onto would throw the draft away and move the
+    // field out from under the user mid-word.
+    if (altsPopoverPinned()) {
       return;
     }
     showAltsPopover(pos, target);
@@ -5874,6 +6593,9 @@ outputArea.addEventListener(
     if (altsPopover && altsPopover.matches(":hover")) {
       return;
     }
+    if (altsPopoverPinned()) {
+      return;
+    }
     setEntropyHoverPosition(null);
     clearTokenMetrics();
     hideAltsPopover();
@@ -5882,6 +6604,9 @@ outputArea.addEventListener(
 
 if (altsPopover) {
   altsPopover.addEventListener("mouseleave", function () {
+    if (altsPopoverPinned()) {
+      return;
+    }
     setEntropyHoverPosition(null);
     clearTokenMetrics();
     hideAltsPopover();
@@ -5906,15 +6631,55 @@ if (altsPopover) {
     if (raw === null) {
       return;
     }
-    doSubstitute(altsPopoverPos, parseInt(raw, 10));
+    // The appended row is the token already in this position, so
+    // forcing it would spend a full re-generation arriving back
+    // where it started.
+    if (row.classList.contains("alt-row-outside")) {
+      return;
+    }
+    // A solidified typed row looks and clicks like a candidate, but
+    // the worker has to be told which it is: the captured path
+    // rejects anything the model did not consider, and that
+    // rejection is deliberate (see _validate_substitute).
+    var typed = row.getAttribute("data-typed") === "1"
+      ? typedEntryDraft : null;
+    doSubstitute(altsPopoverPos, parseInt(raw, 10), typed);
   });
 }
 
+// Escape and a click outside are the two ways out of a typed entry
+// that do not involve reaching for the cancel button. Both are plain
+// cancels: the draft goes, the candidates stay.
+document.addEventListener("keydown", function (e) {
+  if (e.key !== "Escape" || !altsPopoverPinned()) {
+    return;
+  }
+  e.preventDefault();
+  cancelTypedEntry();
+});
+
+// pointerdown rather than click, so the cancel lands before the
+// press can do anything else with the element underneath.
+document.addEventListener("pointerdown", function (e) {
+  if (!altsPopoverPinned() || !altsPopover) {
+    return;
+  }
+  if (altsPopover.contains(e.target)) {
+    return;
+  }
+  cancelTypedEntry();
+});
+
 // A scroll moves the anchoring token out from under a fixed popover.
+// Not while pinned: a stray wheel click should not cost a draft, and
+// re-anchoring instead would slide the text field away from the
+// pointer. The box stays where it is, which is the least surprising
+// of the three, and the anchor is only decorative once you are
+// typing into it.
 window.addEventListener(
   "scroll",
   function () {
-    if (altsPopoverPos !== null) {
+    if (altsPopoverPos !== null && !altsPopoverPinned()) {
       hideAltsPopover();
     }
   },
@@ -5922,7 +6687,9 @@ window.addEventListener(
 );
 
 window.addEventListener("resize", function () {
-  hideAltsPopover();
+  if (!altsPopoverPinned()) {
+    hideAltsPopover();
+  }
   if (scrubberActive) {
     updateEntropyProfileVisibility();
   }
@@ -6473,6 +7240,7 @@ function boot() {
       activeModel =
         models[activeModelId] || list[0] || null;
       activeDevice = info.active_device || null;
+      activeTokenizer = info.active_tokenizer || {};
       gpuPresent = !!info.gpu_name;
       renderModelSelector(list, activeModelId);
       if (activeModel) {

@@ -1054,6 +1054,12 @@ function showDetail(runId) {
 
   html += processorMetaRow(run);
 
+  html += tokenizerMetaRow(run);
+
+  html += tokenizerVocabMetaRow(run);
+
+  html += modelVocabMetaRow(run);
+
   html += elapsedMetaRows(run);
 
   detailMeta.innerHTML = html;
@@ -1105,6 +1111,81 @@ function processorMetaRow(run) {
     + '<span class="meta-label">' + label + ':</span> '
     + '<span class="meta-value">'
     + escHtml(String(name))
+    + '</span></div>';
+}
+
+// Which tokenizer produced this run's ids. Read from the run's own
+// metadata rather than from the resident model, so an old run still
+// answers the question after its checkpoint has been swapped out or
+// moved on. Absent on every run saved before the field existed,
+// which is why this degrades to nothing rather than guessing: a
+// wrong tokenizer name is worse than no tokenizer name.
+//
+// Bracket access because "class" is the payload's field name; see
+// describe_tokenizer in worker_base.py. name_or_path is recorded
+// too but not shown, since the Model row above already carries it.
+function tokenizerMetaRow(run) {
+  var tok = runTokenizer(run);
+  var name = tok["class"];
+  if (!name) {
+    return "";
+  }
+  return metaRowHtml("Tokenizer", String(name));
+}
+
+// A row of its own rather than a parenthetical on the name. The two
+// answer different questions, and this one is the number the entropy
+// scale refers to, since its natural log is the ceiling on what any
+// single position can carry.
+function tokenizerVocabMetaRow(run) {
+  var tok = runTokenizer(run);
+  if (!tok.vocab_size) {
+    return "";
+  }
+  return metaRowHtml(
+    "Tokenizer vocab",
+    Number(tok.vocab_size).toLocaleString()
+  );
+}
+
+// The checkpoint's output width, next to the tokenizer's own count
+// because the pair is the point: they differ wherever a checkpoint
+// pads its embedding for alignment, and this larger figure is the one
+// a candidate's rank is measured against.
+function modelVocabMetaRow(run) {
+  var tok = runTokenizer(run);
+  if (!tok.model_vocab_size) {
+    return "";
+  }
+  return metaRowHtml(
+    "Model vocab",
+    Number(tok.model_vocab_size).toLocaleString()
+  );
+}
+
+function runTokenizer(run) {
+  var repro = run.reproducibility || {};
+  return repro.tokenizer || {};
+}
+
+// The tokenizer of whichever run's overlay is on screen, for the
+// candidate popover's footer. Deliberately the run's own and never a
+// resident worker's: this page is routinely looking at a run whose
+// checkpoint is not loaded at all.
+function activeRunTokenizer() {
+  for (var i = 0; i < allRuns.length; i++) {
+    if (allRuns[i].run_id === activeRunId) {
+      return runTokenizer(allRuns[i]);
+    }
+  }
+  return {};
+}
+
+function metaRowHtml(label, value) {
+  return '<div class="meta-row">'
+    + '<span class="meta-label">' + escHtml(label) + ':</span> '
+    + '<span class="meta-value">'
+    + escHtml(value)
     + '</span></div>';
 }
 
@@ -1895,6 +1976,11 @@ function hideAltsPopover() {
   altsPopover.textContent = "";
   altsPopoverPos = null;
   altsPopoverPage = null;
+  // Same reason as in renderAltsPopover: the rows go without firing
+  // the mouseleave that would have cleared their readout. Needed here
+  // too, because scroll and resize close the popover on their own
+  // rather than through a pointer leaving it.
+  setCandidateMetricsHover(null);
 }
 
 // Which run's candidates a pageable position opens on: the one the
@@ -1946,12 +2032,24 @@ function renderAltsPopover(pos, span) {
   var frame = overlayClampedFrame(frames);
   var chosen = frame && frame[pos] ? frame[pos].id : null;
 
+  // Discarding the rows discards their pending mouseleave: a removed
+  // node never fires one, so a readout for a row that no longer
+  // exists would sit in the strip until the next hover.
+  setCandidateMetricsHover(null);
   altsPopover.textContent = "";
   altsPopover.appendChild(
     overlaysBuildAltHeading(pos, altsPopoverPage, setAltsPage)
   );
   for (var i = 0; i < alts.length; i++) {
-    altsPopover.appendChild(buildAltRow(alts[i], chosen));
+    altsPopover.appendChild(
+      overlaysBuildAltRow(
+        alts[i], chosen, setCandidateMetricsHover, i
+      )
+    );
+  }
+  var tokenizer = overlaysBuildAltTokenizer(activeRunTokenizer());
+  if (tokenizer) {
+    altsPopover.appendChild(tokenizer);
   }
   altsPopover.classList.remove("alt-pickable");
 
@@ -1980,33 +2078,9 @@ function overlayClampedFrame(frames) {
   return frames[index] || null;
 }
 
-// One candidate row: token text, proportional bar, probability.
-function buildAltRow(alt, chosenId) {
-  var row = document.createElement("div");
-  row.className = "alt-row";
-  if (alt.id === chosenId) {
-    row.classList.add("alt-row-chosen");
-  }
-  var text = document.createElement("span");
-  text.className = "alt-text";
-  text.textContent = overlaysAltDisplay(alt.t);
-  row.appendChild(text);
-
-  var bar = document.createElement("span");
-  bar.className = "alt-bar";
-  var fill = document.createElement("span");
-  fill.className = "alt-bar-fill";
-  var clamped = Math.max(0, Math.min(1, alt.p));
-  fill.style.width = Math.round(clamped * 100) + "%";
-  bar.appendChild(fill);
-  row.appendChild(bar);
-
-  var prob = document.createElement("span");
-  prob.className = "alt-prob";
-  prob.textContent = (clamped * 100).toFixed(1) + "%";
-  row.appendChild(prob);
-  return row;
-}
+// Candidate rows are built by overlaysBuildAltRow in overlays.js;
+// this page's own copy was identical to the generator's and both
+// needed the same hover wiring, so they share one.
 
 function loadRunOverlays(runId, run) {
   overlayData = null;
@@ -2389,6 +2463,7 @@ function renderOverlayLayers(
       opacity: compareBlend,
       interactive: editedTakes,
       colorFor: edited.colorFor,
+      classFor: edited.classFor,
     })
   );
 }
@@ -2515,11 +2590,38 @@ var metricsHoverPos = null;
 // span's own layer so the strip reports what is on screen.
 var metricsHoverOriginal = false;
 
+// The candidate under the pointer in the popover, or null. A second,
+// independent hover source: the left group answers "what is at this
+// position" and this answers "what about the one I am reading".
+var metricsCandidate = null;
+
 function setTokenMetricsHover(pos, target) {
   metricsHoverPos = pos;
   metricsHoverOriginal =
     pos === null ? false : metricsLayerIsOriginal(target);
   refreshTokenMetrics();
+}
+
+// Fed by every candidate row. The reading carries the rank; the width
+// it is measured against comes from the page, since a row cannot know
+// it.
+function setCandidateMetricsHover(reading) {
+  metricsCandidate = reading === null ? null : {
+    text: reading.t,
+    probability: reading.p,
+    rank: reading.rank || null,
+    vocabSize: metricsVocabSize(),
+  };
+  refreshTokenMetrics();
+}
+
+// The output width of the model that produced the run on screen,
+// read from the run itself and never from a resident worker: this
+// page is routinely looking at a run whose checkpoint is not loaded.
+// Runs saved before this was recorded report no width, and the rank
+// then shows without a denominator rather than with a wrong one.
+function metricsVocabSize() {
+  return activeRunTokenizer().model_vocab_size || null;
 }
 
 // Re-read the held position, for anything that changes what a
@@ -2534,6 +2636,7 @@ function refreshTokenMetrics() {
 function clearTokenMetrics() {
   metricsHoverPos = null;
   metricsHoverOriginal = false;
+  metricsCandidate = null;
   overlaysRenderTokenMetrics(tokenMetricsStrip, null);
 }
 
@@ -2610,6 +2713,7 @@ function buildTokenMetricsReading() {
     entropy:
       tok && typeof tok.e === "number" ? tok.e : null,
     extra: metricsExtra(index),
+    candidate: metricsCandidate,
     runLabel: metricsRunLabel(),
   };
 }

@@ -415,6 +415,11 @@ class ModelManager:
         self.active_id: Optional[str] = None
         self.active_device: Optional[str] = None
         self.active_versions: Dict[str, str] = {}
+        # Identity of the resident model's tokenizer, reported by the
+        # worker off the loaded object (see describe_tokenizer). Kept
+        # beside the versions because it is the same kind of fact: a
+        # property of what is loaded right now, not of the registry.
+        self.active_tokenizer: Dict[str, Any] = {}
         # Activation is non-blocking: activate() spawns the worker and
         # returns; a background monitor task tracks these until ready,
         # and the client polls them. States: idle | starting |
@@ -548,6 +553,7 @@ class ModelManager:
             self.active_id = model_id
             self.active_device = device
             self.active_versions = {}
+            self.active_tokenizer = {}
             self.load_state = "starting"
             self.load_progress = None
             self.load_error = None
@@ -615,6 +621,7 @@ class ModelManager:
             return True
         if status == "ready":
             self.active_versions = body.get("versions", {})
+            self.active_tokenizer = body.get("tokenizer", {})
             self.load_progress = None
             self.load_state = "ready"
             return True
@@ -764,6 +771,7 @@ class ModelManager:
         self.active_id = None
         self.active_device = None
         self.active_versions = {}
+        self.active_tokenizer = {}
         self.load_state = "idle"
         self.load_progress = None
         self.load_error = None
@@ -882,6 +890,10 @@ def _models_snapshot() -> Dict[str, Any]:
         "models": models,
         "active": active_id,
         "active_device": manager.active_device,
+        # Empty until a worker reports ready. Lives here rather than
+        # on each model's capabilities because it describes the one
+        # resident load, which is the only tokenizer that exists.
+        "active_tokenizer": dict(manager.active_tokenizer),
         "default": DEFAULT_MODEL,
         "gpu_name": gpu,
         "free_vram_gib": free_vram_gib,
@@ -1115,11 +1127,18 @@ class TokenAlternative(BaseModel):
 
     ``p`` is the candidate's probability under the untempered
     softmax at the step that position was sampled.
+
+    ``rank`` is absent for the captured set, whose rank is its order
+    in the list, and present only on the entry appended for a token
+    the position committed from outside that set. There the two part
+    company: it is last in the list and may be thousandth in the
+    distribution.
     """
 
     id: int
     t: str
     p: float
+    rank: Optional[int] = None
 
 
 # Per-frame, per-token stream. A frame may be ``None`` when a model
@@ -1246,6 +1265,11 @@ def _dump_alternatives(
 
     Keeps the index alignment with token positions: a position that
     captured nothing stays None rather than collapsing the list.
+
+    ``exclude_none`` for the same reason ``_dump_frame_tokens`` uses
+    it: ``rank`` is set on at most one entry per position, and a null
+    on the other five would be pure weight in a file that already
+    runs to tens of kilobytes.
     """
     dumped: List[Optional[List[Dict[str, Any]]]] = []
     for entry in positions:
@@ -1253,7 +1277,10 @@ def _dump_alternatives(
             dumped.append(None)
             continue
         dumped.append(
-            [candidate.model_dump() for candidate in entry]
+            [
+                candidate.model_dump(exclude_none=True)
+                for candidate in entry
+            ]
         )
     return dumped
 
@@ -1334,6 +1361,10 @@ def _save_run_blocking(body: SaveRunRequest) -> str:
         "gpu": _gpu_name(),
         "git_commit": _git_commit(),
         "versions": dict(manager.active_versions),
+        # Which tokenizer produced these ids. Persisted per run so an
+        # old run still answers the question after the model it used
+        # has been swapped out or its checkpoint has moved on.
+        "tokenizer": dict(manager.active_tokenizer),
     }
 
     (run_dir / "metadata.json").write_text(

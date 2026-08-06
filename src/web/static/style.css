@@ -861,14 +861,19 @@ button {
    Permanently reserved rather than shown on hover. A row that appears
    under the pointer would shove the canvas down by its own height
    every time you crossed into the text, and the tokens would move out
-   from under the cursor as you read them. */
+   from under the cursor as you read them.
+
+   The lopsided padding centers the text in the band between the
+   controls' bottom rule and the canvas: #output-section already
+   contributes 14px below, which this row has no say in, so the 11px
+   above is what balances it. */
 .token-metrics {
   flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 18px;
   min-height: 22px;
-  padding: 2px 2px 6px;
+  padding: 11px 2px 0;
   font-size: 11px;
   color: var(--text-secondary);
   letter-spacing: 0.04em;
@@ -936,10 +941,54 @@ button {
   letter-spacing: 0;
 }
 
+/* The candidate readout, filled while the pointer is on a row of the
+   popover. Occupies the empty right half of the strip, which is where
+   there is room for the precision a 320px popover row cannot hold. */
+.token-metrics-candidate {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.token-metrics-candidate[hidden] {
+  display: none;
+}
+
+/* Twin of .token-metrics-token, tinted with the accent. The pair of
+   chips is the whole legend: grey is the token the run committed
+   here, green is one it only considered. */
+.token-metrics-alt {
+  flex: 0 0 auto;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 1px 6px;
+  border-radius: 2px;
+  background: rgba(0, 255, 65, 0.12);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0;
+}
+
+.token-metrics-rank {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
 /* The overlay-specific line: which step a position committed at, or
    what the original run had there. Present only under the overlays
-   that define it, so it stays out of the fixed-width group above. */
+   that define it, so it stays out of the fixed-width group above.
+
+   First to give way when an overlay, a candidate and a run label all
+   want the row at once: .token-metrics is nowrap with overflow
+   hidden, so without this the widest thing simply falls off the end
+   with no say in which. This one is prose and survives being cut;
+   the numbers beside it do not. */
 .token-metrics-extra {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--text-secondary);
 }
 
@@ -3034,6 +3083,15 @@ input[type="checkbox"].app-checkbox:checked::after {
   opacity: 1;
 }
 
+/* Ruled off from the five above it, which are a ranked list this row
+   is not a member of: it sits last but stood, say, forty-thousandth.
+   The rule is the popover's way of saying the list ended. */
+.alt-row-outside {
+  margin-top: 3px;
+  padding-top: 3px;
+  border-top: 1px dashed rgba(255, 159, 28, 0.35);
+}
+
 .alt-hint {
   margin-top: 6px;
   padding-top: 5px;
@@ -3041,6 +3099,263 @@ input[type="checkbox"].app-checkbox:checked::after {
   font-size: 9px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+  color: var(--accent);
+}
+
+/* Which vocabulary the rows above belong to. Wears .alt-hint's shape
+   but not its accent: the hint tells you to do something, this only
+   says what you are looking at. Clipped rather than wrapped, so a
+   long tokenizer class name cannot make the popover taller than the
+   candidates it exists to annotate. */
+.alt-tokenizer {
+  margin-top: 5px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+/* ---- Typed token entry (What If) ---- */
+
+/* Sits under the candidates, separated so it reads as a different
+   kind of offer: those five are what the model considered, this is
+   anything at all. */
+.typed-entry {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+/* Positioning context for the field's drawn hint, so the hint can be
+   placed against the input's own box rather than against the entry
+   wrap's border and padding. */
+.typed-field {
+  position: relative;
+}
+
+/* Borrows the prompt box's look rather than the candidate rows', to
+   say "you type here" without a label. */
+.typed-input {
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.typed-input:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+/* The stand-in for a native placeholder (see buildTypedPlaceholder).
+   Left is the input's border plus its padding, so the hint starts
+   exactly where typed text will. Vertically centered instead of
+   offset by the padding, which keeps it aligned if the field's
+   metrics ever change. Transparent to the pointer so clicking the
+   hint still lands in the field under it. */
+.typed-placeholder {
+  position: absolute;
+  left: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* Confirm and cancel emerge from behind the field's right edge. The
+   clip is what sells it: the buttons are always in the DOM and start
+   fully above their own container, so opening slides them down out
+   of hiding rather than popping them into existence.
+
+   A fixed height because the transition needs two numbers; auto
+   would simply jump. 24px is the buttons plus their top margin. */
+.typed-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  height: 0;
+  overflow: hidden;
+  transition: height 0.22s ease;
+}
+
+.typed-actions.is-open {
+  height: 24px;
+}
+
+.typed-confirm,
+.typed-cancel {
+  margin-top: 4px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-surface);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  translate: 0 -100%;
+  transition: translate 0.22s ease;
+}
+
+.typed-actions.is-open .typed-confirm,
+.typed-actions.is-open .typed-cancel {
+  translate: 0 0;
+}
+
+.typed-confirm {
+  color: var(--accent);
+}
+
+.typed-cancel {
+  color: var(--danger);
+}
+
+.typed-confirm:hover:not(:disabled) {
+  background: rgba(0, 255, 65, 0.14);
+  border-color: rgba(0, 255, 65, 0.4);
+}
+
+.typed-cancel:hover {
+  background: rgba(255, 68, 68, 0.14);
+  border-color: rgba(255, 68, 68, 0.4);
+}
+
+/* Not merely dim: the cursor says the control is unavailable before
+   the click, which is the difference between a disabled button and a
+   broken one. */
+.typed-confirm:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .typed-actions,
+  .typed-confirm,
+  .typed-cancel {
+    transition: none;
+  }
+}
+
+/* The split, shown rather than merely counted. Seeing which pieces
+   the text became is what turns a rejection into an explanation. */
+.typed-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 5px;
+  min-height: 0;
+}
+
+.typed-preview:empty {
+  margin-top: 0;
+}
+
+.typed-piece {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: rgba(0, 255, 65, 0.1);
+  color: var(--accent);
+  font-size: 10px;
+  white-space: pre;
+}
+
+/* Alternating so a split inside a word stays legible; the boundary
+   is the entire thing being communicated. */
+.typed-piece-alt {
+  background: rgba(120, 200, 255, 0.12);
+  color: #78c8ff;
+}
+
+.typed-piece-id {
+  opacity: 0.55;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+/* Same glow the tokens use when they are born, so a piece answers to
+   the pointer the way the text above it does. */
+.typed-piece:hover {
+  text-shadow:
+    0 0 6px rgba(255, 255, 255, 0.85),
+    0 0 12px rgba(255, 255, 255, 0.4);
+}
+
+.typed-count {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+}
+
+/* The app's edit orange, spent only here. It means intervention
+   everywhere else, so using it for an ordinary multi-piece split
+   would read as a state rather than as the blocker it is. */
+.typed-count-over {
+  color: #ff9f1c;
+}
+
+/* The confirmed token, wearing .alt-row so it clicks like a
+   candidate, plus a tag saying which of the two it is. */
+.typed-solid {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.typed-tag {
+  flex: 0 0 auto;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+}
+
+/* Carries the auto margin that used to sit on the retry icon, so the
+   pair travels to the right edge together and the figure lands in the
+   same column as the candidates' percentages above it. */
+.typed-prob {
+  flex: 0 0 auto;
+  margin-left: auto;
+  min-width: 42px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Awaiting the probe. Dimmed rather than blank, so the gap reads as
+   "not yet" instead of "this row has nothing to say". */
+.typed-prob.is-pending {
+  color: var(--text-dim);
+}
+
+.typed-retry {
+  flex: 0 0 auto;
+  padding: 0 2px;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.typed-retry:hover {
   color: var(--accent);
 }
 
@@ -3055,6 +3370,18 @@ input[type="checkbox"].app-checkbox:checked::after {
 
 #token-alts-popover.alt-pickable .alt-row:hover .alt-text {
   color: var(--accent);
+}
+
+/* The appended row reports what this position chose from outside the
+   captured five. It is not an offer, so it declines the actionable
+   look even while What If is armed. */
+#token-alts-popover.alt-pickable .alt-row-outside {
+  cursor: default;
+}
+
+#token-alts-popover.alt-pickable
+  .alt-row-outside:hover {
+  background: transparent;
 }
 
 /* "Diverged N/total" readout, shown beside the picker in diff mode. */

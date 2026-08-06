@@ -18,6 +18,7 @@ activation by the supervisor.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import time
 from pathlib import Path
@@ -30,9 +31,15 @@ from transformers import (  # type: ignore[attr-defined]
     AutoTokenizer,
 )
 
+from src.backends.protocol import MSG_PROBE_RESULT
 from src.backends.registry import SMOLLM3
-from src.backends.worker_base import Backend, FrameStreamer
+from src.backends.worker_base import (
+    Backend,
+    FrameStreamer,
+    tokenize_pieces,
+)
 from src.inference.ar_sampler import (
+    probe_token,
     streaming_generate,
     streaming_substitute,
 )
@@ -197,6 +204,10 @@ class Smollm3Backend(Backend):
                 given("top_p"),
                 self._bounds("top_p", experimental),
             ),
+            "top_k": _clamp_int(
+                given("top_k"),
+                self._bounds("top_k", experimental),
+            ),
             "thinking": bool(given("thinking")),
             "alternatives": bool(given("alternatives")),
             "seed": int(given("seed")),
@@ -220,7 +231,10 @@ class Smollm3Backend(Backend):
         start = time.monotonic()
         # Discard any prior run's trace up front, so a failure here
         # cannot leave a stale state that a substitution would then
-        # re-enter against the wrong prompt.
+        # re-enter against the wrong prompt. This is also what frees
+        # the previous run's KV cache, and it happens before the new
+        # one allocates so the two never sit in device memory at
+        # once.
         self.last_run_state = None
         state: Dict[str, Any] = {}
         try:
@@ -231,6 +245,7 @@ class Smollm3Backend(Backend):
                 max_new_tokens=params["max_new_tokens"],
                 temperature=params["temperature"],
                 top_p=params["top_p"],
+                top_k=params["top_k"],
                 thinking=params["thinking"],
                 alternatives=params["alternatives"],
                 seed=params["seed"],
@@ -264,28 +279,21 @@ class Smollm3Backend(Backend):
     ) -> Dict[str, Any]:
         """Check a substitution request against the last run.
 
-        Only a candidate the model actually considered at that
-        position may be forced, so the counterfactual stays a real
-        branch of the recorded decision rather than an arbitrary
-        edit.
+        Two paths, kept deliberately separate. A captured candidate
+        must be one the model actually considered at that position,
+        so the counterfactual stays a real branch of a decision the
+        model faced. A typed token is the explicit opt-out from
+        that, checked against the vocabulary instead. The strict
+        path stays strict rather than being loosened to accommodate
+        the new one, so an unmarked request still cannot smuggle in
+        an arbitrary id.
         """
         state = self.last_run_state
         if state is None:
             raise ValueError(
                 "No previous generation to substitute into."
             )
-        ids: List[int] = state["ids"]
-        position = int(data.get("position", -1))
-        if position < 0 or position >= len(ids):
-            raise ValueError(
-                f"position {position} is out of range"
-                f" [0, {len(ids) - 1}]."
-            )
-        if position == 0 and len(ids) == 1:
-            raise ValueError(
-                "Nothing follows the only token; substituting"
-                " it would change nothing."
-            )
+        position = _substitute_position(state, data)
         captured = state["alternatives"][position]
         if not captured:
             raise ValueError(
@@ -293,22 +301,51 @@ class Smollm3Backend(Backend):
                 f" {position}. Re-run with Alternatives on."
             )
         token_id = int(data.get("token_id", -1))
-        chosen = None
-        for candidate in captured:
-            if int(candidate["id"]) == token_id:
-                chosen = candidate
-                break
-        if chosen is None:
-            raise ValueError(
-                f"token {token_id} was not among the captured"
-                f" candidates at position {position}."
+        forced_conf: Optional[float] = None
+        if data.get("typed"):
+            self._check_typed_token(data, token_id)
+            # Left None on purpose. A typed token has no recorded
+            # probability, and the sampler is about to compute the
+            # distribution it belongs to anyway, so inventing a
+            # number here would only get in the way of the real one.
+        else:
+            forced_conf = _captured_confidence(
+                captured, token_id, position
             )
         return {
             "position": position,
             "forced_id": token_id,
-            "forced_conf": float(chosen["p"]),
+            "forced_conf": forced_conf,
             "forced_alts": captured,
         }
+
+    def _check_typed_token(
+        self, data: Dict[str, Any], token_id: int
+    ) -> None:
+        """Re-resolve a typed token against the vocabulary.
+
+        The client disables its confirm button until the preview
+        resolves to one token, but that gate is a convenience and
+        can be bypassed. This is the contract behind it. Requiring
+        the id to match what the text resolves to also stops a
+        preview that went stale mid-keystroke from forcing a token
+        the user never saw.
+        """
+        text = data.get("typed_text", "")
+        if not isinstance(text, str) or text == "":
+            raise ValueError("No text was typed.")
+        pieces = tokenize_pieces(self.tokenizer, text)
+        if len(pieces) != 1:
+            raise ValueError(
+                f"{text!r} is {len(pieces)} tokens; exactly"
+                " one is required."
+            )
+        resolved = int(pieces[0]["id"])
+        if resolved != token_id:
+            raise ValueError(
+                f"typed text resolves to token {resolved},"
+                f" not {token_id}."
+            )
 
     async def handle_substitute(
         self,
@@ -349,9 +386,13 @@ class Smollm3Backend(Backend):
                 max_new_tokens=state["max_new_tokens"],
                 # Greedy: the divergence after the forced token
                 # should be the intervention's effect, not fresh
-                # sampling noise in a shifted context.
+                # sampling noise in a shifted context. Both
+                # truncations are therefore inert here (argmax
+                # survives either), and are passed off explicitly
+                # rather than left to a default.
                 temperature=0.0,
                 top_p=1.0,
+                top_k=-1,
                 thinking=state["thinking"],
                 alternatives=state["alternatives_enabled"],
                 seed=state["seed"],
@@ -366,6 +407,13 @@ class Smollm3Backend(Backend):
                 # or after the edit. Each substitution therefore
                 # re-enters the run the user still sees.
                 state_sink=None,
+                # The recorded run's attention state, which is what
+                # makes re-entering it cheap: without this the whole
+                # kept prefix is prefilled again before the first new
+                # token appears. Absent on a run that predates it or
+                # one whose cache exceeded the ceiling, and the
+                # sampler prefills in that case.
+                cache=state.get("cache"),
             )
             await stream.run(generator, start)
         except Exception as exc:  # noqa: BLE001
@@ -374,6 +422,131 @@ class Smollm3Backend(Backend):
                 {"type": "error", "message": str(exc)}
             )
             return
+
+    async def handle_probe(
+        self, ws: WebSocket, data: Dict[str, Any]
+    ) -> None:
+        """Measure a token's probability at a recorded position.
+
+        Backs the figure on the What If typed row, so the user can
+        see the odds before deciding to override them. Validated the
+        same way a substitution is, and against the same run state,
+        because a probe that answered for a position the substitution
+        would reject is worse than no answer.
+
+        Run off the event loop: this is a real forward pass, and the
+        loop still has a socket to serve while it happens.
+        """
+        try:
+            state = self._probe_state()
+            position = _substitute_position(state, data)
+            token_id = _probe_token_id(data)
+        except (ValueError, TypeError, KeyError) as exc:
+            await ws.send_json(
+                {"type": "error", "message": str(exc)}
+            )
+            return
+
+        loop = asyncio.get_running_loop()
+        try:
+            measured = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    probe_token,
+                    model=self.model,
+                    tokenizer=self.tokenizer,
+                    prompt=state["prompt"],
+                    prefix_ids=state["ids"][:position],
+                    token_id=token_id,
+                    thinking=state["thinking"],
+                    # With the run's own cache the measurement is the
+                    # run's arithmetic, so a token the run captured
+                    # measures to its recorded probability exactly
+                    # rather than a bf16 rounding step away from it.
+                    cache=state.get("cache"),
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("probe failed")
+            await ws.send_json(
+                {"type": "error", "message": str(exc)}
+            )
+            return
+
+        await ws.send_json(
+            {
+                "type": MSG_PROBE_RESULT,
+                # Echoed so a reply for a token the user has since
+                # retried out of is dropped rather than displayed.
+                "request_id": int(data.get("request_id", 0)),
+                "position": position,
+                "token_id": token_id,
+                "probability": measured["probability"],
+                "rank": measured["rank"],
+                "vocab_size": measured["vocab_size"],
+            }
+        )
+
+    def _probe_state(self) -> Dict[str, Any]:
+        """The run a probe reads, or a stated reason it cannot."""
+        if self.model is None:
+            raise ValueError("No model is loaded.")
+        state = self.last_run_state
+        if state is None:
+            raise ValueError("No previous generation to probe.")
+        return state
+
+
+def _probe_token_id(data: Dict[str, Any]) -> int:
+    """Range-check a requested token id.
+
+    Only the lower bound is checkable here; the upper one belongs to
+    the model's output width, which ``probe_token`` holds.
+    """
+    token_id = int(data.get("token_id", -1))
+    if token_id < 0:
+        raise ValueError(f"token id {token_id} is not valid.")
+    return token_id
+
+
+def _substitute_position(
+    state: Dict[str, Any], data: Dict[str, Any]
+) -> int:
+    """Range-check a requested position against the recorded run."""
+    ids: List[int] = state["ids"]
+    position = int(data.get("position", -1))
+    if position < 0 or position >= len(ids):
+        raise ValueError(
+            f"position {position} is out of range"
+            f" [0, {len(ids) - 1}]."
+        )
+    if position == 0 and len(ids) == 1:
+        raise ValueError(
+            "Nothing follows the only token; substituting"
+            " it would change nothing."
+        )
+    return position
+
+
+def _captured_confidence(
+    captured: List[Dict[str, Any]],
+    token_id: int,
+    position: int,
+) -> float:
+    """The recorded probability of a candidate the model offered.
+
+    Raising rather than defaulting is the point: a token the run
+    never considered is not a candidate substitution, and letting
+    one through would quietly turn a recorded counterfactual into
+    an invented one.
+    """
+    for candidate in captured:
+        if int(candidate["id"]) == token_id:
+            return float(candidate["p"])
+    raise ValueError(
+        f"token {token_id} was not among the captured"
+        f" candidates at position {position}."
+    )
 
 
 def build_backend() -> Backend:

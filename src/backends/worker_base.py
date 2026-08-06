@@ -13,20 +13,32 @@ import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
-from typing import Any, AsyncGenerator, Dict, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 from src.backends.protocol import (
     MSG_CANCEL,
+    MSG_ERROR,
     MSG_GENERATE,
+    MSG_MODEL_STATUS,
+    MSG_PROBE,
     MSG_RESUME,
     MSG_SUBSTITUTE,
+    MSG_TOKENIZE,
+    MSG_TOKENIZE_RESULT,
     ModelInfo,
 )
 
 logger = logging.getLogger("diffusion_worker")
+
+# Upper bound on a typed-token preview request. The feature resolves
+# one token, and no vocabulary entry approaches this, so anything
+# longer is either a paste accident or an attempt to make the worker
+# do work. Truncating beats rejecting: the preview still shows the
+# user what their first few tokens would be.
+TOKENIZE_TEXT_MAX_CHARS = 200
 
 
 class FrameStreamer:
@@ -120,6 +132,164 @@ class Backend(ABC):
             "substitution not supported"
         )
 
+    async def handle_tokenize(
+        self, ws: WebSocket, data: Dict[str, Any]
+    ) -> None:
+        """Resolve a typed string against the loaded vocabulary.
+
+        Backs the What If typed-token preview. Implemented here
+        rather than per backend because every backend holds a
+        tokenizer, so the diffusion models inherit a working preview
+        for free if What If ever reaches them.
+        """
+        tokenizer = getattr(self, "tokenizer", None)
+        if tokenizer is None:
+            await ws.send_json(
+                {
+                    "type": MSG_ERROR,
+                    "message": "No tokenizer is loaded.",
+                }
+            )
+            return
+        raw = data.get("text", "")
+        text = raw[:TOKENIZE_TEXT_MAX_CHARS] if (
+            isinstance(raw, str)
+        ) else ""
+        pieces = tokenize_pieces(tokenizer, text)
+        await ws.send_json(
+            {
+                "type": MSG_TOKENIZE_RESULT,
+                # Echoed so the client can drop a reply that a later
+                # keystroke has already made irrelevant.
+                "request_id": int(data.get("request_id", 0)),
+                "text": text,
+                "pieces": pieces,
+                "count": len(pieces),
+            }
+        )
+
+    async def handle_probe(
+        self, ws: WebSocket, data: Dict[str, Any]
+    ) -> None:
+        """Report what the model gave a token at one position.
+
+        Not implemented here, unlike ``handle_tokenize``: answering
+        needs the last run's committed prefix and a forward pass
+        against it, and only the autoregressive backend keeps a run
+        state shaped for that. Diffusion positions are revealed out
+        of order, so there is no prefix to prefill up to.
+        """
+        raise NotImplementedError("probing not supported")
+
+
+def tokenize_pieces(
+    tokenizer: Any, text: str
+) -> List[Dict[str, Any]]:
+    """Split a string into the vocabulary entries it resolves to.
+
+    This is a standalone encode, not a re-tokenization of the
+    sequence, and that distinction is what makes the preview
+    trustworthy. Substitution keeps the prefix ids verbatim and
+    continues decoding from them, so the sequence is never
+    re-encoded and the boundary effects that make BPE
+    context-sensitive cannot arise. The only question left is
+    whether the typed text is exactly one vocabulary entry.
+
+    ``add_special_tokens=False`` because this is a fragment being
+    spliced into an existing sequence; the BOS a tokenizer would
+    otherwise prepend is not something the user typed.
+
+    Each piece decodes exactly the way a captured candidate does
+    (see ``_top_alternatives``), so one frontend helper renders both.
+    """
+    assert isinstance(text, str), "text must be a string"
+    if text == "":
+        return []
+    ids = tokenizer.encode(text, add_special_tokens=False)
+    pieces: List[Dict[str, Any]] = []
+    for token_id in ids:
+        pieces.append(
+            {
+                "id": int(token_id),
+                "t": tokenizer.decode(
+                    [int(token_id)],
+                    skip_special_tokens=False,
+                ),
+            }
+        )
+    assert len(pieces) == len(ids), "dropped a piece"
+    return pieces
+
+
+def describe_tokenizer(
+    tokenizer: Any, model: Any = None
+) -> Dict[str, Any]:
+    """Identify a loaded tokenizer, for the UI and saved runs.
+
+    Read off the live object rather than declared in the registry.
+    A hand-maintained name is free to drift from whatever the
+    checkpoint actually loads, and this is shown to the user as a
+    statement of fact about their run, so drift is the one failure
+    that matters here.
+
+    ``vocab_size`` is the base vocabulary, deliberately not
+    ``len(tokenizer)``, which adds the special tokens grafted on
+    afterwards. The base figure is the one the entropy scale refers
+    to, since its natural log is the most a position can carry.
+
+    ``model_vocab_size`` is the model's output width, which is a
+    property of the checkpoint rather than of the tokenizer, and is
+    reported here anyway because the two figures only mean anything
+    next to each other: they differ wherever a checkpoint pads its
+    embedding for alignment (128,256 against 128,000 for SmolLM3),
+    and that difference is what a token's rank is measured against.
+    Sharing one dict also means the pair reaches the UI and a saved
+    run through the plumbing the tokenizer already has.
+
+    Every field is optional, because this runs against whatever
+    objects a backend happens to hold. An unrecognizable tokenizer
+    reports only its class rather than failing a health check.
+    """
+    if tokenizer is None:
+        return {}
+    described: Dict[str, Any] = {
+        "class": type(tokenizer).__name__
+    }
+    assert described["class"], "tokenizer class name is empty"
+
+    name = getattr(tokenizer, "name_or_path", None)
+    if name:
+        described["name_or_path"] = str(name)
+    vocab_size = getattr(tokenizer, "vocab_size", None)
+    if isinstance(vocab_size, int):
+        assert vocab_size > 0, "vocab_size must be positive"
+        described["vocab_size"] = vocab_size
+    is_fast = getattr(tokenizer, "is_fast", None)
+    if isinstance(is_fast, bool):
+        described["is_fast"] = is_fast
+    width = describe_output_width(model)
+    if width is not None:
+        described["model_vocab_size"] = width
+    return described
+
+
+def describe_output_width(model: Any) -> Optional[int]:
+    """The model's output width, or None when it cannot be read.
+
+    Taken from the config rather than from ``lm_head.out_features``,
+    because a tied-embedding checkpoint may not expose a linear head
+    to measure, and the config figure is what the head is built from
+    either way.
+    """
+    if model is None:
+        return None
+    config = getattr(model, "config", None)
+    width = getattr(config, "vocab_size", None)
+    if not isinstance(width, int):
+        return None
+    assert width > 0, "model vocab_size must be positive"
+    return width
+
 
 def resolve_load_status(
     *,
@@ -157,6 +327,56 @@ async def _send_busy(ws: WebSocket) -> None:
             "message": (
                 "A generation is already running."
                 " Please wait."
+            ),
+        }
+    )
+
+
+async def _await_model_ready(
+    ws: WebSocket,
+    model_ready: asyncio.Event,
+    load_failed: asyncio.Event,
+    load_error: Dict[str, str],
+) -> bool:
+    """Hold the socket until the model is usable.
+
+    False means it never will be, and the reason has already been
+    sent, so the caller only has to stop. Lifted out of the socket
+    handler because it is a distinct phase with its own three-way
+    outcome, and inlining it put four branches in front of the
+    message loop that has nothing to do with them.
+    """
+    if load_failed.is_set():
+        await _send_load_error(ws, load_error)
+        return False
+    if model_ready.is_set():
+        return True
+
+    await ws.send_json(
+        {"type": MSG_MODEL_STATUS, "status": "loading"}
+    )
+    ready_task = asyncio.ensure_future(model_ready.wait())
+    failed_task = asyncio.ensure_future(load_failed.wait())
+    _done, pending = await asyncio.wait(
+        {ready_task, failed_task},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    for task in pending:
+        task.cancel()
+    if load_failed.is_set():
+        await _send_load_error(ws, load_error)
+        return False
+    return True
+
+
+async def _send_load_error(
+    ws: WebSocket, load_error: Dict[str, str]
+) -> None:
+    await ws.send_json(
+        {
+            "type": MSG_ERROR,
+            "message": load_error.get(
+                "message", "Model failed to load."
             ),
         }
     )
@@ -222,6 +442,14 @@ def create_worker_app(
             "id": backend.model_info.id,
             "versions": versions,
         }
+        # Only once ready: there is no tokenizer to describe before
+        # the load finishes, and the supervisor caches this on the
+        # same transition it caches versions on.
+        if status == "ready":
+            payload["tokenizer"] = describe_tokenizer(
+                getattr(backend, "tokenizer", None),
+                getattr(backend, "model", None),
+            )
         # "loading" is reported with or without progress: the sampler
         # only attaches once the load starts and can measure the
         # checkpoint, and everything before that is still a load.
@@ -242,49 +470,22 @@ def create_worker_app(
         await ws.accept()
         cancel_event = asyncio.Event()
         stream = FrameStreamer(ws)
+        # The three that stream frames. Identical but for the method
+        # they reach, so they share one branch below rather than three
+        # copies of the same busy check and lock acquisition.
+        streaming = {
+            MSG_GENERATE: backend.handle_generate,
+            MSG_RESUME: backend.handle_resume,
+            MSG_SUBSTITUTE: backend.handle_substitute,
+        }
         try:
-            if load_failed.is_set():
-                await ws.send_json(
-                    {
-                        "type": "error",
-                        "message": load_error.get(
-                            "message", "Model failed to load."
-                        ),
-                    }
-                )
+            ready = await _await_model_ready(
+                ws, model_ready, load_failed, load_error
+            )
+            if not ready:
                 return
-            if not model_ready.is_set():
-                await ws.send_json(
-                    {
-                        "type": "model_status",
-                        "status": "loading",
-                    }
-                )
-                ready_task = asyncio.ensure_future(
-                    model_ready.wait()
-                )
-                failed_task = asyncio.ensure_future(
-                    load_failed.wait()
-                )
-                _, pending = await asyncio.wait(
-                    {ready_task, failed_task},
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                for task in pending:
-                    task.cancel()
-                if load_failed.is_set():
-                    await ws.send_json(
-                        {
-                            "type": "error",
-                            "message": load_error.get(
-                                "message",
-                                "Model failed to load.",
-                            ),
-                        }
-                    )
-                    return
             await ws.send_json(
-                {"type": "model_status", "status": "ready"}
+                {"type": MSG_MODEL_STATUS, "status": "ready"}
             )
             while True:
                 data = await ws.receive_json()
@@ -294,42 +495,41 @@ def create_worker_app(
                     cancel_event.set()
                     continue
 
-                if mtype == MSG_GENERATE:
+                if mtype in streaming:
                     if gen_lock.locked():
                         await _send_busy(ws)
                         continue
                     async with gen_lock:
                         cancel_event.clear()
-                        await backend.handle_generate(
+                        await streaming[mtype](
                             ws, data, cancel_event, stream
                         )
                     continue
 
-                if mtype == MSG_RESUME:
-                    if gen_lock.locked():
-                        await _send_busy(ws)
-                        continue
-                    async with gen_lock:
-                        cancel_event.clear()
-                        await backend.handle_resume(
-                            ws, data, cancel_event, stream
-                        )
+                # Deliberately outside gen_lock: a vocabulary lookup
+                # is microseconds, and the lock exists to serialize
+                # generation, not to guard the tokenizer. Taking it
+                # would stall the preview behind a running model and
+                # make typing feel broken.
+                if mtype == MSG_TOKENIZE:
+                    await backend.handle_tokenize(ws, data)
                     continue
 
-                if mtype == MSG_SUBSTITUTE:
+                # Inside gen_lock, unlike the tokenize above it: this
+                # one runs a forward pass, so letting it in alongside
+                # a generation would have two passes contending for
+                # the same device and its memory.
+                if mtype == MSG_PROBE:
                     if gen_lock.locked():
                         await _send_busy(ws)
                         continue
                     async with gen_lock:
-                        cancel_event.clear()
-                        await backend.handle_substitute(
-                            ws, data, cancel_event, stream
-                        )
+                        await backend.handle_probe(ws, data)
                     continue
 
                 await ws.send_json(
                     {
-                        "type": "error",
+                        "type": MSG_ERROR,
                         "message": (
                             f"Unknown message type: {mtype}"
                         ),

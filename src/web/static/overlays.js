@@ -95,6 +95,14 @@ function overlaysPopoverLeft(tokenRect, popoverBox) {
   );
 }
 
+// Distance from the token to the popover's near edge. Deliberately a
+// hairline rather than 0: the trip from a token up into the popover
+// crosses this gap, so every pixel of it is reach the pointer has to
+// survive, but at 0 the border stops reading as a separate surface
+// and subpixel rounding of the token's rect can drop the box shadow
+// onto the glyph being read.
+var OVERLAYS_POPOVER_GAP = 2;
+
 // Place it vertically, preferring above the token. That preference
 // began as a workaround, since the browser drew a native title
 // tooltip below the cursor that nothing could move; the tooltip is
@@ -111,7 +119,8 @@ function overlaysPopoverTop(tokenRect, popoverBox, canvasTop) {
   var ceiling = typeof canvasTop === "number"
     ? Math.max(8, canvasTop)
     : 8;
-  var above = tokenRect.top - popoverBox.height - 6;
+  var above =
+    tokenRect.top - popoverBox.height - OVERLAYS_POPOVER_GAP;
   if (above >= ceiling) {
     return above;
   }
@@ -119,7 +128,7 @@ function overlaysPopoverTop(tokenRect, popoverBox, canvasTop) {
   // for a token near the top of the canvas, which is the case with
   // the most room underneath it.
   var below = Math.min(
-    tokenRect.bottom + 6,
+    tokenRect.bottom + OVERLAYS_POPOVER_GAP,
     window.innerHeight - popoverBox.height - 8
   );
   return Math.max(8, below);
@@ -185,6 +194,138 @@ function overlaysBuildAltPager(target, page, onPage) {
   return button;
 }
 
+// One candidate row: token text, proportional bar, probability. Both
+// pages had their own copy of this, identical but for returning a row
+// against a fragment, and both needed the same hover wiring added, so
+// they share one now for the same reason the metrics strip is shared.
+//
+// ``onHover`` is handed a reading on enter and null on leave, and is
+// what feeds the strip's right-hand readout. Optional, because the
+// row is also drawn where nothing is listening. ``index`` is the
+// row's place in the list, which is also its rank; see
+// overlaysAltRank.
+function overlaysBuildAltRow(alt, chosenId, onHover, index) {
+  var row = document.createElement("div");
+  row.className = "alt-row";
+  if (alt.id === chosenId) {
+    row.classList.add("alt-row-chosen");
+  }
+  // An explicit rank means this is the appended entry: the token the
+  // position committed, from outside the captured set. Marked so it
+  // can read as an answer rather than an offer, since substituting
+  // the token already sitting there would re-run to the same place.
+  if (typeof alt.rank === "number") {
+    row.classList.add("alt-row-outside");
+  }
+  row.setAttribute("data-alt-id", String(alt.id));
+
+  var text = document.createElement("span");
+  text.className = "alt-text";
+  text.textContent = overlaysAltDisplay(alt.t);
+  row.appendChild(text);
+
+  var clamped = Math.max(0, Math.min(1, alt.p));
+  var bar = document.createElement("span");
+  bar.className = "alt-bar";
+  var fill = document.createElement("span");
+  fill.className = "alt-bar-fill";
+  fill.style.width = Math.round(clamped * 100) + "%";
+  bar.appendChild(fill);
+  row.appendChild(bar);
+
+  var prob = document.createElement("span");
+  prob.className = "alt-prob";
+  prob.textContent = (clamped * 100).toFixed(1) + "%";
+  row.appendChild(prob);
+
+  if (onHover) {
+    overlaysBindAltHover(
+      row,
+      {
+        t: alt.t,
+        p: alt.p,
+        rank: overlaysAltRank(alt, index),
+      },
+      onHover
+    );
+  }
+  return row;
+}
+
+// A candidate's rank, which for the captured set is simply where it
+// sits in the list: the sampler takes them with torch.topk, so the
+// order is descending by construction and the index is the rank.
+//
+// An explicit ``rank`` wins where one exists, which is the token the
+// run actually chose when it fell outside the captured set. That one
+// is appended after the others, so its index would claim it was the
+// sixth likeliest when it may have been the forty-thousandth.
+function overlaysAltRank(alt, index) {
+  if (typeof alt.rank === "number" && alt.rank > 0) {
+    return alt.rank;
+  }
+  if (typeof index !== "number" || index < 0) {
+    return null;
+  }
+  return index + 1;
+}
+
+// mouseenter and mouseleave rather than mouseover: these do not
+// bubble, so the row's own children cannot retrigger them and the
+// readout holds steady as the pointer crosses the bar and the
+// percentage inside one row.
+function overlaysBindAltHover(row, reading, onHover) {
+  row.addEventListener("mouseenter", function () {
+    onHover(reading);
+  });
+  row.addEventListener("mouseleave", function () {
+    onHover(null);
+  });
+}
+
+// Which tokenizer cut these candidates, as a caption at the foot of
+// the popover. Not chrome: every row above it is a piece of one
+// specific vocabulary, and which vocabulary that is decides whether
+// a word is one token or three. Returns null when unknown, so the
+// popover simply has no footer rather than an empty one.
+//
+// The two pages source this differently on purpose. The generator
+// asks the resident worker, since the candidates were just produced
+// by it; Analytics asks the run, since its checkpoint may since have
+// been swapped out. Bracket access because "class" is the payload's
+// field name; see describe_tokenizer in worker_base.py.
+function overlaysBuildAltTokenizer(tokenizer) {
+  var tok = tokenizer || {};
+  var name = tok["class"];
+  if (!name) {
+    return null;
+  }
+  var footer = document.createElement("div");
+  footer.className = "alt-tokenizer";
+  var text = String(name);
+  if (tok.vocab_size) {
+    text += " \u00B7 "
+      + overlaysCompactCount(tok.vocab_size)
+      + " vocab";
+  }
+  footer.textContent = text;
+  // The class name is the half that can be long, so it is the half
+  // that ellipsizes; the vocab stays whole.
+  footer.title = text;
+  return footer;
+}
+
+// Thousands as "128k". The footer shares a 190px popover with five
+// candidate rows, so a grouped six-digit figure would either wrap it
+// or push the box wider than the tokens it is annotating.
+function overlaysCompactCount(count) {
+  var n = Number(count);
+  if (!isFinite(n) || n < 1000) {
+    return String(count);
+  }
+  return Math.round(n / 1000) + "k";
+}
+
 // Render a candidate token's raw text readably. Alternatives keep
 // control tokens and whitespace intact (the sampler deliberately
 // does not sanitize them), so make the invisible ones visible rather
@@ -238,6 +379,9 @@ function overlaysBuildTokenMetrics(el) {
     position: overlaysMetricField(el, "Position", false),
     confidence: overlaysMetricField(el, "Confidence", true),
     entropy: overlaysMetricField(el, "Entropy", true),
+    // After the four fixed fields, so nothing to its left moves when
+    // it appears and disappears under the pointer.
+    candidate: overlaysMetricCandidate(el),
     extra: overlaysMetricTrailer(el, "token-metrics-extra"),
     run: overlaysMetricTrailer(el, "token-metrics-run"),
   };
@@ -288,6 +432,34 @@ function overlaysMetricTrailer(el, className) {
   return span;
 }
 
+// The detail readout for a candidate under the pointer in the
+// popover. It lives here rather than on the row because the row has
+// no width for it: the popover is 320px at its widest, shared with
+// five rows, and the strip has half its length standing empty.
+//
+// A green chip heads it, mirroring the grey chip that heads the left
+// group, and the colors carry the distinction: grey is the token the
+// run committed, green is one it merely weighed.
+function overlaysMetricCandidate(el) {
+  var group = document.createElement("span");
+  group.className = "token-metrics-candidate";
+
+  var chip = document.createElement("span");
+  chip.className = "token-metrics-alt";
+  group.appendChild(chip);
+
+  var probability = document.createElement("span");
+  probability.className = "token-metrics-value";
+  group.appendChild(probability);
+
+  var rank = document.createElement("span");
+  rank.className = "token-metrics-rank";
+  group.appendChild(rank);
+
+  el.appendChild(group);
+  return { group: group, chip: chip, value: probability, rank: rank };
+}
+
 // Render a reading, or the idle state when it is null. Every field is
 // written on every call, so no stale value can survive a move onto a
 // token that lacks it.
@@ -316,6 +488,71 @@ function overlaysRenderTokenMetrics(el, reading) {
   );
   nodes.extra.textContent = idle ? "" : (reading.extra || "");
   nodes.run.textContent = idle ? "" : (reading.runLabel || "");
+  overlaysRenderMetricCandidate(
+    nodes.candidate, idle ? null : reading.candidate
+  );
+}
+
+// Hidden outright when nothing is hovered in the popover, unlike the
+// left group, which stays visible while idle as a key to what the
+// strip reports. This one has no such duty: it appears only while
+// you are reading a specific candidate, so an idle placeholder for it
+// would be a label for a question nobody asked.
+function overlaysRenderMetricCandidate(nodes, candidate) {
+  if (!nodes) {
+    return;
+  }
+  if (!candidate) {
+    nodes.group.hidden = true;
+    return;
+  }
+  nodes.group.hidden = false;
+  nodes.chip.textContent = overlaysAltDisplay(candidate.text);
+  // Full precision, which is the point of putting it here: the row
+  // in the popover rounds to a tenth of a percent, and a token the
+  // model gave 1e-5 rounds away to nothing there.
+  nodes.value.textContent = overlaysMetricProbability(
+    candidate.probability
+  );
+  nodes.rank.textContent = overlaysMetricRank(candidate);
+}
+
+// Significant figures rather than fixed decimals, so a probability
+// stays legible across the five orders of magnitude a typed token can
+// span. toPrecision holds fixed notation down to about 1e-6 and
+// switches to exponential below, which is where fixed stops being
+// readable anyway.
+function overlaysMetricProbability(probability) {
+  // Explicitly typed, not coerced: a pending measurement arrives as
+  // null, and Number(null) is 0, which would report a token the model
+  // has not been asked about yet as one it gave no weight to.
+  if (typeof probability !== "number" || !isFinite(probability)) {
+    return OVERLAYS_METRIC_BLANK;
+  }
+  if (probability === 0) {
+    return "0";
+  }
+  return probability.toPrecision(3);
+}
+
+// How many tokens the model preferred. The reading that survives when
+// the probability has collapsed: "#41,203 of 128,256" says what a
+// rounded zero cannot. Omitted for a captured candidate, whose rank
+// is its position in the list you are already looking at.
+// The denominator is optional. Runs saved before the model's output
+// width was recorded have none, and a bare "#3" still says the useful
+// thing; inventing a width from the tokenizer's vocab_size beside it
+// would be wrong wherever the embedding is padded.
+function overlaysMetricRank(candidate) {
+  if (!candidate.rank) {
+    return "";
+  }
+  var rank = "#" + Number(candidate.rank).toLocaleString();
+  if (!candidate.vocabSize) {
+    return rank;
+  }
+  return rank + " of "
+    + Number(candidate.vocabSize).toLocaleString();
 }
 
 // A masked position has no text of its own to show, so it reports the
