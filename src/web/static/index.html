@@ -56,30 +56,49 @@
     <section id="controls">
       <div id="prompt-row">
         <label for="prompt-input">Prompt</label>
-        <div id="prompt-history" hidden>
-          <button id="btn-prompt-history" type="button" class="prompt-hist-btn"
-            title="Use a previous prompt" aria-label="Use a previous prompt">
+        <!-- Always present, unlike #prompt-history, which hides itself
+             when there is nothing to browse. Import has to stay
+             reachable either way, so the two share a container that is
+             positioned once. -->
+        <div id="prompt-actions">
+          <button id="btn-prompt-import" type="button" class="prompt-hist-btn"
+            title="Import a prompt from a .txt or .md file"
+            aria-label="Import a prompt from a file">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
               stroke="currentColor" stroke-width="2" stroke-linecap="round"
               stroke-linejoin="round" aria-hidden="true">
-              <path d="M3 3v5h5" />
-              <path d="M3.05 13a9 9 0 1 0 2.6-6.36L3 8" />
-              <path d="M12 7v5l3 2" />
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <path d="M7 10l5 5 5-5" />
+              <path d="M12 15V3" />
             </svg>
           </button>
-          <span id="prompt-history-nav" hidden>
-            <button id="btn-hist-prev" type="button" class="prompt-hist-nav-btn"
-              title="Older prompt" aria-label="Older prompt">&lsaquo;</button>
-            <span id="prompt-history-counter"></span>
-            <button id="btn-hist-next" type="button" class="prompt-hist-nav-btn"
-              title="Newer prompt" aria-label="Newer prompt">&rsaquo;</button>
-            <button id="btn-hist-confirm" type="button"
-              class="prompt-hist-icon prompt-hist-confirm"
-              title="Use this prompt" aria-label="Use this prompt">&#x2713;</button>
-            <button id="btn-hist-cancel" type="button"
-              class="prompt-hist-icon prompt-hist-cancel"
-              title="Cancel" aria-label="Cancel">&#x2717;</button>
-          </span>
+          <input id="prompt-file-input" type="file"
+            accept=".txt,.md,.markdown,text/plain,text/markdown" hidden />
+          <div id="prompt-history" hidden>
+            <button id="btn-prompt-history" type="button" class="prompt-hist-btn"
+              title="Use a previous prompt" aria-label="Use a previous prompt">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                stroke-linejoin="round" aria-hidden="true">
+                <path d="M3 3v5h5" />
+                <path d="M3.05 13a9 9 0 1 0 2.6-6.36L3 8" />
+                <path d="M12 7v5l3 2" />
+              </svg>
+            </button>
+            <span id="prompt-history-nav" hidden>
+              <button id="btn-hist-prev" type="button" class="prompt-hist-nav-btn"
+                title="Older prompt" aria-label="Older prompt">&lsaquo;</button>
+              <span id="prompt-history-counter"></span>
+              <button id="btn-hist-next" type="button" class="prompt-hist-nav-btn"
+                title="Newer prompt" aria-label="Newer prompt">&rsaquo;</button>
+              <button id="btn-hist-confirm" type="button"
+                class="prompt-hist-icon prompt-hist-confirm"
+                title="Use this prompt" aria-label="Use this prompt">&#x2713;</button>
+              <button id="btn-hist-cancel" type="button"
+                class="prompt-hist-icon prompt-hist-cancel"
+                title="Cancel" aria-label="Cancel">&#x2717;</button>
+            </span>
+          </div>
         </div>
         <textarea
           id="prompt-input"
@@ -280,6 +299,24 @@
        Alternatives capture ran. Fixed-position at body level so it is
        never clipped by the output area's scroll box. -->
   <div id="token-alts-popover" hidden></div>
+
+  <!-- Import-replaces-prompt confirmation modal -->
+  <div id="modal-import" class="modal-overlay hidden">
+    <div class="modal-box modal-box-confirm">
+      <button class="modal-close" id="btn-import-close"
+        aria-label="Close">&times;</button>
+      <h2>Replace the current prompt?</h2>
+      <div class="modal-body">
+        <p id="import-file-label"></p>
+        <p>The prompt box is not empty. Importing overwrites what is in
+          it. Your previous prompts stay in the history control.</p>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-import-cancel" class="btn-secondary">Cancel</button>
+        <button id="btn-import-confirm" class="btn-accent">Replace</button>
+      </div>
+    </div>
+  </div>
 
   <!-- About modal -->
   <div id="modal-about" class="modal-overlay hidden">

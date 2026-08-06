@@ -41,6 +41,16 @@ var promptContextNote =
   document.getElementById("prompt-context-note");
 var promptHistoryGroup =
   document.getElementById("prompt-history");
+var btnPromptImport =
+  document.getElementById("btn-prompt-import");
+var promptFileInput =
+  document.getElementById("prompt-file-input");
+var importFileLabel =
+  document.getElementById("import-file-label");
+var btnImportConfirm =
+  document.getElementById("btn-import-confirm");
+var btnImportCancel =
+  document.getElementById("btn-import-cancel");
 var btnPromptHistory =
   document.getElementById("btn-prompt-history");
 var promptHistoryNav =
@@ -4002,6 +4012,171 @@ function cancelPromptHistory() {
   promptTextChanged();
 }
 
+// ---- Import a prompt from a file ----
+
+// Checked against file.size before a byte is read, so an accidentally
+// chosen video is refused rather than pulled into memory first. Text
+// prompts are kilobytes; this is orders of magnitude above any real
+// one and still bounds the read.
+var PROMPT_IMPORT_BYTES_MAX = 1048576;
+
+// What is inserted, after decoding. Matched to the worker's counting
+// cap on purpose: an import the box accepts is therefore always
+// counted in full, so the readout under it is never a floor.
+var PROMPT_IMPORT_CHARS_MAX = 200000;
+
+// The file waiting on the replace confirmation, or null when nothing
+// is pending. Held rather than re-read because the file input is
+// cleared as soon as it is read, so there would be nothing to go back
+// to if the confirmation were answered later.
+var pendingImportFile = null;
+
+// Start an import: refuse what cannot be read, confirm what would
+// overwrite work, and otherwise go straight in. The check order is
+// deliberate: a file that will be refused should be refused without
+// first asking the user whether to discard their prompt for it.
+function beginPromptImport(file) {
+  if (!file) {
+    return;
+  }
+  if (!isImportableTextFile(file)) {
+    setPromptImportStatus(
+      "Only .txt and .md files can be imported.", true
+    );
+    return;
+  }
+  if (file.size > PROMPT_IMPORT_BYTES_MAX) {
+    setPromptImportStatus(
+      "That file is too large to import ("
+      + formatKilobytes(file.size)
+      + "; the limit is "
+      + formatKilobytes(PROMPT_IMPORT_BYTES_MAX)
+      + ").",
+      true
+    );
+    return;
+  }
+  if (promptInput.value.trim() === "") {
+    readPromptFile(file);
+    return;
+  }
+  pendingImportFile = file;
+  if (importFileLabel) {
+    importFileLabel.textContent = file.name;
+  }
+  openModal(modalImport);
+}
+
+// Read the file and put it in the box. Entirely client-side: the
+// contents are the user's prompt, and routing them through the server
+// would mean uploading a file to have it handed straight back.
+function readPromptFile(file) {
+  file
+    .text()
+    .then(function (text) {
+      applyImportedPrompt(file, text);
+    })
+    .catch(function () {
+      // An unreadable file is an operating error, not a broken
+      // invariant: the file may have been moved or a permission
+      // withdrawn between the picker and the read.
+      setPromptImportStatus(
+        "Could not read " + file.name + ".", true
+      );
+    });
+}
+
+function applyImportedPrompt(file, text) {
+  // Choosing a file is a decision to use its text, which settles the
+  // question browse mode was asking. Left active, it would also hold
+  // the box read-only over text the user had just chosen.
+  if (promptHistoryActive) {
+    _exitPromptHistoryUI();
+  }
+  // Markdown goes in raw. The model reads it fine, and stripping the
+  // syntax would mean the prompt that ran was not the file's text.
+  var clipped = text.slice(0, PROMPT_IMPORT_CHARS_MAX);
+  promptInput.value = clipped;
+  promptTextChanged();
+  onParamFormChanged();
+  var message = "Imported " + file.name;
+  if (clipped.length < text.length) {
+    message +=
+      ", truncated to "
+      + PROMPT_IMPORT_CHARS_MAX.toLocaleString()
+      + " characters";
+  }
+  setPromptImportStatus(message + ".", false);
+  promptInput.focus();
+}
+
+function confirmPromptImport() {
+  var file = pendingImportFile;
+  closeModal(modalImport);
+  if (file) {
+    readPromptFile(file);
+  }
+}
+
+// The resting status line, which is where this page spells out
+// results. An import is a one-off action with an outcome to report,
+// not ongoing work, so it belongs here rather than in a status chip.
+function setPromptImportStatus(text, danger) {
+  if (!statusMessage) {
+    return;
+  }
+  statusRowReflow(function () {
+    statusMessage.textContent = text;
+  });
+  statusMessage.style.color = danger ? "var(--danger)" : "";
+  if (danger) {
+    setTimeout(function () {
+      statusMessage.style.color = "";
+    }, 5000);
+  }
+}
+
+function formatKilobytes(bytes) {
+  return Math.round(bytes / 1024).toLocaleString() + " KB";
+}
+
+// The picker enforces its own accept list, so this is really for the
+// drop path, where anything on the desktop can arrive. A PDF read as
+// text would fill the prompt with binary rather than fail, which is
+// worse than a refusal.
+//
+// The extension is checked as well as the MIME type because platforms
+// disagree about Markdown: some report text/markdown, some text/plain,
+// and some report nothing at all.
+function isImportableTextFile(file) {
+  var name = (file.name || "").toLowerCase();
+  var extensions = [".txt", ".md", ".markdown"];
+  for (var i = 0; i < extensions.length; i++) {
+    if (name.endsWith(extensions[i])) {
+      return true;
+    }
+  }
+  return (file.type || "").indexOf("text/") === 0;
+}
+
+// Whether a drag carries something worth accepting. Types are checked
+// rather than filenames because a drag exposes no name until it is
+// dropped, and an empty type is allowed through since some platforms
+// report none for a plain text file.
+function dragCarriesFile(e) {
+  var transfer = e.dataTransfer;
+  if (!transfer) {
+    return false;
+  }
+  var types = transfer.types || [];
+  for (var i = 0; i < types.length; i++) {
+    if (types[i] === "Files") {
+      return true;
+    }
+  }
+  return false;
+}
+
 // ---- Context window readout ----
 
 // How long the prompt has to sit still before a count goes out.
@@ -5518,6 +5693,12 @@ function setGenerating(active) {
   // save is completing) -- centralized in updateGenerateButton.
   updateGenerateButton();
   promptInput.disabled = active;
+  // Follows the prompt box it writes into. A disabled textarea already
+  // refuses a drop, so leaving the button live would be the one route
+  // that could still overwrite a prompt mid-run.
+  if (btnPromptImport) {
+    btnPromptImport.disabled = active;
+  }
   toggleExperimental.disabled = active;
   setModelSelectDisabled(active);
   var keys = Object.keys(paramInputs);
@@ -6426,6 +6607,55 @@ if (btnHistCancel) {
   );
 }
 
+// Prompt import: button, picker, drag-and-drop, and the confirmation.
+if (btnPromptImport && promptFileInput) {
+  btnPromptImport.addEventListener("click", function () {
+    promptFileInput.click();
+  });
+  promptFileInput.addEventListener("change", function () {
+    var file = promptFileInput.files[0];
+    // Cleared before the read so choosing the same file twice still
+    // fires a change event; beginPromptImport already holds it.
+    promptFileInput.value = "";
+    beginPromptImport(file);
+  });
+}
+
+if (promptInput) {
+  promptInput.addEventListener("dragover", function (e) {
+    if (!dragCarriesFile(e)) {
+      return;
+    }
+    // Without this the browser navigates to the file on drop, which
+    // loses the page and the run on it.
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    promptInput.classList.add("is-drop-target");
+  });
+  promptInput.addEventListener("dragleave", function () {
+    promptInput.classList.remove("is-drop-target");
+  });
+  promptInput.addEventListener("drop", function (e) {
+    if (!dragCarriesFile(e)) {
+      return;
+    }
+    e.preventDefault();
+    promptInput.classList.remove("is-drop-target");
+    beginPromptImport(e.dataTransfer.files[0]);
+  });
+}
+
+if (btnImportConfirm) {
+  btnImportConfirm.addEventListener(
+    "click", confirmPromptImport
+  );
+}
+if (btnImportCancel) {
+  btnImportCancel.addEventListener("click", function () {
+    closeModal(modalImport);
+  });
+}
+
 toggleExperimental.addEventListener(
   "change", applyLimits
 );
@@ -7007,9 +7237,11 @@ var modalAbout =
   document.getElementById("modal-about");
 var modalHelp =
   document.getElementById("modal-help");
+var modalImport =
+  document.getElementById("modal-import");
 
 var allModals = [
-  modalAbout, modalHelp,
+  modalAbout, modalHelp, modalImport,
 ];
 
 function openModal(modal) {
@@ -7018,6 +7250,14 @@ function openModal(modal) {
 
 function closeModal(modal) {
   modal.classList.add("hidden");
+  // Every route out of the import dialog is a decision not to
+  // replace: the close button, the backdrop, Escape, and Cancel. They
+  // all pass through here, so dropping the pending file here is what
+  // keeps a later import from acting on a file the user walked away
+  // from.
+  if (modal === modalImport) {
+    pendingImportFile = null;
+  }
 }
 
 linkAbout.addEventListener(

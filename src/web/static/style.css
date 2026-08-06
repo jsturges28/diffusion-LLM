@@ -343,8 +343,10 @@ body {
   position: relative;
 }
 
-/* Prompt history control, tucked into the prompt row's top-right. */
-#prompt-history {
+/* Import + history controls, tucked into the prompt row's top-right.
+   The container is positioned, not its children, so history can hide
+   itself without moving import. */
+#prompt-actions {
   position: absolute;
   top: 0;
   right: 0;
@@ -352,6 +354,12 @@ body {
   align-items: center;
   gap: 6px;
   z-index: 2;
+}
+
+#prompt-history {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 #prompt-history[hidden] {
@@ -403,6 +411,7 @@ body {
   border-color: var(--text-dim);
 }
 
+.prompt-hist-btn:disabled,
 .prompt-hist-nav-btn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
@@ -434,10 +443,10 @@ body {
   background: rgba(255, 68, 68, 0.14);
 }
 
-/* The gap here also sets the clearance under #prompt-history, which
+/* The gap here also sets the clearance under #prompt-actions, which
    is absolutely positioned against this row's top and so sits on the
    label's line. Widening it moves the textarea down and gives both
-   the same breathing room, which moving the control alone would not.
+   the same breathing room, which moving the controls alone would not.
    */
 #prompt-row label {
   display: block;
@@ -466,6 +475,14 @@ body {
 
 #prompt-input:focus {
   border-color: var(--border-focus);
+}
+
+/* A file is over the box and would be accepted if dropped. Border and
+   tint only: resizing or moving anything here would shift the drop
+   target out from under the cursor mid-drag. */
+#prompt-input.is-drop-target {
+  border-color: var(--accent);
+  background: var(--accent-dim);
 }
 
 /* Context-window readout, under the prompt box. Right-aligned so it
@@ -1164,7 +1181,11 @@ button {
   color: var(--accent);
 }
 
-.btn-settings-save {
+/* The affirmative button in a footer, paired with .btn-secondary. The
+   settings save was the first one, so it named the rule; .btn-accent
+   is the same button anywhere else it is needed. */
+.btn-settings-save,
+.btn-accent {
   background: var(--accent-dim);
   color: var(--accent);
   font-size: 13px;
@@ -1174,12 +1195,14 @@ button {
   transition: background 0.15s, border-color 0.15s;
 }
 
-.btn-settings-save:hover:not(:disabled) {
+.btn-settings-save:hover:not(:disabled),
+.btn-accent:hover:not(:disabled) {
   background: rgba(0, 255, 65, 0.22);
   border-color: rgba(0, 255, 65, 0.4);
 }
 
 .btn-settings-save:disabled,
+.btn-accent:disabled,
 .btn-secondary:disabled {
   opacity: 0.35;
   cursor: not-allowed;
