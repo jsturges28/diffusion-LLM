@@ -1,0 +1,245 @@
+"""Tests for collection storage and its reconciliation on hydrate.
+
+Strategy: collections live in ``ui_state.json`` under
+``diffusion_collections`` as the JSON the client keeps in
+localStorage, so the server is a bounded key/value mirror rather than
+a schema. These tests drive the store directly for the key's contract
+(accepted, and bounded), and then point the server's results dir at a
+tmp path to drive ``GET /api/ui-state`` for the pruning, seeding
+collections that reference one real run folder and one deleted.
+
+Passing proves two things. A collection survives a restart under any
+window origin, which is the reason it is stored server-side at all
+rather than in localStorage alone. And a run deleted anywhere, from
+the table, from another window, or from the filesystem, leaves no id
+behind in a collection, so a tab's contents can always be opened and
+its count cannot overstate what is in it. Set membership is preserved
+throughout: a run filed into two collections stays in both.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, Dict, List
+
+import pytest
+from starlette.testclient import TestClient
+
+import src.web.server as server
+from src.web.ui_state import (
+    UI_STATE_KEYS,
+    load_ui_state,
+    set_ui_state_key,
+)
+
+_KEY = "diffusion_collections"
+
+_REAL = "2026-01-01_00-00-00_llada"
+_ALSO_REAL = "2026-01-02_00-00-00_smollm3"
+_DELETED = "2026-01-01_09-99-99_llada"
+
+
+@pytest.fixture()
+def client_with_results(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> TestClient:
+    monkeypatch.setattr(server, "RESULTS_DIR", tmp_path)
+    return TestClient(server.app)
+
+
+def _collection(
+    name: str, runs: List[str]
+) -> Dict[str, Any]:
+    return {"id": name.lower(), "name": name, "runs": runs}
+
+
+def _seed(results_dir: Path, collections: List[Any]) -> None:
+    (results_dir / "ui_state.json").write_text(
+        json.dumps({_KEY: json.dumps(collections)}),
+        encoding="utf-8",
+    )
+
+
+def _read(client: TestClient) -> List[Any]:
+    body = client.get("/api/ui-state").json()
+    return json.loads(body[_KEY])
+
+
+# -- the store --
+
+
+def test_collections_are_a_known_key() -> None:
+    """Unknown keys are rejected with a 404, so this is the whole
+    difference between the feature persisting and silently not."""
+    assert _KEY in UI_STATE_KEYS
+
+
+def test_a_collection_survives_a_round_trip(
+    tmp_path: Path,
+) -> None:
+    raw = json.dumps([_collection("Favorites", [_REAL])])
+
+    set_ui_state_key(tmp_path, _KEY, raw)
+
+    assert load_ui_state(tmp_path)[_KEY] == raw
+
+
+def test_an_oversized_value_is_refused(
+    tmp_path: Path,
+) -> None:
+    """The bound the other keys have. Without it a client looping on a
+    write could grow the file until the disk filled."""
+    oversized = "x" * (UI_STATE_KEYS[_KEY] + 1)
+
+    with pytest.raises(ValueError):
+        set_ui_state_key(tmp_path, _KEY, oversized)
+
+
+# -- pruning on hydrate --
+
+
+def test_a_deleted_run_leaves_no_id_behind(
+    tmp_path: Path, client_with_results: TestClient
+) -> None:
+    (tmp_path / _REAL).mkdir()
+    _seed(
+        tmp_path,
+        [_collection("Favorites", [_REAL, _DELETED])],
+    )
+
+    collections = _read(client_with_results)
+
+    assert collections[0]["runs"] == [_REAL]
+
+
+def test_the_pruned_list_is_written_back(
+    tmp_path: Path, client_with_results: TestClient
+) -> None:
+    """The paired check: pruning only the response would re-prune on
+    every hydrate and lose the fix the moment the client wrote."""
+    (tmp_path / _REAL).mkdir()
+    _seed(
+        tmp_path,
+        [_collection("Favorites", [_REAL, _DELETED])],
+    )
+
+    client_with_results.get("/api/ui-state")
+
+    on_disk = json.loads(
+        (tmp_path / "ui_state.json").read_text(encoding="utf-8")
+    )
+    stored = json.loads(on_disk[_KEY])
+    assert stored[0]["runs"] == [_REAL]
+
+
+def test_a_run_in_two_collections_stays_in_both(
+    tmp_path: Path, client_with_results: TestClient
+) -> None:
+    """Membership is a set, not an assignment. Pruning must not become
+    the thing that quietly makes it exclusive."""
+    (tmp_path / _REAL).mkdir()
+    _seed(
+        tmp_path,
+        [
+            _collection("Favorites", [_REAL, _DELETED]),
+            _collection("Papers", [_REAL]),
+        ],
+    )
+
+    collections = _read(client_with_results)
+
+    assert collections[0]["runs"] == [_REAL]
+    assert collections[1]["runs"] == [_REAL]
+
+
+def test_an_emptied_collection_is_kept(
+    tmp_path: Path, client_with_results: TestClient
+) -> None:
+    """The user made it. Having its runs deleted is not the same as
+    asking for the collection to go away."""
+    _seed(tmp_path, [_collection("Favorites", [_DELETED])])
+
+    collections = _read(client_with_results)
+
+    assert len(collections) == 1
+    assert collections[0]["runs"] == []
+    assert collections[0]["name"] == "Favorites"
+
+
+def test_nothing_is_rewritten_when_every_run_exists(
+    tmp_path: Path, client_with_results: TestClient
+) -> None:
+    """The common case, and the one that must not write on every page
+    load: hydrate happens on every navigation."""
+    (tmp_path / _REAL).mkdir()
+    (tmp_path / _ALSO_REAL).mkdir()
+    _seed(
+        tmp_path,
+        [_collection("Favorites", [_REAL, _ALSO_REAL])],
+    )
+    before = (tmp_path / "ui_state.json").read_text(
+        encoding="utf-8"
+    )
+
+    client_with_results.get("/api/ui-state")
+
+    after = (tmp_path / "ui_state.json").read_text(
+        encoding="utf-8"
+    )
+    assert after == before
+
+
+def test_a_collection_of_only_deleted_runs_empties(
+    tmp_path: Path, client_with_results: TestClient
+) -> None:
+    """The boundary: every id is an orphan, so the collection is
+    emptied rather than left whole or removed."""
+    (tmp_path / _REAL).mkdir()
+    _seed(
+        tmp_path,
+        [_collection("Stale", [_DELETED, "another-gone"])],
+    )
+
+    collections = _read(client_with_results)
+
+    assert collections[0]["runs"] == []
+
+
+def test_a_malformed_entry_passes_through(
+    tmp_path: Path, client_with_results: TestClient
+) -> None:
+    """Removing ids for missing runs is this endpoint's whole job.
+    Repairing a shape the client wrote is not, and guessing at one
+    would risk discarding something the client could still read."""
+    _seed(tmp_path, ["not a collection", {"name": "no runs"}])
+
+    collections = _read(client_with_results)
+
+    assert collections[0] == "not a collection"
+    assert collections[1] == {"name": "no runs"}
+
+
+def test_corrupt_json_is_left_alone(
+    tmp_path: Path, client_with_results: TestClient
+) -> None:
+    (tmp_path / "ui_state.json").write_text(
+        json.dumps({_KEY: "{not json"}), encoding="utf-8"
+    )
+
+    body = client_with_results.get("/api/ui-state").json()
+
+    assert body[_KEY] == "{not json"
+
+
+def test_hydrate_without_collections_is_unaffected(
+    tmp_path: Path, client_with_results: TestClient
+) -> None:
+    (tmp_path / "ui_state.json").write_text(
+        json.dumps({"diffusion_settings": "{}"}),
+        encoding="utf-8",
+    )
+
+    body = client_with_results.get("/api/ui-state").json()
+
+    assert body == {"diffusion_settings": "{}"}

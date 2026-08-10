@@ -746,6 +746,70 @@ analytics suite.
   emphasis tier, while Chart.js has no per-bar opacity, so the Analytics
   chart bakes alpha into each bar's fill color (`entropyDimColor`, returning
   `hsla`) and multiplies with the crossfade's whole-dataset alpha.
+- Shipped (this session): **context-window metrics, prompt import, and
+  Analytics collections.** Three independent arcs, three commits, in that
+  order, because the import control's "this fits" promise is only honest
+  once the counting exists.
+
+  The context readout under the textarea (`1,240 / 65,536`, amber when the
+  prompt plus the output budget would overflow) rests on two decisions. The
+  window is **read off the loaded object**, not declared in the registry:
+  `describe_context_length` in `worker_base.py` prefers
+  `model.config.max_position_embeddings` and falls back to
+  `tokenizer.model_max_length`, which is frequently a sentinel of `int(1e30)`
+  and therefore needs an upper bound (`CONTEXT_LENGTH_SANE_MAX`); neither
+  being sane returns `None` rather than a guess. Same reasoning as
+  `describe_tokenizer`: registry data is static and served with no worker
+  running, so a declared number is free to drift from the checkpoint. And the
+  count is of the **templated** sequence, produced by the code that builds
+  the real inputs: `Backend.prompt_token_count` mirrors `_build_inputs`
+  (SmolLM3 and DiffusionGemma inherit it), and the LLaDA worker overrides it
+  through a newly extracted `build_llada_inputs` that its sampler and
+  `_store_state` now share, so the counted tokens are provably the generated
+  tokens. Counting raw text would understate: the chat template adds role
+  markers, and `enable_thinking` changes them.
+
+  `MSG_COUNT_PROMPT` is a separate message rather than a flag on `tokenize`,
+  dispatched outside `gen_lock` the same way, because `tokenize` caps at 200
+  characters and answers with one object per token; a 40 KB import would be
+  tens of thousands of objects to answer with a single integer. The client's
+  request has its own id counter rather than sharing `requestTypedPreview`'s,
+  which is bound to What If state, and it re-requests when the `thinking`
+  flag changes, since that changes the template. The authoritative count
+  rides `prompt_len` on the `done` frame from all three samplers into a
+  `context` block in `metadata.json`, so a saved run records what the model
+  received rather than what the client estimated; the two Analytics detail
+  rows stay absent for older runs, as the tokenizer rows already do.
+
+  Prompt import is client-side end to end (`file.text()`), by button or by
+  drop on the textarea, with a byte cap checked **before** reading and a
+  character cap on what is inserted. `#prompt-history` is absolutely
+  positioned and hidden when history is empty, so the import button could not
+  live inside it: both now sit in a `#prompt-actions` flex container that is
+  always present. Markdown goes in raw, since the model reads it fine and
+  stripping it would misrepresent the file. A non-empty box confirms first,
+  through the generator's first confirm modal, following the Analytics
+  `#modal-delete` pattern.
+
+  Collections **reuse `ui_state.py`** rather than a new file: one
+  `diffusion_collections` key holding `[{id, name, runs: [run_id]}]` at the
+  same 262,144 cap as `diffusion_new_runs`, which widened that module's
+  docstring, because this is the first key that is durable user intent rather
+  than a cache. Membership is a **set**, so a run sits in several collections
+  without a later migration. Ids are folder names, and `_reconcile_collections`
+  prunes ones whose folder is gone on every `GET /api/ui-state`, following
+  `_reconcile_new_runs`: a collection is a list the user reads, so a stale id
+  would show as a row that cannot be opened and a tab count that overstates.
+  Malformed entries pass through untouched, since repairing a shape the client
+  wrote is not this endpoint's job. "All" is a view rather than a stored
+  collection; Favorites is created on the first star. Filtering happens before
+  `sortRuns` in `renderTable`, and three things had to follow the active tab
+  or they would act on invisible rows: `onSelectAll`, `checkedRunIds`, and
+  `applyDeletions`, which also drops deleted ids from every collection so the
+  table does not wait for the next hydrate to agree with itself. Storage
+  eviction stayed out of scope: 175 runs occupy 440 MB against 189 GB free,
+  so the pressure it would relieve is roughly 75,000 runs away, and bulk
+  delete already exists.
 - For the feature overview and architecture, see `README.md`. For the build
   history, see `.cursor/plans/`.
 

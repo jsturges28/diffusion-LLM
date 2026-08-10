@@ -934,6 +934,9 @@ var PERSIST_KEYS = [
   // heights, so a shared offset would land sensibly on at most one.
   "diffusion_overlay_drawer_top_generator",
   "diffusion_overlay_drawer_top_analytics",
+  // The one key here that is not a cache: which runs the user filed
+  // into which collection cannot be recomputed from anything on disk.
+  "diffusion_collections",
 ];
 
 // Debounce PUTs per key so rapid writes (e.g. successive settings

@@ -27,7 +27,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import httpx
 import websockets
@@ -1727,14 +1727,7 @@ def _reconcile_new_runs(state: Dict[str, str]) -> Dict[str, str]:
     if not isinstance(ids, list):
         return state
 
-    if RESULTS_DIR.is_dir():
-        existing = {
-            child.name
-            for child in RESULTS_DIR.iterdir()
-            if child.is_dir()
-        }
-    else:
-        existing = set()
+    existing = _existing_run_ids()
     pruned = [run_id for run_id in ids if run_id in existing]
     if len(pruned) == len(ids):
         return state
@@ -1749,17 +1742,101 @@ def _reconcile_new_runs(state: Dict[str, str]) -> Dict[str, str]:
     return state
 
 
+def _existing_run_ids() -> Set[str]:
+    """Run IDs with a folder on disk (the folder name is the ID)."""
+    if not RESULTS_DIR.is_dir():
+        return set()
+    return {
+        child.name
+        for child in RESULTS_DIR.iterdir()
+        if child.is_dir()
+    }
+
+
+def _reconcile_collections(state: Dict[str, str]) -> Dict[str, str]:
+    """Drop deleted runs from every collection they were filed into.
+
+    Same reasoning as ``_reconcile_new_runs``, with a sharper failure
+    if skipped: a collection is a list the user reads, so an id whose
+    folder is gone would show as a row that cannot be opened, and the
+    tab's count would overstate what is in it. Runs are deleted from
+    the table, from another window, or from the filesystem, and only
+    the first of those can prune client-side.
+
+    Empty collections survive: the user made them, and one whose runs
+    have been deleted is still a place they intend to file more.
+    """
+    raw = state.get("diffusion_collections")
+    if not raw:
+        return state
+    try:
+        collections = json.loads(raw)
+    except ValueError:
+        return state  # Corrupt value: load_ui_state will drop it.
+    if not isinstance(collections, list):
+        return state
+
+    existing = _existing_run_ids()
+    pruned, dropped = _prune_collection_runs(collections, existing)
+    if dropped == 0:
+        return state
+
+    new_raw = json.dumps(pruned)
+    try:
+        set_ui_state_key(
+            RESULTS_DIR, "diffusion_collections", new_raw
+        )
+    except (KeyError, ValueError, OSError):
+        logger.exception("failed to reconcile collections")
+        return state
+    state["diffusion_collections"] = new_raw
+    return state
+
+
+def _prune_collection_runs(
+    collections: List[Any], existing: Set[str]
+) -> Tuple[List[Any], int]:
+    """Filter each collection's runs; return the list and drop count.
+
+    Malformed entries are passed through untouched rather than
+    repaired. This endpoint's job is to remove ids for runs that are
+    gone, and a client that wrote a shape the client itself does not
+    understand is not a problem the server can fix by guessing.
+    """
+    pruned: List[Any] = []
+    dropped = 0
+    for entry in collections:
+        if not isinstance(entry, dict):
+            pruned.append(entry)
+            continue
+        runs = entry.get("runs")
+        if not isinstance(runs, list):
+            pruned.append(entry)
+            continue
+        kept = [
+            run_id for run_id in runs if run_id in existing
+        ]
+        dropped += len(runs) - len(kept)
+        updated = dict(entry)
+        updated["runs"] = kept
+        pruned.append(updated)
+    assert len(pruned) == len(collections), "lost a collection"
+    return pruned, dropped
+
+
 @app.get("/api/ui-state")
 async def get_ui_state() -> JSONResponse:
     """Return durable UI state (Settings, analytics "new run" cue,
-    prompt history, generate teaser). The frontend hydrates
-    localStorage from this on boot so the values survive restarts
-    regardless of the window origin (see src/web/ui_state.py). The
-    "new run" cue is reconciled against existing runs so deleted runs
-    do not linger in the count.
+    prompt history, collections, generate teaser). The frontend
+    hydrates localStorage from this on boot so the values survive
+    restarts whatever the window origin (see src/web/ui_state.py).
+    The "new run" cue and the collections are both reconciled against
+    existing runs, so a deleted run neither lingers in the count nor
+    shows as an unopenable row in a collection.
     """
     state = await asyncio.to_thread(load_ui_state, RESULTS_DIR)
     state = await asyncio.to_thread(_reconcile_new_runs, state)
+    state = await asyncio.to_thread(_reconcile_collections, state)
     return JSONResponse(content=state)
 
 

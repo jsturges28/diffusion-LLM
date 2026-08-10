@@ -15,6 +15,8 @@ var runsTbody =
   document.getElementById("runs-tbody");
 var runsEmpty =
   document.getElementById("runs-empty");
+var runsEmptyCollection =
+  document.getElementById("runs-empty-collection");
 var selectAllCb =
   document.getElementById("select-all");
 
@@ -140,6 +142,35 @@ var bulkDeleteCount =
 // Runs staged for the delete confirmation modal (1 for a row's own
 // trashcan, N for the bulk "delete selected" action).
 var pendingDeleteIds = [];
+
+var collectionTabs =
+  document.getElementById("collection-tabs");
+var modalCollections =
+  document.getElementById("modal-collections");
+var collectionChoices =
+  document.getElementById("collection-choices");
+var collectionsRunLabel =
+  document.getElementById("collections-run-label");
+var collectionsNote =
+  document.getElementById("collections-note");
+var newCollectionName =
+  document.getElementById("new-collection-name");
+var btnNewCollection =
+  document.getElementById("btn-new-collection");
+var btnCollectionsDone =
+  document.getElementById("btn-collections-done");
+var btnCollectionsClose =
+  document.getElementById("btn-collections-close");
+var modalCollectionDelete =
+  document.getElementById("modal-collection-delete");
+var colDeleteLabel =
+  document.getElementById("col-delete-label");
+var btnColDeleteConfirm =
+  document.getElementById("btn-col-delete-confirm");
+var btnColDeleteCancel =
+  document.getElementById("btn-col-delete-cancel");
+var btnColDeleteClose =
+  document.getElementById("btn-col-delete-close");
 
 // ---- Chart.js defaults ----
 
@@ -628,12 +659,16 @@ function displayVal(run, key) {
   return String(v);
 }
 
+// The checked runs that are currently on screen. Scoped to the rows
+// on display because everything downstream acts on them: Compare and
+// the bulk delete both take this list, and a stale tick left behind
+// by a tab switch would put a run nobody can see into either.
 function checkedRunIds() {
   var ids = [];
-  var keys = Object.keys(checkedIds);
-  for (var i = 0; i < keys.length; i++) {
-    if (checkedIds[keys[i]]) {
-      ids.push(keys[i]);
+  var shown = visibleRuns();
+  for (var i = 0; i < shown.length; i++) {
+    if (checkedIds[shown[i].run_id]) {
+      ids.push(shown[i].run_id);
     }
   }
   return ids;
@@ -855,6 +890,620 @@ function groupRuns(runs, key) {
   return groups;
 }
 
+// ---- Collections ----
+//
+// A collection is a named set of run ids. Membership is a set rather
+// than an assignment, so one run can sit in several collections and
+// filing it somewhere new never takes it out of where it already was.
+//
+// Stored as JSON under one durable UI-state key (see ui_state.py),
+// the same mechanism the settings use. Unlike those, this key is not
+// a cache: nothing on disk records which runs a user cared about, so
+// losing it loses work rather than a preference. The server prunes
+// ids for deleted runs on every hydrate, which is what keeps a run
+// deleted in another window from lingering as an unopenable row.
+
+var COLLECTIONS_KEY = "diffusion_collections";
+
+// Favorites is created on first use rather than shipped empty, so a
+// user who never stars anything never sees a tab. Its id is fixed so
+// the star always knows where a plain click files to.
+var FAVORITES_ID = "favorites";
+var FAVORITES_NAME = "Favorites";
+
+// Bounds. Names are truncated in the strip anyway, and a collection
+// list long enough to overflow the toolbar would make the tabs
+// useless as navigation.
+var COLLECTION_NAME_MAX = 40;
+var COLLECTIONS_MAX = 24;
+
+var collections = [];
+// null means the All view, which is not a collection: it is every run
+// on disk, and it has no membership to add to or remove from.
+var activeCollectionId = null;
+// The run whose chooser is open, and the collection staged for the
+// delete confirmation. Both null when their dialog is closed.
+var chooserRunId = null;
+var pendingCollectionDelete = null;
+
+// Read the stored collections, discarding anything malformed. A
+// corrupt value degrades to no collections rather than throwing: this
+// runs during boot, and the table is worth more than the tabs.
+function loadCollections() {
+  collections = [];
+  var raw = null;
+  try {
+    raw = localStorage.getItem(COLLECTIONS_KEY);
+  } catch (_e) {
+    return;
+  }
+  if (!raw) {
+    return;
+  }
+  var parsed = null;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (_e) {
+    return;
+  }
+  if (!Array.isArray(parsed)) {
+    return;
+  }
+  for (var i = 0; i < parsed.length; i++) {
+    var entry = sanitizeCollection(parsed[i]);
+    if (entry !== null) {
+      collections.push(entry);
+    }
+  }
+}
+
+// One stored entry, or null when it is not one. Validated on read
+// rather than trusted because this file is shared with a server that
+// deliberately passes shapes it does not recognize straight through.
+function sanitizeCollection(entry) {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+  if (typeof entry.id !== "string" || entry.id === "") {
+    return null;
+  }
+  var runs = [];
+  if (Array.isArray(entry.runs)) {
+    for (var i = 0; i < entry.runs.length; i++) {
+      if (typeof entry.runs[i] === "string") {
+        runs.push(entry.runs[i]);
+      }
+    }
+  }
+  return {
+    id: entry.id,
+    name: typeof entry.name === "string" && entry.name !== ""
+      ? entry.name
+      : entry.id,
+    runs: runs,
+  };
+}
+
+// Write through to the server (see persistSet) so collections survive
+// a desktop restart, where the window origin can change and partition
+// localStorage.
+function saveCollections() {
+  persistSet(COLLECTIONS_KEY, JSON.stringify(collections));
+}
+
+function findCollection(id) {
+  for (var i = 0; i < collections.length; i++) {
+    if (collections[i].id === id) {
+      return collections[i];
+    }
+  }
+  return null;
+}
+
+// Favorites, creating it if this is the first star. Returns null when
+// the collection cap is already reached, which the caller reports
+// rather than silently dropping the click.
+function ensureFavorites() {
+  var favorites = findCollection(FAVORITES_ID);
+  if (favorites) {
+    return favorites;
+  }
+  if (collections.length >= COLLECTIONS_MAX) {
+    return null;
+  }
+  favorites = {
+    id: FAVORITES_ID,
+    name: FAVORITES_NAME,
+    runs: [],
+  };
+  // First, so the tab it creates lands where a user expects the
+  // default one to be rather than after their own collections.
+  collections.unshift(favorites);
+  return favorites;
+}
+
+// Whether a run is filed anywhere. What the filled star reports, so
+// it answers "did I save this" rather than "is this a favorite": a
+// run filed only under Papers is still saved.
+function runIsCollected(runId) {
+  for (var i = 0; i < collections.length; i++) {
+    if (collections[i].runs.indexOf(runId) !== -1) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function collectionHasRun(collection, runId) {
+  return collection.runs.indexOf(runId) !== -1;
+}
+
+// Add or remove one run from one collection. Returns whether anything
+// changed, so callers can skip a write and a re-render.
+function setRunMembership(collectionId, runId, member) {
+  var collection = findCollection(collectionId);
+  if (!collection) {
+    return false;
+  }
+  var at = collection.runs.indexOf(runId);
+  if (member && at === -1) {
+    collection.runs.push(runId);
+    return true;
+  }
+  if (!member && at !== -1) {
+    collection.runs.splice(at, 1);
+    return true;
+  }
+  return false;
+}
+
+// The star's plain click: file to Favorites, or take it back out. One
+// click, no dialog, because the common case is deciding a run is
+// worth keeping and that decision should cost nothing.
+function toggleFavorite(runId) {
+  if (runIsCollected(runId)) {
+    var changed = false;
+    for (var i = 0; i < collections.length; i++) {
+      if (setRunMembership(collections[i].id, runId, false)) {
+        changed = true;
+      }
+    }
+    if (changed) {
+      afterCollectionsChanged();
+    }
+    return;
+  }
+  if (ensureFavorites() === null) {
+    showToast(
+      "Collection limit reached (" + COLLECTIONS_MAX + ")"
+    );
+    return;
+  }
+  setRunMembership(FAVORITES_ID, runId, true);
+  afterCollectionsChanged();
+}
+
+// Persist, then repaint everything that reads membership: the tabs
+// (their counts changed), and the table (its stars, and its rows if a
+// collection is the active view).
+function afterCollectionsChanged() {
+  saveCollections();
+  renderCollectionTabs();
+  renderTable();
+}
+
+// Runs the table should show. The All view is every run; a collection
+// is its members, in the table's own sort order rather than the order
+// they were filed, so switching tabs does not also change the sort.
+function visibleRuns() {
+  if (activeCollectionId === null) {
+    return allRuns;
+  }
+  var collection = findCollection(activeCollectionId);
+  if (!collection) {
+    // The collection was deleted while active. Fall back to All
+    // rather than show an empty table with no way to tell why.
+    activeCollectionId = null;
+    return allRuns;
+  }
+  return allRuns.filter(function (run) {
+    return collectionHasRun(collection, run.run_id);
+  });
+}
+
+// How many of a collection's runs actually exist. Counted against
+// allRuns rather than taken from runs.length so the tab cannot claim
+// more than the table can show, which matters in the window between a
+// delete and the next hydrate.
+function collectionPresentCount(collection) {
+  var present = 0;
+  for (var i = 0; i < allRuns.length; i++) {
+    if (collectionHasRun(collection, allRuns[i].run_id)) {
+      present++;
+    }
+  }
+  return present;
+}
+
+function renderCollectionTabs() {
+  if (!collectionTabs) {
+    return;
+  }
+  collectionTabs.innerHTML = "";
+  collectionTabs.appendChild(
+    buildCollectionTab(null, "All", allRuns.length)
+  );
+  for (var i = 0; i < collections.length; i++) {
+    collectionTabs.appendChild(
+      buildCollectionTab(
+        collections[i],
+        collections[i].name,
+        collectionPresentCount(collections[i])
+      )
+    );
+  }
+  collectionTabs.appendChild(buildCollectionAddButton());
+}
+
+function buildCollectionTab(collection, name, count) {
+  var id = collection ? collection.id : null;
+  var tab = document.createElement("button");
+  tab.type = "button";
+  tab.className = "collection-tab";
+  tab.setAttribute("role", "tab");
+  if (id === activeCollectionId) {
+    tab.classList.add("is-active");
+  }
+  tab.setAttribute(
+    "aria-selected", id === activeCollectionId ? "true" : "false"
+  );
+  if (id !== null) {
+    tab.setAttribute("data-collection-id", id);
+  }
+  tab.title = name;
+
+  var label = document.createElement("span");
+  label.className = "collection-tab-name";
+  label.textContent = name;
+  tab.appendChild(label);
+
+  var countEl = document.createElement("span");
+  countEl.className = "collection-tab-count";
+  countEl.textContent = String(count);
+  tab.appendChild(countEl);
+
+  // All is a view, so it has no name to change and nothing to delete.
+  if (id !== null) {
+    tab.appendChild(
+      buildTabIcon("rename", "Rename", COLLECTION_RENAME_SVG)
+    );
+    tab.appendChild(
+      buildTabIcon("delete", "Delete", COLLECTION_DELETE_SVG)
+    );
+  }
+  return tab;
+}
+
+var COLLECTION_RENAME_SVG =
+  '<svg viewBox="0 0 24 24" width="10" height="10" fill="none"'
+  + ' stroke="currentColor" stroke-width="2.2"'
+  + ' stroke-linecap="round" stroke-linejoin="round"'
+  + ' aria-hidden="true"><path d="M12 20h9"/>'
+  + '<path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>';
+
+var COLLECTION_DELETE_SVG =
+  '<svg viewBox="0 0 24 24" width="10" height="10" fill="none"'
+  + ' stroke="currentColor" stroke-width="2.2"'
+  + ' stroke-linecap="round" stroke-linejoin="round"'
+  + ' aria-hidden="true"><path d="M18 6L6 18"/>'
+  + '<path d="M6 6l12 12"/></svg>';
+
+// Nested buttons are invalid HTML, so the tab's own icons are spans
+// with a role. They are reached through the tab's click handler,
+// which reads the action off the target.
+function buildTabIcon(action, label, svg) {
+  var icon = document.createElement("span");
+  icon.className = "collection-tab-icon";
+  icon.setAttribute("data-tab-action", action);
+  icon.setAttribute("role", "button");
+  icon.setAttribute("tabindex", "-1");
+  icon.setAttribute("aria-label", label);
+  icon.title = label;
+  icon.innerHTML = svg;
+  return icon;
+}
+
+function buildCollectionAddButton() {
+  var add = document.createElement("button");
+  add.type = "button";
+  add.className = "collection-tab collection-tab-add";
+  add.id = "btn-collection-add";
+  add.title = "New collection";
+  add.setAttribute("aria-label", "New collection");
+  add.textContent = "+";
+  return add;
+}
+
+// Replace a tab's label with an input, in place. Inline rather than
+// in a dialog because renaming is a one-field edit and the strip is
+// where the name is read, so this is the shortest path between
+// seeing a bad name and having a better one.
+//
+// ``collection`` is null when creating, in which case committing adds
+// a new collection instead of renaming one.
+function beginCollectionNameEdit(tab, collection) {
+  var input = document.createElement("input");
+  input.type = "text";
+  input.className = "collection-name-input";
+  input.maxLength = COLLECTION_NAME_MAX;
+  input.value = collection ? collection.name : "";
+  input.placeholder = "Collection name";
+  input.setAttribute("aria-label", "Collection name");
+  tab.innerHTML = "";
+  tab.appendChild(input);
+  input.focus();
+  input.select();
+
+  var settled = false;
+  function commit() {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    applyCollectionName(collection, input.value);
+  }
+  function cancel() {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    renderCollectionTabs();
+  }
+
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commit();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      cancel();
+    }
+  });
+  // Clicking away commits, matching the rename affordance everywhere
+  // else in this app; Escape is the way to back out.
+  input.addEventListener("blur", commit);
+  // The tab is a button, so a click inside the input would otherwise
+  // switch the active collection out from under the edit.
+  input.addEventListener("click", function (e) {
+    e.stopPropagation();
+  });
+}
+
+// Commit a typed name. An empty one is a decision not to change
+// anything rather than a request for a nameless collection.
+function applyCollectionName(collection, raw) {
+  var name = raw.trim().slice(0, COLLECTION_NAME_MAX);
+  if (name === "") {
+    renderCollectionTabs();
+    return;
+  }
+  if (collection) {
+    collection.name = name;
+    afterCollectionsChanged();
+    return;
+  }
+  var created = createCollection(name);
+  if (created === null) {
+    showToast(
+      "Collection limit reached (" + COLLECTIONS_MAX + ")"
+    );
+    renderCollectionTabs();
+    return;
+  }
+  // Switch to what was just made: creating a collection is almost
+  // always the first half of filing something into it.
+  activeCollectionId = created.id;
+  afterCollectionsChanged();
+}
+
+// Add a collection under a name, or return null at the cap. Ids are
+// derived from the name and disambiguated with a counter, so the
+// stored value stays readable when inspected by hand.
+function createCollection(name) {
+  if (collections.length >= COLLECTIONS_MAX) {
+    return null;
+  }
+  var base = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (base === "") {
+    base = "collection";
+  }
+  var id = base;
+  var suffix = 2;
+  while (findCollection(id) !== null) {
+    id = base + "-" + suffix;
+    suffix++;
+    if (suffix > COLLECTIONS_MAX + 2) {
+      // Unreachable while ids are unique per collection and the cap
+      // holds, but the loop must be bounded regardless.
+      return null;
+    }
+  }
+  var collection = { id: id, name: name, runs: [] };
+  collections.push(collection);
+  return collection;
+}
+
+function openCollectionDeleteModal(collection) {
+  pendingCollectionDelete = collection.id;
+  if (colDeleteLabel) {
+    colDeleteLabel.textContent =
+      "\u201c" + collection.name + "\u201d ("
+      + collectionPresentCount(collection)
+      + " runs)";
+  }
+  modalCollectionDelete.classList.remove("hidden");
+}
+
+function closeCollectionDeleteModal() {
+  pendingCollectionDelete = null;
+  modalCollectionDelete.classList.add("hidden");
+}
+
+function confirmCollectionDelete() {
+  var id = pendingCollectionDelete;
+  closeCollectionDeleteModal();
+  if (id === null) {
+    return;
+  }
+  deleteCollection(id);
+}
+
+// Remove a collection. The runs in it are untouched: this deletes a
+// label, not data, which is why it is a plain confirm rather than the
+// same danger copy the run delete carries.
+function deleteCollection(id) {
+  var kept = [];
+  for (var i = 0; i < collections.length; i++) {
+    if (collections[i].id !== id) {
+      kept.push(collections[i]);
+    }
+  }
+  collections = kept;
+  if (activeCollectionId === id) {
+    activeCollectionId = null;
+  }
+  afterCollectionsChanged();
+}
+
+// The caret's dialog: every collection with a checkbox, plus a field
+// to make another. Opened from the row rather than from the detail
+// panel so filing a run never costs opening it.
+function openCollectionChooser(runId) {
+  chooserRunId = runId;
+  if (collectionsRunLabel) {
+    collectionsRunLabel.textContent = runPath(runId);
+  }
+  renderCollectionChoices();
+  if (newCollectionName) {
+    newCollectionName.value = "";
+  }
+  setCollectionsNote("");
+  modalCollections.classList.remove("hidden");
+}
+
+function closeCollectionChooser() {
+  chooserRunId = null;
+  modalCollections.classList.add("hidden");
+}
+
+function renderCollectionChoices() {
+  if (!collectionChoices) {
+    return;
+  }
+  collectionChoices.innerHTML = "";
+  if (collections.length === 0) {
+    var empty = document.createElement("div");
+    empty.className = "collection-empty";
+    empty.textContent =
+      "No collections yet. Name one below to start.";
+    collectionChoices.appendChild(empty);
+    return;
+  }
+  for (var i = 0; i < collections.length; i++) {
+    collectionChoices.appendChild(
+      buildCollectionChoice(collections[i])
+    );
+  }
+}
+
+function buildCollectionChoice(collection) {
+  var row = document.createElement("label");
+  row.className = "collection-choice";
+
+  var box = document.createElement("input");
+  box.type = "checkbox";
+  box.className = "app-checkbox";
+  box.checked = collectionHasRun(collection, chooserRunId);
+  box.setAttribute("data-collection-id", collection.id);
+  row.appendChild(box);
+
+  var name = document.createElement("span");
+  name.textContent = collection.name;
+  row.appendChild(name);
+
+  var count = document.createElement("span");
+  count.className = "collection-choice-count";
+  count.textContent =
+    collectionPresentCount(collection) + " runs";
+  row.appendChild(count);
+  return row;
+}
+
+// Tick or untick one collection for the open run. Applied immediately
+// rather than on Done: the checkbox is the switch, and a dialog whose
+// footer button is the one that commits invites closing it and
+// wondering whether anything happened.
+function onCollectionChoiceToggle(e) {
+  var box = e.target.closest('input[type="checkbox"]');
+  if (!box || chooserRunId === null) {
+    return;
+  }
+  var id = box.getAttribute("data-collection-id");
+  if (!id) {
+    return;
+  }
+  setRunMembership(id, chooserRunId, box.checked);
+  afterCollectionsChanged();
+  renderCollectionChoices();
+}
+
+function onCreateCollectionFromChooser() {
+  if (!newCollectionName) {
+    return;
+  }
+  var name = newCollectionName.value.trim();
+  if (name === "") {
+    setCollectionsNote("Give the collection a name.", true);
+    return;
+  }
+  var created = createCollection(name);
+  if (created === null) {
+    setCollectionsNote(
+      "Collection limit reached ("
+      + COLLECTIONS_MAX + ").",
+      true
+    );
+    return;
+  }
+  // Filed straight away: naming a new collection from a run's own
+  // dialog is asking for that run to go in it.
+  if (chooserRunId !== null) {
+    setRunMembership(created.id, chooserRunId, true);
+  }
+  newCollectionName.value = "";
+  setCollectionsNote("");
+  afterCollectionsChanged();
+  renderCollectionChoices();
+}
+
+function setCollectionsNote(text, warn) {
+  if (!collectionsNote) {
+    return;
+  }
+  collectionsNote.textContent = text;
+  collectionsNote.classList.toggle("is-warning", !!warn);
+}
+
+function aCollectionDialogIsOpen() {
+  if (!modalCollections.classList.contains("hidden")) {
+    return true;
+  }
+  return !modalCollectionDelete.classList.contains("hidden");
+}
+
 // ---- Render table ----
 
 // LLaDA-only hyperparameter columns were dropped because
@@ -866,17 +1515,26 @@ var TABLE_KEYS = [
 ];
 
 function renderTable() {
-  var sorted = sortRuns(allRuns);
+  // The active collection narrows the rows before anything else runs,
+  // so sorting and grouping see only what is on screen.
+  var shown = visibleRuns();
+  var sorted = sortRuns(shown);
   var groupKey = groupBySelect.value;
   var groups = groupRuns(sorted, groupKey);
 
   runsTbody.innerHTML = "";
 
-  if (allRuns.length === 0) {
-    runsEmpty.hidden = false;
+  // Which "nothing here" message applies: no runs at all, or a
+  // collection that has none of them.
+  var inCollection = activeCollectionId !== null;
+  runsEmpty.hidden = shown.length > 0 || inCollection;
+  if (runsEmptyCollection) {
+    runsEmptyCollection.hidden =
+      shown.length > 0 || !inCollection;
+  }
+  if (shown.length === 0) {
     return;
   }
-  runsEmpty.hidden = true;
 
   for (var g = 0; g < groups.length; g++) {
     var group = groups[g];
@@ -966,6 +1624,8 @@ function renderTable() {
 
       var tdActions = document.createElement("td");
       tdActions.className = "col-actions";
+      tdActions.appendChild(buildRowStar(run.run_id));
+      tdActions.appendChild(buildRowCollectCaret(run.run_id));
       var delBtn = document.createElement("button");
       delBtn.className = "row-delete-btn";
       delBtn.setAttribute("data-run-id", run.run_id);
@@ -989,6 +1649,52 @@ function renderTable() {
   }
 
   updateSortHeaders();
+}
+
+// One star per row, always present and always filled when the run is
+// filed somewhere. A star that only appeared on hover would leave the
+// table unscannable, which defeats the point of collecting.
+function buildRowStar(runId) {
+  var collected = runIsCollected(runId);
+  var star = document.createElement("button");
+  star.type = "button";
+  star.className = "row-star-btn";
+  if (collected) {
+    star.classList.add("is-collected");
+  }
+  star.setAttribute("data-run-id", runId);
+  star.title = collected
+    ? "Remove from collections"
+    : "Add to Favorites";
+  star.setAttribute("aria-label", star.title);
+  star.setAttribute(
+    "aria-pressed", collected ? "true" : "false"
+  );
+  star.innerHTML =
+    '<svg viewBox="0 0 24 24" width="12" height="12"'
+    + ' fill="none" stroke="currentColor" stroke-width="2"'
+    + ' stroke-linecap="round" stroke-linejoin="round"'
+    + ' aria-hidden="true"><path d="M12 3l2.9 5.9 6.6.9-4.8 4.6'
+    + ' 1.2 6.5L12 17.8 6.1 20.9l1.2-6.5L2.5 9.8l6.6-.9z"/>'
+    + "</svg>";
+  return star;
+}
+
+// The way to reach a collection other than Favorites. Hover-only, so
+// the row stays quiet until there is a reason to act on it.
+function buildRowCollectCaret(runId) {
+  var caret = document.createElement("button");
+  caret.type = "button";
+  caret.className = "row-collect-caret";
+  caret.setAttribute("data-run-id", runId);
+  caret.title = "Choose collections";
+  caret.setAttribute("aria-label", "Choose collections");
+  caret.innerHTML =
+    '<svg viewBox="0 0 24 24" width="10" height="10"'
+    + ' fill="none" stroke="currentColor" stroke-width="2.4"'
+    + ' stroke-linecap="round" stroke-linejoin="round"'
+    + ' aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
+  return caret;
 }
 
 // ---- Detail panel ----
@@ -4262,6 +4968,20 @@ function onRowClick(e) {
     return;
   }
 
+  // Both before the row handler below, so acting on a row's controls
+  // does not also open the run's detail panel.
+  var star = e.target.closest(".row-star-btn");
+  if (star) {
+    toggleFavorite(star.getAttribute("data-run-id"));
+    return;
+  }
+
+  var caret = e.target.closest(".row-collect-caret");
+  if (caret) {
+    openCollectionChooser(caret.getAttribute("data-run-id"));
+    return;
+  }
+
   var cb = e.target.closest(
     'input[type="checkbox"]'
   );
@@ -4289,13 +5009,67 @@ function onSelectAll() {
   var checked = selectAllCb.checked;
   checkedIds = {};
   if (checked) {
-    for (var i = 0; i < allRuns.length; i++) {
-      checkedIds[allRuns[i].run_id] = true;
+    // The rows on screen, not every run on disk. Under a collection
+    // tab, selecting all and then bulk-deleting would otherwise
+    // remove runs the user could not see.
+    var shown = visibleRuns();
+    for (var i = 0; i < shown.length; i++) {
+      checkedIds[shown[i].run_id] = true;
     }
   }
   renderTable();
   updateCompareButton();
   updateBulkDeleteButton();
+}
+
+// Selecting a tab. Clears the selection: a checkbox ticked under one
+// tab refers to a row that may not exist under the next, and carrying
+// it across would put invisible runs in a bulk delete.
+function selectCollection(id) {
+  if (activeCollectionId === id) {
+    return;
+  }
+  activeCollectionId = id;
+  checkedIds = {};
+  selectAllCb.checked = false;
+  updateCompareButton();
+  updateBulkDeleteButton();
+  renderCollectionTabs();
+  renderTable();
+}
+
+function onCollectionTabClick(e) {
+  if (e.target.closest("#btn-collection-add")) {
+    beginCollectionNameEdit(
+      e.target.closest("#btn-collection-add"), null
+    );
+    return;
+  }
+  var tab = e.target.closest(".collection-tab");
+  if (!tab) {
+    return;
+  }
+  var id = tab.getAttribute("data-collection-id");
+  var collection = id ? findCollection(id) : null;
+  var icon = e.target.closest("[data-tab-action]");
+  if (icon && collection) {
+    onCollectionTabAction(
+      icon.getAttribute("data-tab-action"), tab, collection
+    );
+    return;
+  }
+  selectCollection(id || null);
+}
+
+function onCollectionTabAction(action, tab, collection) {
+  if (action === "rename") {
+    beginCollectionNameEdit(tab, collection);
+    return;
+  }
+  if (action === "delete") {
+    openCollectionDeleteModal(collection);
+    return;
+  }
 }
 
 function onGroupChange() {
@@ -4307,8 +5081,13 @@ function loadAndRender() {
     allRuns = runs;
     checkedIds = {};
     selectAllCb.checked = false;
+    // Re-read on every refresh, not just at boot: the server prunes
+    // ids for deleted runs on hydrate, and another window may have
+    // filed something since.
+    loadCollections();
     updateCompareButton();
     updateBulkDeleteButton();
+    renderCollectionTabs();
     renderTable();
   });
 }
@@ -4442,10 +5221,32 @@ function applyDeletions(deletedIds) {
   allRuns = allRuns.filter(function (run) {
     return !removed[run.run_id];
   });
+  // A collection holding an id whose folder is gone would show a row
+  // that cannot be opened. The server prunes on the next hydrate, but
+  // that is a page load away, and this table is looking at it now.
+  dropDeletedFromCollections(removed);
   selectAllCb.checked = false;
   updateCompareButton();
   updateBulkDeleteButton();
+  renderCollectionTabs();
   renderTable();
+}
+
+function dropDeletedFromCollections(removed) {
+  var changed = false;
+  for (var i = 0; i < collections.length; i++) {
+    var runs = collections[i].runs;
+    var kept = runs.filter(function (runId) {
+      return !removed[runId];
+    });
+    if (kept.length !== runs.length) {
+      collections[i].runs = kept;
+      changed = true;
+    }
+  }
+  if (changed) {
+    saveCollections();
+  }
 }
 
 function reportDeletion(deleted, failed) {
@@ -4593,12 +5394,16 @@ detailPanel.addEventListener("click", function (e) {
   }
 });
 
-// Escape closes the detail modal (matches the generator's modals).
+// Escape closes the detail modal (matches the generator's modals),
+// unless a shallower dialog is open over it and gets the key first.
 document.addEventListener("keydown", function (e) {
-  if (
-    e.key === "Escape"
-    && !detailPanel.classList.contains("hidden")
-  ) {
+  if (e.key !== "Escape") {
+    return;
+  }
+  if (aCollectionDialogIsOpen()) {
+    return;
+  }
+  if (!detailPanel.classList.contains("hidden")) {
     hideDetail();
   }
 });
@@ -4625,6 +5430,78 @@ if (btnBulkDelete) {
 modalDelete.addEventListener("click", function (e) {
   if (e.target === modalDelete) {
     closeDeleteModal();
+  }
+});
+
+// Collections: the tab strip, the chooser, and the delete confirm.
+if (collectionTabs) {
+  collectionTabs.addEventListener(
+    "click", onCollectionTabClick
+  );
+}
+if (collectionChoices) {
+  collectionChoices.addEventListener(
+    "change", onCollectionChoiceToggle
+  );
+}
+if (btnNewCollection) {
+  btnNewCollection.addEventListener(
+    "click", onCreateCollectionFromChooser
+  );
+}
+if (newCollectionName) {
+  newCollectionName.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      onCreateCollectionFromChooser();
+    }
+  });
+}
+if (btnCollectionsDone) {
+  btnCollectionsDone.addEventListener(
+    "click", closeCollectionChooser
+  );
+}
+if (btnCollectionsClose) {
+  btnCollectionsClose.addEventListener(
+    "click", closeCollectionChooser
+  );
+}
+if (modalCollections) {
+  modalCollections.addEventListener("click", function (e) {
+    if (e.target === modalCollections) {
+      closeCollectionChooser();
+    }
+  });
+}
+btnColDeleteConfirm.addEventListener(
+  "click", confirmCollectionDelete
+);
+btnColDeleteCancel.addEventListener(
+  "click", closeCollectionDeleteModal
+);
+btnColDeleteClose.addEventListener(
+  "click", closeCollectionDeleteModal
+);
+modalCollectionDelete.addEventListener("click", function (e) {
+  if (e.target === modalCollectionDelete) {
+    closeCollectionDeleteModal();
+  }
+});
+
+// Escape closes whichever collection dialog is open. Separate from
+// the detail modal's handler above because these two are shallow
+// dialogs that can sit over it, so the innermost closes first.
+document.addEventListener("keydown", function (e) {
+  if (e.key !== "Escape") {
+    return;
+  }
+  if (!modalCollectionDelete.classList.contains("hidden")) {
+    closeCollectionDeleteModal();
+    return;
+  }
+  if (!modalCollections.classList.contains("hidden")) {
+    closeCollectionChooser();
   }
 });
 

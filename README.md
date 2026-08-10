@@ -187,7 +187,7 @@ The contract lives in `src/backends/`:
 │   ├── spike_diffusiongemma.py       # Standalone load + generate probe
 │   └── ws_smoke_test.py              # End-to-end supervisor/worker smoke test
 ├── results/                          # Saved runs from the web UI (Save button)
-│   ├── ui_state.json                 # Durable UI state (Settings, "new run" cue, prompt history)
+│   ├── ui_state.json                 # Durable UI state (Settings, "new run" cue, prompt history, collections)
 │   └── <timestamp>_<model>/
 │       ├── metadata.json
 │       ├── final.txt
@@ -464,6 +464,9 @@ Clicking **Save** writes a timestamped folder under `results/` containing `metad
 - [x] **A persistent tint on edited positions** on both pages, a softer wash than the transient in-edit selection and distinct in meaning: one says "selected, about to be redrawn", the other "this run was intervened here", which stays true forever. Background only, so it composes under the overlays instead of fighting them for the token's color
 - [x] **Entropy bars dim past the scrubber** on both pages, so the chart says the same thing the canvas above it does about which tokens exist at this frame; per-bar alpha baked into the fill on the Analytics chart, since Chart.js has no per-bar opacity and it has to multiply with the crossfade's whole-dataset alpha
 - [x] **The run's KV cache is retained** and reused by both the probe and the substitution, which makes a probe *exactly* reproduce a recorded probability rather than land a bf16 rounding step away from it, and removes the prefix prefill that was a substitution's dominant cost; sliced through non-destructive views (not `crop`, which transformers implements in place) with a prefix check and a fresh prefill behind every disagreement
+- [x] **Context-window readout under the prompt** (`1,240 / 65,536`), turning amber when the prompt plus the output budget would exceed the window: the count is of the *templated* sequence, answered by the worker through a new lock-free `count_prompt` message so it is the same encode the sampler will run rather than a character estimate, and the window is read off the loaded model rather than declared in the registry; the authoritative count rides the `done` frame into every saved run's `context` block and two Analytics detail rows that stay absent for older runs
+- [x] **Import a prompt from a `.txt` or `.md` file**, by button or by dropping it on the textarea, read entirely client-side with a byte cap checked before reading and a character cap on what is inserted, confirming first when the box is not empty; markdown goes in raw, and the readout above immediately says what fraction of the window the file costs
+- [x] **Analytics collections:** star any run to file it, tabs beside Group by to browse what was filed (All is a view, Favorites is created on first star, the rest are yours to name, rename, and delete), and a per-row caret for filing one run into several at once; membership is a set stored in durable UI state, so it survives a restart under either the browser or the desktop app, and the server prunes ids for deleted runs on every hydrate so a tab can never show a row that will not open
 
 
 ## Roadmap

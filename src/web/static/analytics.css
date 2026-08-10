@@ -98,6 +98,168 @@ html, body {
   border-color: var(--border-focus);
 }
 
+/* ---- Collection tabs ---- */
+
+/* Separated from Group by with a rule rather than only spacing: the
+   two controls look alike but do different things, one narrowing what
+   the table shows and the other rearranging it. */
+.collection-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
+  min-width: 0;
+}
+
+.collection-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 190px;
+  padding: 4px 9px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.collection-tab:hover {
+  color: var(--text-primary);
+  border-color: var(--text-dim);
+}
+
+.collection-tab.is-active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+/* Long names truncate rather than pushing the strip wider, since the
+   toolbar also has to hold Compare and Refresh. */
+.collection-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collection-tab-count {
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.collection-tab.is-active .collection-tab-count {
+  color: var(--accent);
+}
+
+/* Rename and delete, shown only on the tab they would act on, so a
+   strip of collections is not a row of icons. */
+.collection-tab-icon {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0 1px;
+  background: none;
+  border: none;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+}
+
+.collection-tab.is-active .collection-tab-icon,
+.collection-tab:hover .collection-tab-icon {
+  display: inline-flex;
+}
+
+.collection-tab-icon:hover {
+  opacity: 1;
+}
+
+.collection-tab-add {
+  padding: 4px 8px;
+  font-size: 13px;
+}
+
+/* Inline rename / create, in place of the tab's label. Sized to the
+   strip so committing a name does not make the toolbar jump. */
+.collection-name-input {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border-focus);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  outline: none;
+  width: 150px;
+}
+
+/* ---- Collection chooser modal ---- */
+
+.collection-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+  margin-bottom: 12px;
+}
+
+.collection-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.collection-choice:hover {
+  background: var(--bg-surface-hover);
+}
+
+.collection-choice-count {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.collection-new-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.collection-new-row .collection-name-input {
+  flex: 1;
+  width: auto;
+}
+
+.collection-note {
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--text-dim);
+  min-height: 14px;
+}
+
+.collection-note.is-warning {
+  color: var(--warn);
+}
+
+.collection-empty {
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 4px;
+}
+
 /* ---- Nav separator ---- */
 
 .header-link-sep {
@@ -420,10 +582,11 @@ html, body {
   padding-left: 22px;
 }
 
-/* Per-row delete action. */
+/* Per-row actions: collect, choose a collection, delete. */
 .col-actions {
-  width: 28px;
+  width: 74px;
   text-align: center;
+  white-space: nowrap;
 }
 
 /* "Edited" marker column: check centered under its header. The base
@@ -444,6 +607,69 @@ html, body {
 .edited-check {
   vertical-align: middle;
   filter: drop-shadow(0 0 3px var(--accent-glow));
+}
+
+/* Collect action. The star is always in the DOM and always occupies
+   its slot, unlike the caret beside it: a table you have to hover
+   row by row cannot be scanned for what you saved, which is the one
+   thing collections exist to let you do. Uncollected reads as a faint
+   outline, collected as a filled accent star. */
+.row-star-btn {
+  background: none;
+  border: none;
+  padding: 2px;
+  color: var(--text-dim);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  cursor: pointer;
+  vertical-align: middle;
+  transition: color 0.15s, background 0.15s;
+}
+
+.row-star-btn:hover {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.row-star-btn.is-collected {
+  color: var(--accent);
+}
+
+.row-star-btn.is-collected svg {
+  fill: var(--accent);
+  filter: drop-shadow(0 0 3px var(--accent-glow));
+}
+
+/* The chooser affordance. Hidden until the row is hovered because a
+   plain click already files to Favorites, so this is the secondary
+   path and should not compete with the star for attention. Visibility
+   rather than display, so revealing it cannot reflow the row beneath
+   the cursor. */
+.row-collect-caret {
+  background: none;
+  border: none;
+  padding: 2px 1px;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  cursor: pointer;
+  vertical-align: middle;
+  visibility: hidden;
+  transition: color 0.15s, background 0.15s;
+}
+
+#runs-table tbody tr:hover .row-collect-caret,
+.row-collect-caret:focus-visible {
+  visibility: visible;
+}
+
+.row-collect-caret:hover {
+  color: var(--text-primary);
+  background: var(--bg-surface-hover);
 }
 
 .row-delete-btn {

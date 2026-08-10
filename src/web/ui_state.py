@@ -14,6 +14,13 @@ localStorage: the server is a durable key/value mirror, not a schema,
 so the client's existing (synchronous) localStorage reads keep working
 unchanged after a one-time hydrate on boot. Writes are atomic (temp
 file + ``os.replace``) and serialized with a process-wide lock.
+
+Most of these keys are caches, where losing one costs a preference.
+``diffusion_collections`` is not: it holds which runs the user filed
+into which collection, which is intent they expressed and cannot be
+recomputed from anything on disk. The mechanism is deliberately the
+same anyway, since it is already atomic and origin-independent, but
+that key is the reason this file is worth not corrupting.
 """
 
 from __future__ import annotations
@@ -42,6 +49,10 @@ UI_STATE_KEYS: Dict[str, int] = {
     # number, so 32 characters is generous.
     "diffusion_overlay_drawer_top_generator": 32,
     "diffusion_overlay_drawer_top_analytics": 32,
+    # Analytics collections: [{id, name, runs: [run_id]}]. Sized to
+    # match diffusion_new_runs, which holds the same kind of thing (a
+    # list of run ids) and so runs out at roughly the same point.
+    "diffusion_collections": 262_144,
 }
 
 # Serialize read-modify-write so concurrent PUTs cannot clobber each

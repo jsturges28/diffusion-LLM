@@ -49,6 +49,10 @@
       <div id="toolbar-left">
         <label>Group by</label>
         <span id="group-by-mount"></span>
+        <!-- Collection tabs, built in analytics.js. "All" is a view
+             rather than a collection, so it is not stored. -->
+        <div id="collection-tabs" class="collection-tabs"
+          role="tablist" aria-label="Collections"></div>
       </div>
       <div id="toolbar-right">
         <button id="btn-compare" disabled>
@@ -111,6 +115,13 @@
         <p id="runs-empty" class="empty-msg" hidden>
           No saved runs found. Pick a model from the
           <a href="/">menu</a> and save a run first.
+        </p>
+        <!-- Separate from the message above because that one sends
+             the user to the menu, wrong advice when runs exist and
+             this collection simply has none in it yet. -->
+        <p id="runs-empty-collection" class="empty-msg" hidden>
+          Nothing in this collection yet. Star a run under
+          <strong>All</strong> to file it here.
         </p>
       </section>
 
@@ -460,6 +471,51 @@
        hover for runs saved with the Alternatives capture. Body level
        so the detail modal never clips it. -->
   <div id="token-alts-popover" hidden></div>
+
+  <!-- Save-to-collections chooser, opened from a row's caret -->
+  <div id="modal-collections" class="modal-overlay hidden">
+    <div class="modal-box modal-box-confirm">
+      <button class="modal-close" id="btn-collections-close"
+        aria-label="Close">&times;</button>
+      <h2>Save to collections</h2>
+      <div class="modal-body">
+        <p id="collections-run-label"></p>
+        <div id="collection-choices" class="collection-choices"></div>
+        <div class="collection-new-row">
+          <input id="new-collection-name" type="text"
+            class="collection-name-input" maxlength="40"
+            placeholder="New collection..." spellcheck="false" />
+          <button id="btn-new-collection"
+            class="btn-secondary">Create</button>
+        </div>
+        <p id="collections-note" class="collection-note"></p>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-collections-done"
+          class="btn-accent">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Collection delete confirmation modal -->
+  <div id="modal-collection-delete" class="modal-overlay hidden">
+    <div class="modal-box modal-box-confirm">
+      <button class="modal-close" id="btn-col-delete-close"
+        aria-label="Close">&times;</button>
+      <h2>Delete this collection?</h2>
+      <div class="modal-body">
+        <p id="col-delete-label"></p>
+        <p>Only the collection goes away. The runs in it stay in
+          <code>results/</code> and remain listed under All.</p>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-col-delete-cancel"
+          class="btn-secondary">Cancel</button>
+        <button id="btn-col-delete-confirm"
+          class="btn-danger">Delete</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Delete confirmation modal -->
   <div id="modal-delete" class="modal-overlay hidden">

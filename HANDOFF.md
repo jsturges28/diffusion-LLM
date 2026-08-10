@@ -42,8 +42,9 @@ compare runs in an analytics suite.
   auto-stamps HTML asset URLs. `/api/models` also returns `gpu_name` +
   `free_vram_gib` + per-model `fits` for the menu. Durable UI state
   (`src/web/ui_state.py`, stored in `results/ui_state.json`) is served via
-  `GET`/`PUT /api/ui-state`; the GET reconciles the "new run" cue against
-  existing run folders so deleted runs cannot inflate the count.
+  `GET`/`PUT /api/ui-state`; the GET reconciles both the "new run" cue and the
+  Analytics collections against existing run folders, so a deleted run can
+  neither inflate the count nor linger in a collection as an unopenable row.
 - **Workers**: `src/backends/{llada_worker,dgemma_worker,smollm3_worker}.py` via
   `run_worker.py`; contract in `protocol.py` / `registry.py` / `worker_base.py`.
   LLaDA → `.venv` (transformers 4.38.2); DiffusionGemma → `.venv-dgemma`
@@ -72,7 +73,90 @@ compare runs in an analytics suite.
 
 ## Recently shipped (this session)
 
-**Latest pass: rank everywhere, the chosen row, the edit tint, scrub dimming,
+**Latest pass: context-window metrics, prompt import, and Analytics
+collections.** Three independent arcs, three commits, in that order because the
+import control's "this fits" promise is only honest once the counting exists.
+`pytest` (265/265, up from 226), `node --check`, ReadLints and the 70-column
+audit are clean; `ruff` is held at its 156 baseline. Checklist items 114 to 126
+carry the GPU and display work.
+
+- **The context window is read off the loaded object, not the registry.**
+  `describe_context_length` prefers `model.config.max_position_embeddings` and
+  falls back to `tokenizer.model_max_length`, which is frequently a sentinel of
+  `int(1e30)`, so it needs an upper bound (`CONTEXT_LENGTH_SANE_MAX`); neither
+  being sane returns `None` rather than a guess. Same argument as
+  `describe_tokenizer`: `ModelCapabilities` is static data served with no
+  worker running, so a number there is free to drift from the checkpoint. It
+  rides `/health`'s ready payload, is cached as `active_context_length` beside
+  `active_tokenizer`, and is exposed through `_models_snapshot`.
+- **The count is of the templated sequence, from the code that builds the real
+  inputs.** Counting raw prompt text would understate: the chat template adds
+  role markers and `enable_thinking` changes them. `Backend.prompt_token_count`
+  mirrors `_build_inputs` (SmolLM3 and DiffusionGemma inherit it unchanged),
+  and the LLaDA worker overrides it. That override is why
+  `build_llada_inputs` was extracted: the template-and-encode block was
+  duplicated between `streaming_sampler.py` and `llada_worker._store_state`,
+  and one function behind all three callers is what makes the counted tokens
+  provably the generated tokens.
+- **`MSG_COUNT_PROMPT` is a separate message, not a flag on `tokenize`.** That
+  path caps at `TOKENIZE_TEXT_MAX_CHARS = 200` and answers with one object per
+  token; a 40 KB import would be tens of thousands of objects to answer with a
+  single integer. The new one carries its own much larger cap
+  (`COUNT_PROMPT_MAX_CHARS`) and returns a count and no pieces. Dispatched
+  outside `gen_lock` in the `lockless` dict alongside `tokenize`, since an
+  encode is microseconds.
+- **The client's counter is its own.** `promptCountRequest` is separate from
+  `typedEntryRequest` because `handleTokenizeResult` is tightly bound to What
+  If state. `promptCountThinkingSent` records the flag the count was taken
+  under, so flipping **Thinking** invalidates the outstanding answer rather
+  than leaving a count from the other template on screen.
+- **The saved figure is the sampler's, not the client's.** All three samplers
+  emit `prompt_len` on the `done` frame, `SaveRunRequest` carries it, and
+  `_context_metadata` writes a `context` block into `metadata.json`. The two
+  Analytics detail rows stay absent for older runs the way the tokenizer rows
+  already do.
+- **The import button could not live inside `#prompt-history`.** That element
+  is absolutely positioned at the top right of `#prompt-row` and is `hidden`
+  whenever history is empty. Both now sit in a `#prompt-actions` flex
+  container that is always present, import to the left of history.
+- **The byte cap is checked before reading; the character cap applies to what
+  is inserted.** Two bounds rather than one, because refusing a file you have
+  already read into memory is the wrong order. Drag-and-drop validates the
+  file's type before accepting it, so dropping a PDF is refused rather than
+  inserted as bytes. Markdown goes in raw: the model reads it fine and
+  stripping it would misrepresent the file.
+- **An import exits prompt history first.** `applyImportedPrompt` calls
+  `_exitPromptHistoryUI` when history is active, otherwise the textarea would
+  be holding a browsed entry that the history UI still believes it owns.
+- **Collections reuse `ui_state.py` rather than a new file.** One
+  `diffusion_collections` key at the same 262,144 cap as `diffusion_new_runs`,
+  holding `[{id, name, runs: [run_id]}]`. Membership is a **set**, so a run
+  sits in several collections without a later migration. This is the first key
+  in that module that is durable user intent rather than a cache, which is
+  what the widened module docstring records: losing it loses work, not a
+  preference.
+- **`_reconcile_collections` follows `_reconcile_new_runs`, with a sharper
+  failure if skipped.** A stale id is a row that cannot be opened and a tab
+  count that overstates. Runs are deleted from the table, from another window,
+  or from the filesystem, and only the first can prune client-side. Malformed
+  entries pass through untouched: removing ids for missing runs is this
+  endpoint's job, and repairing a shape the client wrote is not.
+- **Three things had to follow the active tab.** `renderTable` filters through
+  `visibleRuns()` before `sortRuns`, and `onSelectAll` and `checkedRunIds`
+  both iterated `allRuns`, so under a collection tab a select-all plus bulk
+  delete would have reached runs the user could not see. `applyDeletions`
+  also prunes membership immediately rather than waiting for the next
+  hydrate, so the table agrees with itself between a delete and a reload.
+- **A collected run shows a persistently filled star**, not one that appears
+  on hover, otherwise the table cannot be scanned for what was saved, which is
+  the whole point. The star answers "did I save this" rather than "is this a
+  favorite", so it fills for membership in *any* collection; the hover-only
+  caret is the path to the others.
+- **Escape needed an explicit order.** The detail modal's handler now bails
+  when a collection dialog is open, since both listeners fire on the same key
+  and closing the modal underneath a chooser would be wrong.
+
+**Previous pass: rank everywhere, the chosen row, the edit tint, scrub dimming,
 and the retained KV cache.** Started as one reported discrepancy and ended in
 the sampler's attention state. `pytest` (226/226, up from 192), `node --check`,
 ReadLints and the 70-column audit are clean; `ruff` is at 156 findings against
@@ -154,7 +238,7 @@ carry the GPU and display work.
   `monkeypatch` instead, which is both instant and clearer about what is being
   measured. If you add a cache test, size the stub, not the bound.
 
-**Previous pass: the probe, the rank, and the strip's candidate readout.** Closes
+**Earlier pass: the probe, the rank, and the strip's candidate readout.** Closes
 the gap left by the typed row having no figure to show. `pytest` (192/192, up
 from 180), `node --check`, ReadLints and the 70-column audit are clean, and
 `ruff` is now installed, so its gates were actually run: 156 findings against
@@ -234,7 +318,7 @@ GPU and display work.
   three byte-identical streaming branches collapsed into one dispatch through a
   dict of bound methods. Behavior-identical; `_ws` is now under the gate.
 
-**Earlier pass: tokenizer identity, the typed token, and an AR top-k knob.**
+**Earlier still: tokenizer identity, the typed token, and an AR top-k knob.**
 Three commits, sequenced. `pytest` (180/180, up from 157), `node --check`,
 ReadLints, and the 70-column audit are clean. Checklist items 81 to 92 carry
 the GPU and display work.
@@ -1941,12 +2025,48 @@ end to end, reusing the frame/token contract.
 ## Where to pick up
 
 This session shipped the `results/` rename, all of **AR Phase C**, and the
-passes listed under "Recently shipped". Everything through checklist item 101
-has been validated on hardware by the maintainer; **items 102 to 113 have not**,
-so they are the first task. After that, the agreed order is the **Analytics run
-collections** (favorites, tabs, and storage-pressure eviction, still
-un-deliberated), then **Mamba-3**, then extending entropy / top-k to the
-diffusion models. Deliberate each in Ask mode before Plan.
+passes listed under "Recently shipped", ending with context-window metrics,
+prompt import, and Analytics collections. Everything through checklist item 101
+has been validated on hardware by the maintainer; **items 102 to 126 have not**,
+so they are the first task. After that, the agreed order is **Mamba-3**, then
+extending entropy / top-k to the diffusion models. Deliberate each in Ask mode
+before Plan.
+
+**Collections shipped without storage eviction, deliberately.** The original
+framing paired favorites with storage-pressure relief; the measurement killed
+that half. 175 runs occupy 440 MB against 189 GB free, so the pressure eviction
+would relieve is roughly 75,000 runs away, and the table already has
+multi-select bulk delete. If it is ever reopened, the honest trigger is a disk
+figure, not a run count.
+
+**Three loose ends the collections work left, each a chosen stopping point.**
+
+- **Collection order is creation order**, with Favorites `unshift`ed to the
+  front so the default tab lands where a user looks for it. Reordering the
+  strip by drag was not built; if it is wanted, the stored array *is* the
+  order, so it is a UI change rather than a storage one.
+- **The `+` tab reuses the rename editor** (`beginCollectionNameEdit` with a
+  null collection), so creating and renaming cannot drift apart. The tradeoff:
+  the button becomes an input in place, which means the tab strip reflows while
+  you type a long name.
+- **The chooser applies each checkbox immediately**, so its **Done** button
+  only closes the dialog. That was deliberate: a footer button that commits
+  invites closing the dialog and wondering whether anything happened. If a
+  cancel is ever wanted, it needs a staged copy of the membership, not a
+  change to the checkbox handler.
+
+**Two things about the context count worth knowing before touching it.**
+
+- **The count is per template, so it is per `thinking` flag.**
+  `promptCountThinkingSent` is what keeps a count taken under one template
+  from being displayed against the other. Any future parameter that changes
+  the template (a system prompt field, say) needs the same treatment or the
+  readout will quietly go stale.
+- **`prompt_token_count` is the base implementation plus one override.**
+  SmolLM3 and DiffusionGemma inherit the `_build_inputs` mirror; LLaDA
+  overrides it through `build_llada_inputs`. A fourth model class that builds
+  its inputs differently must override it too, or it will report a count from
+  a template it does not use, which is worse than reporting nothing.
 
 **KV cache retention: shipped, with one thing left unmeasured.** The cache is
 retained on `last_run_state` and reused by both the probe and the substitution
@@ -2840,6 +2960,74 @@ in-sandbox (no display).*
     several long runs back to back on GPU, watching the VRAM headroom pill: it
     should return to the same figure after each, since a new generation
     releases the previous run's cache before building its own.
+114. **The context readout appears and counts.** Load each model in turn. Once
+    it is ready, the line under the prompt box should read `N / W`. Check `W`
+    against the checkpoint's own config: LLaDA and SmolLM3 should report
+    `max_position_embeddings`, and DiffusionGemma's should be its window, not
+    256. Then type: `N` should settle a moment after you stop, and an empty
+    prompt should report the template's own overhead rather than 0, because the
+    role markers are always there.
+115. **The count is the templated count, not a character estimate.** With
+    SmolLM3 or DiffusionGemma loaded, note `N`, then flip **Thinking** and
+    watch it change without the prompt changing. Flip it back and it should
+    return to the original figure. If it does not move at all, the re-request
+    on the flag change is broken.
+116. **The saved figure matches what was on screen.** Generate, note the
+    readout, save, then open the run in Analytics: the **Prompt tokens** and
+    **Context window** rows should carry the same two numbers. Open a run saved
+    before this session and confirm both rows are simply absent rather than
+    showing zero or a dash.
+117. **The overflow warning fires on the right key.** With LLaDA, raise **Gen
+    Length** until prompt plus budget passes the window: the readout should
+    turn amber. Do the same with **Max Tokens** on SmolLM3. Then on
+    DiffusionGemma set **Max Tokens** above 256 but well inside the window and
+    confirm it stays neutral, since chaining canvases is legitimate.
+118. **Import by button.** Click the import control, pick a `.txt` file of a
+    few KB, and confirm the text lands intact (including newlines) and the
+    readout immediately reports its cost. Repeat with a `.md` file and confirm
+    the markdown is inserted raw rather than stripped.
+119. **Import by drag.** Drag the same file onto the textarea: it should show a
+    drop target as the file crosses it, and insert on release. Then drag
+    something that is not text (a PDF or an image) and confirm it is refused
+    rather than inserted as bytes, and that the drop styling clears either way.
+120. **The caps hold, and in the right order.** Drop a file over 1 MiB and
+    confirm it is refused with a message naming the limit, and that nothing was
+    inserted. Then take one between 200,000 characters and 1 MiB (300 KB of
+    ASCII will do): it should be accepted, truncated to 200,000, and say so.
+    The two bounds are deliberately different, since refusing a file you have
+    already decoded is the wrong order.
+121. **Replacing a non-empty prompt asks first.** With text in the box, import:
+    the confirm modal should name the file. Cancel and the prompt must be
+    untouched. Confirm and it is replaced. Then browse **prompt history** to an
+    entry and import from there: the history UI should exit cleanly rather than
+    leaving its controls active over imported text.
+122. **Import is unavailable mid-run.** Start a generation and confirm the
+    import button greys out for the duration and comes back afterwards.
+123. **The star files and reads back.** In Analytics, click a row's star: it
+    should fill and stay filled, a **Favorites** tab should appear with a count
+    of 1, and the run should be listed under it. Reload the page and confirm
+    both the filled star and the tab survive. Then close the app entirely,
+    relaunch, and check again, since the point of the server-side store is that
+    it survives more than a reload. Do that last part in the **desktop app**
+    too, which is where the old localStorage approach failed.
+124. **The caret files into several at once.** Hover a row, open its caret, and
+    tick two collections: the run should appear under both tabs and the star
+    should be filled. Untick one and it stays filled, because the star reports
+    membership anywhere. Create a collection from inside the chooser and
+    confirm the run is filed into it straight away.
+125. **Tabs rename, delete, and scope.** Rename a collection from its pencil
+    and confirm the tab and the chooser both show the new name. Delete one and
+    confirm the modal says the runs survive, then confirm they do: they should
+    still be listed under **All**. With a collection tab active, tick **Select
+    all** and confirm the count matches only the visible rows, then switch tabs
+    and confirm the selection cleared. Try a bulk delete from inside a
+    collection and confirm exactly the visible runs went.
+126. **A deleted run leaves no trace in a collection.** File a run, then delete
+    it from the table: the tab count should drop immediately, without a
+    reload. Then file another run, delete its folder from `results/` by hand,
+    reload Analytics, and confirm the id was pruned server-side (check
+    `results/ui_state.json` if you want to see it), and that the tab count
+    never claimed the missing run.
 
 **0. The comparison surfaces (agreed with the maintainer, partly shipped).** The
 timing foundation exists to serve these, and the unifying idea is settled: **the
