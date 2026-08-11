@@ -16,13 +16,13 @@ todos:
     status: completed
   - id: meta-01-cut
     content: "META-01 part three: cut HANDOFF.md to a cold-start page under 200 lines, fix the Alternatives wording at line 30, update AGENTS.md's session-end habit, and add tests/test_handoff_bounded.py"
-    status: in_progress
+    status: completed
   - id: docs-layout
     content: "Documentation layout: git mv the reference and campaign documents into docs/ and docs/audit/, leaving README.md, AGENTS.md and LICENSE at root, then rewrite every cross-reference and let tests/test_docs_links.py prove none broke"
-    status: pending
+    status: completed
   - id: stage2-handback
     content: "Stage boundary: full verification, finalize the ledger deviations, and hand back with the clone test as the one manual item"
-    status: pending
+    status: in_progress
 isProject: false
 ---
 
