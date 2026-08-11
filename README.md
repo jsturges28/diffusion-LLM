@@ -176,6 +176,8 @@ The contract lives in `src/backends/`:
 │           ├── analytics.css         # Analytics-specific styles
 │           ├── analytics.js          # Analytics charts + run browser
 │           ├── custom_select.js      # Shared in-app dropdown widget
+│           ├── detail_requests.js    # Request fencing for the Analytics detail panel
+│           ├── vendor/               # Vendored Chart.js/Hammer.js/zoom plugin + JetBrains Mono (no CDN)
 │           └── assets/               # Title-screen video (title-screen.webm/.mp4)
 ├── assets/
 │   ├── icon.svg                      # App icon source (vector; app-menu launcher)
@@ -184,6 +186,7 @@ The contract lives in `src/backends/`:
 │   ├── quantize_diffusiongemma_nf4.py # Produce the NF4 checkpoint from the bf16 base
 │   ├── install_desktop_entry.sh      # Generate a Linux .desktop launcher entry
 │   ├── render_icon.py                # Render assets/icon.png from the icon geometry
+│   ├── vendor_assets.py              # Refresh static/vendor/ (chart libraries + font)
 │   ├── spike_diffusiongemma.py       # Standalone load + generate probe
 │   └── ws_smoke_test.py              # End-to-end supervisor/worker smoke test
 ├── results/                          # Saved runs from the web UI (Save button)
@@ -358,6 +361,8 @@ Two sources drive it: a token hover, and an entropy hover (the generator's profi
 #### Analytics Suite
 
 Click **Analytics** in the header (or navigate to `/analytics.html`) to open the Analytics Suite. It reads saved runs from `results/` and provides interactive charts for comparing behavior across configurations and models.
+
+Every page works with no outbound network. The chart libraries (Chart.js, Hammer.js, the zoom plugin) and the JetBrains Mono webfont are vendored under `src/web/static/vendor/` with their licenses and a manifest of source URLs and SHA-256 hashes, rather than pulled from a CDN, so a blocked or absent network cannot take the run browser down with it and no third-party origin runs code alongside the model and deletion APIs. Refresh or bump them with `.venv/bin/python scripts/vendor_assets.py`.
 
 - **Run browser:** group runs by date, model, prompt, or whether a run was edited. Columns are shared across models and ordered Date, Model, Prompt, Time, and a sortable **Edited** column (a checkmark, textured from the diffusion mask glyph, marks runs that carry a pre-edit snapshot for a Diff vs Original; blank otherwise). The leading Date column carries the pulsing green "new run" dot. Clicking a row opens a wide **detail modal** (fades in like About/Help; close with the X or by clicking outside) laid out with the token overlay canvas as the centerpiece on the left and the run's info plus the convergence, timing, confidence, and entropy charts stacked on the right. For an edited run saved with its pre-edit snapshot, the **Token overlay** heading row carries a run-level **Original** / **Edited** crossfade, sitting directly above the text it blends, that governs the token view, which stacks the two runs and blends between them in whichever overlay is active, and the entropy chart's bar layers follow the same slider. The timing and confidence charts follow it only while it is being dragged, since those two carry their own pins. The more opaque side takes the pointer, so hovering, the candidate popover, and cross-highlighting all read the run you are actually looking at.
 - **Manage runs:** delete a saved run with the row's red trashcan action. Select rows with the checkboxes to enable **bulk delete** (a trashcan with the selected count appears in the actions header) and highlight the selected rows. Either path opens a confirmation modal ("Delete this run?" / "Delete N runs?") showing the folder path or count, and a toast confirms the deletion.

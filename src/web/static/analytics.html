@@ -5,13 +5,8 @@
   <meta name="viewport"
     content="width=device-width, initial-scale=1.0" />
   <title>Analytics - LLM Visualizer</title>
-  <link rel="preconnect"
-    href="https://fonts.googleapis.com" />
-  <link rel="preconnect"
-    href="https://fonts.gstatic.com" crossorigin />
-  <link
-    href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&display=swap"
-    rel="stylesheet" />
+  <link rel="stylesheet"
+    href="/vendor/fonts/jetbrains-mono.css" />
   <link rel="stylesheet" href="/style.css" />
   <link rel="stylesheet" href="/analytics.css" />
 </head>
@@ -546,9 +541,12 @@
     </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js"></script>
+  <!-- Vendored, not CDN: the run browser has to work offline, and a
+       third-party origin should not run code beside the model and
+       deletion APIs. See src/web/static/vendor/README.md. -->
+  <script src="/vendor/chart.umd.min.js"></script>
+  <script src="/vendor/hammer.min.js"></script>
+  <script src="/vendor/chartjs-plugin-zoom.min.js"></script>
   <script src="/custom_select.js"></script>
   <script src="/overlays.js"></script>
   <script src="/detail_requests.js"></script>

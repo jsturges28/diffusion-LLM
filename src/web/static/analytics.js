@@ -176,11 +176,22 @@ var btnColDeleteClose =
 
 // ---- Chart.js defaults ----
 
-Chart.defaults.color = "#888888";
-Chart.defaults.borderColor = "#1e1e1e";
-Chart.defaults.font.family =
-  "'JetBrains Mono', monospace";
-Chart.defaults.font.size = 10;
+// Whether the charting library loaded at all. Everything below this
+// point used to assume it had, and the assumption was made at the
+// top level of the file: one missing script and the whole of
+// analytics.js failed to parse past here, taking the run table, the
+// metadata, the overlays and deletion down with the charts. The
+// library is vendored now so this should always be true, but the
+// page should degrade rather than disappear if it ever is not.
+var chartsAvailable = typeof Chart !== "undefined";
+
+if (chartsAvailable) {
+  Chart.defaults.color = "#888888";
+  Chart.defaults.borderColor = "#1e1e1e";
+  Chart.defaults.font.family =
+    "'JetBrains Mono', monospace";
+  Chart.defaults.font.size = 10;
+}
 
 // Chart.js paints every tooltip swatch as a white rect at the full
 // box size, then strokes it, then fills a square inset one pixel per
@@ -189,19 +200,21 @@ Chart.defaults.font.size = 10;
 // the fill (a whole physical pixel at 2x). Dropping the white
 // backing removes that edge; see lineLabelColor for the border half
 // of the same swatch.
-Chart.defaults.plugins.tooltip.multiKeyBackground =
-  "transparent";
+if (chartsAvailable) {
+  Chart.defaults.plugins.tooltip.multiKeyBackground =
+    "transparent";
 
-// Fixed-position tooltip: anchored to the top-left
-// of the chart area so it never obscures data lines.
-Chart.Tooltip.positioners.topLeft =
-  function (elements, eventPosition) {
-    var chart = this.chart;
-    return {
-      x: chart.chartArea.left + 8,
-      y: chart.chartArea.top + 8,
+  // Fixed-position tooltip: anchored to the top-left
+  // of the chart area so it never obscures data lines.
+  Chart.Tooltip.positioners.topLeft =
+    function (elements, eventPosition) {
+      var chart = this.chart;
+      return {
+        x: chart.chartArea.left + 8,
+        y: chart.chartArea.top + 8,
+      };
     };
-  };
+}
 
 // Corner preference for the smart positioner, most wanted first.
 var TOOLTIP_CORNERS = ["tl", "tr", "bl", "br"];
@@ -218,23 +231,25 @@ var TOOLTIP_CORNERS = ["tl", "tr", "bl", "br"];
 //
 // When no corner is free the box has to sit on the data, and
 // burnThroughPlugin redraws the line through it.
-Chart.Tooltip.positioners.smart =
-  function (elements, eventPosition) {
-    var chart = this.chart;
-    var pad = 10;
-    // Box size from the previous frame (0 on the very first hover,
-    // corrected on the next frame as it fades in).
-    var w = this.width || 120;
-    var h = this.height || 44;
-    var corner = smartTooltipCorner(
-      chart, eventPosition, w, h, pad
-    );
-    chart.$smartCorner = corner;
-    var rect = tooltipCornerRect(
-      chart.chartArea, corner, w, h, pad
-    );
-    return { x: rect.left, y: rect.top };
-  };
+if (chartsAvailable) {
+  Chart.Tooltip.positioners.smart =
+    function (elements, eventPosition) {
+      var chart = this.chart;
+      var pad = 10;
+      // Box size from the previous frame (0 on the very first
+      // hover, corrected on the next frame as it fades in).
+      var w = this.width || 120;
+      var h = this.height || 44;
+      var corner = smartTooltipCorner(
+        chart, eventPosition, w, h, pad
+      );
+      chart.$smartCorner = corner;
+      var rect = tooltipCornerRect(
+        chart.chartArea, corner, w, h, pad
+      );
+      return { x: rect.left, y: rect.top };
+    };
+}
 
 // The first corner, in TOOLTIP_CORNERS order, that clears both the
 // pointer and the data. Corners the pointer occupies are out
@@ -2621,6 +2636,14 @@ function clearRunCharts() {
   timingPageReady.tps = false;
 }
 
+// Shown when the charting library itself is missing, as opposed to
+// one run's metrics failing to load. Names the cause, because the
+// two look identical from the user's side and only one of them is
+// worth reporting as a bug.
+var CHARTS_MISSING_MESSAGE =
+  "Charts are unavailable: the charting library did not load."
+  + " Everything else on this page still works.";
+
 function showChartsUnavailable(message) {
   clearRunCharts();
   if (chartsErrorNote) {
@@ -2637,6 +2660,10 @@ function hideChartsError() {
 }
 
 function renderRunCharts(data, run) {
+  if (!chartsAvailable) {
+    showChartsUnavailable(CHARTS_MISSING_MESSAGE);
+    return;
+  }
   hideChartsError();
 
   var remaskEdits = data.remask_edits || [];
@@ -4628,7 +4655,7 @@ function entropyOriginalSeries(data, divergence) {
 // a time series. Hidden for runs saved without the entropy signal.
 function renderEntropyChart(data) {
   var section = document.getElementById("entropy-section");
-  if (!overlayEntropyAvailable(data)) {
+  if (!chartsAvailable || !overlayEntropyAvailable(data)) {
     clearEntropyChart();
     return;
   }
@@ -4868,6 +4895,12 @@ function showComparison(ids) {
   // requests, and this route does not go through hideDetail.
   detailRequests.cancel();
   renderTable();
+
+  if (!chartsAvailable) {
+    // The compare view is nothing but a chart, so there is no
+    // reduced version of it to show.
+    return;
+  }
 
   fetchCompare(ids).then(function (results) {
     chartCompareConv = destroyChart(

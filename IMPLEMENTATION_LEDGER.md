@@ -29,13 +29,10 @@ commit, **M** a short multi-commit change, **L** a staged boundary migration.
 
 ## Ready now
 
-Five findings have no unmet blockers. The first is the last of the isolated
-safety fixes, the next three are the gates the report wants installed before
-any boundary moves, and the last one is stage 3's first step, which
-`DATA-03` has now unblocked.
+Stage 1 is complete. Four findings have no unmet blockers: the three gates the
+report wants installed before any boundary moves, and stage 3's first step,
+which `DATA-03` unblocked.
 
-- **TRUST-02** (high, M): vendor the Analytics chart dependencies so the page
-  works without third-party networks. Independent of frontend modularization.
 - **QUALITY-02** (medium, M): install the lint ratchet now, burn down later
   and only in files that later work touches.
 - **META-01** (medium, M): reduce `HANDOFF.md` to a cold-start page and move
@@ -78,6 +75,14 @@ maintainer's confirmation on real hardware is outstanding. The report's
 standing measurement programme is separate and lives at
 `AUDIT_REPORT.md:1927-2011`.
 
+- **TRUST-02**: the automated half is thorough (no page or stylesheet
+  references an external origin, the server serves each vendored asset, and
+  the served Analytics page names only stamped local paths). Outstanding is
+  the finding's own clause: block outbound traffic, open all four pages from
+  a cold browser profile, and exercise the generation UI, settings, run
+  table, detail metadata, charts, zoom, and deletion with the network panel
+  showing zero external requests. Worth a glance at the type while there,
+  since the webfont now comes from disk.
 - **ANALYTICS-01**: the fence's logic is covered by
   `tests/web/static/detail_requests.test.js` (12 cases, `node --test`).
   Outstanding is the browser half of the Verification clause, which needs a
@@ -102,7 +107,7 @@ standing measurement programme is separate and lives at
 | TRUST-01 | high | S | done | none | Bind to loopback unless exposure is asked for |
 | ANALYTICS-01 | high | S | needs hardware | none | Fence detail responses to the run that asked |
 | DATA-03 | medium | S | done | none | Resolve the data root without asking the cwd |
-| TRUST-02 | high | M | ready | none | |
+| TRUST-02 | high | M | needs hardware | none | Serve every page without a third-party origin |
 | QUALITY-02 | medium | M | ready | none | |
 | META-01 | medium | M | ready | none | |
 | META-02 | medium | S | ready | none | |
@@ -329,4 +334,41 @@ before.
 **Also noted.** `fetchRuns`, `fetchCompare`, and `fetchSystemInfo` still skip
 `response.ok` and still have no rejection handler; only the two detail fetches
 were centralized, because those are the ones this finding is about.
+
+### TRUST-02
+
+**The assets were fetchable after all.** The plan assumed they would not be,
+since the npm registry fails at the agent sandbox's proxy, and budgeted for
+handing the maintainer a list of `curl` commands. jsDelivr, Google Fonts, and
+raw.githubusercontent are reachable with network permission, so everything is
+vendored and committed. Worth knowing for `TRUST-03`, which has to fetch far
+larger artifacts: the blocked path is npm specifically, not the network.
+
+`scripts/vendor_assets.py` is how they got there and how they get bumped. It
+writes `vendor/README.md` with each file's source URL, byte count, and
+SHA-256, so a version bump reviews as a diff rather than as an act of faith.
+That manifest is deliberately the shape `TRUST-03` will want for model
+artifacts.
+
+**The font is one file per subset, not per weight.** JetBrains Mono is a
+variable font, so Google returns the same woff2 for weights 300, 400, and 500
+and varies only the descriptor. Downloading per weight wrote three
+byte-identical copies of each subset, 253 KiB where 86 KiB does the same job.
+All six subsets are kept, including Cyrillic and Greek, because the models can
+emit them and `unicode-range` means a page still loads only what it needs. The
+`--font-mono` variable in `style.css` was left alone; only the `@font-face`
+source changed.
+
+**The feature detection was the substantive code change.** `analytics.js`
+dereferenced `Chart` at the top level in three places, so a missing library
+did not degrade the charts, it stopped the file parsing and took the run
+table, metadata, overlays, and deletion with it. Those are guarded now and the
+chart renderers return early, so the page survives a library that fails to
+load even though vendoring should mean it never does.
+
+**Noted, not fixed (adjacent).** The vendored scripts carry no Subresource
+Integrity attributes. They are same-origin now, so SRI would guard against
+nothing an attacker who can write to the repository could not also change; the
+manifest hashes are the meaningful record. Revisit only if these ever move
+back to a remote origin.
 
