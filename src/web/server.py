@@ -52,7 +52,7 @@ from src.analytics.metrics import (
     list_runs,
     load_run_frames,
     load_run_metadata,
-    parse_history,
+    read_frame_texts,
     total_elapsed_seconds,
 )
 from src.backends.protocol import ModelInfo
@@ -1568,14 +1568,10 @@ def _compute_run_metrics(run_id: str) -> Dict[str, Any]:
     # This one used to join the path unguarded, so a crafted id could
     # walk out of the data root while its three siblings refused.
     run_dir = run_store.resolve_run_dir(RESULTS_DIR, run_id)
-    history_path = run_dir / "history.txt"
-    if not history_path.is_file():
-        raise FileNotFoundError(
-            f"history.txt missing for run {run_id}"
-        )
-
     meta = load_run_metadata(run_dir)
-    frames = parse_history(history_path)
+    # Which file holds the frames is the schema version's business,
+    # so the check for its absence belongs to the reader too.
+    frames = read_frame_texts(run_dir, meta)
     convergence = compute_convergence(frames)
 
     result: Dict[str, Any] = {

@@ -558,9 +558,10 @@
         <h3>Saving results</h3>
         <p>The <strong>Save</strong> button (the down-arrow icon to the left of <strong>Generate</strong>) becomes enabled once a run completes. Clicking it saves the run to a timestamped folder under <code>results/</code> containing:</p>
         <ul>
-          <li><strong>metadata.json:</strong> prompt, hyperparameters, final output text, reproducibility info (seed, GPU, git commit, library versions, and the tokenizer that produced the run's ids), the prompt's token length against the model's context window, and any remask edits.</li>
+          <li><strong>metadata.json:</strong> prompt, hyperparameters, final output text, reproducibility info (seed, GPU, git commit, library versions, and the tokenizer that produced the run's ids), the prompt's token length against the model's context window, any remask edits, and the run's format version and list of captured signals.</li>
           <li><strong>final.txt:</strong> the decoded final text.</li>
-          <li><strong>history.txt:</strong> frame-by-frame snapshots of the diffusion process.</li>
+          <li><strong>frames.jsonl:</strong> the frame-by-frame record Analytics reads, one JSON line per frame.</li>
+          <li><strong>history.txt:</strong> the same frames as a plain-text transcript, kept for reading by eye.</li>
           <li><strong>tokens.json:</strong> per-frame token records (text, mask flag, vocab id, confidence, and entropy where captured) that drive the durable overlays in Analytics.</li>
           <li><strong>alternatives.json:</strong> the captured top-five candidates per position, written only for runs generated with <strong>Alternatives</strong> on.</li>
           <li><strong>diffusion.gif:</strong> an animated GIF visualizing the denoising progression.</li>

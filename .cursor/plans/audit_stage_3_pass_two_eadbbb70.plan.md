@@ -4,10 +4,10 @@ overview: Give saved runs an explicit format version with read adapters, make a 
 todos:
   - id: forbid
     content: "DATA-05 part one: set extra=forbid on the four save-boundary models so an undeclared signal fails loudly instead of being dropped, with tests"
-    status: in_progress
+    status: completed
   - id: version-adapters
     content: "DATA-05 part two: write schema_version and a capture manifest, add frames.jsonl as the machine format while keeping history.txt for humans, validate the bundle between stage and publish, and route reads through v0/v1 adapters into the existing canonical shape, with golden fixtures per era"
-    status: pending
+    status: in_progress
   - id: invalid-runs
     content: "DATA-05 part three: make a malformed run an explicit invalid entry instead of crashing the whole catalog, and give an unsupported future version a visible compatibility message that touches no disk"
     status: pending

@@ -1,8 +1,22 @@
 """Compute intrinsic diffusion metrics from saved runs.
 
-Reads history.txt and metadata.json from results/ directories
-and produces convergence and timing statistics for the
-Analytics Suite frontend.
+Reads a run directory and produces convergence and timing statistics
+for the Analytics Suite frontend.
+
+This module is the read boundary for saved runs, so it is where the
+on-disk schema version is dispatched on. Two eras exist and both must
+keep working:
+
+- **v0**, every run saved before versioning: no version field, frame
+  text recoverable only from the human transcript, and which signals
+  were captured inferable only from which files are present and what
+  the first token looks like.
+- **v1**: states its version and a capture manifest, and carries a
+  JSON-lines frame stream that no model output can forge a delimiter
+  in.
+
+An adapter per era normalizes into one shape, so nothing downstream of
+here branches on version.
 """
 
 from __future__ import annotations
@@ -17,15 +31,166 @@ FRAME_HEADER_RE = re.compile(
     r"^={5}\s+FRAME\s+\d+\s+={5}$"
 )
 
+# Kept in step with `src/web/run_store.py`, which writes them. Named
+# here rather than imported because analytics does not otherwise
+# depend on the web layer, and one import is not worth inverting that;
+# `tests/analytics/test_run_schema.py` fails if the two ever disagree.
+METADATA_NAME = "metadata.json"
+HISTORY_NAME = "history.txt"
+FRAMES_NAME = "frames.jsonl"
+SCHEMA_VERSION_KEY = "schema_version"
+CAPTURE_KEY = "capture"
+
+# Absent means v0: the corpus that predates versioning is far larger
+# than the one that follows it, so the unmarked case has to be a
+# supported era rather than an error.
+SCHEMA_VERSION_LEGACY = 0
+SCHEMA_VERSION_LATEST = 1
+SUPPORTED_SCHEMA_VERSIONS = (
+    SCHEMA_VERSION_LEGACY,
+    SCHEMA_VERSION_LATEST,
+)
+
+assert SCHEMA_VERSION_LATEST in SUPPORTED_SCHEMA_VERSIONS
+assert SCHEMA_VERSION_LEGACY in SUPPORTED_SCHEMA_VERSIONS
+
+
+class UnsupportedRunVersionError(ValueError):
+    """A run was written by a newer version of this app.
+
+    Raised instead of guessing. A forward version means fields this
+    code has never heard of, and a reader that pushes on anyway would
+    show a confidently wrong run rather than an honest refusal.
+    """
+
+    def __init__(self, version: object, run_id: str) -> None:
+        super().__init__(
+            f"run {run_id} uses schema version {version!r};"
+            f" this build reads up to {SCHEMA_VERSION_LATEST}"
+        )
+        self.version = version
+        self.run_id = run_id
+
+
+def run_schema_version(metadata: Dict[str, Any]) -> int:
+    """The era a run was written in.
+
+    Raises ``UnsupportedRunVersionError`` for anything this build
+    cannot read, including a non-integer version, which means the
+    field was written by something that did not share this contract.
+    """
+    raw = metadata.get(SCHEMA_VERSION_KEY)
+    if raw is None:
+        return SCHEMA_VERSION_LEGACY
+    run_id = str(metadata.get("run_id", "<unknown>"))
+    # bool is an int in Python and `True == 1` would pass the
+    # membership test below, quietly reading a nonsense run as v1.
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise UnsupportedRunVersionError(raw, run_id)
+    if raw not in SUPPORTED_SCHEMA_VERSIONS:
+        raise UnsupportedRunVersionError(raw, run_id)
+    return raw
+
+
+def read_frame_texts(
+    run_dir: Path,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> List[str]:
+    """Per-frame text for a run, whichever era wrote it.
+
+    Callers get frame *i* at index *i* and never learn which file it
+    came from. Pass ``metadata`` when it is already loaded to avoid
+    reading it twice.
+
+    Raises ``FileNotFoundError`` if the era's frame file is missing.
+    That is an explicit raise rather than an assertion because a run
+    directory missing a file is a damaged run, not a broken caller,
+    and the route above turns it into a 404. An assertion would
+    vanish under ``python -O`` and take the 404 with it.
+    """
+    assert run_dir.is_dir(), f"run dir not found: {run_dir}"
+
+    if metadata is None:
+        metadata = load_run_metadata(run_dir)
+    version = run_schema_version(metadata)
+
+    if version >= SCHEMA_VERSION_LATEST:
+        frames_path = run_dir / FRAMES_NAME
+    else:
+        frames_path = run_dir / HISTORY_NAME
+    if not frames_path.is_file():
+        raise FileNotFoundError(
+            f"{frames_path.name} missing for run {run_dir.name}"
+        )
+
+    if version >= SCHEMA_VERSION_LATEST:
+        return parse_frames_jsonl(frames_path)
+    return parse_history(frames_path)
+
+
+def parse_frames_jsonl(
+    frames_path: Path,
+) -> List[str]:
+    """Read the v1 frame stream: one JSON object per line.
+
+    Unlike the transcript this replaces, a frame boundary is a line
+    break between JSON documents, so text inside a frame cannot
+    produce one no matter what the model emitted.
+
+    Trusts the index each record carries rather than its position, and
+    rejects a stream whose indices are not exactly 0..n-1, because a
+    gap would silently shift every later frame's number in the UI.
+    """
+    assert frames_path.is_file(), (
+        f"frames.jsonl not found: {frames_path}"
+    )
+
+    raw = frames_path.read_text(encoding="utf-8")
+    by_index: Dict[int, str] = {}
+    for line_number, line in enumerate(raw.splitlines(), 1):
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        if not isinstance(record, dict):
+            raise ValueError(
+                f"{frames_path.name} line {line_number} is not"
+                " an object"
+            )
+        index = record.get("i")
+        text = record.get("text")
+        if not isinstance(index, int) or isinstance(index, bool):
+            raise ValueError(
+                f"{frames_path.name} line {line_number} has no"
+                " integer frame index"
+            )
+        if not isinstance(text, str):
+            raise ValueError(
+                f"{frames_path.name} line {line_number} has no"
+                " frame text"
+            )
+        by_index[index] = text
+
+    expected = set(range(len(by_index)))
+    if set(by_index) != expected:
+        raise ValueError(
+            f"{frames_path.name} frame indices are not"
+            f" contiguous from 0 ({len(by_index)} records)"
+        )
+    return [by_index[i] for i in range(len(by_index))]
+
 
 def parse_history(
     history_path: Path,
 ) -> List[str]:
     """Split history.txt into per-frame text strings.
 
-    Each frame is delimited by ``===== FRAME N =====``
-    headers. Returns a list where index *i* holds the
-    text body of frame *i*.
+    The v0 frame reader. Each frame is delimited by
+    ``===== FRAME N =====`` headers. Returns a list where index *i*
+    holds the text body of frame *i*.
+
+    The delimiter is unescaped, so a model that emits the header line
+    splits one frame into two here. That is why v1 does not use this
+    file; it stays because the runs that only have it are real.
     """
     assert history_path.is_file(), (
         f"history.txt not found: {history_path}"
@@ -187,8 +352,25 @@ def load_run_frames(
     ``records_available``, ``alternatives`` (or None),
     ``alternatives_available``, and ``original_alternatives`` (or
     None). Raises ``ValueError`` on malformed files.
+
+    The shape is the same for both eras. What differs is where
+    ``records_available`` comes from: a v1 run declares it in the
+    capture manifest, a v0 run has it inferred from the type of its
+    first token.
     """
     assert run_dir.is_dir(), f"run dir not found: {run_dir}"
+
+    # Tolerant on purpose: this function's subject is the token
+    # sidecars, and a directory holding those without a metadata file
+    # is not a run the catalog would list anyway. Treating that as v0
+    # keeps the failure with whoever asked for a non-run.
+    metadata = _load_metadata_if_present(run_dir)
+    version = run_schema_version(metadata)
+    manifest = metadata.get(CAPTURE_KEY)
+    if version < SCHEMA_VERSION_LATEST or not isinstance(
+        manifest, dict
+    ):
+        manifest = None
 
     result: Dict[str, Any] = {
         "frames": None,
@@ -208,7 +390,15 @@ def load_run_frames(
             f"tokens.json is malformed in {run_dir}"
         )
     result["frames"] = frames
-    result["records_available"] = _frames_have_records(frames)
+    if manifest is None:
+        result["records_available"] = _frames_have_records(frames)
+    else:
+        # Every v1 run writes rich records, so the manifest saying
+        # tokens were captured settles it. Sniffing would agree, but
+        # only for as long as no frame is legitimately empty.
+        result["records_available"] = bool(
+            manifest.get("frame_tokens")
+        )
 
     original_path = run_dir / "original_tokens.json"
     if original_path.is_file():
@@ -258,6 +448,20 @@ def _load_alternatives(
             f"{path.name} is malformed in {run_dir}"
         )
     return alternatives
+
+
+def _load_metadata_if_present(
+    run_dir: Path,
+) -> Dict[str, Any]:
+    """Metadata for a directory that may not have any.
+
+    An empty dict reads as v0 downstream, which is the right era for
+    a run old enough to be missing pieces.
+    """
+    meta_path = run_dir / METADATA_NAME
+    if not meta_path.is_file():
+        return {}
+    return load_run_metadata(run_dir)
 
 
 def load_run_metadata(

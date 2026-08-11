@@ -160,6 +160,7 @@ def test_a_saved_run_has_every_core_file(tmp_path: Path) -> None:
         "metadata.json",
         "final.txt",
         "history.txt",
+        "frames.jsonl",
     }
 
 
@@ -299,6 +300,7 @@ def test_racing_saves_do_not_interleave(
         "metadata.json",
         "final.txt",
         "history.txt",
+        "frames.jsonl",
         "tokens.json",
     ],
 )
@@ -554,6 +556,158 @@ def test_deleting_a_traversing_id_is_refused(
     assert victim.is_dir()
 
 
+# -- the check between staging and publication --
+
+
+def test_a_published_run_states_its_schema_version(
+    tmp_path: Path,
+) -> None:
+    run_id, _ = _save(tmp_path)
+
+    meta = json.loads(
+        (tmp_path / run_id / "metadata.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert meta["schema_version"] == run_store.SCHEMA_VERSION
+
+
+def test_the_manifest_describes_the_files_that_exist(
+    tmp_path: Path,
+) -> None:
+    """Cross-checked against the directory rather than the bundle,
+    so a writer that forgets a file is caught by its own manifest."""
+    run_id, _ = _save(
+        tmp_path, bundle=_bundle(frame_tokens=[[{"t": "a"}]])
+    )
+    run_dir = tmp_path / run_id
+
+    meta = json.loads(
+        (run_dir / "metadata.json").read_text(encoding="utf-8")
+    )
+    manifest = meta[run_store.CAPTURE_KEY]
+
+    for attribute, filename in run_store.SIDECAR_NAMES:
+        assert manifest[attribute] == (run_dir / filename).is_file()
+
+
+def test_validation_rejects_a_manifest_that_overstates(
+    tmp_path: Path,
+) -> None:
+    """The failure this gate exists for: metadata advertising an
+    overlay whose file is not there, which is what a half-written
+    replacement used to look like."""
+    staging = run_store.stage(tmp_path, "run-a", _bundle())
+    meta_path = staging / "metadata.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta[run_store.SCHEMA_VERSION_KEY] = run_store.SCHEMA_VERSION
+    meta[run_store.CAPTURE_KEY] = {
+        "frames": True,
+        "frame_tokens": True,
+        "original_frame_tokens": False,
+        "alternatives": False,
+        "original_alternatives": False,
+    }
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+
+    with pytest.raises(run_store.BundleInvalidError, match="tokens"):
+        run_store.validate_staged(staging)
+
+
+def test_validation_rejects_a_missing_core_file(
+    tmp_path: Path,
+) -> None:
+    staging = run_store.stage(tmp_path, "run-a", _bundle())
+    _stamp_valid_metadata(staging)
+    (staging / "frames.jsonl").unlink()
+
+    with pytest.raises(
+        run_store.BundleInvalidError, match="frames.jsonl"
+    ):
+        run_store.validate_staged(staging)
+
+
+def test_validation_rejects_an_unparseable_sidecar(
+    tmp_path: Path,
+) -> None:
+    """A sidecar is checked as JSON here, where the run can still be
+    abandoned, rather than by Analytics after it is published."""
+    staging = run_store.stage(
+        tmp_path, "run-a", _bundle(frame_tokens=[[{"t": "a"}]])
+    )
+    _stamp_valid_metadata(staging, frame_tokens=True)
+    (staging / "tokens.json").write_text(
+        "{not json", encoding="utf-8"
+    )
+
+    with pytest.raises(json.JSONDecodeError):
+        run_store.validate_staged(staging)
+
+
+def test_validation_rejects_a_sidecar_that_is_not_a_list(
+    tmp_path: Path,
+) -> None:
+    staging = run_store.stage(
+        tmp_path, "run-a", _bundle(frame_tokens=[[{"t": "a"}]])
+    )
+    _stamp_valid_metadata(staging, frame_tokens=True)
+    (staging / "tokens.json").write_text('{"a": 1}', encoding="utf-8")
+
+    with pytest.raises(
+        run_store.BundleInvalidError, match="must be a list"
+    ):
+        run_store.validate_staged(staging)
+
+
+def test_a_bundle_that_fails_validation_publishes_nothing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gate has to abandon the staged copy, not the visible run.
+    Otherwise it would turn a bad write into a lost run."""
+    existing_id, revision = _save(tmp_path)
+    original = (tmp_path / existing_id / "final.txt").read_text(
+        encoding="utf-8"
+    )
+
+    def always_invalid(_staging: Path) -> None:
+        raise run_store.BundleInvalidError("injected")
+
+    monkeypatch.setattr(run_store, "validate_staged", always_invalid)
+
+    with pytest.raises(run_store.BundleInvalidError):
+        _save(
+            tmp_path,
+            run_id=existing_id,
+            expected_revision=revision,
+            bundle=_bundle(final_text="replacement"),
+        )
+
+    assert (tmp_path / existing_id / "final.txt").read_text(
+        encoding="utf-8"
+    ) == original
+    staging_root = tmp_path / run_store.STAGING_DIR_NAME
+    assert not staging_root.exists() or not any(
+        staging_root.iterdir()
+    )
+
+
+def _stamp_valid_metadata(
+    staging: Path, **captured: bool
+) -> None:
+    """Give a staged bundle the version and manifest the gate wants,
+    so a test can then break exactly one thing."""
+    meta_path = staging / "metadata.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta[run_store.SCHEMA_VERSION_KEY] = run_store.SCHEMA_VERSION
+    manifest = {"frames": True}
+    for attribute, _filename in run_store.SIDECAR_NAMES:
+        manifest[attribute] = captured.get(attribute, False)
+    meta[run_store.CAPTURE_KEY] = manifest
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+
+
 # -- listing --
 
 
@@ -617,26 +771,28 @@ def _freeze_clock(monkeypatch: pytest.MonkeyPatch) -> None:
 def _install_write_failure(
     monkeypatch: pytest.MonkeyPatch, filename: str
 ) -> None:
-    """Make writing one named file raise, and nothing else."""
-    real_write_text = Path.write_text
+    """Make writing one named file raise, and nothing else.
 
-    def failing(
+    Both write paths are patched because the store uses `write_text`
+    for whole-file payloads and `open` for the two it streams
+    line by line.
+    """
+    real_write_text = Path.write_text
+    real_open = Path.open
+
+    def failing_write_text(
         self: Path, *args: Any, **kwargs: Any
     ) -> int:
         if self.name == filename:
             raise OSError(f"injected failure writing {filename}")
         return real_write_text(self, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "write_text", failing)
+    def failing_open(
+        self: Path, *args: Any, **kwargs: Any
+    ) -> Any:
+        if self.name == filename:
+            raise OSError(f"injected failure writing {filename}")
+        return real_open(self, *args, **kwargs)
 
-    if filename == "history.txt":
-        real_open = Path.open
-
-        def failing_open(
-            self: Path, *args: Any, **kwargs: Any
-        ) -> Any:
-            if self.name == filename:
-                raise OSError("injected failure writing history")
-            return real_open(self, *args, **kwargs)
-
-        monkeypatch.setattr(Path, "open", failing_open)
+    monkeypatch.setattr(Path, "write_text", failing_write_text)
+    monkeypatch.setattr(Path, "open", failing_open)

@@ -40,7 +40,19 @@ from uuid import uuid4
 METADATA_NAME = "metadata.json"
 
 FINAL_TEXT_NAME = "final.txt"
+
+# Written for a person to read and no longer parsed by anything this
+# code saves. Its frame delimiter is unescaped and appears verbatim
+# around model output, so a model can emit the line and forge a frame
+# boundary. Runs written before `frames.jsonl` existed are still read
+# through it, because they are not being rewritten.
 HISTORY_NAME = "history.txt"
+
+# The machine-readable frame stream: one JSON object per line, so a
+# delimiter cannot be forged by anything a model writes inside a
+# string. Carries frame text and nothing else; `ANALYTICS-02` may add
+# per-frame counts, which is what the schema version is for.
+FRAMES_NAME = "frames.jsonl"
 
 # Optional per-run signal files, keyed by the bundle attribute that
 # supplies them. The order is fixed so a bundle is written the same
@@ -65,6 +77,18 @@ TRASH_DIR_NAME = ".trash"
 # editable without being rewritten.
 REVISION_KEY = "revision"
 
+# The format this code writes. Absent means version 0, which is every
+# run saved before this existed; readers dispatch on it rather than
+# guessing a run's shape from which files happen to be present.
+SCHEMA_VERSION = 1
+SCHEMA_VERSION_KEY = "schema_version"
+
+# Names the signals a run actually captured, so a reader is told
+# rather than left to infer it from file presence and the type of the
+# first token. Combinations of optional signals are not a version,
+# which is why this is a separate field from the one above.
+CAPTURE_KEY = "capture"
+
 
 class RunNotFoundError(FileNotFoundError):
     """No run by that id.
@@ -81,6 +105,14 @@ class InvalidRunIdError(ValueError):
 
     Subclasses ``ValueError`` for the same reason: the routes that
     turn a bad id into a 400 already catch that.
+    """
+
+
+class BundleInvalidError(Exception):
+    """A staged bundle failed its check and was not published.
+
+    Always raised before anything reaches the visible namespace, so
+    the run that was already there, if any, is untouched.
     """
 
 
@@ -232,6 +264,7 @@ def stage(
             bundle.final_text, encoding="utf-8"
         )
         _write_history(staging / HISTORY_NAME, bundle.frames)
+        _write_frames(staging / FRAMES_NAME, bundle.frames)
         for attribute, filename in SIDECAR_NAMES:
             payload = getattr(bundle, attribute)
             if payload is not None:
@@ -348,12 +381,28 @@ def _publish_replacement(
     return run_id, revision
 
 
+def capture_manifest(bundle: RunBundle) -> Dict[str, bool]:
+    """Which signals this run captured, stated rather than inferred.
+
+    One entry per optional sidecar plus the frame stream. A reader of
+    a versioned run consults this instead of testing for files and
+    sniffing the type of the first token, which is what it has to do
+    for runs that predate it.
+    """
+    manifest = {"frames": True}
+    for attribute, _filename in SIDECAR_NAMES:
+        manifest[attribute] = getattr(bundle, attribute) is not None
+    return manifest
+
+
 def _stage_and_publish(
     root: Path, run_id: str, bundle: RunBundle, *, revision: int
 ) -> None:
-    """Write the bundle aside, then move it in. All or nothing."""
+    """Write the bundle aside, validate it, then move it in."""
     stamped = dict(bundle.metadata)
     stamped[REVISION_KEY] = revision
+    stamped[SCHEMA_VERSION_KEY] = SCHEMA_VERSION
+    stamped[CAPTURE_KEY] = capture_manifest(bundle)
     staged = RunBundle(
         metadata=stamped,
         final_text=bundle.final_text,
@@ -365,10 +414,66 @@ def _stage_and_publish(
     )
     staging = stage(root, run_id, staged)
     try:
+        validate_staged(staging)
         publish(root, run_id, staging)
     except Exception:
         shutil.rmtree(staging, ignore_errors=True)
         raise
+
+
+def validate_staged(staging: Path) -> None:
+    """Check a staged bundle before it is allowed to become a run.
+
+    The point of staging is that what gets published was checked, and
+    this is the check. It runs against the files as written rather
+    than against the objects that produced them, so a serialization
+    bug is caught here instead of by a reader months later.
+
+    Deliberately narrow: structure and self-consistency, not content.
+    Whether a confidence is plausible is not this function's business;
+    whether the manifest describes the files that are actually here
+    is.
+    """
+    metadata_path = staging / METADATA_NAME
+    raw = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise BundleInvalidError(
+            "metadata must be an object, got"
+            f" {type(raw).__name__}"
+        )
+    version = raw.get(SCHEMA_VERSION_KEY)
+    if version != SCHEMA_VERSION:
+        raise BundleInvalidError(
+            f"staged metadata claims version {version!r},"
+            f" this code writes {SCHEMA_VERSION}"
+        )
+    manifest = raw.get(CAPTURE_KEY)
+    if not isinstance(manifest, dict):
+        raise BundleInvalidError("capture manifest is missing")
+
+    for name in (FINAL_TEXT_NAME, HISTORY_NAME, FRAMES_NAME):
+        if not (staging / name).is_file():
+            raise BundleInvalidError(f"{name} was not written")
+
+    for attribute, filename in SIDECAR_NAMES:
+        declared = bool(manifest.get(attribute))
+        present = (staging / filename).is_file()
+        if declared != present:
+            raise BundleInvalidError(
+                f"manifest says {attribute}={declared} but"
+                f" {filename} is {'present' if present else 'absent'}"
+            )
+        if present:
+            _require_json_list(staging / filename)
+
+
+def _require_json_list(path: Path) -> None:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        raise BundleInvalidError(
+            f"{path.name} must be a list, got"
+            f" {type(payload).__name__}"
+        )
 
 
 def read_revision(root: Path, run_id: str) -> int:
@@ -439,15 +544,33 @@ def _write_json(
 
 
 def _write_history(path: Path, frames: List[str]) -> None:
-    """Frame texts with the delimiter the reader expects.
+    """Frame texts in the human-readable transcript.
 
-    The delimiter is unescaped and a model can emit it, which makes
-    this a forgeable machine format; `DATA-05` replaces it with one
-    that is not. Preserved verbatim here because this extraction
-    changes no behavior.
+    Byte-identical to what the app has always written, because 182
+    saved runs are read through this exact framing and none of them
+    is being rewritten. Nothing written today parses it back: new
+    runs carry `frames.jsonl` for that, and this file is kept because
+    it is the one artifact a person can open and read.
     """
     with path.open("w", encoding="utf-8") as handle:
         for index, frame_text in enumerate(frames):
             handle.write(f"\n===== FRAME {index} =====\n")
             handle.write(frame_text)
+            handle.write("\n")
+
+
+def _write_frames(path: Path, frames: List[str]) -> None:
+    """Frame texts as JSON lines, one object per frame.
+
+    The container a reader can trust. Text lives inside a JSON string,
+    so a model emitting the transcript's delimiter, or a newline, or
+    anything else, cannot change where a frame begins.
+    """
+    with path.open("w", encoding="utf-8") as handle:
+        for index, frame_text in enumerate(frames):
+            line = json.dumps(
+                {"i": index, "text": frame_text},
+                ensure_ascii=False,
+            )
+            handle.write(line)
             handle.write("\n")

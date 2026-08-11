@@ -458,6 +458,35 @@ with availability only.
 
 ### DATA-05
 
+**The transcript adds a trailing newline that was never in the
+frame.** Found by the golden fixtures, not suspected beforehand. The
+v0 writer puts a newline after each frame body and the next delimiter
+begins with another, so `parse_history` returns every frame except
+the last with a trailing newline. `frames.jsonl` is exact, which
+means the two eras return subtly different strings for identical
+runs.
+
+It changes no number the app shows, because `compute_convergence`
+strips each frame before counting mask characters, and
+`tests/analytics/test_run_schema.py` asserts the two eras produce
+identical convergence output. Left in place rather than fixed: v0 runs
+are not being rewritten, so "fixed" would mean the reader silently
+editing what it read.
+
+**A missing frame file is now a 404 by contract rather than by
+accident.** `parse_history` asserted the file's existence, and the
+metrics route turns `FileNotFoundError` into a 404, so under
+`python -O` the assertion would vanish and a damaged run would 500
+instead. `read_frame_texts` raises explicitly. A damaged run is an
+operating error, not a programmer error.
+
+**The version and the capture manifest are stamped by the store, not
+the caller.** They describe the bytes on disk, so `_stage_and_publish`
+writes them the same way it writes the revision. A caller cannot
+forget them, and `validate_staged` cross-checks the manifest against
+the directory rather than against the bundle that produced it, so a
+writer that drops a file is caught by its own manifest.
+
 **Unknown fields at the save boundary now fail loudly.** All four models
 carry `extra="forbid"`, so a signal added to the client without the server
 gets a 422 naming the key instead of a run saved without it and an HTTP 200
