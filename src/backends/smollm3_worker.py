@@ -86,6 +86,7 @@ class Smollm3Backend(Backend):
             else "cpu"
         )
         self.device = resolved
+        self.effective_device = resolved
         name = self.model_info.checkpoint
         # Fetch weights first (reporting progress via /health) so the
         # first activation shows a download bar; a cache hit is a no-op.

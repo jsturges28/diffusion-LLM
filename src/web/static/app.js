@@ -274,6 +274,14 @@ var lastFinalText = null;
 // with the run so the record is a measurement rather than the
 // readout's count of whatever is in the box at save time.
 var lastRunPromptLen = null;
+// What the worker attested about itself on the done frame: which
+// model and checkpoint, the device it actually loaded onto, its
+// library versions, and its tokenizer. Held here and submitted with
+// the save so the record describes the run, not whichever model the
+// supervisor happens to have resident when Save is clicked. Two
+// windows share one supervisor, so those differ more easily than it
+// sounds. Null for a run that finished before this existed.
+var lastRunProvenance = null;
 var originalTotalFrames = 0;
 var originalFrameHistory = [];
 var originalFrameTokens = [];
@@ -1778,6 +1786,12 @@ function handleDone(data) {
   }
   if (typeof data.prompt_len === "number") {
     lastRunPromptLen = data.prompt_len;
+  }
+  // Every terminal frame carries this, including the ones the
+  // worker synthesizes for a guided edit, so a resumed run keeps
+  // describing the worker that resumed it.
+  if (data.provenance && typeof data.provenance === "object") {
+    lastRunProvenance = data.provenance;
   }
   if (thinkingPanel && thinkingContent) {
     if (data.thinking) {
@@ -6129,6 +6143,7 @@ function resetRunState() {
   lastRunParams = null;
   lastFinalText = null;
   lastRunPromptLen = null;
+  lastRunProvenance = null;
   originalTotalFrames = 0;
   originalFrameHistory = [];
   originalFrameTokens = [];
@@ -6435,6 +6450,13 @@ function saveRun() {
   // carries a measured length or carries nothing.
   if (lastRunPromptLen !== null) {
     payload.prompt_len = lastRunPromptLen;
+  }
+
+  // The worker's own account of what produced this run. Omitted when
+  // the run predates it, which makes the server fall back to
+  // describing whatever is resident, the way every save used to.
+  if (lastRunProvenance !== null) {
+    payload.provenance = lastRunProvenance;
   }
 
   // canvas_index must be a clean List[int] matching the frame count.
@@ -7373,6 +7395,12 @@ function saveSessionState() {
     finalText: lastFinalText,
     params: lastRunParams,
     promptLen: lastRunPromptLen,
+    // Carried because a trip to Analytics and back is exactly the
+    // gap in which another window can switch the model. Restoring
+    // the run without it would leave the save describing the new
+    // resident model, which is the failure this whole field exists
+    // to close.
+    provenance: lastRunProvenance,
     thinking:
       thinkingPanel && !thinkingPanel.hidden
         ? thinkingContent.textContent
@@ -7471,6 +7499,10 @@ function restoreSessionState() {
   lastRunParams = s.params || null;
   lastRunPromptLen =
     typeof s.promptLen === "number" ? s.promptLen : null;
+  lastRunProvenance =
+    s.provenance && typeof s.provenance === "object"
+      ? s.provenance
+      : null;
   remaskEdits = s.remaskEdits || [];
   originalTotalFrames =
     s.originalTotalFrames || frameHistory.length;

@@ -122,6 +122,7 @@ class LladaBackend(Backend):
             if device == "cuda" and torch.cuda.is_available()
             else "cpu"
         )
+        self.effective_device = resolved
         device = torch.device(resolved)
         name = self.model_info.checkpoint
         # Fetch weights first (progress via /health) so the first
@@ -463,13 +464,14 @@ class LladaBackend(Backend):
                 # failed send rolls back too, matching the done
                 # path where the sampler's terminal frame has
                 # already gone out through the streamer.
-                await ws.send_json(
+                await stream.send_done(
                     {
                         "type": "done",
                         "final_text": self._resume_final_text(
                             resume_history
                         ),
-                    }
+                    },
+                    start,
                 )
             _commit_resume(
                 state,

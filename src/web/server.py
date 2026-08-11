@@ -1221,6 +1221,33 @@ class TokenAlternative(BaseModel):
 FrameTokens = List[Optional[List[TokenRecord]]]
 
 
+class RunProvenance(BaseModel):
+    """What the worker attested when it finished the run.
+
+    Travels with the run from the terminal frame, through the
+    browser's snapshot, back to the save. Everything here used to be
+    read from whichever worker happened to be active when the save
+    arrived, so a run finished before a model switch was described by
+    the model that replaced it.
+
+    Not strict, unlike its siblings. This one is echoed back by the
+    client from a worker payload, and the workers are the part of the
+    system most likely to gain a field ahead of the supervisor; a
+    save must not start failing because a worker learned to attest
+    something new. Only the declared fields are read.
+    """
+
+    model_id: str
+    checkpoint: str = ""
+    # The placement the model actually got, which is not always the
+    # one requested: LLaDA and SmolLM3 fall back to CPU when CUDA is
+    # unavailable, so a run that ran on CPU could be saved as GPU.
+    device: str = "unknown"
+    versions: Dict[str, str] = Field(default_factory=dict)
+    tokenizer: Dict[str, Any] = Field(default_factory=dict)
+    context_length: Optional[int] = None
+
+
 class SaveRunRequest(BaseModel):
     model_config = STRICT
 
@@ -1257,6 +1284,11 @@ class SaveRunRequest(BaseModel):
     original_alternatives: Optional[
         List[Optional[List[TokenAlternative]]]
     ] = None
+    # What the worker said about itself when this run finished,
+    # echoed back from the terminal frame. Absent for a run whose
+    # snapshot predates this field, which then falls back to the
+    # supervisor's current view, as every save used to do.
+    provenance: Optional[RunProvenance] = None
     # When set, replace this existing run instead of creating a new
     # one. Used when a saved run is edited-and-resumed: the edited
     # (bundled) run replaces its pre-edit original so it is a single
@@ -1332,6 +1364,7 @@ def _dump_alternatives(
 
 def _context_metadata(
     prompt_len: Optional[int],
+    provenance: Optional[RunProvenance],
 ) -> Dict[str, Any]:
     """The context block for a saved run, or empty when unknowable.
 
@@ -1339,15 +1372,19 @@ def _context_metadata(
     a prompt length means little without the window it competed for,
     and the window means little without a prompt to place inside it.
 
-    The window is the resident model's, which is sound because a save
-    always follows a run on the model that is still loaded; a switch
-    reloads the page and discards the unsaved run.
+    The window comes from the run's own provenance when it has one.
+    Older snapshots fall back to the resident model's, which was the
+    only source before and is right whenever nothing has changed
+    since the run finished.
     """
     if prompt_len is None:
         return {}
     assert prompt_len >= 0, "prompt_len must be non-negative"
     block: Dict[str, Any] = {"prompt_tokens": prompt_len}
-    window = manager.active_context_length
+    if provenance is not None:
+        window = provenance.context_length
+    else:
+        window = manager.active_context_length
     if window is not None:
         block["context_length"] = window
     return block
@@ -1367,14 +1404,24 @@ _OPTIONAL_METADATA_FIELDS = (
 )
 
 
-def _describe_processor() -> Tuple[str, Optional[str]]:
+def _describe_processor(
+    provenance: Optional[RunProvenance],
+) -> Tuple[str, Optional[str]]:
     """What ran the model, for the Processor column and the header.
 
-    Reads the supervisor's *current* device, which is the `DATA-04`
-    problem in miniature: a run finished before a model switch gets
-    the switch's answer. Left as is here and fixed there.
+    The run's own attested device when it has one. That is stronger
+    than what the supervisor knows in two ways: it survives a model
+    switch between finishing and saving, and it is where the model
+    actually landed rather than where it was sent, which differ
+    whenever CUDA was asked for on a host without it.
+
+    Falls back to the supervisor's current device for snapshots taken
+    before runs carried provenance.
     """
-    device = manager.active_device
+    if provenance is not None:
+        device = provenance.device
+    else:
+        device = manager.active_device
     if device == "cuda":
         return "GPU", _gpu_name()
     if device == "cpu":
@@ -1382,21 +1429,55 @@ def _describe_processor() -> Tuple[str, Optional[str]]:
     return "Unknown", None
 
 
+def _attested_model_id(body: SaveRunRequest) -> str:
+    """Which model produced this run, worker's word over client's.
+
+    They agree for every ordinary save. When they do not, the client
+    has told us about a different model than the one that generated
+    the frames, and the worker is the one that was there. Logged
+    rather than refused: the run itself is real and complete, and
+    losing it to a disagreement about its label would be the worse
+    outcome.
+    """
+    claimed = body.model or DEFAULT_MODEL
+    if body.provenance is None:
+        return claimed
+    attested = body.provenance.model_id
+    if not attested:
+        return claimed
+    if attested != claimed:
+        logger.warning(
+            "save claims model %s but the run was produced by %s;"
+            " recording the latter",
+            claimed,
+            attested,
+        )
+    return attested
+
+
 def _build_metadata(body: SaveRunRequest) -> Dict[str, Any]:
     """Assemble the metadata a saved run records.
 
-    Split out of the save so the write path is about writing. Note how
-    much of this comes from the supervisor's *current* state rather
-    than from the run being saved: that is `DATA-04`, and it is why a
-    run saved after a model switch can describe the wrong worker.
+    Split out of the save so the write path is about writing.
+
+    Everything describing *how* the run was produced comes from the
+    run's own provenance envelope, attested by the worker at the
+    moment it finished. The supervisor's current state is consulted
+    only for runs whose snapshot predates that envelope. This is
+    `DATA-04`: two windows share one supervisor, so the model that
+    is active when a save arrives is not necessarily the model that
+    produced the run being saved.
     """
-    model_id = body.model or DEFAULT_MODEL
+    provenance = body.provenance
+    model_id = _attested_model_id(body)
     entry = REGISTRY.get(model_id)
     checkpoint = entry.checkpoint if entry else ""
+    if provenance is not None and provenance.checkpoint:
+        checkpoint = provenance.checkpoint
     model_type = (
         entry.capabilities.model_type if entry else "diffusion"
     )
-    processor, processor_name = _describe_processor()
+    processor, processor_name = _describe_processor(provenance)
     metadata: Dict[str, Any] = {
         "backend": model_id,
         "model": checkpoint or model_id,
@@ -1429,20 +1510,47 @@ def _build_metadata(body: SaveRunRequest) -> Dict[str, Any]:
     # Absent, not zeroed, when the length is unknown: an older run and
     # a run with an empty prompt must stay distinguishable, and the
     # Analytics rows are built to skip a missing block.
-    context = _context_metadata(body.prompt_len)
+    context = _context_metadata(body.prompt_len, provenance)
     if context:
         metadata["context"] = context
-    metadata["reproducibility"] = {
+    metadata["reproducibility"] = _reproducibility_block(
+        body, provenance
+    )
+    return metadata
+
+
+def _reproducibility_block(
+    body: SaveRunRequest,
+    provenance: Optional[RunProvenance],
+) -> Dict[str, Any]:
+    """What it would take to run this again and get this back.
+
+    The environment half comes from the run's own envelope when it
+    has one. The host half (GPU name, git commit) is still read at
+    save time, because neither is something a worker attests and
+    both are properties of the machine rather than the run.
+    """
+    if provenance is not None:
+        versions = dict(provenance.versions)
+        tokenizer = dict(provenance.tokenizer)
+    else:
+        versions = dict(manager.active_versions)
+        tokenizer = dict(manager.active_tokenizer)
+    return {
         "seed": body.params.get("seed"),
         "gpu": _gpu_name(),
         "git_commit": _git_commit(),
-        "versions": dict(manager.active_versions),
+        "versions": versions,
         # Which tokenizer produced these ids. Persisted per run so an
         # old run still answers the question after the model it used
         # has been swapped out or its checkpoint has moved on.
-        "tokenizer": dict(manager.active_tokenizer),
+        "tokenizer": tokenizer,
+        # Whether the two fields above describe the run or the
+        # supervisor's state at save time. Recorded because the two
+        # are not equally trustworthy and a reader cannot otherwise
+        # tell which one it is looking at.
+        "attested": provenance is not None,
     }
-    return metadata
 
 
 def _build_bundle(body: SaveRunRequest) -> run_store.RunBundle:

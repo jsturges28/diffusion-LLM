@@ -360,17 +360,7 @@ def load_run_frames(
     """
     assert run_dir.is_dir(), f"run dir not found: {run_dir}"
 
-    # Tolerant on purpose: this function's subject is the token
-    # sidecars, and a directory holding those without a metadata file
-    # is not a run the catalog would list anyway. Treating that as v0
-    # keeps the failure with whoever asked for a non-run.
-    metadata = _load_metadata_if_present(run_dir)
-    version = run_schema_version(metadata)
-    manifest = metadata.get(CAPTURE_KEY)
-    if version < SCHEMA_VERSION_LATEST or not isinstance(
-        manifest, dict
-    ):
-        manifest = None
+    manifest = _capture_manifest(run_dir)
 
     result: Dict[str, Any] = {
         "frames": None,
@@ -448,6 +438,27 @@ def _load_alternatives(
             f"{path.name} is malformed in {run_dir}"
         )
     return alternatives
+
+
+def _capture_manifest(
+    run_dir: Path,
+) -> Optional[Dict[str, Any]]:
+    """A run's declared capture list, or None if it has none.
+
+    None means the caller has to infer what was captured, which is
+    what every reader did before versioning and what v0 runs still
+    need. Tolerant of a missing metadata file on purpose: this is
+    reached from the token loader, whose subject is the sidecars, and
+    a directory holding those without metadata is not a run the
+    catalog would list anyway.
+    """
+    metadata = _load_metadata_if_present(run_dir)
+    if run_schema_version(metadata) < SCHEMA_VERSION_LATEST:
+        return None
+    manifest = metadata.get(CAPTURE_KEY)
+    if not isinstance(manifest, dict):
+        return None
+    return manifest
 
 
 def _load_metadata_if_present(

@@ -125,6 +125,21 @@ class _StubStreamer:
                     break
         return done_sent
 
+    async def send_done(
+        self,
+        frame: Dict[str, Any],
+        start_time: float,
+    ) -> None:
+        """The worker's own terminal frame, forwarded like the rest.
+
+        Present because the resume path sends one whenever the
+        sampler stopped at a frame budget, and because an injected
+        send failure there has to surface the same way it does for a
+        sampler-produced frame.
+        """
+        del start_time  # Elapsed timings are not under test.
+        await self._ws.send_json(frame)
+
 
 def _install_resume_stub(
     monkeypatch: pytest.MonkeyPatch,

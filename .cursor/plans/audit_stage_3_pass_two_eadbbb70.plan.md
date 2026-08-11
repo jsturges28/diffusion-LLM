@@ -10,10 +10,10 @@ todos:
     status: completed
   - id: invalid-runs
     content: "DATA-05 part three: make a malformed run an explicit invalid entry instead of crashing the whole catalog, and give an unsupported future version a visible compatibility message that touches no disk"
-    status: in_progress
+    status: completed
   - id: data-04
     content: "DATA-04: record the effective device on each backend, stamp a provenance envelope onto every done frame via FrameStreamer and the two synthetic send sites, carry it through the browser's run and session snapshots, and prefer it over manager state when building metadata"
-    status: pending
+    status: in_progress
   - id: runtime-02
     content: "RUNTIME-02: bound the GIF with an even temporal sample within a frame budget, yield frames from a generator instead of accumulating them, and label the actual model"
     status: pending

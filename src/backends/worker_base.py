@@ -13,7 +13,14 @@ import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import (
+    Any,
+    AsyncGenerator,
+    Callable,
+    Dict,
+    List,
+    Optional,
+)
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -58,10 +65,25 @@ assert COUNT_PROMPT_MAX_CHARS > TOKENIZE_TEXT_MAX_CHARS, (
 
 
 class FrameStreamer:
-    """Forwards frames from an async generator to a WebSocket."""
+    """Forwards frames from an async generator to a WebSocket.
 
-    def __init__(self, ws: WebSocket) -> None:
+    Also the single place a terminal frame is stamped with what the
+    worker attests about the run. Every ``done`` leaves through
+    ``run`` or ``send_done``, so a backend cannot finish a run
+    without saying which model, device and tokenizer produced it.
+    """
+
+    def __init__(
+        self,
+        ws: WebSocket,
+        provenance: Optional[Callable[[], Dict[str, Any]]] = None,
+    ) -> None:
         self._ws = ws
+        # A callable rather than a dict because a worker's tokenizer
+        # is not describable until its load finishes, and the socket
+        # is accepted before that. Called once per terminal frame,
+        # which is once per run.
+        self._provenance = provenance
 
     async def run(
         self,
@@ -80,6 +102,8 @@ class FrameStreamer:
         async for frame in generator:
             elapsed = time.monotonic() - start_time
             frame["elapsed"] = round(elapsed, 2)
+            if frame.get("type") == "done":
+                self._stamp_provenance(frame)
             await self._ws.send_json(frame)
             if frame.get("type") == "done":
                 done_sent = True
@@ -92,6 +116,87 @@ class FrameStreamer:
                     break
         return done_sent
 
+    async def send_done(
+        self,
+        frame: Dict[str, Any],
+        start_time: float,
+    ) -> None:
+        """Send a terminal frame the generator did not produce.
+
+        A guided edit stops its sampler at a frame budget, so the
+        worker ends the run itself. Routed through here so those
+        runs carry the same ``elapsed`` and provenance as every
+        other one; they used to be assembled by hand at each site
+        and disagree about which fields a done frame has.
+        """
+        assert frame.get("type") == "done", frame.get("type")
+        frame["elapsed"] = round(
+            time.monotonic() - start_time, 2
+        )
+        self._stamp_provenance(frame)
+        await self._ws.send_json(frame)
+
+    def _stamp_provenance(self, frame: Dict[str, Any]) -> None:
+        if self._provenance is None:
+            return
+        frame["provenance"] = self._provenance()
+
+
+def provenance_envelope(backend: Backend) -> Dict[str, Any]:
+    """What the worker attests about the run it just finished.
+
+    Taken from the loaded model rather than from what the supervisor
+    was asked for. The supervisor answers these from whichever worker
+    is active when a save arrives, so a run finished before a model
+    switch was being described by the model that replaced it. Here
+    the facts travel with the run.
+
+    ``device`` in particular is the placement the model actually got,
+    which is not always the one requested: two backends fall back to
+    CPU when CUDA is unavailable.
+    """
+    envelope: Dict[str, Any] = {
+        "model_id": backend.model_info.id,
+        "checkpoint": backend.model_info.checkpoint,
+        "device": backend.effective_device or "unknown",
+        "versions": library_versions(),
+        "tokenizer": describe_tokenizer(
+            getattr(backend, "tokenizer", None),
+            getattr(backend, "model", None),
+        ),
+    }
+    # Omitted rather than null when unreadable, matching /health, so
+    # a consumer's "is there a ceiling" test stays a plain key check.
+    context = describe_context_length(
+        getattr(backend, "model", None),
+        getattr(backend, "tokenizer", None),
+    )
+    if context is not None:
+        envelope["context_length"] = context
+    return envelope
+
+
+def library_versions() -> Dict[str, str]:
+    """Torch and transformers as this worker's venv has them.
+
+    Read here rather than in the supervisor because the three venvs
+    hold deliberately incompatible versions, so the supervisor's own
+    imports would describe the wrong environment.
+    """
+    try:
+        import torch
+        import transformers
+
+        return {
+            "torch": torch.__version__,
+            "transformers": transformers.__version__,
+        }
+    except Exception:  # noqa: BLE001
+        # A worker that cannot import its own libraries has bigger
+        # problems, and none of them are fixed by refusing to report
+        # health. An empty block reads as "not recorded".
+        return {}
+
 
 class Backend(ABC):
     """Model-specific worker logic (loading + streaming)."""
@@ -101,6 +206,13 @@ class Backend(ABC):
     # while weights download during ``load``, then back to None. Read by
     # ``/health`` to report a "downloading" state to the supervisor.
     load_progress: Optional[Dict[str, Any]] = None
+    # Where the model actually ended up, set by ``load``. Not the same
+    # as the device it was asked for: two of the three backends fall
+    # back to CPU when CUDA was requested and is unavailable, and a
+    # run saved as "GPU" when it ran on CPU misreports the one fact
+    # its timings should be read against. None means ``load`` has not
+    # finished, or a backend has not been taught to say.
+    effective_device: Optional[str] = None
 
     @abstractmethod
     def load(self, *, device: str = "cuda") -> None:
@@ -573,21 +685,10 @@ def create_worker_app(
             ready=model_ready.is_set(),
             progress=progress,
         )
-        versions: Dict[str, str] = {}
-        try:
-            import torch
-            import transformers
-
-            versions = {
-                "torch": torch.__version__,
-                "transformers": transformers.__version__,
-            }
-        except Exception:  # noqa: BLE001
-            versions = {}
         payload: Dict[str, Any] = {
             "status": status,
             "id": backend.model_info.id,
-            "versions": versions,
+            "versions": library_versions(),
         }
         # Only once ready: there is no tokenizer to describe before
         # the load finishes, and the supervisor caches this on the
@@ -596,6 +697,12 @@ def create_worker_app(
             payload["tokenizer"] = describe_tokenizer(
                 getattr(backend, "tokenizer", None),
                 getattr(backend, "model", None),
+            )
+            # Where the model landed, which is not always where it
+            # was sent: the supervisor knows only what it asked for,
+            # and a CUDA request on a GPU-less host becomes CPU here.
+            payload["device"] = (
+                backend.effective_device or "unknown"
             )
             # Omitted rather than sent as null when unreadable, so the
             # client's "is there a ceiling to check against" test is a
@@ -625,7 +732,9 @@ def create_worker_app(
     async def _ws(ws: WebSocket) -> None:
         await ws.accept()
         cancel_event = asyncio.Event()
-        stream = FrameStreamer(ws)
+        stream = FrameStreamer(
+            ws, provenance=lambda: provenance_envelope(backend)
+        )
         # The three that stream frames. Identical but for the method
         # they reach, so they share one branch below rather than three
         # copies of the same busy check and lock acquisition.

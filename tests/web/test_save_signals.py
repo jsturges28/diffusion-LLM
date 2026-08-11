@@ -359,7 +359,7 @@ def test_the_context_block_pairs_the_prompt_with_the_window(
         manager, "active_context_length", 65_536
     )
 
-    block = _context_metadata(1240)
+    block = _context_metadata(1240, None)
 
     assert block == {
         "prompt_tokens": 1240,
@@ -376,7 +376,7 @@ def test_the_window_is_omitted_when_unreadable(
         manager, "active_context_length", None
     )
 
-    block = _context_metadata(1240)
+    block = _context_metadata(1240, None)
 
     assert block == {"prompt_tokens": 1240}
 
@@ -384,7 +384,7 @@ def test_the_window_is_omitted_when_unreadable(
 def test_no_context_block_without_a_measured_length() -> None:
     """An older run gets no block at all, which is what lets the
     Analytics rows stay absent rather than reading zero."""
-    assert _context_metadata(None) == {}
+    assert _context_metadata(None, None) == {}
 
 
 def test_an_empty_prompt_still_records_its_length(
@@ -396,7 +396,7 @@ def test_an_empty_prompt_still_records_its_length(
         manager, "active_context_length", None
     )
 
-    assert _context_metadata(0) == {"prompt_tokens": 0}
+    assert _context_metadata(0, None) == {"prompt_tokens": 0}
 
 
 # -- an undeclared field is an error, not a silent loss --

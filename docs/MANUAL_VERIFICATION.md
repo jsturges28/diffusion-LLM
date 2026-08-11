@@ -21,6 +21,8 @@ kept when these were written:
 - **127 to 132**: confirmed as each one landed.
 - **133 to 135**: **not yet validated.** Added by `DATA-05`; they need a
   display, so the sandbox could only check the server's half.
+- **136 to 139**: **not yet validated.** Added by `DATA-04`; they need two
+  windows, a GPU, and a real model switch, none of which the sandbox has.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -985,3 +987,32 @@ in-sandbox (no display).*
     (one saved before this session): that one *should* break, because the
     transcript is all it has, and it should show as an invalid row rather
     than failing the page.
+136. **A run keeps its own provenance across a model switch.** This is the
+    scenario the fix exists for and it needs two browser windows on the same
+    server. In window A, run LLaDA and let it finish, but do **not** save. In
+    window B, switch to SmolLM3 and let it load. Go back to A and save. Open
+    the saved `metadata.json`: `backend` must be LLaDA, the `reproducibility`
+    block's `tokenizer` must be LLaDA's, `versions` must be the LLaDA venv's
+    (`transformers` 4.38.2, not 4.53+), `context.context_length` must be
+    LLaDA's window, and `reproducibility.attested` must be `true`. Before this
+    change every one of those would have described SmolLM3. Check the
+    Analytics detail panel for the same run agrees.
+137. **A CPU run is not recorded as a GPU run.** Launch with SmolLM3 forced
+    onto CPU (the device selector, or a host with no GPU), run and save.
+    `metadata.json` should say `"processor": "CPU"` with the CPU's name, and
+    the Analytics Processor column should agree. The supervisor only ever knew
+    what it asked for, so a CUDA request that fell back used to be saved as
+    GPU, which quietly makes the run's timings incomparable with real GPU
+    runs.
+138. **A guided edit's terminal frame carries provenance too.** Run LLaDA, do
+    an Edit Frames resume with "run to here" so the worker ends the run at the
+    frame budget rather than the sampler ending it, then Confirm and save.
+    `reproducibility.attested` must still be `true`. That terminal frame is
+    built by the worker on a separate code path from an ordinary finish, and
+    it is the one most likely to be missed. Repeat on DiffusionGemma, whose
+    resume path is different again.
+139. **An older completed run still saves.** If you have a browser tab with a
+    run finished before this session (a restored session snapshot), save it.
+    It should save normally, with `reproducibility.attested` set to `false`,
+    describing the resident model exactly as it always did. The fallback is
+    what stops this change from stranding a run that is already on screen.

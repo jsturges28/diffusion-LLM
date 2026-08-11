@@ -93,8 +93,23 @@ standing measurement programme is separate and lives at
 All four stage 1 entries were cleared on 2026-08-11, as was `DATA-01`: the
 maintainer confirmed a fresh save reaching Analytics with its GIF and a guided
 edit through Confirm exercising the compare-and-swap replacement. What each
-showed is recorded under Deviations. One entry is open:
+showed is recorded under Deviations. Three entries are open:
 
+- **DATA-04**: the automated half covers both ends and the middle. The worker
+  attests where it actually loaded
+  (`tests/backends/test_worker_provenance.py`), the save prefers the run's
+  envelope over the supervisor's current state
+  (`tests/web/test_run_provenance.py`), and the browser carries it across the
+  save and the session snapshot (`tests/web/test_app_provenance_threading.py`).
+  Outstanding is everything that needs a GPU and a second window:
+  `docs/MANUAL_VERIFICATION.md` items 136 to 139, of which 136 (finish a run in
+  one window, switch the model in another, then save) is the scenario the
+  finding is about.
+- **DATA-05**: the server's half is covered by execution and all 182 real runs
+  were loaded through the adapters here, but the Analytics table's amber
+  invalid row needs eyes on it: `docs/MANUAL_VERIFICATION.md` items 133 to 135.
+  Item 133's alignment check is the one worth doing carefully, since the
+  spanning cell's width is arithmetic no test in the sandbox can see.
 - **TRUST-03 (offline slice)**: the automated half asserts that both Hub
   workers pin every `from_pretrained` call to local files, and that being
   offline with nothing cached now reports what happened instead of a urllib3
@@ -118,11 +133,11 @@ showed is recorded under Deviations. One entry is open:
 | QUALITY-01 | medium | L | companion | lands with each seam | |
 | ORG-01 | medium | M | done | none | Extract the run store out of the supervisor |
 | DATA-01 | high | L | done | none | Publish saved runs whole or not at all |
-| DATA-05 | high | L | ready | DATA-01 (done) | |
-| DATA-04 | high | M | blocked | DATA-05 | |
-| RUNTIME-02 | medium | M | blocked | DATA-01 | |
-| ANALYTICS-02 | high | M | blocked | DATA-05, see decision above | |
-| ANALYTICS-03 | medium | L | blocked | DATA-01, DATA-05 | |
+| DATA-05 | high | L | done | none | Three commits: strict boundary, version and frame stream, invalid runs |
+| DATA-04 | high | M | needs hardware | none | Persist run provenance from the run, not manager state |
+| RUNTIME-02 | medium | M | ready | DATA-01 (done) | |
+| ANALYTICS-02 | high | M | ready | DATA-05 (done), see decision above | |
+| ANALYTICS-03 | medium | L | ready | DATA-01, DATA-05 (both done) | |
 | ANALYTICS-04 | high | M | blocked | DATA-01 | |
 | LIFE-02 | high | M | blocked | stage 4 order | |
 | LIFE-06 | medium | M | blocked | LIFE-02 | |
@@ -174,12 +189,12 @@ commit.
 **Stage 3, the run-store boundary. Pass one done.** Behavior-preserving
 extraction of the storage operations (`ORG-01`) and then unique staged
 publication with complete replacement, revisions, and compare-and-swap
-(`DATA-01`) have landed. Pass two is versioned validation and read adapters
-(`DATA-05`), then immutable worker provenance threaded through the terminal
-run contract (`DATA-04`), then GIFs as bounded non-authoritative derivatives
-(`RUNTIME-02`), which publication semantics now allow. The stage unlocks
-`ANALYTICS-02`, `ANALYTICS-03`, `ANALYTICS-04`, and later `ROADMAP-04`; those
-stay blocked until `DATA-05` lands, which is what they actually depend on.
+(`DATA-01`) have landed. Pass two has landed versioned validation and read
+adapters (`DATA-05`, three commits) and immutable worker provenance threaded
+through the terminal run contract (`DATA-04`), leaving GIFs as bounded
+non-authoritative derivatives (`RUNTIME-02`), which publication semantics now
+allow. `ANALYTICS-02`, `ANALYTICS-03` and `ANALYTICS-04` are unblocked;
+`ROADMAP-04` still waits on its own stage.
 
 **Stage 4, explicit process and socket ownership.** Extract and test the
 manager process adapter, then make termination and pre-eviction validation
@@ -455,6 +470,43 @@ revisions in the registry, resolved revisions and weight digests in run
 provenance, cache-space preflight against remaining bytes, and a completion
 manifest for the locally quantized DiffusionGemma artifact. The slice deals
 with availability only.
+
+### DATA-04
+
+**The device nobody was recording.** The finding named the two-window
+model switch, and that is real, but the quieter half was that no part
+of the system knew where a model had actually loaded. LLaDA and
+SmolLM3 fall back to CPU when CUDA is requested and unavailable, and
+that fallback was a local variable inside `load`: not stored, not in
+`/health`, not anywhere. The supervisor could only ever report what
+it asked for. So on a GPU-less host every run was saved as a GPU run,
+with no switch and no second window involved. Backends now set
+`effective_device`, `/health` reports it, and the envelope carries it.
+
+**Every terminal frame goes out through one object now.** Provenance
+has to ride the done frame, and done frames were being assembled at
+four sampler sites plus three worker sites that each remembered a
+different set of fields: LLaDA's synthetic done had no `elapsed`,
+DiffusionGemma's had one, and DiffusionGemma's resume bypassed
+`FrameStreamer` entirely. Adding `FrameStreamer.send_done` gave the
+worker-built ones the same treatment as the sampler-built ones, which
+is what makes "every run carries provenance" a property rather than a
+list of call sites to keep in step.
+
+**`RunProvenance` is the one save-boundary model that is not
+strict**, which is a deliberate exception to what `DATA-05` just
+established. The other four describe what the browser sends and
+should refuse a field the server does not know. This one is a worker
+payload echoed back, and workers are the part of the system most
+likely to gain a field first; a save must not start failing because
+one of them learned to attest something new.
+
+**A model mismatch is logged, not refused.** The audit allowed either
+"provenance stays tied to the generating worker" or "the request
+fails". Tied is implemented, so the failure path is not needed: the
+attested model wins over the claimed one and a disagreement is a
+warning. Refusing would discard a real, complete run over a
+disagreement about its label.
 
 ### DATA-05
 

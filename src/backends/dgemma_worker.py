@@ -91,6 +91,10 @@ class DgemmaBackend(Backend):
             host_stage_ceiling=HOST_STAGE_CEILING_PICKLED,
         ):
             self.model = load_quantized(str(path), device=device)
+        # Always "cuda": the guard above refuses anything else, so
+        # unlike the other two backends there is no fallback for this
+        # to disagree with. Set anyway so every backend attests.
+        self.effective_device = device
         logger.info("DiffusionGemma NF4 loaded")
 
     def _bounds(
@@ -270,7 +274,10 @@ class DgemmaBackend(Backend):
         cancel_event: asyncio.Event,
         stream: FrameStreamer,
     ) -> None:
-        del stream  # resume forwards frames directly (see below)
+        # Ordinary frames are forwarded directly (see
+        # _forward_resume, which has to drain the generator), but the
+        # terminal frame still goes through the streamer, because
+        # that is what stamps the run's provenance.
         try:
             resume_params = self._validate_resume(data)
         except (ValueError, TypeError) as exc:
@@ -310,7 +317,7 @@ class DgemmaBackend(Backend):
                 frame_history=resume_frames,
             )
             await self._forward_resume(
-                ws, generator, start, max_frames
+                ws, stream, generator, start, max_frames
             )
             # Splice: keep only the frames the client received so
             # the worker history stays aligned with the browser's
@@ -330,6 +337,7 @@ class DgemmaBackend(Backend):
     async def _forward_resume(
         self,
         ws: WebSocket,
+        stream: FrameStreamer,
         generator: Any,
         start: float,
         max_frames: Optional[int],
@@ -342,6 +350,11 @@ class DgemmaBackend(Backend):
         request finishes). When ``max_frames`` is set (guided "run to
         here"), frames past the budget are drained silently and an
         explicit ``done`` is sent so the client stops at the target.
+
+        Both terminal frames go out through the streamer even though
+        the ordinary ones do not, because that is what stamps the
+        run's provenance. Draining is this method's reason to exist,
+        so it cannot hand the generator to ``stream.run``.
         """
         sent = 0
         async for frame in generator:
@@ -355,19 +368,10 @@ class DgemmaBackend(Backend):
                     sent += 1
                 continue
             if ftype == "done" and max_frames is None:
-                frame["elapsed"] = round(
-                    time.monotonic() - start, 2
-                )
-                await ws.send_json(frame)
+                await stream.send_done(frame, start)
         if max_frames is not None:
-            await ws.send_json(
-                {
-                    "type": "done",
-                    "final_text": "",
-                    "elapsed": round(
-                        time.monotonic() - start, 2
-                    ),
-                }
+            await stream.send_done(
+                {"type": "done", "final_text": ""}, start
             )
 
 
