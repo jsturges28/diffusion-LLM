@@ -5,14 +5,17 @@ analysis; this file is the moving part. Read `IMPLEMENTATION_BRIEF.md` for how
 to work a finding, and update this file in the same commit as the change it
 describes.
 
-**Stage 1 is complete.** All five isolated safety fixes landed as five
-commits, `85383e5` through `dbf63f9`. `TRUST-01` is fully done; the other four
-wait only on the maintainer's checks on the real machine, and none of those
-blocks anything. Stage 2 is next: `QUALITY-02`, `META-01`, and `META-02`.
-`ORG-01` is also unblocked but belongs to stage 3.
+**Stage 1 is complete and verified on hardware.** All five isolated safety
+fixes landed and all five are `done`; the maintainer cleared the whole
+validation queue on 2026-08-11. That pass also turned up an unrelated offline
+model-loading gap, which is recorded under `TRUST-03` and whose availability
+half was pulled forward as its own commit.
 
-Baselines as of the stage boundary: 329 tests passing (from 265), 12 browser
-tests under `node --test`, and Ruff still at exactly 156 in `src tests`.
+Stage 2 is next: `QUALITY-02`, `META-01`, and `META-02`. `ORG-01` is also
+unblocked but belongs to stage 3.
+
+Baselines: 329 tests passing (from 265), 12 browser tests under `node --test`,
+and Ruff at exactly 156 in `src tests`.
 
 ## How to read this
 
@@ -35,9 +38,9 @@ commit, **M** a short multi-commit change, **L** a staged boundary migration.
 
 ## Ready now
 
-Stage 1 is complete. Four findings have no unmet blockers: the three gates the
-report wants installed before any boundary moves, and stage 3's first step,
-which `DATA-03` unblocked.
+Four findings have no unmet blockers: the three gates the report wants
+installed before any boundary moves, and stage 3's first step, which
+`DATA-03` unblocked.
 
 - **QUALITY-02** (medium, M): install the lint ratchet now, burn down later
   and only in files that later work touches.
@@ -81,47 +84,18 @@ maintainer's confirmation on real hardware is outstanding. The report's
 standing measurement programme is separate and lives at
 `AUDIT_REPORT.md:1927-2011`.
 
-- **TRUST-02**: the automated half is thorough (no page or stylesheet
-  references an external origin, the server serves each vendored asset, and
-  the served Analytics page names only stamped local paths). Outstanding is
-  the finding's own clause: block outbound traffic, open all four pages from
-  a cold browser profile, and exercise the generation UI, settings, run
-  table, detail metadata, charts, zoom, and deletion with the network panel
-  showing zero external requests. Worth a glance at the type while there,
-  since the webfont now comes from disk.
-- **ANALYTICS-01**: the fence's logic is covered by
-  `tests/web/static/detail_requests.test.js` (12 cases, `node --test`).
-  Outstanding is the browser half of the Verification clause, which needs a
-  real browser: with DevTools throttling, open run A, open run B before A
-  answers, and close the panel during each phase, checking that title,
-  metadata, charts, and overlays always share one run or are empty. Also
-  worth one look at a detail panel for a run whose metrics endpoint fails,
-  which should now show a message rather than empty chart slots.
-- **DATA-03**: the resolver is covered by `tests/web/test_results_root.py`,
-  including that no input can produce a cwd-dependent path, and the display
-  path both for the default root and for one outside the repository.
-  Outstanding is the launch half, which needs the real app and the real 178
-  runs: start `main.py` from the repository and from `/tmp`, and open the
-  desktop entry, confirming all three list the same runs and log the same
-  resolved directory. Then `--results-dir /tmp/isolated` once, to see an
-  empty, separately named tree.
-- **LIFE-07**: the finding's own Verification clause is met in full by
-  `tests/backends/test_llada_resume_state.py`, which injects failure at all
-  four named points and proves the retained history and step count survive
-  byte for byte. Outstanding is one smoke run on real hardware, because no
-  part of the resume path can execute here: load LLaDA, generate, remask and
-  run to a frame, then edit again from an earlier original frame. Nothing
-  depends on this finding, so the queue entry blocks nothing.
+Empty. All four stage 1 entries were cleared on 2026-08-11; what each of
+them showed is recorded under Deviations.
 
 ## Status table
 
 | ID | Sev | Eff | Status | Blocked by | Commits |
 |---|---|---|---|---|---|
-| LIFE-07 | high | S | needs hardware | none | Commit LLaDA resume state only after the run lands |
+| LIFE-07 | high | S | done | none | Commit LLaDA resume state only after the run lands |
 | TRUST-01 | high | S | done | none | Bind to loopback unless exposure is asked for |
-| ANALYTICS-01 | high | S | needs hardware | none | Fence detail responses to the run that asked |
-| DATA-03 | medium | S | needs hardware | none | Resolve the data root without asking the cwd |
-| TRUST-02 | high | M | needs hardware | none | Serve every page without a third-party origin |
+| ANALYTICS-01 | high | S | done | none | Fence detail responses to the run that asked |
+| DATA-03 | medium | S | done | none | Resolve the data root without asking the cwd |
+| TRUST-02 | high | M | done | none | Serve every page without a third-party origin |
 | QUALITY-02 | medium | M | ready | none | |
 | META-01 | medium | M | ready | none | |
 | META-02 | medium | S | ready | none | |
@@ -233,6 +207,26 @@ the difference between that and what turned out to be true is worth keeping.
 No finding has been contradicted so far. The entries below are things learned
 while working one finding that belong to another, recorded rather than
 opportunistically fixed.
+
+### Stage 1 hardware pass, 2026-08-11
+
+All four queued findings were confirmed by the maintainer in one sitting and
+the queue is empty. Two results are worth keeping rather than just ticking:
+
+- **LIFE-07 was stress tested past its clause.** The maintainer ran four
+  consecutive Retry cycles on one run. Each Retry resumes from frame 0 against
+  a history that the previous resume already replaced, so a commit that leaked
+  a truncated list would have surfaced by the fourth pass as an out-of-range
+  rejection or a branch from the wrong frame. It did not.
+- **TRUST-02 passed, and found something else.** Every page rendered with the
+  network physically off, webfont included. Model *activation* did not, and
+  that turned out to be an unrelated pre-existing gap; see the TRUST-03 entry
+  below, which is where the discovery is recorded.
+
+`DATA-03` and `ANALYTICS-01` were confirmed exactly as written: four launch
+contexts resolving to one directory with no stray `/tmp/results`, the delete
+dialog naming `/tmp/isolated` under an alternate root, and the detail panel
+holding one run's identity through throttled interleaving and closes.
 
 ### LIFE-07
 
@@ -389,4 +383,42 @@ Integrity attributes. They are same-origin now, so SRI would guard against
 nothing an attacker who can write to the repository could not also change; the
 manifest hashes are the meaningful record. Revisit only if these ever move
 back to a remote origin.
+
+### TRUST-03
+
+**Found early, by TRUST-02's offline test rather than by working this
+finding.** With the network physically off, every page rendered but two of the
+three models would not activate. SmolLM3 failed loudly with a
+`NameResolutionError` for `huggingface.co` while fetching
+`additional_chat_templates`; LLaDA hung at "loading weights 0%" for over two
+minutes instead of erroring. DiffusionGemma loaded normally.
+
+The asymmetry explains the cause exactly. DiffusionGemma's checkpoint is a
+local directory (`registry.py:127`), so it never contacts the Hub. The other
+two are Hub repo ids, and while `download_with_progress` already answers the
+"is it cached" question correctly and returns a local snapshot path with no
+network (`hf_download.py:152-153`), both workers then discard that path for
+loading and hand `from_pretrained` the *repo id* with no `local_files_only`.
+Transformers therefore goes back to the Hub to revalidate a model that is
+already fully on disk. The two fail differently only because of their
+environments: 4.53+ in `.venv-ar` makes an API call that fails fast, while
+4.38.2 plus `trust_remote_code=True` retries with long timeouts.
+
+This is squarely inside this finding's Direction, which already says to "load
+from the resolved snapshot" (`AUDIT_REPORT.md:896-898`). But the finding is
+stage 6 and is mostly about reproducibility, while what the offline test
+exposed is availability, so the maintainer chose to pull the availability half
+forward as its own commit. **TRUST-03 stays blocked** for everything else it
+asks for: pinned source revisions, persisted weight digests, cache-space
+preflight, and a completion manifest for the local quantized artifact.
+
+**Why the early slice used `local_files_only=True` rather than the snapshot
+path.** Passing the resolved snapshot path is the more thorough fix and is
+what this finding will eventually want, because the path names the exact
+commit. It also changes `tokenizer.name_or_path`, which
+`describe_tokenizer` writes into saved-run provenance and the Analytics detail
+panel, so runs saved after it would display a long cache path where earlier
+runs show `GSAI-ML/LLaDA-8B-Instruct`. That is a user-visible saved-run change
+and belongs with the versioning this finding will do properly. The flag buys
+the offline behavior with none of it.
 
