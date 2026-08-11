@@ -571,6 +571,20 @@ html, body {
   cursor: pointer;
 }
 
+/* Collect column: the star plus its hover-only caret, sized to hold
+   both so revealing the caret cannot widen the column. Centering the
+   header needs its own rule for the same specificity reason as
+   th.col-edited below. */
+.col-star {
+  width: 46px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+#runs-table thead th.col-star {
+  text-align: center;
+}
+
 .col-prompt {
   max-width: 180px;
 }
@@ -582,7 +596,9 @@ html, body {
   padding-left: 22px;
 }
 
-/* Per-row actions: collect, choose a collection, delete. */
+/* Per-row actions: delete. Wider than a lone trashcan needs, because
+   the header cell holds the bulk-delete button, which carries a count
+   like "(177)" beside its icon. */
 .col-actions {
   width: 74px;
   text-align: center;
@@ -672,6 +688,9 @@ html, body {
   background: var(--bg-surface-hover);
 }
 
+/* An inline-flex box with only an SVG in it has no text baseline to
+   align on, so the default falls back to its bottom edge and the icon
+   rides low in the row. Matches the star and the edited check. */
 .row-delete-btn {
   background: none;
   border: none;
@@ -682,6 +701,7 @@ html, body {
   justify-content: center;
   border-radius: 4px;
   cursor: pointer;
+  vertical-align: middle;
   transition: color 0.15s, background 0.15s;
 }
 

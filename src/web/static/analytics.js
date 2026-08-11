@@ -1543,8 +1543,8 @@ function renderTable() {
       var gtr = document.createElement("tr");
       gtr.className = "group-header-row";
       var gtd = document.createElement("td");
-      // check column + TABLE_KEYS + has-diff column + actions column.
-      gtd.colSpan = TABLE_KEYS.length + 3;
+      // check + star + TABLE_KEYS + has-diff + actions.
+      gtd.colSpan = TABLE_KEYS.length + 4;
       gtd.textContent = groupKey.toUpperCase()
         .replace("_", " ") + ": " + group.label;
       gtr.appendChild(gtd);
@@ -1574,6 +1574,16 @@ function renderTable() {
       );
       tdCheck.appendChild(cb);
       tr.appendChild(tdCheck);
+
+      // Collecting sits beside selecting rather than beside
+      // deleting: both are things you do to a row you have picked
+      // out, and a star is read down the column, which suits the
+      // left edge.
+      var tdStar = document.createElement("td");
+      tdStar.className = "col-star";
+      tdStar.appendChild(buildRowStar(run.run_id));
+      tdStar.appendChild(buildRowCollectCaret(run.run_id));
+      tr.appendChild(tdStar);
 
       for (var k = 0; k < TABLE_KEYS.length; k++) {
         var td = document.createElement("td");
@@ -1624,8 +1634,6 @@ function renderTable() {
 
       var tdActions = document.createElement("td");
       tdActions.className = "col-actions";
-      tdActions.appendChild(buildRowStar(run.run_id));
-      tdActions.appendChild(buildRowCollectCaret(run.run_id));
       var delBtn = document.createElement("button");
       delBtn.className = "row-delete-btn";
       delBtn.setAttribute("data-run-id", run.run_id);

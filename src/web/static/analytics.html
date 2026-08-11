@@ -74,6 +74,10 @@
                   <input type="checkbox" class="app-checkbox"
                     id="select-all" title="Select all" />
                 </th>
+                <!-- Collect column. Unlabeled and not
+                     sortable, so the header is inert
+                     (onSortClick needs th.sortable). -->
+                <th class="col-star" title="Collected"></th>
                 <th class="sortable col-date"
                   data-key="created_at">Date</th>
                 <th class="sortable"
