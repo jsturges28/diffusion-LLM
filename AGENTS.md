@@ -43,10 +43,13 @@ The maintainer prefers **deliberate → Plan → Agent**:
 Small, unambiguous fixes can skip straight to implementation. When a design has
 multiple valid paths, surface the decision instead of guessing.
 
-**A session brief overrides this cadence and the commit discipline below.** If
-`HANDOFF.md` points you at one (for example `AUDIT_BRIEF.md`, a read-only audit
-that ships no code), the brief wins for that session: follow its contract, and
-do not implement or commit merely because this file says to.
+**A session brief overrides this cadence and the commit discipline below.**
+When `HANDOFF.md` points you at one, read it first and let it win for that
+session. `AUDIT_BRIEF.md` governed the read-only audit that produced
+`AUDIT_REPORT.md`; `IMPLEMENTATION_BRIEF.md` governs the sessions working
+through its findings, and narrows the session-end documentation habit at the
+bottom of this file, because forty findings must not become forty rounds of
+documentation churn.
 
 ## Coding standards
 

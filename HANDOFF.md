@@ -2060,17 +2060,27 @@ end to end, reusing the frame/token contract.
 
 ## Where to pick up
 
-**Next session: a read-only audit of the whole repo. Read `AUDIT_BRIEF.md`,
-which is the only file that session needs beyond the code.** The maintainer
-wants the app sharpened deeply before the next model class lands, so that
-session reads everything and writes `AUDIT_REPORT.md`, changing nothing else.
-It covers code organization and monoliths, tangled or race-prone logic,
-runtime smoothness, robustness for users who are not the author, duplication
-with a receipt, how well the architecture is positioned for the future models
-in `ROADMAP.md`, and whether these documents still match the code and route an
-agent efficiently. The report then feeds a separate session that deliberates,
-plans, and implements. The brief carries the contract, a routing map with line
-counts, the subagent split, the finding schema, and verified seeds.
+**Next session: start working the audit findings. Read
+`IMPLEMENTATION_BRIEF.md`, then `IMPLEMENTATION_LEDGER.md`.** The read-only
+audit is done. `AUDIT_REPORT.md` carries 40 findings across seven sequenced
+stages, with an executive summary, a findings index, a dependency order at
+lines 1829 to 1925, and a hardware measurement programme at 1927 to 2011.
+Three files divide the work: the report is the immutable analysis, the ledger
+is the state that survives between sessions, and the brief is the rhythm for
+working one finding.
+
+Eight findings are ready immediately, and the report names **`LIFE-07`** the
+best first commit: a failed LLaDA resume currently leaves the worker's
+retained history already truncated, which is high severity, small, and
+touches no protocol or architecture. Two things want a decision before they
+start: `DATA-02`'s fork between server-authoritative collections and a
+revision scheme with stale rejection, and whether `ANALYTICS-02` runs early
+as a safety fix or waits for the run store, which the report's summary and
+its sequencing answer differently.
+
+`META-01` will restructure this file early in the campaign, reducing it to a
+bounded cold-start page and moving the 132-item verification ledger into its
+own document. Until then, lines 1 to 73 are the orientation worth reading.
 
 This session shipped the `results/` rename, all of **AR Phase C**, and the
 passes listed under "Recently shipped", ending with context-window metrics,
