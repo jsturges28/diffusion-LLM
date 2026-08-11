@@ -38,15 +38,12 @@ commit, **M** a short multi-commit change, **L** a staged boundary migration.
 
 ## Ready now
 
-Three findings have no unmet blockers: the two remaining gates the report
-wants installed before any boundary moves, and stage 3's first step, which
-`DATA-03` unblocked.
+Two findings have no unmet blockers: the last gate the report wants installed
+before any boundary moves, and stage 3's first step, which `DATA-03`
+unblocked.
 
 - **META-01** (medium, M): reduce `HANDOFF.md` to a cold-start page and move
   the 132-item verification ledger out of it.
-- **META-02** (medium, S): move the canonical agent contract into tracked
-  files, since `.cursor/` is gitignored and its Python rule contradicts the
-  three-environment matrix.
 - **ORG-01** (medium, M): extract behavior-preserving storage operations out
   of `server.py`. Became ready when `DATA-03` made the root explicit, and it
   is the first step of the run-store stage rather than of stage 1.
@@ -104,7 +101,7 @@ is recorded under Deviations. One new entry arrived from that same pass:
 | TRUST-02 | high | M | done | none | Serve every page without a third-party origin |
 | QUALITY-02 | medium | M | done | none | Ratchet the lint baseline instead of remembering it |
 | META-01 | medium | M | ready | none | |
-| META-02 | medium | S | ready | none | |
+| META-02 | medium | S | done | none | Put the agent contract where a clone can read it |
 | QUALITY-01 | medium | L | companion | lands with each seam | |
 | ORG-01 | medium | M | ready | DATA-03 (done) | |
 | DATA-01 | high | L | blocked | ORG-01 | |
@@ -442,6 +439,38 @@ provenance, cache-space preflight against remaining bytes, and a completion
 manifest for the locally quantized DiffusionGemma artifact. The slice deals
 with availability only.
 
+### META-02
+
+**The finding understated the gap, and the missing piece was the whole
+standard.** The report cites `.cursor/rules/python-venv.mdc` contradicting the
+three-environment matrix, which was true and is fixed. But TigerStyle, which
+`AGENTS.md` called "the repo's" coding standard, was not in `.cursor/rules/`
+at all. It lived in one maintainer's *user-level* Cursor settings, so it
+travelled to no clone and to no second machine. Around 250 lines of mandatory
+standards existed nowhere in the repository. `TIGERSTYLE.md` now carries them,
+and defers to `pyproject.toml` for line length, complexity, and nesting so the
+prose and the linter cannot drift apart.
+
+**`.cursor/plans/` turned out to hold 39 real build plans**, not an empty
+path, and `ROADMAP.md` cites them in three places as the canonical history for
+named milestones. The maintainer chose to track them, so `.gitignore` now
+ignores `.cursor/*` with an exception for `plans/`. `.cursor/rules/` stays
+ignored on purpose: the tracked documents are canonical and the `.mdc` files
+were rewritten as thin pointers that say so, which also removes the venv
+contradiction for current sessions even though they are not committed.
+
+**The link test needed two modes, and the reason is worth keeping.** A first
+attempt treated every backticked `foo/bar` as a path claim and produced a wall
+of false positives, because this prose is full of fragments that look like
+paths and are not: `vendor/README.md` written relative to the directory under
+discussion, `backends/` naming a subdirectory in passing, `Results/` recalling
+a folder that no longer exists. So markdown links are checked strictly, since
+somebody wrote those expecting them to resolve, while backtick spans are
+checked only when their first segment is a tracked top-level entry or the path
+exists on disk. That second clause is what detects this finding's real shape,
+present locally and absent from every clone, and a first draft that lacked it
+would have skipped the exact reference that was broken.
+
 ### QUALITY-02
 
 **The Direction's first instruction does not survive contact.** It says to
@@ -478,6 +507,11 @@ code: `streaming_sampler.py:23` imports live helpers from it while its
 `generate` is the dormant reference program, which is precisely the split
 `ORG-03` exists to make. Expect the number to fall sharply there and to move
 very little before then.
+
+**The gate caught its author first.** The very next commit, `META-02`, added a
+test file with two long lines and a collapsible `if`, and the ratchet refused
+it. Fixed rather than absorbed into the ceiling, which is the behavior the
+whole mechanism exists to produce.
 
 **Where the gate ended up.** 156 to 140. `scripts/lint_ratchet.py` compares
 per (file, rule) against `lint_baseline.json`, because the Verification's

@@ -16,19 +16,37 @@ the deeper living roadmap in `ROADMAP.md`.
 
 ## Environments (never touch system Python)
 
-Models need incompatible `transformers` versions, so there are three venvs:
+Models need incompatible `transformers` versions, so there are three venvs.
+**There is no single project interpreter**; pick the one that matches the code
+you are running, and always invoke it by path.
 
-- `.venv`: supervisor + LLaDA worker (`transformers==4.38.2`). Use
-  `.venv/bin/python` and `.venv/bin/pip`.
-- `.venv-dgemma`: DiffusionGemma worker (`transformers` v5). Use
+- `.venv`: supervisor, LLaDA worker, the test suite, Ruff, and every script
+  here (`transformers==4.38.2`). Use `.venv/bin/python` and `.venv/bin/pip`.
+- `.venv-dgemma`: DiffusionGemma worker only (`transformers` v5). Use
   `.venv-dgemma/bin/python`.
-- `.venv-ar`: SmolLM3 autoregressive worker (`transformers` >= 4.53,
+- `.venv-ar`: SmolLM3 autoregressive worker only (`transformers` >= 4.53,
   CUDA torch wheel that also runs on CPU). Use `.venv-ar/bin/python`.
 
 Dependency files: `requirements.txt` (core `.venv`), `requirements-dgemma.txt`
 (the DiffusionGemma env), `requirements-ar.txt` (the SmolLM3 env),
 `requirements-desktop.txt` (optional `pywebview[qt]` desktop add-on for
 `.venv`). Pin versions; do not install to system/user Python.
+
+## Models and hardware
+
+Three model families, **one resident at a time**, each a separate worker
+process in the environment above that matches it.
+
+- **LLaDA-8B-Instruct**: masked discrete diffusion, bf16, ~17 GB VRAM.
+- **DiffusionGemma-26B-A4B**: block-autoregressive MoE, self-quantized 4-bit
+  NF4, ~18 GB VRAM. Its checkpoint is a local directory, not a Hub id.
+- **SmolLM3-3B**: autoregressive baseline, bf16, ~6 GB VRAM. Also runs on CPU,
+  so it is the model a GPU-less host can use.
+
+Models load slowly and hold VRAM until evicted. **The agent sandbox has no GPU
+and no display**, so model inference and the desktop window can only be
+verified by the maintainer on hardware; hand that work back with a
+manual-verification checklist.
 
 ## Workflow cadence
 
@@ -53,10 +71,16 @@ documentation churn.
 
 ## Coding standards
 
-Follow the repo's **TigerStyle** rules (assertions, precise types, small
-functions, explicit control flow, `pathlib`, pinned deps, etc.) and the rules in
-`.cursor/rules/`. Match existing conventions in each file. Do not rewrite working
-code without reason.
+Follow **TigerStyle**, the repo's coding standard: assertions, precise types,
+small functions, explicit control flow, `pathlib`, pinned dependencies. The
+canonical text is `TIGERSTYLE.md` in this repository; the enforced numbers
+(line length, complexity, nesting) live in `pyproject.toml` and are gated by
+`scripts/lint_ratchet.py`. Match existing conventions in each file. Do not
+rewrite working code without reason.
+
+Editor-specific rules under `.cursor/rules/` are local convenience only. They
+are gitignored, so nothing may depend on them; if a rule matters, it belongs
+in this file or in `TIGERSTYLE.md`.
 
 **No em-dashes in copy.** Do not use em-dashes (`\u2014`, `&mdash;`, `&#8212;`)
 in user-facing text, and avoid them in the frontend (`src/web/static/`) and prose

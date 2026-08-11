@@ -1,4 +1,9 @@
-.cursor
+# Editor state is local, with one exception: the per-milestone build
+# plans are real design history that ROADMAP.md cites, so they travel
+# with the repository. Rules under .cursor/rules/ stay local, because
+# the canonical contract is AGENTS.md and TIGERSTYLE.md.
+.cursor/*
+!.cursor/plans/
 .venv
 .venv-dgemma
 .venv-ar
