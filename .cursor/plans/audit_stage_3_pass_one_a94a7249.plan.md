@@ -13,7 +13,7 @@ todos:
     status: completed
   - id: pass-one-handback
     content: "Pass one boundary: full verification, ledger deviations recorded, and hand back with the two hardware checks (fresh save, guided edit through Confirm)"
-    status: in_progress
+    status: completed
 isProject: false
 ---
 

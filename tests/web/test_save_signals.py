@@ -1,15 +1,19 @@
 """Tests that the new XAI signals survive the save request models.
 
-Strategy: ``TokenRecord`` and ``SaveRunRequest`` are strict pydantic
-models, so any field they do not declare is silently dropped on the
-way to disk. That is a quiet data-loss failure mode rather than an
-error, so these tests pin the serialized shape directly: entropy is
-kept for resolved tokens, omitted for masked ones, per-position
-candidate sets keep their index alignment (including the gaps), and
-the pre-edit run's own signals survive alongside the edited run's.
-The context block gets the same treatment, plus its own boundary: a
-prompt of zero tokens is a measurement and must stay distinguishable
-from a run that measured nothing.
+Strategy: pin the serialized shape of a save request directly.
+Entropy is kept for resolved tokens and omitted for masked ones,
+per-position candidate sets keep their index alignment including the
+gaps, and the pre-edit run's own signals survive alongside the edited
+run's. The context block gets the same treatment plus its own
+boundary: a prompt of zero tokens is a measurement and must stay
+distinguishable from a run that measured nothing.
+
+These models used to drop any field they did not declare, so an
+incomplete rollout returned HTTP 200 and a run missing the signal it
+was supposed to be carrying. They now refuse unknown fields, and the
+tests at the bottom of this file pin that, because a loud 422 naming
+the key is the difference between a bug you find in a minute and one
+you find when you open the run months later.
 
 Passing proves a saved run carries everything the durable Entropy
 overlay, the candidate popover, the original-versus-edited comparison,
@@ -393,3 +397,99 @@ def test_an_empty_prompt_still_records_its_length(
     )
 
     assert _context_metadata(0) == {"prompt_tokens": 0}
+
+
+# -- an undeclared field is an error, not a silent loss --
+#
+# The failure this replaces was the quiet kind. A client sending a
+# signal the server did not know about got HTTP 200 and a run saved
+# without it, and the gap only showed up later as an overlay that
+# would not draw. Refusing the request names the field instead.
+
+
+def test_an_unknown_request_field_is_refused() -> None:
+    with pytest.raises(ValidationError) as caught:
+        SaveRunRequest(
+            prompt="p",
+            frames=["f"],
+            final_text="hello",
+            brand_new_signal=[1, 2, 3],  # type: ignore[call-arg]
+        )
+
+    assert "brand_new_signal" in str(caught.value)
+
+
+def test_an_unknown_token_field_is_refused() -> None:
+    """The one the old docstring warned about: a per-token signal
+    added to the protocol but not to this model used to vanish on the
+    way to tokens.json."""
+    with pytest.raises(ValidationError):
+        TokenRecord(
+            t="he", m=False, id=5, surprisal=0.4
+        )  # type: ignore[call-arg]
+
+
+def test_an_unknown_candidate_field_is_refused() -> None:
+    with pytest.raises(ValidationError):
+        TokenAlternative(
+            id=5, t="he", p=0.9, logit=1.2
+        )  # type: ignore[call-arg]
+
+
+def test_an_unknown_remask_field_is_refused() -> None:
+    with pytest.raises(ValidationError):
+        RemaskEdit(
+            frame_index=1, token_positions=[1], canvas=0
+        )  # type: ignore[call-arg]
+
+
+def test_run_parameters_stay_open() -> None:
+    """The deliberate exception. ``params`` is a per-model bag whose
+    keys come from each model's own registry, so forbidding unknown
+    keys there would mean editing this file to add a hyperparameter.
+    The strictness is about the envelope, not its cargo."""
+    body = SaveRunRequest(
+        prompt="p",
+        frames=["f"],
+        final_text="hello",
+        params={"anything_a_model_declares": 7},
+    )
+
+    assert body.params["anything_a_model_declares"] == 7
+
+
+def test_the_payload_the_browser_actually_sends_is_accepted() -> None:
+    """The paired check on all of the above.
+
+    Strictness is only safe if it accepts the real client. This is
+    every field app.js can put in a save body, taken from the payload
+    construction in ``saveRun``, including the edited-run additions
+    and the revision that DATA-01 introduced.
+    """
+    body = SaveRunRequest(
+        model="llada",
+        prompt="p",
+        params={"steps": 128, "seed": -1},
+        frames=["f"],
+        final_text="hello",
+        elapsed_seconds=1.5,
+        per_frame_elapsed=[0.5, 1.5],
+        frame_tokens=[_frame()],
+        mean_conf=[0.8, None],
+        prompt_len=12,
+        canvas_index=[0, 0],
+        alternatives=_candidates(),
+        remask_edits=[
+            RemaskEdit(frame_index=1, token_positions=[1])
+        ],
+        original_frame_tokens=[_frame()],
+        original_per_frame_elapsed=[0.5],
+        original_elapsed_seconds=0.5,
+        original_mean_conf=[0.8],
+        original_alternatives=_candidates(),
+        run_id="2026-01-01_00-00-00_llada",
+        expected_revision=3,
+    )
+
+    assert body.run_id == "2026-01-01_00-00-00_llada"
+    assert body.expected_revision == 3

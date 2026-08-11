@@ -90,17 +90,11 @@ maintainer's confirmation on real hardware is outstanding. The report's
 standing measurement programme is separate and lives at
 `AUDIT_REPORT.md:1927-2011`.
 
-All four stage 1 entries were cleared on 2026-08-11; what each of them showed
-is recorded under Deviations. Two entries are open:
+All four stage 1 entries were cleared on 2026-08-11, as was `DATA-01`: the
+maintainer confirmed a fresh save reaching Analytics with its GIF and a guided
+edit through Confirm exercising the compare-and-swap replacement. What each
+showed is recorded under Deviations. One entry is open:
 
-- **DATA-01**: the store's behavior is covered by
-  `tests/web/test_run_store.py` (38 cases, including threaded races and a
-  failure injected at each file), and the save, replace, conflict and delete
-  round trip was driven through the real endpoint against a temp data root.
-  Outstanding is the browser half against the 180 real runs: save a fresh run
-  and confirm it appears in Analytics with its GIF, then run a guided edit
-  through Confirm, which exercises the compare-and-swap replacement and the
-  `expected_revision` the client now sends.
 - **TRUST-03 (offline slice)**: the automated half asserts that both Hub
   workers pin every `from_pretrained` call to local files, and that being
   offline with nothing cached now reports what happened instead of a urllib3
@@ -123,7 +117,7 @@ is recorded under Deviations. Two entries are open:
 | META-02 | medium | S | done | none | Put the agent contract where a clone can read it |
 | QUALITY-01 | medium | L | companion | lands with each seam | |
 | ORG-01 | medium | M | done | none | Extract the run store out of the supervisor |
-| DATA-01 | high | L | needs hardware | none | Publish saved runs whole or not at all |
+| DATA-01 | high | L | done | none | Publish saved runs whole or not at all |
 | DATA-05 | high | L | ready | DATA-01 (done) | |
 | DATA-04 | high | M | blocked | DATA-05 | |
 | RUNTIME-02 | medium | M | blocked | DATA-01 | |
@@ -461,6 +455,21 @@ revisions in the registry, resolved revisions and weight digests in run
 provenance, cache-space preflight against remaining bytes, and a completion
 manifest for the locally quantized DiffusionGemma artifact. The slice deals
 with availability only.
+
+### DATA-05
+
+**Unknown fields at the save boundary now fail loudly.** All four models
+carry `extra="forbid"`, so a signal added to the client without the server
+gets a 422 naming the key instead of a run saved without it and an HTTP 200
+saying otherwise. Verified that this rejects nothing the browser actually
+sends: every key in `app.js`'s save payload was compared against the model's
+declared fields, and the two that looked undeclared (`type`, `experimental`)
+turned out to belong to the generate WebSocket message, a different `payload`
+variable in the same file.
+
+`params` stays open on purpose. Its keys come from each model's own registry,
+so forbidding unknown ones there would mean editing the save model to add a
+hyperparameter. The strictness is about the envelope, not its cargo.
 
 ### DATA-01
 

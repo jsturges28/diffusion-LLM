@@ -44,7 +44,7 @@ from fastapi.responses import (
     Response,
 )
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.analytics.metrics import (
     canvas_boundaries,
@@ -1156,7 +1156,17 @@ async def websocket_proxy(browser: WebSocket) -> None:
 # -- Save endpoint (model-agnostic) --
 
 
+# Every model on the save boundary refuses fields it does not declare.
+# Pydantic's default is to drop them silently, which turns "somebody
+# added a signal to the client and forgot the server" into a run saved
+# without it and an HTTP 200 saying otherwise. A 422 naming the field
+# is the whole point: the failure should be the rollout, not the data.
+STRICT = ConfigDict(extra="forbid")
+
+
 class RemaskEdit(BaseModel):
+    model_config = STRICT
+
     frame_index: int
     token_positions: List[int]
 
@@ -1170,9 +1180,12 @@ class TokenRecord(BaseModel):
     positions), and ``e`` is the sampling-time entropy in nats
     (autoregressive runs only, so absent elsewhere).
 
-    Unlisted keys are dropped by pydantic, so a new signal must be
-    declared here or it silently never reaches ``tokens.json``.
+    A new signal must be declared here to reach ``tokens.json``. It
+    used to be dropped silently; now the request fails and says which
+    key it did not recognize.
     """
+
+    model_config = STRICT
 
     t: str
     m: bool
@@ -1194,6 +1207,8 @@ class TokenAlternative(BaseModel):
     distribution.
     """
 
+    model_config = STRICT
+
     id: int
     t: str
     p: float
@@ -1206,6 +1221,8 @@ FrameTokens = List[Optional[List[TokenRecord]]]
 
 
 class SaveRunRequest(BaseModel):
+    model_config = STRICT
+
     model: str = DEFAULT_MODEL
     prompt: str
     params: Dict[str, Any] = Field(default_factory=dict)
