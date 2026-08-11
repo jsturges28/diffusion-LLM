@@ -87,12 +87,19 @@ then `docs/audit/IMPLEMENTATION_LEDGER.md` for what is done, ready, and blocked.
 `docs/audit/AUDIT_REPORT.md` is the immutable analysis behind it; read only the findings
 you intend to take, since it is 2,000 lines.
 
-Stages 1 and 2 are complete. Stage 3, the run-store boundary, opens with
-`ORG-01`. The ledger is the authority on all of this and is updated in the
-same commit as each change.
+Stages 1 and 2 are complete, and so is stage 3, the run-store boundary. Saved
+runs now publish whole or not at all (`DATA-01`) out of an extracted store
+(`ORG-01`), declare a schema version and what they captured (`DATA-05`), carry
+the worker's own account of what produced them (`DATA-04`), and render a
+bounded GIF (`RUNTIME-02`). Stage 4 is next; the ledger is the authority on all
+of this and is updated in the same commit as each change.
 
-**Outstanding hardware debt unrelated to the campaign**: items 102 to 126 of
-`docs/MANUAL_VERIFICATION.md` have never been validated.
+**Hardware debt.** Two lists, both real. The campaign's own queue is at the
+top of `docs/audit/IMPLEMENTATION_LEDGER.md`: `DATA-04`, `DATA-05` and the
+`TRUST-03` offline slice are all waiting on a GPU, a display, or two windows,
+covered by items 133 to 141 of `docs/MANUAL_VERIFICATION.md`. Separately,
+items 102 to 126 of that file predate the campaign and have never been
+validated.
 
 ## Conventions
 

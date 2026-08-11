@@ -16,10 +16,10 @@ todos:
     status: completed
   - id: runtime-02
     content: "RUNTIME-02: bound the GIF with an even temporal sample within a frame budget, yield frames from a generator instead of accumulating them, and label the actual model"
-    status: in_progress
+    status: completed
   - id: pass-two-handback
     content: "Pass boundary: full verification including loading all 182 real runs through the adapters, ledger deviations recorded, and hand back with the hardware checks"
-    status: pending
+    status: in_progress
 isProject: false
 ---
 
