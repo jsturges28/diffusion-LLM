@@ -1,7 +1,7 @@
 from __future__ import annotations
-from typing import Any, List, Tuple, Optional
+from typing import Any, List, Tuple
 from transformers.models.auto.tokenization_auto import AutoTokenizer
-from transformers.models.auto.modeling_auto import AutoModel, AutoModelForCausalLM
+from transformers.models.auto.modeling_auto import AutoModel
 
 import torch
 import numpy as np
@@ -68,7 +68,7 @@ def generate(model: Any, prompt: torch.Tensor, attention_mask: torch.Tensor | No
 
     if record_history:
         history.append(x.clone())
-        
+
     if attention_mask is not None:
         attention_mask = torch.cat([attention_mask, torch.ones((prompt.shape[0], gen_length), dtype=attention_mask.dtype, device=model.device)], dim=-1)
 
@@ -102,7 +102,7 @@ def generate(model: Any, prompt: torch.Tensor, attention_mask: torch.Tensor | No
 
             logits_with_noise = add_gumbel_noise(logits, temperature=temperature)
             x0 = torch.argmax(logits_with_noise, dim=-1) # b, l
-            
+
             if confidence_eos_eot_inf:
                 logits_with_noise[:, :, 126081] = logits[:, :, 126348] = -torch.inf
 
@@ -138,7 +138,7 @@ def generate(model: Any, prompt: torch.Tensor, attention_mask: torch.Tensor | No
 
             if record_history:
                 history.append(x.clone())
-    
+
     return x, history
 
 
@@ -201,7 +201,7 @@ def main():
     model = AutoModel.from_pretrained('GSAI-ML/LLaDA-8B-Instruct', trust_remote_code=True, torch_dtype=torch.bfloat16).to(device).eval()
     tokenizer = AutoTokenizer.from_pretrained('GSAI-ML/LLaDA-8B-Instruct', trust_remote_code=True)
 
-    # The LLaDA architecture theoretically supports both left-padding and right-padding. 
+    # The LLaDA architecture theoretically supports both left-padding and right-padding.
     # However, the sampling code implementation is simpler with left-padding.
     if tokenizer.padding_side != 'left':
         tokenizer.padding_side = 'left'

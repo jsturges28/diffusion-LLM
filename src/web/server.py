@@ -13,6 +13,7 @@ The supervisor itself never imports torch or transformers.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ctypes
 import json
 import logging
@@ -769,6 +770,11 @@ class ModelManager:
     async def _stop_locked(self) -> None:
         if self._monitor_task is not None:
             self._monitor_task.cancel()
+            # Cancelling is expected here, but this also swallows a
+            # monitor that died of a real fault, with nothing logged.
+            # Left as is rather than compressed into a suppress():
+            # the shape is the problem, not the syntax, and making
+            # termination a verified transition is LIFE-02's job.
             try:
                 await self._monitor_task
             except (asyncio.CancelledError, Exception):
@@ -1137,12 +1143,13 @@ async def websocket_proxy(browser: WebSocket) -> None:
         return
     except Exception as exc:  # noqa: BLE001
         logger.exception("proxy error")
-        try:
+        # Best-effort notification: the browser socket may already be
+        # gone, which is why we are here. The error itself is logged
+        # above, so nothing is lost if this cannot be delivered.
+        with contextlib.suppress(Exception):
             await browser.send_json(
                 {"type": "error", "message": str(exc)}
             )
-        except Exception:
-            pass
 
 
 # -- Save endpoint (model-agnostic) --

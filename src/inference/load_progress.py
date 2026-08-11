@@ -293,7 +293,7 @@ def rss_bytes() -> int:
     """
     path = "/proc/self/statm"
     try:
-        with open(path, "r", encoding="ascii") as handle:
+        with Path(path).open("r", encoding="ascii") as handle:
             fields = handle.read().split()
         if len(fields) < 2:
             return 0

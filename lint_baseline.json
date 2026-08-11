@@ -1,0 +1,56 @@
+{
+  "_comment": "Accepted Ruff findings per file and rule. Written by scripts/lint_ratchet.py --update. These may only go down; see audit finding QUALITY-02.",
+  "total": 140,
+  "counts": {
+    "src/backends/registry.py": {
+      "E501": 3
+    },
+    "src/backends/run_worker.py": {
+      "E501": 2
+    },
+    "src/backends/smollm3_worker.py": {
+      "E501": 1
+    },
+    "src/backends/worker_base.py": {
+      "C901": 1,
+      "E501": 2,
+      "PLR1702": 4
+    },
+    "src/inference/ar_sampler.py": {
+      "E501": 5
+    },
+    "src/inference/hf_download.py": {
+      "E501": 23
+    },
+    "src/inference/llada_sampler.py": {
+      "C901": 1,
+      "E501": 45,
+      "PLR1702": 2
+    },
+    "src/inference/load_progress.py": {
+      "E501": 3
+    },
+    "src/inference/render_gif.py": {
+      "E501": 4,
+      "PLR1702": 1
+    },
+    "src/web/server.py": {
+      "C901": 1,
+      "E501": 30,
+      "PLR1702": 1,
+      "SIM105": 1
+    },
+    "src/web/ui_state.py": {
+      "E501": 6
+    },
+    "tests/inference/test_load_progress.py": {
+      "E501": 1
+    },
+    "tests/web/test_ui_state.py": {
+      "E501": 2
+    },
+    "tests/web/test_ui_state_reconcile.py": {
+      "E501": 1
+    }
+  }
+}

@@ -25,6 +25,7 @@ that key is the reason this file is worth not corrupting.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import tempfile
@@ -130,10 +131,10 @@ def _write_atomic(results_dir: Path, state: Dict[str, str]) -> None:
     try:
         with os.fdopen(handle_fd, "w", encoding="utf-8") as handle:
             handle.write(payload)
-        os.replace(tmp_name, path)
+        Path(tmp_name).replace(path)
     except OSError:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass  # Temp file already gone; nothing to clean up.
+        # Best-effort cleanup; the temp file may already be gone.
+        # The write's own failure is what matters and is reraised.
+        with contextlib.suppress(OSError):
+            Path(tmp_name).unlink()
         raise

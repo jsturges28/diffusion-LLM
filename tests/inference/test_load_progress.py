@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import struct
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import pytest
 
@@ -660,11 +660,12 @@ def test_context_manager_still_finishes_when_the_load_raises(
         load_progress, "_POLL_INTERVAL_SECONDS", 0.01
     )
     seen: List[Dict[str, Any]] = []
-    with pytest.raises(RuntimeError):
-        with load_progress.sample_load_progress(
+    with pytest.raises(RuntimeError), (
+        load_progress.sample_load_progress(
             target_bytes=1000, sink=seen.append
-        ):
-            raise RuntimeError("load failed")
+        )
+    ):
+        raise RuntimeError("load failed")
     assert seen[-1]["fraction"] == 1.0
 
 
@@ -705,11 +706,12 @@ def test_final_sample_does_not_invent_a_device_on_a_cpu_load(
 
 
 def test_context_manager_rejects_a_negative_target() -> None:
-    with pytest.raises(AssertionError):
-        with load_progress.sample_load_progress(
+    with pytest.raises(AssertionError), (
+        load_progress.sample_load_progress(
             target_bytes=-1, sink=lambda _p: None
-        ):
-            pass
+        )
+    ):
+        pass
 
 
 def test_poll_loop_is_bounded() -> None:

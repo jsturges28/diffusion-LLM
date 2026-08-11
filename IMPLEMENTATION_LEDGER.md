@@ -38,12 +38,10 @@ commit, **M** a short multi-commit change, **L** a staged boundary migration.
 
 ## Ready now
 
-Four findings have no unmet blockers: the three gates the report wants
-installed before any boundary moves, and stage 3's first step, which
+Three findings have no unmet blockers: the two remaining gates the report
+wants installed before any boundary moves, and stage 3's first step, which
 `DATA-03` unblocked.
 
-- **QUALITY-02** (medium, M): install the lint ratchet now, burn down later
-  and only in files that later work touches.
 - **META-01** (medium, M): reduce `HANDOFF.md` to a cold-start page and move
   the 132-item verification ledger out of it.
 - **META-02** (medium, S): move the canonical agent contract into tracked
@@ -104,7 +102,7 @@ is recorded under Deviations. One new entry arrived from that same pass:
 | ANALYTICS-01 | high | S | done | none | Fence detail responses to the run that asked |
 | DATA-03 | medium | S | done | none | Resolve the data root without asking the cwd |
 | TRUST-02 | high | M | done | none | Serve every page without a third-party origin |
-| QUALITY-02 | medium | M | ready | none | |
+| QUALITY-02 | medium | M | done | none | Ratchet the lint baseline instead of remembering it |
 | META-01 | medium | M | ready | none | |
 | META-02 | medium | S | ready | none | |
 | QUALITY-01 | medium | L | companion | lands with each seam | |
@@ -443,4 +441,50 @@ revisions in the registry, resolved revisions and weight digests in run
 provenance, cache-space preflight against remaining bytes, and a completion
 manifest for the locally quantized DiffusionGemma artifact. The slice deals
 with availability only.
+
+### QUALITY-02
+
+**The Direction's first instruction does not survive contact.** It says to
+"first remove the non-style findings", of which there were 27 against 129
+line-length. Sixteen came out cleanly and did. The other eleven are all
+`C901` and `PLR1702`, and every one of them sits inside a function that a
+currently blocked finding owns:
+
+- `create_worker_app` at complexity 21, plus four nesting hits, in
+  `worker_base.py`, which is `LIFE-02`, `LIFE-03` and `PROTOCOL-01` in stage 4
+- `_save_run_blocking` at complexity 22 in `server.py`, which is `ORG-01` and
+  `DATA-01` in stage 3
+- `generate` at complexity 14, plus two nesting hits, in `llada_sampler.py`,
+  which is `ORG-03` in stage 6
+- nesting in `render_gif.py` (`RUNTIME-02`) and at `server.py:597` (lifecycle)
+
+Refactoring them here would be doing stage 3, 4 and 6 work early under a lint
+banner, which the brief forbids in two separate places. They stay in the
+baseline and come out when their owners arrive.
+
+**One of the three `SIM105` sites was left deliberately.** In
+`ModelManager._stop_locked`, `await self._monitor_task` is wrapped in
+`except (asyncio.CancelledError, Exception): pass`, which swallows a monitor
+that died of a real fault with nothing logged. `contextlib.suppress` would
+have satisfied the linter while preserving exactly that, so the site keeps
+its finding and gained a comment saying the shape is the problem and
+`LIFE-02` owns it. The other two are genuine best-effort cleanups whose real
+errors are reraised or already logged, and they were converted.
+
+**The burn-down is mostly a stage 6 consequence, not a stage 7 slog.**
+`llada_sampler.py` carries 56 of the original 156 findings, 36% of the whole
+baseline, almost all line-length from upstream reference code. It is not dead
+code: `streaming_sampler.py:23` imports live helpers from it while its
+`generate` is the dormant reference program, which is precisely the split
+`ORG-03` exists to make. Expect the number to fall sharply there and to move
+very little before then.
+
+**Where the gate ended up.** 156 to 140. `scripts/lint_ratchet.py` compares
+per (file, rule) against `lint_baseline.json`, because the Verification's
+"never pass because a different finding disappeared" rules out comparing
+totals; `tests/test_lint_ratchet.py` proves that with a swap case that holds
+the total constant while moving a finding between files. A file with no
+recorded debt starts at a ceiling of zero, so new code has to be clean, which
+is the half of the policy that stops the baseline growing with the
+repository.
 
