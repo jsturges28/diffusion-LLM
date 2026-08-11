@@ -4,13 +4,13 @@ overview: Extract a dependency-light run store out of server.py, then make saved
 todos:
   - id: xss
     content: "Pull forward the DATA-05 parameter-key XSS fix: route analytics.js detail metadata rows through the escaping helper that already exists beside them"
-    status: in_progress
+    status: completed
   - id: org-01
     content: "ORG-01: extract src/web/run_store.py with one guarded resolver over a RunBundle dataclass, no FastAPI or model imports, closing the missing traversal guard in _compute_run_metrics; keep routes and Pydantic models in server.py; add tests/web/test_run_store.py including the import-purity check"
-    status: pending
+    status: completed
   - id: data-01
     content: "DATA-01: exclusive allocation with -2 suffix on collision, staging under .staging/, publication on the metadata.json rename, revision-based compare-and-swap for in-place edits with a 409 on mismatch, and delete via .trash/; wire expected_revision through the save request and app.js"
-    status: pending
+    status: in_progress
   - id: pass-one-handback
     content: "Pass one boundary: full verification, ledger deviations recorded, and hand back with the two hardware checks (fresh save, guided edit through Confirm)"
     status: pending

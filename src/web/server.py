@@ -1239,11 +1239,18 @@ class SaveRunRequest(BaseModel):
     original_alternatives: Optional[
         List[Optional[List[TokenAlternative]]]
     ] = None
-    # When set, update this existing run folder in place instead of
-    # creating a new one. Used when a saved run is edited-and-resumed:
-    # the edited (bundled) run replaces its pre-edit original so it is a
-    # single Analytics row rather than two.
+    # When set, replace this existing run instead of creating a new
+    # one. Used when a saved run is edited-and-resumed: the edited
+    # (bundled) run replaces its pre-edit original so it is a single
+    # Analytics row rather than two.
     run_id: Optional[str] = None
+    # The revision the client believes it is replacing, echoed from
+    # the save that produced it. The replacement is refused if the run
+    # has moved on since, so two windows editing one run cannot have
+    # the later writer silently erase the earlier. Absent means "I did
+    # not look", which is accepted for a client that predates this
+    # field and for the runs saved before revisions existed.
+    expected_revision: Optional[int] = Field(default=None, ge=0)
     # Tokens the templated prompt occupied, as reported by the sampler
     # on its ``done`` frame rather than counted by the client, so the
     # saved figure is the one the run really built. None for a run
@@ -1449,39 +1456,76 @@ def _build_bundle(body: SaveRunRequest) -> run_store.RunBundle:
     )
 
 
-def _save_run_blocking(body: SaveRunRequest) -> str:
-    run_dir: Optional[Path] = None
+def _save_run_blocking(body: SaveRunRequest) -> Dict[str, Any]:
+    """Publish a run and describe it back to the client.
+
+    Returns the id and revision as well as the display path, because
+    an edited run has to be able to replace what it just saved, and
+    doing that safely means quoting the revision it is replacing.
+    """
+    replacing: Optional[str] = None
     if body.run_id:
-        # Update the pre-edit run's folder in place; if it is gone
-        # (e.g. deleted), fall back to a fresh folder rather than fail.
+        # Replace the pre-edit run; if it is gone (deleted from
+        # another window, say), fall back to a fresh run rather than
+        # failing a save the user has already paid for.
         try:
-            run_dir = run_store.resolve_run_dir(
-                RESULTS_DIR, body.run_id
-            )
+            run_store.resolve_run_dir(RESULTS_DIR, body.run_id)
+            replacing = body.run_id
         except (
             run_store.InvalidRunIdError,
             run_store.RunNotFoundError,
         ):
-            run_dir = None
-    if run_dir is None:
-        run_dir = run_store.make_run_dir(
-            RESULTS_DIR, body.model or DEFAULT_MODEL
+            replacing = None
+
+    run_id, revision = run_store.save(
+        RESULTS_DIR,
+        _build_bundle(body),
+        model_id=body.model or DEFAULT_MODEL,
+        run_id=replacing,
+        expected_revision=(
+            body.expected_revision if replacing else None
+        ),
+    )
+    run_dir = RESULTS_DIR / run_id
+
+    # After publication, deliberately. The GIF is a derivative, and a
+    # failure rendering one must not cost the user the run's text and
+    # token data. `RUNTIME-02` bounds its memory next; this only moves
+    # it out of the path that decides whether the save succeeded.
+    try:
+        history_to_gif(
+            body.frames,
+            run_dir / "diffusion.gif",
+            header_text=body.prompt,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "GIF rendering failed for %s; run is saved", run_id
         )
 
-    run_store.write_bundle(run_dir, _build_bundle(body))
-    history_to_gif(
-        body.frames,
-        run_dir / "diffusion.gif",
-        header_text=body.prompt,
-    )
-    return _display_run_path(run_dir)
+    return {
+        "path": _display_run_path(run_dir),
+        "run_id": run_id,
+        "revision": revision,
+    }
 
 
 @app.post("/api/save")
 async def save_run(body: SaveRunRequest) -> JSONResponse:
     try:
-        run_path = await asyncio.to_thread(
-            _save_run_blocking, body
+        saved = await asyncio.to_thread(_save_run_blocking, body)
+    except run_store.RevisionConflictError as exc:
+        # Someone else wrote this run since the client last read it.
+        # A conflict, not a failure: the client can reload and decide.
+        logger.info("save conflict: %s", exc)
+        return JSONResponse(
+            status_code=409,
+            content={
+                "success": False,
+                "message": str(exc),
+                "run_id": exc.run_id,
+                "revision": exc.actual,
+            },
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("failed to save run")
@@ -1489,10 +1533,8 @@ async def save_run(body: SaveRunRequest) -> JSONResponse:
             status_code=500,
             content={"success": False, "message": str(exc)},
         )
-    logger.info("saved run to %s", run_path)
-    return JSONResponse(
-        content={"success": True, "path": run_path}
-    )
+    logger.info("saved run to %s", saved["path"])
+    return JSONResponse(content={"success": True, **saved})
 
 
 # -- Analytics endpoints --

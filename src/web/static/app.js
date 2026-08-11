@@ -370,9 +370,14 @@ var editedRunSaved = false;
 // from duplicating the original run's saved entry.
 var runSaved = false;
 // Folder id of this run's last save. An edited/bundled save reuses it
-// so the pre-edit run's folder is updated in place (one Analytics row)
-// rather than creating a duplicate.
+// so the pre-edit run is replaced (one Analytics row) rather than
+// duplicated.
 var lastSavedRunId = null;
+// The revision that save produced, quoted back when replacing it. The
+// server refuses a replacement whose base has moved on, which is what
+// stops a second window's stale edit from erasing this one. Null means
+// we have not saved this run yet.
+var lastSavedRevision = null;
 // Prompt history (localStorage, per-browser): most-recent-first. While
 // browsing, the box is read-only and the pre-browse text is held in
 // promptHistoryDraft so Cancel can restore it.
@@ -6139,6 +6144,7 @@ function resetRunState() {
   editedRunSaved = false;
   runSaved = false;
   lastSavedRunId = null;
+  lastSavedRevision = null;
   isResuming = false;
   resumeFrameOffset = 0;
   resumeElapsedOffset = 0;
@@ -6456,10 +6462,15 @@ function saveRun() {
         tokenRecordsFrom(originalFrameTokens);
     }
     addOriginalRunSignals(payload);
-    // Update the pre-edit run's folder in place so the bundled edited
-    // run replaces its original (one Analytics row, not two).
+    // Replace the pre-edit run so the bundled edited run is one
+    // Analytics row, not two. The revision says which version we
+    // believe we are replacing; the server rejects the write if
+    // something else got there first.
     if (lastSavedRunId) {
       payload.run_id = lastSavedRunId;
+      if (lastSavedRevision !== null) {
+        payload.expected_revision = lastSavedRevision;
+      }
     }
   }
 
@@ -6496,11 +6507,19 @@ function saveRun() {
         }
         updateEditFramesLock();
         updateGenerateButton();
-        // Point the user to where the saved run now lives (the run id
-        // is the folder name at the end of the returned path). Remember
-        // it so a later edited save updates this folder in place.
+        // Point the user to where the saved run now lives. The server
+        // names the run and its revision outright; the path is still
+        // split as a fallback for the id, since the response gained
+        // run_id later than the path.
         var savedParts = String(result.path || "").split("/");
-        lastSavedRunId = savedParts[savedParts.length - 1] || null;
+        lastSavedRunId =
+          result.run_id
+          || savedParts[savedParts.length - 1]
+          || null;
+        lastSavedRevision =
+          typeof result.revision === "number"
+            ? result.revision
+            : null;
         showAnalyticsCue(lastSavedRunId || "");
         statusRetire(saveStatus);
         // The longest line the row ever shows, arriving while the
@@ -7363,6 +7382,7 @@ function saveSessionState() {
     editedRunSaved: editedRunSaved,
     runSaved: runSaved,
     lastSavedRunId: lastSavedRunId,
+    lastSavedRevision: lastSavedRevision,
     statusStep: statusStep.textContent,
     statusElapsed: statusElapsed.textContent,
     statusMessage: statusMessage.textContent,
@@ -7463,6 +7483,10 @@ function restoreSessionState() {
   editedRunSaved = !!s.editedRunSaved;
   runSaved = !!s.runSaved;
   lastSavedRunId = s.lastSavedRunId || null;
+  lastSavedRevision =
+    typeof s.lastSavedRevision === "number"
+      ? s.lastSavedRevision
+      : null;
   updateGenerateButton();
   if (s.prompt) {
     promptInput.value = s.prompt;

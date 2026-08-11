@@ -297,6 +297,12 @@ def list_runs(
     ):
         if not child.is_dir():
             continue
+        # The run store's working directories (.staging, .trash) live
+        # here too. They contain no metadata of their own, so they
+        # would be skipped below anyway; skipping them by name says
+        # so on purpose rather than by luck.
+        if child.name.startswith("."):
+            continue
         meta_path = child / "metadata.json"
         if not meta_path.is_file():
             continue

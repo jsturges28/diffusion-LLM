@@ -84,8 +84,16 @@ standing measurement programme is separate and lives at
 `AUDIT_REPORT.md:1927-2011`.
 
 All four stage 1 entries were cleared on 2026-08-11; what each of them showed
-is recorded under Deviations. One new entry arrived from that same pass:
+is recorded under Deviations. Two entries are open:
 
+- **DATA-01**: the store's behavior is covered by
+  `tests/web/test_run_store.py` (38 cases, including threaded races and a
+  failure injected at each file), and the save, replace, conflict and delete
+  round trip was driven through the real endpoint against a temp data root.
+  Outstanding is the browser half against the 180 real runs: save a fresh run
+  and confirm it appears in Analytics with its GIF, then run a guided edit
+  through Confirm, which exercises the compare-and-swap replacement and the
+  `expected_revision` the client now sends.
 - **TRUST-03 (offline slice)**: the automated half asserts that both Hub
   workers pin every `from_pretrained` call to local files, and that being
   offline with nothing cached now reports what happened instead of a urllib3
@@ -108,8 +116,8 @@ is recorded under Deviations. One new entry arrived from that same pass:
 | META-02 | medium | S | done | none | Put the agent contract where a clone can read it |
 | QUALITY-01 | medium | L | companion | lands with each seam | |
 | ORG-01 | medium | M | done | none | Extract the run store out of the supervisor |
-| DATA-01 | high | L | blocked | ORG-01 | |
-| DATA-05 | high | L | blocked | DATA-01 | |
+| DATA-01 | high | L | needs hardware | none | Publish saved runs whole or not at all |
+| DATA-05 | high | L | ready | DATA-01 (done) | |
 | DATA-04 | high | M | blocked | DATA-05 | |
 | RUNTIME-02 | medium | M | blocked | DATA-01 | |
 | ANALYTICS-02 | high | M | blocked | DATA-05, see decision above | |
@@ -445,6 +453,53 @@ revisions in the registry, resolved revisions and weight digests in run
 provenance, cache-space preflight against remaining bytes, and a completion
 manifest for the locally quantized DiffusionGemma artifact. The slice deals
 with availability only.
+
+### DATA-01
+
+**Publication happens on the metadata rename, not a directory rename.** The
+Direction says "publish with one atomic rename", meaning the staging
+directory. That is not available: the destination already exists as the
+reservation from `allocate`, renaming onto a non-empty directory fails, and
+removing the reservation first opens a window where the name is free for
+another caller to take. Moving the files in and `metadata.json` last has no
+such window, and it is still a single atomic rename that publishes. It works
+because every reader in the app already decides a directory is a run by
+looking for that file, so a reserved-but-unpublished directory is invisible
+without anything being taught to ignore it.
+
+**The race test found a real bug in the first design.** Staging was keyed on
+the run id, so two callers replacing one run wrote into the same scratch
+directory and wiped each other mid-write. Staging is now private per attempt.
+The same test then found the deeper half: two callers can both read revision
+N, both pass the check, and both publish, which is the last-writer-wins the
+check exists to prevent. Read-and-publish is now serialized under one lock.
+One lock for all replacements rather than one per run, because a replacement
+is a user pressing Confirm and there is no contention worth a more
+complicated structure. In-process only, which is the right scope while one
+supervisor owns the data root; `LIFE-05` is where a second becomes possible.
+
+**"Kill the process mid-save" is the one Verification clause not met as
+written**, because it cannot be staged inside pytest. What is proved instead
+is the property that matters after such a kill: a staged bundle and a
+reserved empty directory are both invisible to `list_runs` and both refused
+by the resolver, so a killed save leaves nothing that looks like a run.
+
+**The GIF moved after publication.** Not `RUNTIME-02`, which still owns
+bounding its memory and fixing its label, but the save no longer fails
+because a derivative failed. A render error is logged and the run stays
+saved, which is what the finding means by the core data being acknowledged.
+
+**Two working directories now exist in the data root**, `.staging` and
+`.trash`, and they persist empty between saves. Both are dot-prefixed and
+carry no metadata, so no reader counts them; `list_runs` skips dot-prefixed
+entries by name now rather than relying on the accident that they contain no
+metadata.
+
+**Revisions are additive.** The save response gained `run_id` and `revision`,
+the request gained `expected_revision`, and a stale replacement answers 409
+rather than winning. All 180 existing runs have no revision and read as 0, so
+they remain editable without being rewritten, which is the no-migration
+decision holding.
 
 ### ORG-01
 
