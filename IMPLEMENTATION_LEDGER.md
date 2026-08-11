@@ -29,13 +29,11 @@ commit, **M** a short multi-commit change, **L** a staged boundary migration.
 
 ## Ready now
 
-Six findings have no unmet blockers. The first two are the remaining
-isolated safety fixes, the next three are the gates the report wants
-installed before any boundary moves, and the last one is stage 3's first
-step, which `DATA-03` has now unblocked.
+Five findings have no unmet blockers. The first is the last of the isolated
+safety fixes, the next three are the gates the report wants installed before
+any boundary moves, and the last one is stage 3's first step, which
+`DATA-03` has now unblocked.
 
-- **ANALYTICS-01** (high, S): a stale detail response can populate the panel
-  of a different run.
 - **TRUST-02** (high, M): vendor the Analytics chart dependencies so the page
   works without third-party networks. Independent of frontend modularization.
 - **QUALITY-02** (medium, M): install the lint ratchet now, burn down later
@@ -80,6 +78,14 @@ maintainer's confirmation on real hardware is outstanding. The report's
 standing measurement programme is separate and lives at
 `AUDIT_REPORT.md:1927-2011`.
 
+- **ANALYTICS-01**: the fence's logic is covered by
+  `tests/web/static/detail_requests.test.js` (12 cases, `node --test`).
+  Outstanding is the browser half of the Verification clause, which needs a
+  real browser: with DevTools throttling, open run A, open run B before A
+  answers, and close the panel during each phase, checking that title,
+  metadata, charts, and overlays always share one run or are empty. Also
+  worth one look at a detail panel for a run whose metrics endpoint fails,
+  which should now show a message rather than empty chart slots.
 - **LIFE-07**: the finding's own Verification clause is met in full by
   `tests/backends/test_llada_resume_state.py`, which injects failure at all
   four named points and proves the retained history and step count survive
@@ -94,7 +100,7 @@ standing measurement programme is separate and lives at
 |---|---|---|---|---|---|
 | LIFE-07 | high | S | needs hardware | none | Commit LLaDA resume state only after the run lands |
 | TRUST-01 | high | S | done | none | Bind to loopback unless exposure is asked for |
-| ANALYTICS-01 | high | S | ready | none | |
+| ANALYTICS-01 | high | S | needs hardware | none | Fence detail responses to the run that asked |
 | DATA-03 | medium | S | done | none | Resolve the data root without asking the cwd |
 | TRUST-02 | high | M | ready | none | |
 | QUALITY-02 | medium | M | ready | none | |
@@ -288,3 +294,39 @@ to name the wrong directory. The resolved root now rides along on
 `_compute_run_frames`, and `_delete_run_blocking`, which all resolve and check
 the parent. That is a pre-existing traversal gap and belongs to the run-store
 stage rather than to making the root absolute.
+
+### ANALYTICS-01
+
+**Deliberately narrowed, with the maintainer's agreement.** The Direction adds
+"where practical, fetch the pair together and publish one coherent detail
+snapshot". A combined endpoint would touch the run-store read path that
+`ORG-01` and `DATA-05` are about to take ownership of, so it was left out; the
+epoch makes the two responses behave as one commit without changing the wire.
+Worth reconsidering alongside `ANALYTICS-03`, which is already going to rework
+how this page reads runs.
+
+**The seam and the JS test harness are new ground**, so the conventions they
+set are worth naming. `src/web/static/detail_requests.js` is a classic global
+script following `overlays.js`, not an ES module: `analytics.js` is 5,586
+lines of `var` globals loaded as a classic script, and converting it is
+`ORG-02`'s job in stage 5. The test loads the shipped file into a `vm`
+context, which gives top-level `var` the same become-a-global behavior a
+browser gives it, so the production file needs no `module.exports` tail that
+only tests would use. The same harness will work for `overlays.js` when
+`QUALITY-01` reaches it. The command is
+`node --test tests/web/static/*.test.js`, now recorded in `AGENTS.md`; a bare
+directory argument does not work, since Node reads it as a module path.
+
+**Noted, not fixed (adjacent).** The compare panel has the same race and none
+of the fix: `fetchCompare` has no abort and no epoch, and `showComparison`
+destroys `chartCompareConv` inside its `.then` rather than before the fetch.
+It shares no state with the detail panel, so the fence did not need to cover
+it, and comparison as a bounded coherent transaction is exactly what
+`ANALYTICS-04` is for. What did land here is the other direction: leaving the
+detail view for compare now retires the detail requests, which it did not
+before.
+
+**Also noted.** `fetchRuns`, `fetchCompare`, and `fetchSystemInfo` still skip
+`response.ok` and still have no rejection handler; only the two detail fetches
+were centralized, because those are the ones this finding is about.
+

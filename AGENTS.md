@@ -68,7 +68,10 @@ tokens to remask" over an em-dash separator). If you happen to find or come acro
 
 - Python: `.venv/bin/python -m pytest` (tests live in `tests/`, mirroring `src/`).
   Compile-check changed modules with `.venv/bin/python -m py_compile <files>`.
-- JS: `node --check` on each changed `.js` file.
+- JS: `node --check` on each changed `.js` file, and
+ `node --test tests/web/static/*.test.js` for the browser modules that have
+ tests. Those load the shipped file into a `vm` context, so a testable helper
+ stays a plain classic script with no export tail.
 - Always run the linter (ReadLints) on changed files and fix what you introduced.
 - **GUI/GPU can't be exercised in the sandbox** (no display, no CUDA). When work
   touches the desktop window or model inference, hand back with a short

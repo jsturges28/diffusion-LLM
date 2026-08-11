@@ -26,6 +26,8 @@ var detailTitle =
   document.getElementById("detail-title");
 var detailMeta =
   document.getElementById("detail-meta");
+var chartsErrorNote =
+  document.getElementById("charts-error");
 var btnCloseDetail =
   document.getElementById("btn-close-detail");
 var timingSection =
@@ -514,6 +516,12 @@ var checkedIds = {};
 var activeRunId = null;
 var gpuName = null;
 
+// Fences the detail panel's two fetches against each other and
+// against the panel closing (see detail_requests.js). activeRunId
+// above says what is on screen; this says which attempt is allowed
+// to paint it, which is the part run id alone cannot answer.
+var detailRequests = detailRequestsCreate();
+
 var chartConvergence = null;
 var chartTiming = null;
 // Shares the Timing slot with chartTiming; timingPage says which of
@@ -585,11 +593,35 @@ function fetchRuns() {
     .then(function (r) { return r.json(); });
 }
 
-function fetchMetrics(runId) {
+// One error shape for every detail fetch, so a caller has a single
+// thing to test. An HTTP status used to go unread entirely: a 404 or
+// a 500 was parsed as if it were data, and only failed later at
+// whichever property was missing first. A rejected promise, likewise,
+// went nowhere at all.
+function fetchDetailJson(url, signal) {
+  return fetch(url, { signal: signal })
+    .then(function (r) {
+      if (!r.ok) {
+        return {
+          error: "Request failed (" + r.status + ")",
+        };
+      }
+      return r.json();
+    })
+    .catch(function (err) {
+      if (detailRequestsIsAbort(err)) {
+        // Superseded or closed. The caller's epoch check will
+        // discard this anyway; saying so keeps the log quiet.
+        return { aborted: true };
+      }
+      return { error: "Could not load this run" };
+    });
+}
+
+function fetchMetrics(runId, signal) {
   var url = "/api/analytics/runs/"
     + encodeURIComponent(runId) + "/metrics";
-  return fetch(url)
-    .then(function (r) { return r.json(); });
+  return fetchDetailJson(url, signal);
 }
 
 function fetchCompare(ids) {
@@ -599,11 +631,10 @@ function fetchCompare(ids) {
     .then(function (r) { return r.json(); });
 }
 
-function fetchFrames(runId) {
+function fetchFrames(runId, signal) {
   var url = "/api/analytics/runs/"
     + encodeURIComponent(runId) + "/frames";
-  return fetch(url)
-    .then(function (r) { return r.json(); });
+  return fetchDetailJson(url, signal);
 }
 
 function fetchSystemInfo() {
@@ -1709,6 +1740,9 @@ function buildRowCollectCaret(runId) {
 
 function showDetail(runId) {
   activeRunId = runId;
+  // One token for both fetches, taken before either starts, so the
+  // pair either paints together or not at all.
+  var token = detailRequests.begin(runId);
   comparePanel.hidden = true;
   detailPanel.classList.remove("hidden");
 
@@ -1781,8 +1815,8 @@ function showDetail(runId) {
   detailMeta.innerHTML = html;
 
   renderTable();
-  loadRunCharts(runId, run);
-  loadRunOverlays(runId, run);
+  loadRunCharts(runId, run, token);
+  loadRunOverlays(runId, run, token);
 }
 
 // An edited run has two totals worth reading: how long the run it
@@ -1933,6 +1967,11 @@ function metaRowHtml(label, value) {
 
 function hideDetail() {
   activeRunId = null;
+  // Nulling activeRunId used to be the whole of this, which stopped
+  // nothing: both fetches stayed in flight and repopulated a panel
+  // the user had already dismissed.
+  detailRequests.cancel();
+  hideChartsError();
   detailPanel.classList.add("hidden");
   clearOverlay();
   renderTable();
@@ -2548,50 +2587,83 @@ function runIdIsAutoregressive(runId) {
   return false;
 }
 
-function loadRunCharts(runId, run) {
-  fetchMetrics(runId).then(function (data) {
-    if (data.error) { return; }
+function loadRunCharts(runId, run, token) {
+  // Torn down before the fetch, not inside it, the way
+  // loadRunOverlays already did. Destroying on success only meant a
+  // slow or failed response left the previous run's charts sitting
+  // under the new run's title, which is the reading a user has no
+  // way to catch.
+  clearRunCharts();
 
-    resetTooltipToggles();
-    resetComparePins();
-
-    chartConvergence = destroyChart(
-      chartConvergence
-    );
-    chartTiming = destroyChart(chartTiming);
-    chartTps = destroyChart(chartTps);
-    chartConfidence = destroyChart(chartConfidence);
-    timingPageReady.elapsed = false;
-    timingPageReady.tps = false;
-
-    var remaskEdits = data.remask_edits || [];
-    var remaskSet = buildRemaskFrameSet(
-      remaskEdits
-    );
-
-    var convergenceSection = document.getElementById(
-      "convergence-section"
-    );
-    if (runIsAutoregressive(run)) {
-      if (convergenceSection) {
-        convergenceSection.hidden = true;
+  fetchMetrics(runId, token && token.signal).then(
+    function (data) {
+      if (!detailRequests.accepts(token)) { return; }
+      if (data.aborted) { return; }
+      if (data.error) {
+        showChartsUnavailable(data.error);
+        return;
       }
-    } else {
-      if (convergenceSection) {
-        convergenceSection.hidden = false;
-      }
-      renderConvergenceChart(data, remaskSet);
+      renderRunCharts(data, run);
     }
-    renderTimingChart(data, remaskSet);
-    renderTpsChart(data, remaskSet, runIsAutoregressive(run));
-    // Last, so both charts have been sized while visible and the
-    // slot settles on one page in the same paint.
-    applyTimingPage();
-    renderConfidenceChart(data);
-    // The fourth chart, Entropy by Position, is built in
-    // loadRunOverlays instead: it needs per-token records from the
-    // frames payload, which that function already fetches.
-  });
+  );
+}
+
+// Every chart surface back to empty. Split out because it is now
+// called from two places: before a load, and when one fails.
+function clearRunCharts() {
+  resetTooltipToggles();
+  resetComparePins();
+  chartConvergence = destroyChart(chartConvergence);
+  chartTiming = destroyChart(chartTiming);
+  chartTps = destroyChart(chartTps);
+  chartConfidence = destroyChart(chartConfidence);
+  timingPageReady.elapsed = false;
+  timingPageReady.tps = false;
+}
+
+function showChartsUnavailable(message) {
+  clearRunCharts();
+  if (chartsErrorNote) {
+    chartsErrorNote.textContent = message;
+    chartsErrorNote.hidden = false;
+  }
+}
+
+function hideChartsError() {
+  if (chartsErrorNote) {
+    chartsErrorNote.hidden = true;
+    chartsErrorNote.textContent = "";
+  }
+}
+
+function renderRunCharts(data, run) {
+  hideChartsError();
+
+  var remaskEdits = data.remask_edits || [];
+  var remaskSet = buildRemaskFrameSet(remaskEdits);
+
+  var convergenceSection = document.getElementById(
+    "convergence-section"
+  );
+  if (runIsAutoregressive(run)) {
+    if (convergenceSection) {
+      convergenceSection.hidden = true;
+    }
+  } else {
+    if (convergenceSection) {
+      convergenceSection.hidden = false;
+    }
+    renderConvergenceChart(data, remaskSet);
+  }
+  renderTimingChart(data, remaskSet);
+  renderTpsChart(data, remaskSet, runIsAutoregressive(run));
+  // Last, so both charts have been sized while visible and the
+  // slot settles on one page in the same paint.
+  applyTimingPage();
+  renderConfidenceChart(data);
+  // The fourth chart, Entropy by Position, is built in
+  // loadRunOverlays instead: it needs per-token records from the
+  // frames payload, which that function already fetches.
 }
 
 // ---- Token overlay viewer (durable commit-order / diff) ----
@@ -2824,44 +2896,50 @@ function overlayClampedFrame(frames) {
 // this page's own copy was identical to the generator's and both
 // needed the same hover wiring, so they share one.
 
-function loadRunOverlays(runId, run) {
-  overlayData = null;
-  overlayCommitSteps = null;
-  overlayOriginalCommitSteps = null;
-  overlayDiffData = null;
-  overlayIsAutoregressive = runIsAutoregressive(run);
-  hideAltsPopover();
+function loadRunOverlays(runId, run, token) {
   // Torn down before the fetch, not inside it, so switching runs can
-  // never leave the previous run's chart or crossfade on screen while
-  // the new payload is in flight.
+  // never leave the previous run's chart, tokens, or crossfade on
+  // screen while the new payload is in flight. clearOverlay covers
+  // the rendered tokens, which used to survive the switch because
+  // only the globals behind them were reset here.
+  clearOverlay();
+  hideAltsPopover();
   clearEntropyChart();
-  resetRunBlend(false);
-  fetchFrames(runId).then(function (data) {
-    if (!data || data.error) {
-      showOverlayUnavailable();
-      return;
+  overlayIsAutoregressive = runIsAutoregressive(run);
+  fetchFrames(runId, token && token.signal).then(
+    function (data) {
+      if (!detailRequests.accepts(token)) { return; }
+      if (!data || data.aborted) { return; }
+      if (data.error) {
+        showOverlayUnavailable();
+        return;
+      }
+      renderRunOverlays(data);
     }
-    var hasRecords = !!data.records_available;
-    var hasDiff = overlayDiffAvailable(data);
-    if (!hasRecords && !hasDiff) {
-      showOverlayUnavailable();
-      return;
-    }
-    overlayData = data;
-    overlayViewer.hidden = false;
-    overlayEmpty.hidden = true;
-    overlayOutput.hidden = false;
-    overlaySelectGroup.hidden = false;
-    setOverlayDrawerOpen(false);
-    resetRunBlend(hasDiff);
-    // Mirror the generator: default to None; the drawer offers the
-    // durable overlays (Heatmap for record runs, plus Commit Order and
-    // Diff vs Original for diffusion runs with the required data).
-    buildOverlaySelect(data);
-    setupOverlayScrubber(data);
-    setOverlayMode("none");
-    renderEntropyChart(data);
-  });
+  );
+}
+
+function renderRunOverlays(data) {
+  var hasRecords = !!data.records_available;
+  var hasDiff = overlayDiffAvailable(data);
+  if (!hasRecords && !hasDiff) {
+    showOverlayUnavailable();
+    return;
+  }
+  overlayData = data;
+  overlayViewer.hidden = false;
+  overlayEmpty.hidden = true;
+  overlayOutput.hidden = false;
+  overlaySelectGroup.hidden = false;
+  setOverlayDrawerOpen(false);
+  resetRunBlend(hasDiff);
+  // Mirror the generator: default to None; the drawer offers the
+  // durable overlays (Heatmap for record runs, plus Commit Order and
+  // Diff vs Original for diffusion runs with the required data).
+  buildOverlaySelect(data);
+  setupOverlayScrubber(data);
+  setOverlayMode("none");
+  renderEntropyChart(data);
 }
 
 // Configure the per-frame scrubber for the loaded run. Opens on the
@@ -4786,6 +4864,9 @@ function showComparison(ids) {
   detailPanel.classList.add("hidden");
   comparePanel.hidden = false;
   activeRunId = null;
+  // Leaving the detail view by any route has to retire its
+  // requests, and this route does not go through hideDetail.
+  detailRequests.cancel();
   renderTable();
 
   fetchCompare(ids).then(function (results) {

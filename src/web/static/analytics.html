@@ -234,6 +234,11 @@
             <div class="detail-side">
               <div id="detail-meta"></div>
 
+              <!-- Shown only when the metrics request fails, so a
+                   run whose charts cannot load says so instead of
+                   leaving the slots silently empty. -->
+              <p id="charts-error" class="charts-error" hidden></p>
+
               <div class="chart-section" id="convergence-section">
                 <div class="chart-header-row">
                   <h3>Convergence</h3>
@@ -546,6 +551,7 @@
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js"></script>
   <script src="/custom_select.js"></script>
   <script src="/overlays.js"></script>
+  <script src="/detail_requests.js"></script>
   <script src="/download_toast.js"></script>
   <script src="/analytics.js"></script>
 </body>

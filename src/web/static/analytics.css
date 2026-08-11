@@ -1088,6 +1088,21 @@ html, body {
   display: none;
 }
 
+/* Shown in place of the charts when their request fails, so the
+   slots do not just sit empty and read as "this run has no data". */
+.charts-error {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--danger);
+}
+
+.charts-error[hidden] {
+  display: none;
+}
+
 #overlay-output {
   height: 100%;
   overflow-y: auto;
