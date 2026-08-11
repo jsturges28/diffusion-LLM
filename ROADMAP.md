@@ -1027,6 +1027,119 @@ grounded text, VRAM stays within budget, and the text-only path is unaffected.
 
 ---
 
+## Settled decisions and deliberate stopping points
+
+Places where work stopped on purpose, with the reasoning that would be
+expensive to rediscover. These are not backlog items: each one is either a
+line drawn deliberately, or a trap a future change will otherwise walk into.
+They moved here from `HANDOFF.md` when `META-01` reduced it to a cold-start
+page.
+
+**Collections ship without storage eviction.** The original framing paired
+favorites with storage-pressure relief; the measurement killed that half. 175
+runs occupied 440 MB against 189 GB free, so the pressure eviction would
+relieve is roughly 75,000 runs away, and the table already has multi-select
+bulk delete. If it is reopened, the honest trigger is a disk figure, not a run
+count.
+
+**Three collections loose ends, each a chosen stopping point.**
+
+- Collection order is creation order, with Favorites `unshift`ed to the front.
+  Drag-to-reorder was not built; the stored array *is* the order, so it is a
+  UI change rather than a storage one.
+- The `+` tab reuses the rename editor (`beginCollectionNameEdit` with a null
+  collection) so creating and renaming cannot drift apart. The cost is that
+  the tab strip reflows while you type a long name.
+- The chooser applies each checkbox immediately, so **Done** only closes the
+  dialog. A footer button that commits invites closing and wondering whether
+  anything happened. A cancel would need a staged copy of the membership, not
+  a change to the checkbox handler.
+
+**The context count is per template, so it is per `thinking` flag.**
+`promptCountThinkingSent` keeps a count taken under one template from being
+displayed against the other. Any future parameter that changes the template, a
+system prompt field for instance, needs the same treatment or the readout goes
+quietly stale. Relatedly, `prompt_token_count` is one base implementation plus
+one override: SmolLM3 and DiffusionGemma inherit the `_build_inputs` mirror
+and LLaDA overrides it. **A new model class that builds its inputs differently
+must override it too**, or it reports a count from a template it does not use,
+which is worse than reporting nothing.
+
+**The KV cache is retained but its benefit is unmeasured.** The cache lives on
+`last_run_state` and is reused by both the probe and the substitution
+(`_reuse_cache`, `_sliced_cache`, `_cache_record` in `ar_sampler.py`). The
+claim that prefill dominates a substitution's cost is well founded and was
+never timed, because the sandbox has no GPU. To get the number: time a
+substitution at a late position in a several-hundred-token run, once with the
+cache present and once with `state.get("cache")` forced to None.
+
+**Follow-ons left open by the typed token.** None of these blocks anything.
+
+- **Multi-token substitution.** Shipped at exactly one token, and the blocker
+  was never validation, it is **alignment**: a substitution of length *n*
+  shifts every downstream index, and `overlaysComputeDiff`, the
+  position-indexed entropy chart, and the dashed edit marker are all
+  index-based. When it lands, cap on resolved token count (4 was the agreed
+  figure) rather than on characters, so the live preview already computes the
+  limit and the limit explains itself. `_check_typed_token` is the one place
+  that hard-codes `len(pieces) != 1`.
+- **The "why" behind a BPE split stays out of scope**, deliberately. A split
+  is reached through a merge sequence that fast tokenizers do not expose
+  cheaply, so there is no short interpretable reason to show. Naming the
+  tokenizer is the honest answer available for free, which is what the
+  Analytics row does. Do not reopen without a concrete plan for getting merge
+  ranks out of the fast tokenizers.
+- **A configurable capture count** (currently `TOP_K_ALTERNATIVES = 5`) is
+  deferred. It is distinct from the sampling `top_k` that shipped, and needs a
+  decision about already-saved runs whose `alternatives.json` holds five.
+- **Diffusion What If** would inherit the typed preview for free, since
+  `Backend.handle_tokenize` is a base-class default reading
+  `getattr(self, "tokenizer", None)` and all three workers answer it. What is
+  missing is the substitution path, not the tokenization.
+- **The popover pin is generator-only.** Analytics needs none of it because
+  its popover is read-only. If Analytics ever gains an interactive one, both
+  halves have to come with it: the closer suppression *and* the
+  state-outside-the-DOM rehydration.
+- **Two probabilities for the same position disagree unless they are the same
+  call.** In `bf16` a prefill and an incremental decode over identical values
+  differ by about an ulp, which is a visible percentage point at these
+  magnitudes. Any readout that recomputes something a run already measured has
+  this problem. In order: prefer the recorded figure, then reuse the run's own
+  cache, then measure afresh. Do not round the display to hide it.
+
+**Comparison surfaces, the remainder.** The unifying idea is settled, that the
+pre-edit run is a first-class layer everywhere driven by one shared
+Original/Edited state. One correction learned from the line-chart pass: one
+shared state does not mean one shared control. "Both runs at once" is only
+expressible on stroke marks, so the line charts needed their own pins with the
+crossfade reduced to a momentary borrow during a drag. Expect that split
+anywhere the mark type cannot show two runs at full opacity. What is left:
+
+- **Confidence chart**, a cumulative versus per-position toggle. The default is
+  **modality-aware**, not per-position everywhere: the AR `mean_conf` is a
+  cumulative running mean so its curve is degenerate, while LLaDA's and
+  DiffusionGemma's are per-frame canvas means and that curve is what makes
+  adaptive stopping visible. Per-position comes from the **frames** payload
+  while the line comes from **metrics**, so the toggle straddles two
+  independent fetches.
+- **Timing chart**: a dashed edit marker (reuse `substitutionMarkerPlugin`
+  with frame indices via `resumeBoundarySet`; its orange tint is sized from
+  bar geometry, so a line chart needs either a width strategy or no tint), and
+  "E204" style tooltip labels for the branch's frames. The marker is the
+  valuable one: the two lines separate visibly, but nothing yet names the
+  frame where they do.
+
+**The load bar's unmeasurable phase stays unmeasured.** The ambitious fix was
+to time worker startup on first run, persist it per model, and drive a real
+bar from the previous run's timing. Held on the maintainer's call. Two things
+to weigh if it returns: a cold start and a warm one differ by more than the
+estimate would tolerate, so the bar would routinely stall at 90% or finish
+early, which is worse than admitting there is no number; and it would put
+per-model timing state in `results/ui_state.json`, which currently holds only
+user preferences. The cheaper middle ground is to name the sub-phase rather
+than measure it, since the worker already knows when it has finished importing
+and when uvicorn is answering.
+
 ## Experimental / XAI feature backlog (to deliberate)
 
 The suite is shaping up as an explainability playground, so these are candidate

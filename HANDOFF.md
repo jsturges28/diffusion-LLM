@@ -2091,109 +2091,9 @@ first task at the machine. The agreed feature order after that is **Mamba-3**,
 then extending entropy / top-k to the diffusion models, though the audit may
 reorder it. Deliberate each in Ask mode before Plan.
 
-**Collections shipped without storage eviction, deliberately.** The original
-framing paired favorites with storage-pressure relief; the measurement killed
-that half. 175 runs occupy 440 MB against 189 GB free, so the pressure eviction
-would relieve is roughly 75,000 runs away, and the table already has
-multi-select bulk delete. If it is ever reopened, the honest trigger is a disk
-figure, not a run count.
-
-**Three loose ends the collections work left, each a chosen stopping point.**
-
-- **Collection order is creation order**, with Favorites `unshift`ed to the
-  front so the default tab lands where a user looks for it. Reordering the
-  strip by drag was not built; if it is wanted, the stored array *is* the
-  order, so it is a UI change rather than a storage one.
-- **The `+` tab reuses the rename editor** (`beginCollectionNameEdit` with a
-  null collection), so creating and renaming cannot drift apart. The tradeoff:
-  the button becomes an input in place, which means the tab strip reflows while
-  you type a long name.
-- **The chooser applies each checkbox immediately**, so its **Done** button
-  only closes the dialog. That was deliberate: a footer button that commits
-  invites closing the dialog and wondering whether anything happened. If a
-  cancel is ever wanted, it needs a staged copy of the membership, not a
-  change to the checkbox handler.
-
-**Two things about the context count worth knowing before touching it.**
-
-- **The count is per template, so it is per `thinking` flag.**
-  `promptCountThinkingSent` is what keeps a count taken under one template
-  from being displayed against the other. Any future parameter that changes
-  the template (a system prompt field, say) needs the same treatment or the
-  readout will quietly go stale.
-- **`prompt_token_count` is the base implementation plus one override.**
-  SmolLM3 and DiffusionGemma inherit the `_build_inputs` mirror; LLaDA
-  overrides it through `build_llada_inputs`. A fourth model class that builds
-  its inputs differently must override it too, or it will report a count from
-  a template it does not use, which is worse than reporting nothing.
-
-**KV cache retention: shipped, with one thing left unmeasured.** The cache is
-retained on `last_run_state` and reused by both the probe and the substitution
-(`_reuse_cache` / `_sliced_cache` / `_cache_record` in `ar_sampler.py`). What
-was *not* done is the measurement: the claim that the prefill dominates a
-substitution's cost is well-founded but was never timed on hardware, since the
-sandbox has no GPU. Checklist item 104 asks for the qualitative version on the
-CPU build. If a future session wants the number, time a substitution at a late
-position in a several-hundred-token run with the cache present and with
-`state.get("cache")` forced to None.
-
-**Follow-ons left open by the typed token.** Nothing
-here blocks anything; each is a deliberate stopping point with its reasoning
-recorded, so a later session does not have to rediscover why the line was drawn
-where it was.
-
-- **Multi-token substitution.** Shipped at exactly one token, and the blocker
-  was never validation, it is **alignment**: a substitution of length *n*
-  shifts every downstream index, and `overlaysComputeDiff`, the
-  position-indexed entropy chart, and the dashed edit marker are all
-  index-based. When it lands, cap on **resolved token count** (4 was the
-  agreed figure) rather than on characters, so the live preview is already
-  computing the limit and the limit explains itself. The server-side check in
-  `_check_typed_token` is the one place that hard-codes `len(pieces) != 1`.
-- **The "why" behind a split stays out of scope**, and this was a deliberate
-  call rather than an omission. BPE reaches a split through a merge sequence
-  that fast tokenizers do not expose cheaply, so there is no short
-  interpretable reason available to show. Naming the tokenizer is the honest
-  answer that *is* available for free, which is what the Analytics row does.
-  Do not reopen this without a concrete plan for getting merge ranks out of
-  the fast tokenizers.
-- **A configurable capture count** (how many candidates the popover lists,
-  currently `TOP_K_ALTERNATIVES = 5`) is still deferred. It is distinct from
-  the sampling `top_k` that shipped, and would need a decision about what
-  happens to already-saved runs whose `alternatives.json` holds five.
-- **Diffusion What If** would inherit the typed preview for free:
-  `Backend.handle_tokenize` is a default on the base class reading
-  `getattr(self, "tokenizer", None)`, so all three workers already answer it.
-  What is missing is the substitution path itself, not the tokenization.
-- **The popover pin is generator-only.** Analytics needs none of it, because
-  its popover is read-only: substitution only ever applies to the live run. If
-  Analytics ever gains an interactive popover, the pin has to come with it,
-  and the two halves to copy are the closer suppression *and* the
-  state-outside-the-DOM rehydration, not just the first.
-- **Two probabilities for the same position will disagree unless they are the
-  same call.** This cost a debugging pass and is worth carrying forward. In
-  `bf16` a prefill and an incremental decode over identical values differ by
-  about an ulp, which is a visible percentage point at these magnitudes. Any
-  future readout that recomputes something a run already measured has this
-  problem, and the answers, in order, are: prefer the recorded figure, then
-  reuse the run's own cache, and only then measure afresh. Do not round the
-  display to paper over it; that hides a real arithmetic difference rather
-  than resolving it.
-
-**Held deliberately, pending the sweep.** The ambitious version of the load
-gap fix was to *measure* the unmeasurable phase: time the worker startup on
-first run, persist the figure per model, and drive a real bar from the previous
-run's timing. It was held on the maintainer's call unless the sweep proves
-unsatisfying in practice. Two things to weigh if it ever comes back. First,
-a cold start and a warm one differ by more than the estimate would tolerate
-(page cache, and whether the venv's imports are resident), so the bar would
-routinely stall at 90% or finish early, which is worse than admitting there is
-no number. Second, it would put per-model timing state in
-`results/ui_state.json`, which currently holds only user preferences. The
-cheaper middle ground, if the sweep alone reads as too vague, is to name the
-sub-phase rather than to measure it: the worker already knows when it has
-finished importing and when uvicorn is answering, so `starting` could split
-into two or three labeled sweeps without inventing a percentage.
+The settled decisions and deliberate stopping points that used to
+sit here now live in `ROADMAP.md` under "Settled decisions and
+deliberate stopping points".
 
 **0. Validate AR Phase C on hardware (do this first).** Nothing here could be
 exercised in-sandbox (no CUDA, no display).
@@ -2212,52 +2112,6 @@ by accident. Then:
 The 132-item hardware checklist that used to sit here now lives in
 `MANUAL_VERIFICATION.md`, along with the runbook for forcing an
 activation failure. Items 102 to 126 are still unvalidated.
-
-**0. The comparison surfaces (agreed with the maintainer, partly shipped).** The
-timing foundation exists to serve these, and the unifying idea is settled: **the
-pre-edit run is a first-class layer everywhere**, driven by one shared
-Original/Edited state rather than a bespoke control per surface. The shared
-layer, cross-highlighting, popover pagination, the line charts, and now the
-generator's own crossfade have all landed (see "Recently shipped"); what
-remains is below.
-
-One correction to the framing above, learned from the line-chart pass: **one
-shared state does not mean one shared control.** "Both runs at once" is only
-expressible on stroke marks, so the line charts needed their own pins, with the
-crossfade reduced to a momentary borrow during a drag. Expect the same split
-anywhere the mark type cannot show two runs at full opacity.
-
-- ~~The generator's crossfade and two-layer stack~~ **shipped this session**
-  (see "Recently shipped"): `#run-blend-row` below the scrubber, gated on
-  `runBlendActive()`, with `renderFrameWithTokens` routed through the shared
-  span builder. The one thing worth carrying forward from it: that gate turned
-  out to be load-bearing for *safety*, not just for tidiness, since it is what
-  makes an interactive affordance on the un-editable layer structurally
-  impossible. Any future surface that stacks the two runs should establish the
-  same property rather than guarding each click site.
-- **Confidence chart**: cumulative versus per-position toggle. Note the default is
-  **modality-aware**, not per-position everywhere: the AR `mean_conf` is a
-  cumulative running mean so its curve is degenerate, but LLaDA's and
-  DiffusionGemma's are per-frame canvas means and that curve is what makes
-  adaptive stopping visible. Per-position is the entropy chart again (read `c` off
-  the final frame), so it comes from the **frames** payload while the line comes
-  from **metrics**, and the toggle straddles two independent fetches.
-- **Timing chart**, the remainder after this pass. The two-line overlay shipped,
-  so what is left is: a dashed edit marker (reuse `substitutionMarkerPlugin`
-  with frame indices via `resumeBoundarySet`; its orange tint is sized from bar
-  geometry, so a line chart needs either a width strategy or no tint), "E204"
-  style tooltip labels for the branch's frames, and both elapsed totals in the
-  summary rather than only the combined one. The marker is the valuable one:
-  the two lines separate visibly, but nothing yet names the frame where they
-  do.
-- ~~Status message stack~~ **shipped this session** (see "Recently shipped").
-  One correction to the framing this entry had: the split that mattered was
-  not footer readouts versus event messages, since `Step` and `Elapsed` were
-  already their own elements. It was *inside* `#status-message`, between work
-  in flight and the run's resting state. The download toast turned out not to
-  collide, since it defaults to bottom-left and the stack is bottom-right,
-  though a user who drags it there can still overlap it; that was judged not
-  worth constraining a drag surface over.
 
 **1. State-space models: Mamba-3 (new model class).** A genuinely new XAI
 direction: SSMs compress all context into a fixed-size recurrent state, so they
