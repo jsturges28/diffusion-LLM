@@ -2060,13 +2060,26 @@ end to end, reusing the frame/token contract.
 
 ## Where to pick up
 
+**Next session: a read-only audit of the whole repo. Read `AUDIT_BRIEF.md`,
+which is the only file that session needs beyond the code.** The maintainer
+wants the app sharpened deeply before the next model class lands, so that
+session reads everything and writes `AUDIT_REPORT.md`, changing nothing else.
+It covers code organization and monoliths, tangled or race-prone logic,
+runtime smoothness, robustness for users who are not the author, duplication
+with a receipt, how well the architecture is positioned for the future models
+in `ROADMAP.md`, and whether these documents still match the code and route an
+agent efficiently. The report then feeds a separate session that deliberates,
+plans, and implements. The brief carries the contract, a routing map with line
+counts, the subagent split, the finding schema, and verified seeds.
+
 This session shipped the `results/` rename, all of **AR Phase C**, and the
 passes listed under "Recently shipped", ending with context-window metrics,
 prompt import, and Analytics collections. Everything through checklist item 101
-has been validated on hardware by the maintainer; **items 102 to 126 have not**,
-so they are the first task. After that, the agreed order is **Mamba-3**, then
-extending entropy / top-k to the diffusion models. Deliberate each in Ask mode
-before Plan.
+has been validated on hardware by the maintainer, and items 127 to 132 were
+confirmed as they landed; **items 102 to 126 have not been**, so they are the
+first task at the machine. The agreed feature order after that is **Mamba-3**,
+then extending entropy / top-k to the diffusion models, though the audit may
+reorder it. Deliberate each in Ask mode before Plan.
 
 **Collections shipped without storage eviction, deliberately.** The original
 framing paired favorites with storage-pressure relief; the measurement killed
