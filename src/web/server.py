@@ -1603,9 +1603,10 @@ def _save_run_blocking(body: SaveRunRequest) -> Dict[str, Any]:
         ):
             replacing = None
 
+    bundle = _build_bundle(body)
     run_id, revision = run_store.save(
         RESULTS_DIR,
-        _build_bundle(body),
+        bundle,
         model_id=body.model or DEFAULT_MODEL,
         run_id=replacing,
         expected_revision=(
@@ -1616,14 +1617,9 @@ def _save_run_blocking(body: SaveRunRequest) -> Dict[str, Any]:
 
     # After publication, deliberately. The GIF is a derivative, and a
     # failure rendering one must not cost the user the run's text and
-    # token data. `RUNTIME-02` bounds its memory next; this only moves
-    # it out of the path that decides whether the save succeeded.
+    # token data.
     try:
-        history_to_gif(
-            body.frames,
-            run_dir / "diffusion.gif",
-            header_text=body.prompt,
-        )
+        _render_run_gif(body, bundle.metadata, run_dir)
     except Exception:  # noqa: BLE001
         logger.exception(
             "GIF rendering failed for %s; run is saved", run_id
@@ -1634,6 +1630,33 @@ def _save_run_blocking(body: SaveRunRequest) -> Dict[str, Any]:
         "run_id": run_id,
         "revision": revision,
     }
+
+
+def _render_run_gif(
+    body: SaveRunRequest,
+    metadata: Dict[str, Any],
+    run_dir: Path,
+) -> None:
+    """Draw the run's preview, labelled with the model that ran it.
+
+    Reads the label out of the metadata that was just written rather
+    than off the request, so the picture and the record cannot
+    disagree about which model this was; `DATA-04` may have preferred
+    the worker's word over the client's claim.
+    """
+    model_id = str(metadata.get("backend", ""))
+    entry = REGISTRY.get(model_id)
+    history_to_gif(
+        body.frames,
+        run_dir / "diffusion.gif",
+        header_text=body.prompt,
+        model_label=(
+            entry.display_name if entry else model_id or None
+        ),
+        model_type=str(
+            metadata.get("model_type", "diffusion")
+        ),
+    )
 
 
 @app.post("/api/save")

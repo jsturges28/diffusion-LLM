@@ -135,7 +135,7 @@ showed is recorded under Deviations. Three entries are open:
 | DATA-01 | high | L | done | none | Publish saved runs whole or not at all |
 | DATA-05 | high | L | done | none | Three commits: strict boundary, version and frame stream, invalid runs |
 | DATA-04 | high | M | needs hardware | none | Persist run provenance from the run, not manager state |
-| RUNTIME-02 | medium | M | ready | DATA-01 (done) | |
+| RUNTIME-02 | medium | M | done | none | Bound the GIF and label the model that produced it |
 | ANALYTICS-02 | high | M | ready | DATA-05 (done), see decision above | |
 | ANALYTICS-03 | medium | L | ready | DATA-01, DATA-05 (both done) | |
 | ANALYTICS-04 | high | M | blocked | DATA-01 | |
@@ -470,6 +470,42 @@ revisions in the registry, resolved revisions and weight digests in run
 provenance, cache-space preflight against remaining bytes, and a completion
 manifest for the locally quantized DiffusionGemma artifact. The slice deals
 with availability only.
+
+### RUNTIME-02
+
+**Streaming frames into the encoder bounds nothing on its own.** The
+Direction says to stream where supported, and Pillow does accept a
+generator, so the obvious reading is that streaming is the fix and the
+budget is a refinement. It is the other way round. Pillow's GIF writer
+collects a paletted copy of every frame before it writes any of them,
+so peak memory still grows with frame count no matter how the frames
+arrive. Streaming is worth having, because it stops the full-size RGB
+images from piling up alongside those copies, but the frame budget is
+the load-bearing change.
+
+Measured on this host, peak RSS above baseline for one render:
+
+| frames | before | after |
+|---|---|---|
+| 128 | 383 MB | 36 MB |
+| 400 | 1,252 MB | 167 MB |
+| 1,024 | 3,185 MB | 148 MB |
+
+The last row is the point: past the budget the cost stops tracking the
+run. 1,024 frames now costs less than 400 did.
+
+**The budget is 300, chosen against the corpus rather than picked.**
+179 of the 182 saved runs are at or under it, so in practice almost
+nothing is sampled. The frame counts cluster hard: 67 runs exceed 240
+but only 3 exceed 300, so 240 would have resampled a third of the
+corpus for no memory benefit worth the loss.
+
+**Pillow merges consecutive identical frames**, which surfaced while
+making the tests fast: a GIF drawn on a canvas too small to show the
+frame's text came back with 112 frames instead of 300. Harmless for
+real runs, whose frames differ, but it means a GIF's frame count is a
+ceiling rather than an exact count, and a test that shrinks the canvas
+to save time has to keep the content distinct.
 
 ### DATA-04
 

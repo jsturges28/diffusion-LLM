@@ -13,10 +13,10 @@ todos:
     status: completed
   - id: data-04
     content: "DATA-04: record the effective device on each backend, stamp a provenance envelope onto every done frame via FrameStreamer and the two synthetic send sites, carry it through the browser's run and session snapshots, and prefer it over manager state when building metadata"
-    status: in_progress
+    status: completed
   - id: runtime-02
     content: "RUNTIME-02: bound the GIF with an even temporal sample within a frame budget, yield frames from a generator instead of accumulating them, and label the actual model"
-    status: pending
+    status: in_progress
   - id: pass-two-handback
     content: "Pass boundary: full verification including loading all 182 real runs through the adapters, ledger deviations recorded, and hand back with the hardware checks"
     status: pending

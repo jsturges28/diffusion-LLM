@@ -23,6 +23,9 @@ kept when these were written:
   display, so the sandbox could only check the server's half.
 - **136 to 139**: **not yet validated.** Added by `DATA-04`; they need two
   windows, a GPU, and a real model switch, none of which the sandbox has.
+- **140 to 141**: **not yet validated.** Added by `RUNTIME-02`; the frame
+  count and the heading are covered by tests, but whether a sampled
+  animation still reads well is a judgement only a person can make.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -1016,3 +1019,15 @@ in-sandbox (no display).*
     It should save normally, with `reproducibility.attested` set to `false`,
     describing the resident model exactly as it always did. The fallback is
     what stops this change from stranding a run that is already on screen.
+140. **The GIF names the model that made it.** Save a SmolLM3 run and a
+    DiffusionGemma run, then open each `diffusion.gif`. The heading should
+    read `SmolLM3-3B RESPONSE (Autoregressive):` and `DiffusionGemma-26B-A4B
+    RESPONSE (Diffusion):`. Every GIF used to say `LLaDA RESPONSE
+    (Diffusion):` whichever model ran.
+141. **A long run's GIF is sampled and says so.** Run something past 300
+    frames (raise steps, or use a long DiffusionGemma run) and save it. Its
+    GIF heading should carry `[300 of N frames]`, the animation should still
+    begin fully masked and end on the finished text, and the progression in
+    between should look even rather than jumping at the end. Watch the
+    supervisor's memory while it saves: it should stay flat rather than
+    climbing by gigabytes, which is the actual point of the change.

@@ -565,7 +565,7 @@
           <li><strong>history.txt:</strong> the same frames as a plain-text transcript, kept for reading by eye.</li>
           <li><strong>tokens.json:</strong> per-frame token records (text, mask flag, vocab id, confidence, and entropy where captured) that drive the durable overlays in Analytics.</li>
           <li><strong>alternatives.json:</strong> the captured top-five candidates per position, written only for runs generated with <strong>Alternatives</strong> on.</li>
-          <li><strong>diffusion.gif:</strong> an animated GIF visualizing the denoising progression.</li>
+          <li><strong>diffusion.gif:</strong> an animated GIF visualizing the generation, headed with the model that produced it. A run longer than 300 frames is sampled evenly down to 300, keeping the first and last, and the heading says so; the full frame-by-frame record is in <code>frames.jsonl</code> either way.</li>
         </ul>
         <p>It is disabled during generation and after a successful save (to prevent duplicates); while saving it shows a spinner, then a brief checkmark. Starting a new generation resets it.</p>
         <h3>Experimental mode</h3>
