@@ -1802,17 +1802,19 @@ function showDetail(runId) {
   }
 
   // Render whatever params this run recorded (model-agnostic).
+  // Through metaRowHtml, which escapes the label as well as the
+  // value. This loop used to interpolate the key raw, so a saved
+  // run whose params carried markup in a *key* could execute it on
+  // this origin, next to the model and deletion APIs. The keys come
+  // off disk, and a run folder is not a trusted input just because
+  // this app usually writes it.
   var params = run.params || {};
   var paramKeys = Object.keys(params);
   for (var j = 0; j < paramKeys.length; j++) {
     var pk = paramKeys[j];
-    html += '<div class="meta-row">'
-      + '<span class="meta-label">'
-      + pk.replace(/_/g, " ")
-      + ':</span> '
-      + '<span class="meta-value">'
-      + escHtml(String(params[pk]))
-      + '</span></div>';
+    html += metaRowHtml(
+      pk.replace(/_/g, " "), String(params[pk])
+    );
   }
 
   html += processorMetaRow(run);

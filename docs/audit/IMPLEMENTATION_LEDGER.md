@@ -506,16 +506,12 @@ ignored on purpose: the tracked documents are canonical and the `.mdc` files
 were rewritten as thin pointers that say so, which also removes the venv
 contradiction for current sessions even though they are not committed.
 
-**Outstanding, and not a hardware item.** The finding's Verification asks for a
-clone into a clean directory with no local Cursor state, checking that every
-mandatory command, environment boundary, and model constraint is discoverable
-from tracked files. The mechanical half is automated by
+**Cleared on 2026-08-11.** The maintainer cloned into an empty directory with
+no Cursor state and read their way in. The mechanical half stays automated by
 `tests/test_docs_links.py`, and `git ls-tree` confirms the shape a clone gets:
 `README.md`, `AGENTS.md` and `LICENSE` at the root, four documents under
 `docs/`, four under `docs/audit/`, 41 build plans under `.cursor/plans/`, and
-nothing under `.cursor/rules/`. What cannot be automated is whether a cold
-contributor can actually work from it, which is a judgement the maintainer
-makes by reading.
+nothing under `.cursor/rules/`.
 
 **The link test needed two modes, and the reason is worth keeping.** A first
 attempt treated every backticked `foo/bar` as a path claim and produced a wall
