@@ -72,8 +72,16 @@
               <path d="M12 15V3" />
             </svg>
           </button>
+          <!-- Extensions only. A file chooser builds one filter
+               per accept token and looks each description up in
+               the host's type database, where an extension and
+               its MIME type resolve to the same words, so listing
+               both showed every type twice. Extensions also map
+               the same way on every platform, unlike MIME tokens.
+               .markdown still imports: isImportableTextFile is
+               what actually decides. -->
           <input id="prompt-file-input" type="file"
-            accept=".txt,.md,.markdown,text/plain,text/markdown" hidden />
+            accept=".txt,.md" hidden />
           <div id="prompt-history" hidden>
             <button id="btn-prompt-history" type="button" class="prompt-hist-btn"
               title="Use a previous prompt" aria-label="Use a previous prompt">

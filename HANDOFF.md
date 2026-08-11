@@ -77,7 +77,7 @@ compare runs in an analytics suite.
 collections.** Three independent arcs, three commits, in that order because the
 import control's "this fits" promise is only honest once the counting exists.
 `pytest` (265/265, up from 226), `node --check`, ReadLints and the 70-column
-audit are clean; `ruff` is held at its 156 baseline. Checklist items 114 to 126
+audit are clean; `ruff` is held at its 156 baseline. Checklist items 114 to 131
 carry the GPU and display work.
 
 - **The context window is read off the loaded object, not the registry.**
@@ -155,6 +155,33 @@ carry the GPU and display work.
 - **Escape needed an explicit order.** The detail modal's handler now bails
   when a collection dialog is open, since both listeners fire on the same key
   and closing the modal underneath a chooser would be wrong.
+
+Three refinements followed on the maintainer's first look at the page:
+
+- **The star moved to its own column**, between the checkbox and Date, with
+  the caret alongside it. Collecting belongs beside selecting rather than
+  beside deleting, and a star is read *down* a column, which the left edge
+  suits. The caret came along because separating them would leave a
+  hover-only chevron next to the trashcan with nothing to associate it with.
+  The group headers' `colSpan` had to grow with it; nothing else in the table
+  is position-dependent, since neither the CSS nor the JS indexes cells.
+  `.col-actions` deliberately kept its 74px even though it now holds one
+  icon, because that width was always sized for the header's bulk-delete
+  count, not for the body's icons.
+- **The trashcan was riding low.** An `inline-flex` box holding nothing but an
+  SVG has no text baseline to align on, so it falls back to its bottom edge.
+  The star, the caret and the edited check all already carried
+  `vertical-align: middle`; the delete button was the one that did not.
+- **The import dialog listed every file type twice.** The `accept` attribute
+  passed extensions *and* MIME types, and a chooser builds one filter per
+  token, resolving each through the host's type database, where `.txt` and
+  `text/plain` come back as the same words. Trimming to `.txt,.md` leaves
+  QtWebEngine's own combined "Accepted types" entry plus one per extension,
+  which is the list that was wanted. Extensions are also the portable half:
+  MIME tokens expand differently per platform because each engine resolves
+  them against a different system database. `.markdown` came out of `accept`
+  to keep the list to two named types and stays in `isImportableTextFile`,
+  so it still imports by drag.
 
 **Previous pass: rank everywhere, the chosen row, the edit tint, scrub dimming,
 and the retained KV cache.** Started as one reported discrepancy and ended in
@@ -3028,6 +3055,33 @@ in-sandbox (no display).*
     reload Analytics, and confirm the id was pruned server-side (check
     `results/ui_state.json` if you want to see it), and that the tab count
     never claimed the missing run.
+127. **The star column reads down the table.** The star and its caret now sit
+    in their own column between the checkbox and Date. Confirm the header
+    lines up over them, that hovering a row reveals the caret without the
+    column widening or the Date text shifting (it uses `visibility`, so it
+    should not), and that clicking either one still does what it did from the
+    right-hand side. Scroll the table with the sticky header up: the new
+    header cell should stay in line with the rest.
+128. **The group headers still span the whole table.** Set **Group by** to
+    Model or Date: each group's heading row should reach the full width, with
+    no empty cell left at the right edge. That row's `colSpan` had to grow by
+    one for the new column, and an off-by-one shows up here and nowhere else.
+129. **The trashcan sits on the row's centerline.** Compare a row's trashcan
+    against its star, its Edited check and its text. Then check the header's
+    bulk-delete button by ticking a few rows: its count should still fit
+    beside the icon, since the actions column kept its width even though it
+    now holds only one icon.
+130. **The import dialog lists three entries.** Click import and open the file
+    type dropdown. It should read **Accepted types (\*.txt \*.md)**, **Plain
+    text document (\*.txt)** and **Markdown document (\*.md)**, with no
+    repeats. "Accepted types" is Qt's own wording for the combined filter, not
+    ours, so it cannot be renamed from the page. Confirm the combined entry
+    shows both file kinds at once.
+131. **A `.markdown` file still imports.** It is deliberately out of the accept
+    list to keep that dropdown to two named types, but `isImportableTextFile`
+    still allows it. Drag one onto the textarea and confirm it lands. In the
+    browser as well as the desktop app, since the two use different file
+    choosers and only the desktop one was the reason for this change.
 
 **0. The comparison surfaces (agreed with the maintainer, partly shipped).** The
 timing foundation exists to serve these, and the unifying idea is settled: **the
