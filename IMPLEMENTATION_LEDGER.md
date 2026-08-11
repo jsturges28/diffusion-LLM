@@ -84,8 +84,16 @@ maintainer's confirmation on real hardware is outstanding. The report's
 standing measurement programme is separate and lives at
 `AUDIT_REPORT.md:1927-2011`.
 
-Empty. All four stage 1 entries were cleared on 2026-08-11; what each of
-them showed is recorded under Deviations.
+All four stage 1 entries were cleared on 2026-08-11; what each of them showed
+is recorded under Deviations. One new entry arrived from that same pass:
+
+- **TRUST-03 (offline slice)**: the automated half asserts that both Hub
+  workers pin every `from_pretrained` call to local files, and that being
+  offline with nothing cached now reports what happened instead of a urllib3
+  retry dump. Outstanding is the case that found it: turn networking off and
+  activate LLaDA and SmolLM3, both of which are already downloaded. Both
+  should load at their usual speed with no hang and no error.
+  DiffusionGemma needs no retest; it never touched the Hub.
 
 ## Status table
 
@@ -125,7 +133,7 @@ them showed is recorded under Deviations.
 | ROADMAP-01 | high | M | blocked | stage 6 order | |
 | ROADMAP-05 | high | M | blocked | stage 6 order | |
 | ROADMAP-02 | medium | M | blocked | stage 6 order | |
-| TRUST-03 | high | L | blocked | stage 6 order | |
+| TRUST-03 | high | L | blocked | stage 6 order | Offline slice only: Load cached weights without asking the Hub |
 | DEPS-01 | medium | L | blocked | stage 6 order | |
 | ROADMAP-03 | high | L | blocked | stage 6 order | |
 | ORG-03 | medium | M | blocked | stage 6 order | |
@@ -421,4 +429,18 @@ panel, so runs saved after it would display a long cache path where earlier
 runs show `GSAI-ML/LLaDA-8B-Instruct`. That is a user-visible saved-run change
 and belongs with the versioning this finding will do properly. The flag buys
 the offline behavior with none of it.
+
+**What the slice landed** (commit "Load cached weights without asking the
+Hub"): `local_files_only=True` on all four `from_pretrained` calls across
+`llada_worker` and `smollm3_worker`, placed after `download_with_progress`
+returns, since a successful return already means every file is present. Plus
+`WeightsUnavailableError` in `hf_download`, raised only when the cause chain
+actually shows a connectivity failure, so a 403 or a full disk keeps its own
+message rather than being relabelled as an offline problem.
+
+**Still open for this finding**, and unchanged by the slice: pinned source
+revisions in the registry, resolved revisions and weight digests in run
+provenance, cache-space preflight against remaining bytes, and a completion
+manifest for the locally quantized DiffusionGemma artifact. The slice deals
+with availability only.
 

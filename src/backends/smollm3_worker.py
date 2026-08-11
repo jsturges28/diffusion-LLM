@@ -94,8 +94,16 @@ class Smollm3Backend(Backend):
             name, sink=lambda p: setattr(self, "load_progress", p)
         )
         self.load_progress = None
+        # local_files_only from here down. Returning from
+        # download_with_progress means every file is on disk, so any
+        # request past this point is transformers revalidating a
+        # checkpoint we already have. Offline that fails outright:
+        # this environment's transformers asks the Hub API for
+        # additional chat templates while building the tokenizer.
         logger.info("loading tokenizer %s", name)
-        self.tokenizer = AutoTokenizer.from_pretrained(name)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            name, local_files_only=True
+        )
         logger.info(
             "loading model %s on %s (bfloat16)", name, resolved
         )
@@ -113,7 +121,9 @@ class Smollm3Backend(Backend):
             # footprint (to ~6 GiB), which matters most for
             # CPU/RAM-constrained hosts.
             model = AutoModelForCausalLM.from_pretrained(
-                name, torch_dtype=torch.bfloat16
+                name,
+                torch_dtype=torch.bfloat16,
+                local_files_only=True,
             )
             self.model = model.to(resolved).eval()
         logger.info("SmolLM3 loaded on %s", resolved)

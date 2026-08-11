@@ -131,9 +131,18 @@ class LladaBackend(Backend):
             name, sink=lambda p: setattr(self, "load_progress", p)
         )
         self.load_progress = None
+        # local_files_only from here down. Returning from
+        # download_with_progress means every file is on disk, so any
+        # request past this point is transformers revalidating a
+        # checkpoint we already have. Offline that is not a slower
+        # load, it is a hang: this model carries remote code, and
+        # resolving it against an unreachable Hub retries for minutes
+        # before giving up.
         logger.info("loading tokenizer %s", name)
         tok = AutoTokenizer.from_pretrained(
-            name, trust_remote_code=True
+            name,
+            trust_remote_code=True,
+            local_files_only=True,
         )
         if tok.padding_side != "left":
             tok.padding_side = "left"
@@ -163,6 +172,7 @@ class LladaBackend(Backend):
                 name,
                 trust_remote_code=True,
                 torch_dtype=load_dtype,
+                local_files_only=True,
                 device_map=(
                     "auto" if device.type == "cuda" else None
                 ),

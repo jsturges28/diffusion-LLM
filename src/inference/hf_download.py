@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
 
 ProgressSink = Callable[[Dict[str, Any]], None]
 
@@ -132,16 +132,86 @@ def _emit(sink: ProgressSink, done: int, total: int) -> None:
     )
 
 
+class WeightsUnavailableError(RuntimeError):
+    """Weights are neither cached nor reachable.
+
+    Distinguished from every other download failure because it is an
+    operating condition with an obvious remedy (connect, or download
+    the model once from the menu), and because the underlying
+    exception for it is a wall of urllib3 retry text that says
+    "MaxRetryError" where it means "you are offline".
+    """
+
+
+def _describe_unreachable(repo_id: str, cause: BaseException) -> str:
+    assert isinstance(repo_id, str) and repo_id, "repo_id required"
+    return (
+        f"{repo_id} is not downloaded and the Hugging Face Hub"
+        " could not be reached. Connect to the internet and try"
+        " again, or download this model once while online; after"
+        " that it loads from the local cache with no network."
+        f" (underlying error: {type(cause).__name__})"
+    )
+
+
+# Exception types that mean "the network is not there", across the
+# requests, urllib3, and huggingface_hub layers a fetch passes
+# through. Matched by name rather than by class so this does not have
+# to import three libraries to ask one question, and so it keeps
+# working when a library moves an error between modules.
+_UNREACHABLE_ERROR_NAMES = frozenset(
+    {
+        "ConnectionError",
+        "ConnectTimeout",
+        "ConnectTimeoutError",
+        "LocalEntryNotFoundError",
+        "MaxRetryError",
+        "NameResolutionError",
+        "NewConnectionError",
+        "OfflineModeIsEnabled",
+        "ReadTimeout",
+        "ReadTimeoutError",
+    }
+)
+
+# Any real chain is a few links; this only keeps the walk finite.
+_CAUSE_CHAIN_MAX = 20
+
+
+def _is_unreachable(exc: BaseException) -> bool:
+    """Whether a failed fetch failed for want of a network.
+
+    Walks the cause chain because the interesting type is usually
+    wrapped: a DNS failure surfaces as a urllib3 NameResolutionError
+    inside a MaxRetryError inside a requests ConnectionError. Anything
+    unrecognized is reported as False so its own message survives
+    rather than being relabelled as an offline problem.
+    """
+    current: Optional[BaseException] = exc
+    for _ in range(_CAUSE_CHAIN_MAX):
+        if current is None:
+            return False
+        if type(current).__name__ in _UNREACHABLE_ERROR_NAMES:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 def download_with_progress(
     repo_id: str, *, sink: ProgressSink
 ) -> str:
     """Ensure ``repo_id`` is fully cached, reporting progress to ``sink``.
 
     Returns the local snapshot path. On a cache hit this returns
-    immediately without invoking ``sink`` (no download bar). Otherwise
-    the fetch runs on a helper thread while this function polls the cache
-    directory size and reports ``{fraction, downloaded_bytes,
-    total_bytes}`` to ``sink`` roughly twice a second.
+    immediately without invoking ``sink`` (no download bar) and without
+    touching the network. Otherwise the fetch runs on a helper thread
+    while this function polls the cache directory size and reports
+    ``{fraction, downloaded_bytes, total_bytes}`` to ``sink`` roughly
+    twice a second.
+
+    Callers may treat a successful return as proof that every file is
+    on disk, which is what lets the workers load with
+    ``local_files_only=True`` and never revalidate against the Hub.
     """
     assert isinstance(repo_id, str) and repo_id, "repo_id required"
     from huggingface_hub import snapshot_download
@@ -186,7 +256,16 @@ def download_with_progress(
         worker.join()
 
     if "error" in failure:
-        raise failure["error"]
+        cause = failure["error"]
+        # Being offline with nothing cached is the one failure here a
+        # user can act on, and it arrives as a wall of urllib3 retry
+        # text. Everything else (a full disk, permissions, a 403) is
+        # reraised untouched so its own message survives.
+        if _is_unreachable(cause):
+            raise WeightsUnavailableError(
+                _describe_unreachable(repo_id, cause)
+            ) from cause
+        raise cause
 
     # Land on a clean 100% once the snapshot is complete (guards against
     # a small total/disk mismatch leaving the bar just shy of full).
