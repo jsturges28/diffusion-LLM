@@ -5,8 +5,14 @@ analysis; this file is the moving part. Read `IMPLEMENTATION_BRIEF.md` for how
 to work a finding, and update this file in the same commit as the change it
 describes.
 
-Stage 1 is in progress. The stage map at the bottom is the agreed plan;
-statuses below move as each finding lands.
+**Stage 1 is complete.** All five isolated safety fixes landed as five
+commits, `85383e5` through `dbf63f9`. `TRUST-01` is fully done; the other four
+wait only on the maintainer's checks on the real machine, and none of those
+blocks anything. Stage 2 is next: `QUALITY-02`, `META-01`, and `META-02`.
+`ORG-01` is also unblocked but belongs to stage 3.
+
+Baselines as of the stage boundary: 329 tests passing (from 265), 12 browser
+tests under `node --test`, and Ruff still at exactly 156 in `src tests`.
 
 ## How to read this
 
@@ -91,6 +97,14 @@ standing measurement programme is separate and lives at
   metadata, charts, and overlays always share one run or are empty. Also
   worth one look at a detail panel for a run whose metrics endpoint fails,
   which should now show a message rather than empty chart slots.
+- **DATA-03**: the resolver is covered by `tests/web/test_results_root.py`,
+  including that no input can produce a cwd-dependent path, and the display
+  path both for the default root and for one outside the repository.
+  Outstanding is the launch half, which needs the real app and the real 178
+  runs: start `main.py` from the repository and from `/tmp`, and open the
+  desktop entry, confirming all three list the same runs and log the same
+  resolved directory. Then `--results-dir /tmp/isolated` once, to see an
+  empty, separately named tree.
 - **LIFE-07**: the finding's own Verification clause is met in full by
   `tests/backends/test_llada_resume_state.py`, which injects failure at all
   four named points and proves the retained history and step count survive
@@ -106,7 +120,7 @@ standing measurement programme is separate and lives at
 | LIFE-07 | high | S | needs hardware | none | Commit LLaDA resume state only after the run lands |
 | TRUST-01 | high | S | done | none | Bind to loopback unless exposure is asked for |
 | ANALYTICS-01 | high | S | needs hardware | none | Fence detail responses to the run that asked |
-| DATA-03 | medium | S | done | none | Resolve the data root without asking the cwd |
+| DATA-03 | medium | S | needs hardware | none | Resolve the data root without asking the cwd |
 | TRUST-02 | high | M | needs hardware | none | Serve every page without a third-party origin |
 | QUALITY-02 | medium | M | ready | none | |
 | META-01 | medium | M | ready | none | |
@@ -149,10 +163,14 @@ standing measurement programme is separate and lives at
 Derived from `AUDIT_REPORT.md:1829-1925`. Each stage is a boundary to validate
 before the next takes a dependency on it.
 
-**Stage 1, isolated safety fixes.** `LIFE-07` first, then loopback binding
-(`TRUST-01`), synchronous detail clearing with request epochs
-(`ANALYTICS-01`), and an absolute configurable data root (`DATA-03`), each as
-its own commit. Vendor the Analytics dependencies (`TRUST-02`) independently.
+**Stage 1, isolated safety fixes. Done.** `LIFE-07` first, then loopback
+binding (`TRUST-01`), an absolute configurable data root (`DATA-03`),
+synchronous detail clearing with request epochs (`ANALYTICS-01`), and the
+vendored Analytics dependencies (`TRUST-02`), each as its own commit.
+`DATA-03` was moved ahead of `ANALYTICS-01` against the report's listing
+order, deliberately, so the run-store stage would unblock early if the session
+ran short. Three new test files, one new browser test harness, and a
+`node --test` line in `AGENTS.md` came with it.
 
 **Stage 2, gates before boundaries move.** Install the path-specific and
 code-specific Ruff ratchet (`QUALITY-02`). Shorten `HANDOFF.md` and make the
