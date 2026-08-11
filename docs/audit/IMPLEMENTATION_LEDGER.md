@@ -18,11 +18,18 @@ documents now live under `docs/` and this campaign's four files under
 root. Every move was a `git mv`, and `AUDIT_REPORT.md` moved byte for byte, so
 its line citations still resolve and its immutability holds.
 
-**Stage 3 is next**, opening with `ORG-01`.
+**Stage 3 is in progress.** Pass one landed `ORG-01` and `DATA-01`: the run
+store is its own dependency-light module and a saved run now publishes whole
+or not at all. The parameter-key XSS was pulled forward from `DATA-05` as a
+standalone commit. Pass two is `DATA-05`, `DATA-04`, and `RUNTIME-02`, whose
+decisions were settled with the maintainer before pass one began: no
+migration of the existing corpus, `history.txt` demoted to a human artifact
+with `frames.jsonl` as the machine format, and `DATA-04`'s provenance
+envelope without the validation token that `LIFE-03` will own.
 
-Baselines: 381 tests passing (from 265 at the campaign's start), 12 browser
-tests under `node --test`, and Ruff at 140 in `src tests`, now gated per file
-and per rule by `scripts/lint_ratchet.py` rather than remembered.
+Baselines: 422 tests passing (from 265 at the campaign's start), 12 browser
+tests under `node --test`, and Ruff at 137 in `src tests`, gated per file and
+per rule by `scripts/lint_ratchet.py` rather than remembered.
 
 ## How to read this
 
@@ -170,14 +177,15 @@ closed the stage. `QUALITY-01` fixtures still attach to seams as they are cut,
 and `META-03` refreshes at milestone boundaries rather than after every
 commit.
 
-**Stage 3, the run-store boundary.** Extract behavior-preserving storage
-operations (`ORG-01`) once the root is explicit, then unique staged
+**Stage 3, the run-store boundary. Pass one done.** Behavior-preserving
+extraction of the storage operations (`ORG-01`) and then unique staged
 publication with complete replacement, revisions, and compare-and-swap
-(`DATA-01`), then versioned validation and read adapters (`DATA-05`), then
-immutable worker provenance threaded through the terminal run contract
-(`DATA-04`). Make GIFs bounded non-authoritative derivatives (`RUNTIME-02`)
-only after publication semantics exist. This stage unlocks `ANALYTICS-02`,
-`ANALYTICS-03`, `ANALYTICS-04`, and later `ROADMAP-04`.
+(`DATA-01`) have landed. Pass two is versioned validation and read adapters
+(`DATA-05`), then immutable worker provenance threaded through the terminal
+run contract (`DATA-04`), then GIFs as bounded non-authoritative derivatives
+(`RUNTIME-02`), which publication semantics now allow. The stage unlocks
+`ANALYTICS-02`, `ANALYTICS-03`, `ANALYTICS-04`, and later `ROADMAP-04`; those
+stay blocked until `DATA-05` lands, which is what they actually depend on.
 
 **Stage 4, explicit process and socket ownership.** Extract and test the
 manager process adapter, then make termination and pre-eviction validation

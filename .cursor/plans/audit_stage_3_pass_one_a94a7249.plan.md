@@ -10,10 +10,10 @@ todos:
     status: completed
   - id: data-01
     content: "DATA-01: exclusive allocation with -2 suffix on collision, staging under .staging/, publication on the metadata.json rename, revision-based compare-and-swap for in-place edits with a 409 on mismatch, and delete via .trash/; wire expected_revision through the save request and app.js"
-    status: in_progress
+    status: completed
   - id: pass-one-handback
     content: "Pass one boundary: full verification, ledger deviations recorded, and hand back with the two hardware checks (fresh save, guided edit through Confirm)"
-    status: pending
+    status: in_progress
 isProject: false
 ---
 
