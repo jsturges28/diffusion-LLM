@@ -5,7 +5,7 @@ display, or both. They were written as each feature landed and they stay
 here as a regression suite, so a change that touches an old surface can
 be re-checked without reconstructing what "correct" looked like.
 
-This file used to be the back half of `HANDOFF.md`, where 132 numbered
+This file used to be the back half of `docs/HANDOFF.md`, where 132 numbered
 items sat between two thousand lines of shipment narrative and a backlog.
 Audit finding `META-01` moved them out so the handoff could go back to
 being a page you read on the way in.
@@ -28,7 +28,7 @@ discover that a correct result looks like a regression.
 ## How these relate to the audit campaign
 
 Separate lists, on purpose. The hardware queue in
-`IMPLEMENTATION_LEDGER.md` tracks findings whose automated half passes
+`docs/audit/IMPLEMENTATION_LEDGER.md` tracks findings whose automated half passes
 and whose hardware confirmation is pending; it is short, current, and
 empties as the campaign runs. This file is the standing regression
 suite. A finding that lands a lasting behavior worth re-checking should
@@ -483,10 +483,10 @@ said to request DiffusionGemma on CPU, "which is refused". That is wrong twice
 over and cost the maintainer a session's worth of hunting, so it is written out
 here once. There is no CPU option for a diffusion model in the UI at all
 (`isAutoregressive` gates the device toggle in
-[menu.js](src/web/static/menu.js); diffusion rows get a static GPU tag), and
+[menu.js](../src/web/static/menu.js); diffusion rows get a static GPU tag), and
 reaching past the UI would not be refused either: `_resolve_device` accepts
 `cpu` for any model and `activate()` **skips** the VRAM pre-flight for it
-([server.py](src/web/server.py)), so the app would earnestly try to load LLaDA
+([server.py](../src/web/server.py)), so the app would earnestly try to load LLaDA
 into host RAM. Three things do work, and the first two fail through different
 paths, which matters depending on what you are testing:
 

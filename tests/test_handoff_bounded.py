@@ -1,8 +1,8 @@
 """Tests that the cold-start page stays a page.
 
-Strategy: count the lines in `HANDOFF.md` and look for the shapes that
-made it unreadable before. Passing proves a cold reader still reaches
-the current state cheaply.
+Strategy: count the lines in `docs/HANDOFF.md` and look for the shapes
+that made it unreadable before. Passing proves a cold reader still
+reaches the current state cheaply.
 
 This is a ratchet, not a style preference. The file reached 3,233
 lines the way such files always do: every session appended what it had
@@ -21,7 +21,7 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-HANDOFF = REPO_ROOT / "HANDOFF.md"
+HANDOFF = REPO_ROOT / "docs" / "HANDOFF.md"
 
 # The finding asks for "roughly 200 lines". Taken literally, with no
 # slack: slack is how the last one got to 3,233.
@@ -87,9 +87,9 @@ def test_it_points_at_where_the_detail_went() -> None:
 
     for target in (
         "AGENTS.md",
-        "ROADMAP.md",
-        "MANUAL_VERIFICATION.md",
-        "IMPLEMENTATION_LEDGER.md",
-        "TIGERSTYLE.md",
+        "docs/ROADMAP.md",
+        "docs/MANUAL_VERIFICATION.md",
+        "docs/audit/IMPLEMENTATION_LEDGER.md",
+        "docs/TIGERSTYLE.md",
     ):
         assert target in text, f"handoff never mentions {target}"

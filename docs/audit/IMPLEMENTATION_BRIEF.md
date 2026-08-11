@@ -1,6 +1,6 @@
 # IMPLEMENTATION_BRIEF: working the audit findings
 
-This brief governs every session that implements `AUDIT_REPORT.md`, not just
+This brief governs every session that implements `docs/audit/AUDIT_REPORT.md`, not just
 the first. The report calls them remediation sessions. There are 40 findings
 across seven sequenced stages, so this is a campaign rather than a task, and
 the thing that makes a campaign work is that each session starts from an
@@ -8,9 +8,9 @@ accurate picture and leaves one behind.
 
 Three files carry the work, and they have different jobs:
 
-- **`AUDIT_REPORT.md`** is the analysis of record, dated 2026-08-10. Treat it
+- **`docs/audit/AUDIT_REPORT.md`** is the analysis of record, dated 2026-08-10. Treat it
   as immutable. Do not edit it to reflect progress or to correct it.
-- **`IMPLEMENTATION_LEDGER.md`** is the state: what is done, what is ready,
+- **`docs/audit/IMPLEMENTATION_LEDGER.md`** is the state: what is done, what is ready,
   what is blocked, what needs hardware, and where the report has since been
   found wrong. Every session updates it.
 - **This brief** is the rhythm: how to pick work, how to work it, and what
@@ -23,7 +23,7 @@ Three files carry the work, and they have different jobs:
 2. Read in full only the findings you intend to take. Each one carries its own
    Direction, Blast radius, and Verification, which is what you implement
    against.
-3. For orientation, read `HANDOFF.md`. `META-01` has since reduced it to a
+3. For orientation, read `docs/HANDOFF.md`. `META-01` has since reduced it to a
    bounded cold-start page, so the caveat that used to sit here, telling you
    to read its first 73 lines and skip the rest, no longer applies.
 4. Tell the maintainer what you propose to take and why, and deliberate before
@@ -150,13 +150,13 @@ findings they inform, particularly the streaming resource curve behind
 
 ## Documentation, deliberately restrained
 
-`AGENTS.md` asks each session to update `HANDOFF.md`, `README.md`, and
-`ROADMAP.md` as work lands. For this campaign the ledger carries the state
+`AGENTS.md` asks each session to update `docs/HANDOFF.md`, `README.md`, and
+`docs/ROADMAP.md` as work lands. For this campaign the ledger carries the state
 instead, and the standing habit is narrowed to three cases:
 
-- Update `HANDOFF.md`'s orientation only when the architecture it describes
+- Update `docs/HANDOFF.md`'s orientation only when the architecture it describes
   actually changes.
-- Update `README.md` or `ROADMAP.md` only when a finding changes something
+- Update `README.md` or `docs/ROADMAP.md` only when a finding changes something
   user-visible or a decision they record.
 - Update the in-app About and Help copy when a user would notice the change.
 

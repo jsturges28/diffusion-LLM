@@ -1,21 +1,28 @@
 # IMPLEMENTATION_LEDGER: state of the audit remediation
 
-State for the 40 findings in `AUDIT_REPORT.md`. The report is the immutable
-analysis; this file is the moving part. Read `IMPLEMENTATION_BRIEF.md` for how
-to work a finding, and update this file in the same commit as the change it
-describes.
+State for the 40 findings in `docs/audit/AUDIT_REPORT.md`. The report is the
+immutable analysis; this file is the moving part. Read
+`docs/audit/IMPLEMENTATION_BRIEF.md` for how to work a finding, and update
+this file in the same commit as the change it describes.
 
 **Stage 1 is complete and verified on hardware.** All five isolated safety
-fixes landed and all five are `done`; the maintainer cleared the whole
-validation queue on 2026-08-11. That pass also turned up an unrelated offline
-model-loading gap, which is recorded under `TRUST-03` and whose availability
-half was pulled forward as its own commit.
+fixes landed; the maintainer cleared the whole validation queue on 2026-08-11.
+That pass also turned up an unrelated offline model-loading gap, recorded
+under `TRUST-03`, whose availability half was pulled forward as its own
+commit.
 
-Stage 2 is next: `QUALITY-02`, `META-01`, and `META-02`. `ORG-01` is also
-unblocked but belongs to stage 3.
+**Stage 2 is complete.** `QUALITY-02`, `META-02`, and `META-01`, in that
+order, plus a documentation layout move that was not a finding: the reference
+documents now live under `docs/` and this campaign's four files under
+`docs/audit/`, leaving only `README.md`, `AGENTS.md`, and `LICENSE` at the
+root. Every move was a `git mv`, and `AUDIT_REPORT.md` moved byte for byte, so
+its line citations still resolve and its immutability holds.
 
-Baselines: 329 tests passing (from 265), 12 browser tests under `node --test`,
-and Ruff at exactly 156 in `src tests`.
+**Stage 3 is next**, opening with `ORG-01`.
+
+Baselines: 381 tests passing (from 265 at the campaign's start), 12 browser
+tests under `node --test`, and Ruff at 140 in `src tests`, now gated per file
+and per rule by `scripts/lint_ratchet.py` rather than remembered.
 
 ## How to read this
 
@@ -146,11 +153,14 @@ order, deliberately, so the run-store stage would unblock early if the session
 ran short. Three new test files, one new browser test harness, and a
 `node --test` line in `AGENTS.md` came with it.
 
-**Stage 2, gates before boundaries move.** Install the path-specific and
-code-specific Ruff ratchet (`QUALITY-02`). Shorten `HANDOFF.md` and make the
-agent contract portable (`META-01`, `META-02`) so every later session starts
-from the same rules. `QUALITY-01` fixtures attach to seams as they are cut.
-`META-03` refreshes at milestone boundaries, not after every commit.
+**Stage 2, gates before boundaries move. Done.** The path-specific and
+code-specific Ruff ratchet (`QUALITY-02`), then the portable agent contract
+(`META-02`), then the bounded cold-start page (`META-01`). The last two ran in
+the opposite order to this map on purpose, so the contract's home was settled
+before the page that points at it was rewritten. A documentation layout move
+closed the stage. `QUALITY-01` fixtures still attach to seams as they are cut,
+and `META-03` refreshes at milestone boundaries rather than after every
+commit.
 
 **Stage 3, the run-store boundary.** Extract behavior-preserving storage
 operations (`ORG-01`) once the root is explicit, then unique staged
@@ -201,7 +211,7 @@ reviews.
 When implementation shows a finding is mistaken, incomplete, or that its
 Direction does not survive contact with the code, add an entry here under the
 finding's ID with what was learned and what was done instead. Do not edit
-`AUDIT_REPORT.md`; it is the record of what was believed on 2026-08-10, and
+`docs/audit/AUDIT_REPORT.md`; it is the record of what was believed on 2026-08-10, and
 the difference between that and what turned out to be true is worth keeping.
 
 No finding has been contradicted so far. The entries below are things learned
@@ -440,8 +450,8 @@ with availability only.
 
 **3,233 lines to 114.** Three commits, each a move rather than a copy so the
 tree never held the same content twice: the 132-item checklist and its
-activation-failure runbook to `MANUAL_VERIFICATION.md`, the settled decisions
-to `ROADMAP.md`, then the narrative deleted and the page rewritten.
+activation-failure runbook to `docs/MANUAL_VERIFICATION.md`, the settled decisions
+to `docs/ROADMAP.md`, then the narrative deleted and the page rewritten.
 
 **The verification ledger's state was the thing to be careful with.** It
 records validation per range rather than per item, and the ranges say that
@@ -461,7 +471,7 @@ real cost of the file's size.
 as load-bearing operational knowledge, and the audit's own evidence cites it.
 But its stated cause is that `RESULTS_DIR` was relative to the process working
 directory, which `DATA-03` removed in stage 1. What was left is a historical
-incident already recorded in `AUDIT_REPORT.md`, so it was deleted rather than
+incident already recorded in `docs/audit/AUDIT_REPORT.md`, so it was deleted rather than
 relocated.
 
 **Both entries numbered `0.` disappeared with their sections**, which resolves
@@ -473,7 +483,7 @@ reasonable appends, and only a number that fails stops that.
 
 **`AGENTS.md`'s session-end habit was the upstream cause** and was rewritten
 to say which document takes what, rather than to ask for an append to the
-handoff. `IMPLEMENTATION_BRIEF.md`'s instruction to read only the first 73
+handoff. `docs/audit/IMPLEMENTATION_BRIEF.md`'s instruction to read only the first 73
 lines was removed, which the brief itself had predicted would happen.
 
 ### META-02
@@ -484,12 +494,12 @@ three-environment matrix, which was true and is fixed. But TigerStyle, which
 `AGENTS.md` called "the repo's" coding standard, was not in `.cursor/rules/`
 at all. It lived in one maintainer's *user-level* Cursor settings, so it
 travelled to no clone and to no second machine. Around 250 lines of mandatory
-standards existed nowhere in the repository. `TIGERSTYLE.md` now carries them,
+standards existed nowhere in the repository. `docs/TIGERSTYLE.md` now carries them,
 and defers to `pyproject.toml` for line length, complexity, and nesting so the
 prose and the linter cannot drift apart.
 
 **`.cursor/plans/` turned out to hold 39 real build plans**, not an empty
-path, and `ROADMAP.md` cites them in three places as the canonical history for
+path, and `docs/ROADMAP.md` cites them in three places as the canonical history for
 named milestones. The maintainer chose to track them, so `.gitignore` now
 ignores `.cursor/*` with an exception for `plans/`. `.cursor/rules/` stays
 ignored on purpose: the tracked documents are canonical and the `.mdc` files

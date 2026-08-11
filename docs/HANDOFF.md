@@ -2,13 +2,13 @@
 
 Orientation for whoever picks this up next, human or agent. Read `AGENTS.md`
 first for the working conventions, this file for what the project is and where
-it stands, then `README.md` and `ROADMAP.md` as needed.
+it stands, then `README.md` and `docs/ROADMAP.md` as needed.
 
 **This page is deliberately bounded.** It used to be 3,233 lines, most of it
 session-by-session shipment narrative that every future session paid to read
 past. That history is in git, and a test keeps this file under 200 lines so it
-cannot grow back. Put durable rationale in `ROADMAP.md`, hardware scenarios in
-`MANUAL_VERIFICATION.md`, and shipped features in `README.md`.
+cannot grow back. Put durable rationale in `docs/ROADMAP.md`, hardware scenarios in
+`docs/MANUAL_VERIFICATION.md`, and shipped features in `README.md`.
 
 ## What it is
 
@@ -82,9 +82,9 @@ in an analytics suite.
 ## Where things stand
 
 **An audit remediation campaign is the current work**, and it overrides the
-normal session cadence. Read `IMPLEMENTATION_BRIEF.md` for how to work it,
-then `IMPLEMENTATION_LEDGER.md` for what is done, ready, and blocked.
-`AUDIT_REPORT.md` is the immutable analysis behind it; read only the findings
+normal session cadence. Read `docs/audit/IMPLEMENTATION_BRIEF.md` for how to work it,
+then `docs/audit/IMPLEMENTATION_LEDGER.md` for what is done, ready, and blocked.
+`docs/audit/AUDIT_REPORT.md` is the immutable analysis behind it; read only the findings
 you intend to take, since it is 2,000 lines.
 
 Stages 1 and 2 are complete. Stage 3, the run-store boundary, opens with
@@ -92,13 +92,13 @@ Stages 1 and 2 are complete. Stage 3, the run-store boundary, opens with
 same commit as each change.
 
 **Outstanding hardware debt unrelated to the campaign**: items 102 to 126 of
-`MANUAL_VERIFICATION.md` have never been validated.
+`docs/MANUAL_VERIFICATION.md` have never been validated.
 
 ## Conventions
 
 - Three virtualenvs, one per model environment; never system Python. See
   `AGENTS.md` for which command goes where.
-- Coding standard: `TIGERSTYLE.md`. Enforced numbers live in `pyproject.toml`.
+- Coding standard: `docs/TIGERSTYLE.md`. Enforced numbers live in `pyproject.toml`.
 - Verification before handing back: `.venv/bin/python -m pytest`,
   `.venv/bin/python scripts/lint_ratchet.py`, `node --check` on changed JS and
   `node --test tests/web/static/*.test.js`. Full list in `AGENTS.md`.
@@ -107,8 +107,8 @@ same commit as each change.
 
 ## Where to pick up
 
-`IMPLEMENTATION_LEDGER.md` answers this during the campaign. After it, the
+`docs/audit/IMPLEMENTATION_LEDGER.md` answers this during the campaign. After it, the
 agreed feature order is **Mamba-3** as a new model class, then extending
 entropy and top-k to the diffusion models; both have prerequisites the ledger
-lists, and both want deliberating before Plan. `ROADMAP.md` carries the
+lists, and both want deliberating before Plan. `docs/ROADMAP.md` carries the
 settled decisions, the deliberate stopping points, and the longer backlog.

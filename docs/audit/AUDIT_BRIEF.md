@@ -1,7 +1,7 @@
 # AUDIT_BRIEF: a read-only sweep of diffusion-LLM
 
 This brief governs one session and one session only. That session reads the
-whole repository and produces `AUDIT_REPORT.md`. It changes nothing else.
+whole repository and produces `docs/audit/AUDIT_REPORT.md`. It changes nothing else.
 
 The app works and has grown quickly. The point of this pass is to find where it
 has accumulated friction, duplication, fragility, and drift before the next
@@ -12,7 +12,7 @@ spent reading deeply than repairing shallowly.
 
 ## The contract
 
-1. **The only path you may create or modify is `AUDIT_REPORT.md`.** No source
+1. **The only path you may create or modify is `docs/audit/AUDIT_REPORT.md`.** No source
    file, no other document, no configuration, no dependency file. No commits,
    no branches, no `git add`.
 2. **Do not fix anything, however small.** A one-line fix you spot in passing
@@ -84,7 +84,7 @@ Seven areas, in the maintainer's own framing. They overlap; that is fine.
 7. **Meta: docs against code, and routing for future agents.** Do the
    documents say true things? Are they organized so an agent finds what it
    needs without paying for what it does not? This includes `AGENTS.md`,
-   `HANDOFF.md`, `README.md`, `ROADMAP.md`, and the rules under
+   `docs/HANDOFF.md`, `README.md`, `docs/ROADMAP.md`, and the rules under
    `.cursor/rules/`. Treat the routing cost as a real cost: every session pays
    it before it does anything useful.
 
@@ -94,13 +94,13 @@ Read these first, in this order, and stop where indicated. This inventory
 exists so you do not spend budget rediscovering the shape of the repo.
 
 - `AGENTS.md` (115 lines): all of it. It is the conventions contract.
-- `HANDOFF.md` (3,223 lines): **lines 1 to 73 only** for orientation, which
+- `docs/HANDOFF.md` (3,223 lines): **lines 1 to 73 only** for orientation, which
   covers what the app is, the three models, and the architecture. Lines 74 to
   2,030 are "Recently shipped" and are a per-session narrative; read into them
   only when a specific finding needs the history, and cite the line range when
   you do. Lines 2,061 to 3,213 are "Where to pick up" and include a 132-item
   manual verification checklist running to line 3,107.
-- `ROADMAP.md` (1,139 lines): "Current status (orientation)" starts at line 20,
+- `docs/ROADMAP.md` (1,139 lines): "Current status (orientation)" starts at line 20,
   the future work at lines 818, 846, 943, 995, and 1030, and the quick map at
   line 1096. Read the map early even though it sits at the end.
 - `README.md` (494 lines): all of it. It is the public description and the
@@ -155,7 +155,7 @@ to synthesize after the tracks return, since no single track can see them.
 
 ## The report
 
-One file, `AUDIT_REPORT.md`, at the repository root. Structure it as:
+One file, `docs/audit/AUDIT_REPORT.md`, at the repository root. Structure it as:
 
 1. **Executive summary**, one screen. What is healthy, what is urgent, what
    the three highest-leverage moves are, and what the report deliberately does
@@ -233,7 +233,7 @@ out. Do not let them anchor the sweep.
 - **`.cursor/` is gitignored** (`.gitignore:1`), so the always-applied rules do
   not travel with the repository, and `ROADMAP.md:1137` points at
   `.cursor/plans/`, which no clone will have.
-- **`HANDOFF.md` has structural drift**: 1,957 lines sit under "Recently
+- **`docs/HANDOFF.md` has structural drift**: 1,957 lines sit under "Recently
   shipped (this session)", and two different pick-up items are both numbered
   0, at lines 2,188 and 3,114.
 - **`tests/web/` covers saved signals, UI state, reconciliation, and run
@@ -257,7 +257,7 @@ budget in an area, say which one and what you would have looked at, so the
 next session knows where the map has a blank rather than a clean bill.
 
 **The report is this session's handoff.** `AGENTS.md` asks every session to
-update `HANDOFF.md`, the README, and the roadmap on the way out. That habit is
+update `docs/HANDOFF.md`, the README, and the roadmap on the way out. That habit is
 suspended here, because rewriting the documents you just audited would bury
 the findings about them. Recommend those edits in the report and leave them
 for the session that implements.

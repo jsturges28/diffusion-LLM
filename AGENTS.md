@@ -1,9 +1,9 @@
 # AGENTS.md: working conventions for this repo
 
 Durable guidance for any agent (or human) picking up work on **diffusion-LLM**.
-Read this first, then `HANDOFF.md` (a bounded cold-start page: what the project
+Read this first, then `docs/HANDOFF.md` (a bounded cold-start page: what the project
 is, how it is put together, and where it stands), then
-`README.md` and `ROADMAP.md`. Take a look, coarse through the necessary areas of the repo to familiarize yourself with the project, and let the user know what you think of the overall plan for this session. They prefer to discuss the overall direction, then ensure both sides are aligned sufficiently before going into Plan mode at the beginning of the session.
+`README.md` and `docs/ROADMAP.md`. Take a look, coarse through the necessary areas of the repo to familiarize yourself with the project, and let the user know what you think of the overall plan for this session. They prefer to discuss the overall direction, then ensure both sides are aligned sufficiently before going into Plan mode at the beginning of the session.
 
 ## What this project is
 
@@ -13,7 +13,7 @@ oriented toward explainability (XAI). The depth is in **discrete diffusion**
 autoregressive baseline and room for further model classes. It runs in the
 browser (localhost) and as an optional native desktop app (`desktop.py`,
 pywebview). Architecture, features, and the public roadmap live in `README.md`;
-the deeper living roadmap in `ROADMAP.md`.
+the deeper living roadmap in `docs/ROADMAP.md`.
 
 ## Environments (never touch system Python)
 
@@ -53,7 +53,7 @@ manual-verification checklist.
 
 The maintainer prefers **deliberate → Plan → Agent**:
 
-1. For non-trivial work, read `README.md` + `ROADMAP.md`, skim the relevant code,
+1. For non-trivial work, read `README.md` + `docs/ROADMAP.md`, skim the relevant code,
    and **discuss/deliberate** the approach and trade-offs before planning.
 2. Use **Plan mode** to write a concise, grounded plan (cite files) and get
    confirmation.
@@ -63,9 +63,9 @@ Small, unambiguous fixes can skip straight to implementation. When a design has
 multiple valid paths, surface the decision instead of guessing.
 
 **A session brief overrides this cadence and the commit discipline below.**
-When `HANDOFF.md` points you at one, read it first and let it win for that
-session. `AUDIT_BRIEF.md` governed the read-only audit that produced
-`AUDIT_REPORT.md`; `IMPLEMENTATION_BRIEF.md` governs the sessions working
+When `docs/HANDOFF.md` points you at one, read it first and let it win for that
+session. `docs/audit/AUDIT_BRIEF.md` governed the read-only audit that produced
+`docs/audit/AUDIT_REPORT.md`; `docs/audit/IMPLEMENTATION_BRIEF.md` governs the sessions working
 through its findings, and narrows the session-end documentation habit at the
 bottom of this file, because forty findings must not become forty rounds of
 documentation churn.
@@ -74,14 +74,14 @@ documentation churn.
 
 Follow **TigerStyle**, the repo's coding standard: assertions, precise types,
 small functions, explicit control flow, `pathlib`, pinned dependencies. The
-canonical text is `TIGERSTYLE.md` in this repository; the enforced numbers
+canonical text is `docs/TIGERSTYLE.md` in this repository; the enforced numbers
 (line length, complexity, nesting) live in `pyproject.toml` and are gated by
 `scripts/lint_ratchet.py`. Match existing conventions in each file. Do not
 rewrite working code without reason.
 
 Editor-specific rules under `.cursor/rules/` are local convenience only. They
 are gitignored, so nothing may depend on them; if a rule matters, it belongs
-in this file or in `TIGERSTYLE.md`.
+in this file or in `docs/TIGERSTYLE.md`.
 
 **No em-dashes in copy.** Do not use em-dashes (`\u2014`, `&mdash;`, `&#8212;`)
 in user-facing text, and avoid them in the frontend (`src/web/static/`) and prose
@@ -131,19 +131,19 @@ subjective; err toward one cohesive, reviewable change per commit).
 Each document has one job, and the fastest way to ruin them is to append
 everything to whichever one is open.
 
-- **`HANDOFF.md`** is a bounded cold-start page, kept under 200 lines by a
+- **`docs/HANDOFF.md`** is a bounded cold-start page, kept under 200 lines by a
  test. Update it only when the orientation it gives is actually wrong: a new
  model, a changed architecture, a different current focus. It is not a
  changelog, and "this session shipped" does not belong in it. Git history is
  the changelog.
-- **`ROADMAP.md`** takes durable rationale: settled decisions, deliberate
+- **`docs/ROADMAP.md`** takes durable rationale: settled decisions, deliberate
  stopping points, and the backlog. If a future session would otherwise have
  to rediscover why a line was drawn, write it here.
 - **`README.md`** takes user-visible features and Implementation Status.
-- **`MANUAL_VERIFICATION.md`** takes any hardware scenario worth re-running
+- **`docs/MANUAL_VERIFICATION.md`** takes any hardware scenario worth re-running
  later. A one-off confirmation belongs in the session handback instead.
 
-`HANDOFF.md` reached 3,233 lines through session-end appends that were each
+`docs/HANDOFF.md` reached 3,233 lines through session-end appends that were each
 individually reasonable, which is the habit this list exists to break.
 
 Whenever a session lands something a user would notice, also check the in-app
@@ -153,7 +153,7 @@ hyperparameter, or a workflow change all want the matching copy updated in the
 same pass so the in-app docs never fall behind. Small internal-only fixes do
 not require an About/Help edit. Follow the no-em-dash rule there too.
 
-Whenever you touch `HANDOFF.md` at session end, also check the in-app **About**
+Whenever you touch `docs/HANDOFF.md` at session end, also check the in-app **About**
 and **Help** modals (`src/web/static/index.html`, `#modal-about` /
 `#modal-help`). If the session landed anything a user would notice: a new model,
 a new page, changed overlays or settings, a new hyperparameter, or a workflow

@@ -8,7 +8,7 @@ from every clone, which is exactly the failure that produced this
 finding.
 
 `AGENTS.md` told agents to follow `.cursor/rules/` while `.gitignore`
-excluded all of `.cursor`, and `ROADMAP.md` cited `.cursor/plans/` as
+excluded all of `.cursor`, and the roadmap cited `.cursor/plans/` as
 the canonical build history for three milestones. A contributor could
 obey every tracked instruction and still never see the rules, and the
 coding standard the contract named did not exist in the repository at
@@ -47,9 +47,15 @@ _IGNORED_PREFIXES = (
 # A build plan describes what was true when it was written, and a file
 # it named may since have been renamed or deleted; holding history to
 # the present tense would just mean never writing history down.
+#
+# The audit report is here for a stronger reason: the campaign's brief
+# declares it immutable, so a test that demanded edits to it would be
+# asking for a rule to be broken. Its file citations are part of the
+# record of what was believed on the day it was written.
 _UNCHECKED_DOC_PREFIXES = (
     ".cursor/plans/",
     "archive/",
+    "docs/audit/AUDIT_REPORT.md",
     "src/web/static/vendor/",
 )
 
@@ -107,7 +113,29 @@ def _top_level_names(tracked: Set[str]) -> Set[str]:
     return {name.split("/", 1)[0] for name in tracked}
 
 
-def _candidate_paths(text: str, tracked: Set[str]) -> Set[str]:
+def _resolve_link(doc: Path, target: str) -> str:
+    """A link target as a path from the repository root.
+
+    Markdown links resolve against the directory holding the
+    document, so `../AGENTS.md` written in `docs/` means something
+    different from the same string written at the root. Normalizing
+    here is what lets the rest of the check treat every path the same
+    way, and it is the part that has to be right for a documentation
+    move to be verifiable.
+    """
+    if target.startswith("/"):
+        return target.lstrip("/")
+    combined = (doc.parent / target).resolve()
+    try:
+        return combined.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        # Points outside the repository, which is never satisfiable.
+        return target
+
+
+def _candidate_paths(
+    doc: Path, text: str, tracked: Set[str]
+) -> Set[str]:
     """Repository paths a document claims exist.
 
     Two signals, and the second is the one that matters. A path
@@ -135,9 +163,10 @@ def _candidate_paths(text: str, tracked: Set[str]) -> Set[str]:
         target = match.split("#", 1)[0].strip()
         if target == "" or target.startswith(_IGNORED_PREFIXES):
             continue
-        if _is_allowed_absent(target):
+        resolved = _resolve_link(doc, target)
+        if _is_allowed_absent(resolved):
             continue
-        found.add(target)
+        found.add(resolved)
 
     # A backtick span may or may not be a path, so it gets the
     # heuristic described above.
@@ -189,7 +218,7 @@ def test_every_referenced_path_reaches_a_clone(doc: Path) -> None:
 
     missing = sorted(
         path
-        for path in _candidate_paths(text, tracked)
+        for path in _candidate_paths(doc, text, tracked)
         if not _is_satisfied(path, tracked)
     )
 
@@ -208,7 +237,7 @@ def test_the_coding_standard_is_in_the_repository() -> None:
     """
     tracked = _tracked_files()
 
-    assert "TIGERSTYLE.md" in tracked
+    assert "docs/TIGERSTYLE.md" in tracked
 
 
 def test_the_build_plans_reach_a_clone() -> None:

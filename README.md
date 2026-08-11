@@ -480,7 +480,7 @@ Clicking **Save** writes a timestamped folder under `results/` containing `metad
 
 ## Roadmap
 
-Detailed, living notes for each item (technical hooks, files to touch, open questions) live in [ROADMAP.md](ROADMAP.md). Development conventions for agents and contributors live in [AGENTS.md](AGENTS.md), the coding standard in [TIGERSTYLE.md](TIGERSTYLE.md), and a bounded cold-start orientation in [HANDOFF.md](HANDOFF.md). Scenarios that need a GPU or a display are collected in [MANUAL_VERIFICATION.md](MANUAL_VERIFICATION.md).
+Detailed, living notes for each item (technical hooks, files to touch, open questions) live in [ROADMAP.md](docs/ROADMAP.md). Development conventions for agents and contributors live in [AGENTS.md](AGENTS.md), the coding standard in [TIGERSTYLE.md](docs/TIGERSTYLE.md), and a bounded cold-start orientation in [HANDOFF.md](docs/HANDOFF.md). Scenarios that need a GPU or a display are collected in [MANUAL_VERIFICATION.md](docs/MANUAL_VERIFICATION.md).
 
 **Phase 2 (shipped for single-canvas): DiffusionGemma interactive remask and resume.** Single-canvas runs can now be re-entered via `decoder_input_ids` as a seed canvas: remasked positions are renoised and denoising continues under a reduced step budget. The remaining work is multi-canvas resume, which must target the correct canvas while preserving already-committed prior canvases (encoder-decoder KV-cache and adaptive stopping make this the hard part).
 

@@ -1032,7 +1032,7 @@ grounded text, VRAM stays within budget, and the text-only path is unaffected.
 Places where work stopped on purpose, with the reasoning that would be
 expensive to rediscover. These are not backlog items: each one is either a
 line drawn deliberately, or a trap a future change will otherwise walk into.
-They moved here from `HANDOFF.md` when `META-01` reduced it to a cold-start
+They moved here from `docs/HANDOFF.md` when `META-01` reduced it to a cold-start
 page.
 
 **Collections ship without storage eviction.** The original framing paired
