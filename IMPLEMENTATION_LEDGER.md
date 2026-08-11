@@ -5,7 +5,8 @@ analysis; this file is the moving part. Read `IMPLEMENTATION_BRIEF.md` for how
 to work a finding, and update this file in the same commit as the change it
 describes.
 
-Nothing has been implemented yet. Every status below is the opening position.
+Stage 1 is in progress. The stage map at the bottom is the agreed plan;
+statuses below move as each finding lands.
 
 ## How to read this
 
@@ -28,13 +29,10 @@ commit, **M** a short multi-commit change, **L** a staged boundary migration.
 
 ## Ready now
 
-Eight findings have no unmet blockers. The first five are the report's
-isolated safety fixes; the last three are the gates it wants installed before
-any boundary moves.
+Seven findings have no unmet blockers. The first four are the remaining
+isolated safety fixes; the last three are the gates the report wants
+installed before any boundary moves.
 
-- **LIFE-07** (high, S): a failed LLaDA resume currently leaves the worker's
-  retained history already truncated. The report names this the best first
-  commit: high severity, small, and it changes no protocol or architecture.
 - **TRUST-01** (high, S): bind to loopback unless network exposure is
   explicit.
 - **ANALYTICS-01** (high, S): a stale detail response can populate the panel
@@ -77,16 +75,24 @@ production owner. Track it as an obligation attached to other findings.
 
 ## Hardware validation queue
 
-Empty. Findings land here when their automated verification passes but the
+Findings land here when their automated verification passes but the
 maintainer's confirmation on real hardware is outstanding. The report's
 standing measurement programme is separate and lives at
 `AUDIT_REPORT.md:1927-2011`.
+
+- **LIFE-07**: the finding's own Verification clause is met in full by
+  `tests/backends/test_llada_resume_state.py`, which injects failure at all
+  four named points and proves the retained history and step count survive
+  byte for byte. Outstanding is one smoke run on real hardware, because no
+  part of the resume path can execute here: load LLaDA, generate, remask and
+  run to a frame, then edit again from an earlier original frame. Nothing
+  depends on this finding, so the queue entry blocks nothing.
 
 ## Status table
 
 | ID | Sev | Eff | Status | Blocked by | Commits |
 |---|---|---|---|---|---|
-| LIFE-07 | high | S | ready | none | |
+| LIFE-07 | high | S | needs hardware | none | Commit LLaDA resume state only after the run lands |
 | TRUST-01 | high | S | ready | none | |
 | ANALYTICS-01 | high | S | ready | none | |
 | DATA-03 | medium | S | ready | none | |
@@ -189,8 +195,43 @@ reviews.
 
 ## Deviations and corrections
 
-Empty. When implementation shows a finding is mistaken, incomplete, or that
-its Direction does not survive contact with the code, add an entry here under
-the finding's ID with what was learned and what was done instead. Do not edit
+When implementation shows a finding is mistaken, incomplete, or that its
+Direction does not survive contact with the code, add an entry here under the
+finding's ID with what was learned and what was done instead. Do not edit
 `AUDIT_REPORT.md`; it is the record of what was believed on 2026-08-10, and
 the difference between that and what turned out to be true is worth keeping.
+
+No finding has been contradicted so far. The entries below are things learned
+while working one finding that belong to another, recorded rather than
+opportunistically fixed.
+
+### LIFE-07
+
+The Direction held exactly. `streaming_resume` builds its own sequence with
+`torch.cat` and never writes through the base tensor
+(`src/inference/streaming_sampler.py:490-498`), so staging really did cost one
+list of existing references and no tensor storage. DiffusionGemma was not
+merely the safer shape but the precise target: `dgemma_worker.py:312-323`
+already sends its terminal frame before assigning the spliced history, and
+LLaDA now matches it.
+
+Two clarifications the finding left implicit, both settled with the
+maintainer and pinned by tests:
+
+- **Cancellation commits.** `streaming_resume` returns without a terminal
+  frame when its cancel event is set, and the browser keeps the frames it
+  received, so discarding the partial history would recreate the same
+  worker/browser disagreement in the other direction. "Commit only after
+  resume succeeds" means after an accepted *terminal outcome*, and a cancel
+  is one.
+- **The terminal send is part of the transaction.** On the guided
+  "run to here" path the terminal frame is the worker's own, so the commit
+  moved after that `send_json`, matching the completed path where the
+  sampler's terminal frame has already gone out through the streamer.
+
+**Noted, not fixed (adjacent).** On a guided partial resume, `tensor_history`
+changes while `total_steps` deliberately keeps describing the run it branched
+from, so `_validate_resume` bounds-checks the frame index against one and
+computes remaining steps from the other. That is pre-existing and does not
+prevent LIFE-07's Verification clause from passing, so it was left alone. It
+belongs with `LIFE-01`'s retained-state contract.

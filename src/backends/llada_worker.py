@@ -64,6 +64,46 @@ def _apply_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def _commit_resume(
+    state: Dict[str, Any],
+    base_history: List[torch.Tensor],
+    resume_history: List[torch.Tensor],
+    *,
+    done: bool,
+) -> None:
+    """Swap the staged candidate in as the retained history.
+
+    Called only once a terminal outcome has reached the client, so
+    that every failure before it leaves the original history and
+    its step count exactly as they were. That is what keeps the
+    worker agreeing with the browser, which rolls back to its own
+    pre-edit snapshot when a resume fails.
+
+    An empty ``resume_history`` cannot come from a terminal
+    outcome: ``streaming_resume`` appends the remasked canvas
+    before yielding its first frame. Committing one anyway would
+    cut the run back to the surviving prefix, which is the exact
+    loss this staging exists to prevent, so it is refused rather
+    than trusted.
+
+    ``total_steps`` moves only on a completed resume. A guided
+    "run to here" stops short on purpose and leaves the figure
+    describing the run it branched from.
+    """
+    if len(resume_history) == 0:
+        return
+    candidate = base_history + resume_history
+    assert len(candidate) > len(base_history), (
+        "a committed candidate extends the surviving prefix"
+    )
+    state["tensor_history"] = candidate
+    assert len(state["tensor_history"]) == len(candidate), (
+        "the retained history is the candidate"
+    )
+    if done:
+        state["total_steps"] = len(candidate) - 1
+
+
 class LladaBackend(Backend):
     def __init__(self) -> None:
         self.model_info = LLADA
@@ -371,9 +411,17 @@ class LladaBackend(Backend):
         frame_index = resume_params["frame_index"]
         max_frames: Optional[int] = data.get("max_frames")
         base_tensor = state["tensor_history"][frame_index]
-        state["tensor_history"] = state["tensor_history"][
-            :frame_index
-        ]
+        # Staged, never truncated in place. The prefix is a new
+        # list of the same tensor references, and streaming_resume
+        # builds its own sequence with torch.cat rather than
+        # writing through base_tensor, so rolling back costs
+        # nothing and duplicates no tensor storage.
+        base_history: List[torch.Tensor] = state[
+            "tensor_history"
+        ][:frame_index]
+        assert len(base_history) == frame_index, (
+            "the staged prefix stops at the resume frame"
+        )
         resume_history: List[torch.Tensor] = []
         try:
             generator = streaming_resume(
@@ -398,29 +446,50 @@ class LladaBackend(Backend):
             done = await stream.run(
                 generator, start, max_frames=max_frames
             )
-            state["tensor_history"].extend(resume_history)
-            if done:
-                state["total_steps"] = (
-                    len(state["tensor_history"]) - 1
-                )
-            else:
-                final_text = ""
-                if resume_history:
-                    final_text = self.tokenizer.batch_decode(
-                        resume_history[-1],
-                        skip_special_tokens=True,
-                    )[0]
+            if not done:
+                # The worker's own terminal message, for a guided
+                # "run to here" that stopped at its budget or a
+                # cancelled resume. Sent before the commit so a
+                # failed send rolls back too, matching the done
+                # path where the sampler's terminal frame has
+                # already gone out through the streamer.
                 await ws.send_json(
                     {
                         "type": "done",
-                        "final_text": final_text,
+                        "final_text": self._resume_final_text(
+                            resume_history
+                        ),
                     }
                 )
+            _commit_resume(
+                state,
+                base_history,
+                resume_history,
+                done=done,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.exception("resume failed")
             await ws.send_json(
                 {"type": "error", "message": str(exc)}
             )
+
+    def _resume_final_text(
+        self, resume_history: List[torch.Tensor]
+    ) -> str:
+        """Decode the last staged resume frame, or "" if none.
+
+        Only the guided and cancelled paths need this. A resume
+        that ran to completion gets its text from the sampler's
+        own terminal frame instead.
+        """
+        if len(resume_history) == 0:
+            return ""
+        decoded = self.tokenizer.batch_decode(
+            resume_history[-1],
+            skip_special_tokens=True,
+        )
+        assert len(decoded) > 0, "batch_decode returned nothing"
+        return str(decoded[0])
 
 
 def build_backend() -> Backend:
