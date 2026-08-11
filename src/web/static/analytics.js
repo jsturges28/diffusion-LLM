@@ -1609,16 +1609,27 @@ function renderTable() {
         tr.classList.add("row-checked");
       }
 
+      // A run the server could not read. It is listed rather than
+      // hidden, because a run that quietly disappears looks deleted
+      // and invites saving it again. Everything that would try to
+      // plot it is withheld; deleting it is left available, since
+      // that is the one useful thing to do with it.
+      if (run.invalid) {
+        tr.classList.add("row-invalid");
+      }
+
       var tdCheck = document.createElement("td");
       tdCheck.className = "col-check";
-      var cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.className = "app-checkbox";
-      cb.checked = !!checkedIds[run.run_id];
-      cb.setAttribute(
-        "data-run-id", run.run_id
-      );
-      tdCheck.appendChild(cb);
+      if (!run.invalid) {
+        var cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.className = "app-checkbox";
+        cb.checked = !!checkedIds[run.run_id];
+        cb.setAttribute(
+          "data-run-id", run.run_id
+        );
+        tdCheck.appendChild(cb);
+      }
       tr.appendChild(tdCheck);
 
       // Collecting sits beside selecting rather than beside
@@ -1627,11 +1638,28 @@ function renderTable() {
       // left edge.
       var tdStar = document.createElement("td");
       tdStar.className = "col-star";
-      tdStar.appendChild(buildRowStar(run.run_id));
-      tdStar.appendChild(buildRowCollectCaret(run.run_id));
+      if (!run.invalid) {
+        tdStar.appendChild(buildRowStar(run.run_id));
+        tdStar.appendChild(buildRowCollectCaret(run.run_id));
+      }
       tr.appendChild(tdStar);
 
-      for (var k = 0; k < TABLE_KEYS.length; k++) {
+      // One spanning cell rather than per-column values, because a
+      // run that could not be read has no values to put in them, and
+      // because the reason has to appear whichever columns are
+      // configured. Only the folder name and the reason are shown,
+      // and both come from the server as text.
+      if (run.invalid) {
+        var tdWhy = document.createElement("td");
+        tdWhy.className = "cell-invalid";
+        tdWhy.colSpan = TABLE_KEYS.length + 1;
+        tdWhy.textContent = run.run_id + ": "
+          + (run.error || "Could not be read");
+        tdWhy.title = tdWhy.textContent;
+        tr.appendChild(tdWhy);
+      }
+
+      for (var k = 0; !run.invalid && k < TABLE_KEYS.length; k++) {
         var td = document.createElement("td");
         td.textContent = displayVal(
           run, TABLE_KEYS[k]
@@ -1676,7 +1704,12 @@ function renderTable() {
           + ' stroke-linecap="round" stroke-linejoin="round" />'
           + '</svg>';
       }
-      tr.appendChild(tdDiff);
+      // The invalid row's spanning cell already covers this column,
+      // so appending it too would push the row a cell wide and
+      // misalign the delete buttons down the table.
+      if (!run.invalid) {
+        tr.appendChild(tdDiff);
+      }
 
       var tdActions = document.createElement("td");
       tdActions.className = "col-actions";
@@ -1753,8 +1786,53 @@ function buildRowCollectCaret(runId) {
 
 // ---- Detail panel ----
 
+function findRun(runId) {
+  for (var i = 0; i < allRuns.length; i++) {
+    if (allRuns[i].run_id === runId) {
+      return allRuns[i];
+    }
+  }
+  return null;
+}
+
+function showInvalidDetail(run) {
+  // Any request already in flight for another run is dropped, so the
+  // panel cannot be repainted by a fetch the user has moved on from.
+  detailRequests.begin(run.run_id);
+  comparePanel.hidden = true;
+  detailPanel.classList.remove("hidden");
+  detailTitle.textContent = "Run: " + run.run_id;
+
+  var reason = run.error || "This run could not be read.";
+  detailMeta.innerHTML =
+    '<div class="run-unreadable">'
+    + '<div class="run-unreadable-title">'
+    + 'This run could not be opened</div>'
+    + '<div class="run-unreadable-reason">'
+    + escHtml(reason) + '</div>'
+    + '<div class="run-unreadable-hint">'
+    + 'Its folder is still on disk. Delete it from the row if you '
+    + 'no longer want it.</div>'
+    + '</div>';
+
+  // Torn down for the same reason the loaders tear down before their
+  // fetch: otherwise the previous run's charts and tokens sit under
+  // this run's title, which reads as this run's data.
+  clearRunCharts();
+  clearOverlay();
+  renderTable();
+}
+
 function showDetail(runId) {
   activeRunId = runId;
+  // A run the catalog could not read has nothing to fetch. Say why
+  // and stop, rather than firing two requests that can only fail and
+  // leaving the panel on a spinner.
+  var listed = findRun(runId);
+  if (listed && listed.invalid) {
+    showInvalidDetail(listed);
+    return;
+  }
   // One token for both fetches, taken before either starts, so the
   // pair either paints together or not at all.
   var token = detailRequests.begin(runId);
@@ -1773,13 +1851,7 @@ function showDetail(runId) {
     }
   }
 
-  var run = null;
-  for (var i = 0; i < allRuns.length; i++) {
-    if (allRuns[i].run_id === runId) {
-      run = allRuns[i];
-      break;
-    }
-  }
+  var run = findRun(runId);
   if (!run) { return; }
 
   detailTitle.textContent =

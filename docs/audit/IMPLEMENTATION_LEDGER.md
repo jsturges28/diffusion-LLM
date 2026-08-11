@@ -458,6 +458,26 @@ with availability only.
 
 ### DATA-05
 
+**The catalog's silent skip was hiding a crash, not preventing one.**
+`list_runs` caught `JSONDecodeError` and `AssertionError` and dropped
+the run. Two things were wrong with that. A run that vanishes reads as
+a deleted run, and the natural response is to save it again. And the
+catch did not cover the failure that actually mattered: a
+`metadata.json` holding a list or a string got past `json.loads` and
+died on `data["run_id"] = ...` with a bare `TypeError` about item
+assignment, which nothing caught, so one bad file returned a 500 for
+every run. Both are now entries carrying `invalid` and a reason.
+
+No test covered the skip, which is why the neighboring crash could sit
+next to it.
+
+**A future version and a damaged run are told apart deliberately.** A
+forward version is almost always this build being old, not the run
+being broken, so it gets "saved by a newer version, update to open it"
+rather than "unreadable". The wording is the point: calling a good run
+corrupt invites deleting it. Nothing else is read from such a run, so
+no field written by an unknown build is interpreted.
+
 **The transcript adds a trailing newline that was never in the
 frame.** Found by the golden fixtures, not suspected beforehand. The
 v0 writer puts a newline after each frame body and the next delimiter

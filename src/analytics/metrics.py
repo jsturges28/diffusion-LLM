@@ -470,17 +470,50 @@ def load_run_metadata(
     """Read and return metadata.json from a run dir.
 
     Adds the directory name as ``run_id`` for API use.
+
+    Raises ``ValueError`` if the file does not hold a JSON object.
+    That check exists because the next line assigns into the result:
+    a metadata file holding a list or a string used to fail there
+    with a bare ``TypeError`` about item assignment, which said
+    nothing about which run was broken.
     """
-    meta_path = run_dir / "metadata.json"
+    meta_path = run_dir / METADATA_NAME
     assert meta_path.is_file(), (
         f"metadata.json not found in {run_dir}"
     )
 
-    data: Dict[str, Any] = json.loads(
-        meta_path.read_text(encoding="utf-8")
-    )
+    data = json.loads(meta_path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"metadata.json in {run_dir.name} holds a"
+            f" {type(data).__name__}, not an object"
+        )
     data["run_id"] = run_dir.name
     return data
+
+
+def _invalid_run_entry(
+    run_id: str, reason: str
+) -> Dict[str, Any]:
+    """A catalog row for a run that could not be read.
+
+    An entry rather than an omission. A run that silently vanishes
+    from the list looks like a deleted run, and the natural next step
+    is to save it again; a row that says what is wrong can be read,
+    and deleted on purpose.
+
+    Carries the keys the table sorts and groups on so a damaged run
+    cannot break the rendering of the healthy ones around it.
+    """
+    return {
+        "run_id": run_id,
+        "invalid": True,
+        "error": reason,
+        "prompt": "",
+        "model": "",
+        "created_at": "",
+        "has_diff": False,
+    }
 
 
 def list_runs(
@@ -491,6 +524,10 @@ def list_runs(
     Returns a list of metadata dicts sorted by
     created_at (newest first), falling back to
     directory name sort when created_at is absent.
+
+    One damaged run cannot empty the catalog or fail the request. It
+    becomes an entry carrying ``invalid`` and a reason, so the other
+    runs still list and the broken one is visible enough to delete.
     """
     if not results_dir.is_dir():
         return []
@@ -507,27 +544,9 @@ def list_runs(
         # so on purpose rather than by luck.
         if child.name.startswith("."):
             continue
-        meta_path = child / "metadata.json"
-        if not meta_path.is_file():
+        if not (child / METADATA_NAME).is_file():
             continue
-        try:
-            meta = load_run_metadata(child)
-            # A durable counterfactual diff is available only when the
-            # pre-edit snapshot was saved alongside the run.
-            meta["has_diff"] = (
-                child / "original_tokens.json"
-            ).is_file()
-            # Repairs edited runs saved before the elapsed series was
-            # made cumulative, whose stored value covers only the
-            # final segment. A no-op for every other run.
-            repaired = total_elapsed_seconds(
-                meta.get("per_frame_elapsed")
-            )
-            if repaired is not None:
-                meta["elapsed_seconds"] = repaired
-            runs.append(meta)
-        except (json.JSONDecodeError, AssertionError):
-            continue
+        runs.append(_read_catalog_entry(child))
 
     runs.sort(
         key=lambda r: r.get(
@@ -536,3 +555,49 @@ def list_runs(
         reverse=True,
     )
     return runs
+
+
+def _read_catalog_entry(
+    run_dir: Path,
+) -> Dict[str, Any]:
+    """One row of the catalog, valid or explicitly not.
+
+    Every failure mode of reading a run directory converges here, so
+    that the loop above has no error handling of its own and cannot
+    grow a path that lets one run take down the request.
+    """
+    try:
+        meta = load_run_metadata(run_dir)
+        version = run_schema_version(meta)
+    except UnsupportedRunVersionError as exc:
+        # Deliberately the end of the road for this run: nothing else
+        # is read from it. Its fields were written by a build this
+        # one does not know, so interpreting any of them, including
+        # the timings repaired below, would be a guess presented as a
+        # fact.
+        return _invalid_run_entry(
+            run_dir.name,
+            "Saved by a newer version of this app"
+            f" (format {exc.version}). Update to open it.",
+        )
+    except (json.JSONDecodeError, ValueError) as exc:
+        return _invalid_run_entry(
+            run_dir.name, f"Unreadable metadata: {exc}"
+        )
+    except (OSError, AssertionError) as exc:
+        return _invalid_run_entry(
+            run_dir.name, f"Could not be read: {exc}"
+        )
+
+    assert version in SUPPORTED_SCHEMA_VERSIONS, version
+
+    # A durable counterfactual diff is available only when the
+    # pre-edit snapshot was saved alongside the run.
+    meta["has_diff"] = (run_dir / "original_tokens.json").is_file()
+    # Repairs edited runs saved before the elapsed series was made
+    # cumulative, whose stored value covers only the final segment. A
+    # no-op for every other run.
+    repaired = total_elapsed_seconds(meta.get("per_frame_elapsed"))
+    if repaired is not None:
+        meta["elapsed_seconds"] = repaired
+    return meta

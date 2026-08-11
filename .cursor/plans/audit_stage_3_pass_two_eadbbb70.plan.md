@@ -7,10 +7,10 @@ todos:
     status: completed
   - id: version-adapters
     content: "DATA-05 part two: write schema_version and a capture manifest, add frames.jsonl as the machine format while keeping history.txt for humans, validate the bundle between stage and publish, and route reads through v0/v1 adapters into the existing canonical shape, with golden fixtures per era"
-    status: in_progress
+    status: completed
   - id: invalid-runs
     content: "DATA-05 part three: make a malformed run an explicit invalid entry instead of crashing the whole catalog, and give an unsupported future version a visible compatibility message that touches no disk"
-    status: pending
+    status: in_progress
   - id: data-04
     content: "DATA-04: record the effective device on each backend, stamp a provenance envelope onto every done frame via FrameStreamer and the two synthetic send sites, carry it through the browser's run and session snapshots, and prefer it over manager state when building metadata"
     status: pending

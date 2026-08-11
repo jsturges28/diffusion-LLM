@@ -561,6 +561,26 @@ html, body {
   max-width: 200px;
 }
 
+/* A run the server could not read. Listed rather than hidden, so it
+   reads as a problem to look at rather than a run that vanished, and
+   dimmed so it never competes with the runs that do have data. The
+   left rule is the only strong mark: it lines the broken rows up
+   down the table without shouting. */
+#runs-table tbody tr.row-invalid {
+  background: rgba(255, 180, 0, 0.05);
+}
+
+#runs-table tbody tr.row-invalid:hover {
+  background: rgba(255, 180, 0, 0.09);
+}
+
+#runs-table tbody td.cell-invalid {
+  color: var(--warn);
+  font-style: italic;
+  border-left: 2px solid var(--warn);
+  max-width: none;
+}
+
 .col-check {
   width: 32px;
   text-align: center;
@@ -686,6 +706,33 @@ html, body {
 .row-collect-caret:hover {
   color: var(--text-primary);
   background: var(--bg-surface-hover);
+}
+
+/* The detail panel for a run that could not be opened. It replaces
+   the metadata block, so it carries its own padding rather than
+   inheriting the meta-row rhythm. */
+.run-unreadable {
+  padding: 14px 16px;
+  border: 1px solid var(--warn);
+  border-radius: 6px;
+  background: rgba(255, 180, 0, 0.05);
+}
+
+.run-unreadable-title {
+  color: var(--warn);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.run-unreadable-reason {
+  color: var(--text-primary);
+  margin-bottom: 8px;
+  word-break: break-word;
+}
+
+.run-unreadable-hint {
+  color: var(--text-dim);
+  font-size: 0.85em;
 }
 
 /* An inline-flex box with only an SVG in it has no text baseline to

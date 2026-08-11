@@ -47,6 +47,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.analytics.metrics import (
+    UnsupportedRunVersionError,
     canvas_boundaries,
     compute_convergence,
     list_runs,
@@ -1605,6 +1606,28 @@ def _compute_run_metrics(run_id: str) -> Dict[str, Any]:
     return result
 
 
+def _unsupported_version_response(
+    exc: UnsupportedRunVersionError,
+) -> JSONResponse:
+    """Answer a run this build cannot read with a plain explanation.
+
+    Separate from the generic malformed-run 400 so the browser can
+    say "update the app" rather than "this run is broken". The run is
+    almost certainly fine; this build is the old one.
+    """
+    return JSONResponse(
+        status_code=400,
+        content={
+            "error": (
+                "This run was saved by a newer version of the app"
+                f" (format {exc.version}), which this build cannot"
+                " read. Update to open it."
+            ),
+            "unsupported_version": True,
+        },
+    )
+
+
 @app.get("/api/analytics/runs/{run_id}/metrics")
 async def analytics_run_metrics(run_id: str) -> JSONResponse:
     try:
@@ -1614,6 +1637,12 @@ async def analytics_run_metrics(run_id: str) -> JSONResponse:
     except FileNotFoundError as exc:
         return JSONResponse(
             status_code=404, content={"error": str(exc)}
+        )
+    except UnsupportedRunVersionError as exc:
+        return _unsupported_version_response(exc)
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=400, content={"error": str(exc)}
         )
     return JSONResponse(content=result)
 
@@ -1655,6 +1684,8 @@ async def analytics_run_frames(run_id: str) -> JSONResponse:
         return JSONResponse(
             status_code=404, content={"error": str(exc)}
         )
+    except UnsupportedRunVersionError as exc:
+        return _unsupported_version_response(exc)
     except ValueError as exc:
         return JSONResponse(
             status_code=400, content={"error": str(exc)}

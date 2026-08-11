@@ -32,6 +32,7 @@ from src.analytics.metrics import (
     SCHEMA_VERSION_LEGACY,
     UnsupportedRunVersionError,
     compute_convergence,
+    list_runs,
     load_run_frames,
     load_run_metadata,
     parse_frames_jsonl,
@@ -444,6 +445,169 @@ def test_a_string_version_is_refused() -> None:
 def test_a_negative_version_is_refused() -> None:
     with pytest.raises(UnsupportedRunVersionError):
         run_schema_version({"schema_version": -1})
+
+
+# -- one bad run does not take the catalog with it --
+
+
+def _write_raw_metadata(root: Path, run_id: str, raw: str) -> Path:
+    run_dir = root / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "metadata.json").write_text(raw, encoding="utf-8")
+    return run_dir
+
+
+def test_a_healthy_run_still_lists_beside_a_broken_one(
+    tmp_path: Path,
+) -> None:
+    """The finding in one assertion: a single unreadable directory
+    used to be able to fail the whole request."""
+    _write_v0_run(tmp_path, "20251102_143107_legacy")
+    _write_raw_metadata(tmp_path, "20251103_000000_broken", "{oops")
+
+    runs = list_runs(tmp_path)
+
+    assert len(runs) == 2
+    healthy = [r for r in runs if not r.get("invalid")]
+    assert len(healthy) == 1
+    assert healthy[0]["run_id"] == "20251102_143107_legacy"
+
+
+def test_a_broken_run_is_listed_rather_than_hidden(
+    tmp_path: Path,
+) -> None:
+    """Skipping it silently reads as a deleted run, and the obvious
+    response to that is to save it again."""
+    _write_raw_metadata(tmp_path, "20251103_000000_broken", "{oops")
+
+    runs = list_runs(tmp_path)
+
+    assert len(runs) == 1
+    assert runs[0]["invalid"] is True
+    assert runs[0]["run_id"] == "20251103_000000_broken"
+    assert "Unreadable metadata" in runs[0]["error"]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["[1, 2, 3]", '"just a string"', "42", "null"],
+)
+def test_metadata_that_is_not_an_object_is_an_invalid_entry(
+    tmp_path: Path, raw: str
+) -> None:
+    """These used to raise TypeError on item assignment, which no
+    handler caught, so the catalog returned a 500 for all runs."""
+    _write_raw_metadata(tmp_path, "20251103_000000_odd", raw)
+
+    runs = list_runs(tmp_path)
+
+    assert len(runs) == 1
+    assert runs[0]["invalid"] is True
+
+
+def test_an_invalid_entry_carries_what_the_table_needs(
+    tmp_path: Path,
+) -> None:
+    """The row is rendered next to healthy ones, so a missing key
+    here becomes a broken table rather than a broken run."""
+    _write_raw_metadata(tmp_path, "20251103_000000_broken", "{oops")
+
+    entry = list_runs(tmp_path)[0]
+
+    for key in ("run_id", "prompt", "model", "created_at",
+                "has_diff", "error", "invalid"):
+        assert key in entry, key
+
+
+def test_the_catalog_survives_a_directory_of_broken_runs(
+    tmp_path: Path,
+) -> None:
+    """Bound the blast radius: many bad runs still return, in order,
+    without raising."""
+    for index in range(12):
+        _write_raw_metadata(
+            tmp_path, f"20251103_0000{index:02d}_broken", "{oops"
+        )
+    _write_v0_run(tmp_path, "20251102_143107_legacy")
+
+    runs = list_runs(tmp_path)
+
+    assert len(runs) == 13
+    assert sum(1 for r in runs if r.get("invalid")) == 12
+
+
+# -- a run from a future build --
+
+
+def _write_future_run(root: Path, run_id: str) -> Path:
+    """A run claiming a format this build has never seen."""
+    run_dir = root / run_id
+    run_dir.mkdir(parents=True)
+    metadata = {
+        "prompt": "from tomorrow",
+        "model": "LLaDA-8B-Instruct",
+        "created_at": "2027-01-01T00:00:00",
+        "schema_version": SCHEMA_VERSION_LATEST + 1,
+    }
+    (run_dir / "metadata.json").write_text(
+        json.dumps(metadata), encoding="utf-8"
+    )
+    return run_dir
+
+
+def test_a_future_run_lists_with_a_compatibility_message(
+    tmp_path: Path,
+) -> None:
+    _write_future_run(tmp_path, "20270101_000000_future")
+
+    entry = list_runs(tmp_path)[0]
+
+    assert entry["invalid"] is True
+    assert "newer version" in entry["error"]
+    assert "Update" in entry["error"]
+
+
+def test_a_future_run_is_not_reported_as_corrupt(
+    tmp_path: Path,
+) -> None:
+    """The run is probably fine; this build is the old one. Saying
+    "unreadable" would invite deleting a good run."""
+    _write_future_run(tmp_path, "20270101_000000_future")
+
+    entry = list_runs(tmp_path)[0]
+
+    assert "Unreadable" not in entry["error"]
+    assert "corrupt" not in entry["error"].lower()
+
+
+def test_no_field_of_a_future_run_is_interpreted(
+    tmp_path: Path,
+) -> None:
+    """Its fields were written by a build this one does not know, so
+    reading any of them would be a guess shown as a fact."""
+    run_dir = _write_future_run(tmp_path, "20270101_000000_future")
+    (run_dir / "original_tokens.json").write_text(
+        "[]", encoding="utf-8"
+    )
+
+    entry = list_runs(tmp_path)[0]
+
+    assert entry["has_diff"] is False
+    assert entry["prompt"] == ""
+    assert "elapsed_seconds" not in entry
+
+
+def test_a_future_run_never_reaches_the_frame_readers(
+    tmp_path: Path,
+) -> None:
+    """Refused at the version check, before anything tries to parse
+    a file whose format is unknown."""
+    run_dir = _write_future_run(tmp_path, "20270101_000000_future")
+
+    with pytest.raises(UnsupportedRunVersionError):
+        read_frame_texts(run_dir)
+    with pytest.raises(UnsupportedRunVersionError):
+        load_run_frames(run_dir)
 
 
 # -- writer and reader name the same files --

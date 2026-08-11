@@ -19,6 +19,8 @@ kept when these were written:
 - **102 to 126**: **not yet validated.** This is the outstanding debt,
   and it predates the audit campaign.
 - **127 to 132**: confirmed as each one landed.
+- **133 to 135**: **not yet validated.** Added by `DATA-05`; they need a
+  display, so the sandbox could only check the server's half.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -954,3 +956,32 @@ in-sandbox (no display).*
     drifted off the can. The correction is a single pixel against a 10px font,
     so judge it at the window size you actually use; say so if it now reads
     high and the lift can come back out.
+133. **A damaged run is a visible row, not a gap.** Copy a saved run's folder
+    aside, then corrupt the copy: overwrite its `metadata.json` with `{oops`.
+    Reload Analytics. The corrupt run should appear as its own row, in amber
+    italics, reading `<folder>: Unreadable metadata: ...`, and **every other
+    run should still be listed**. Before this change it vanished silently,
+    which reads as a deleted run. Sight along the table: the amber row's
+    single wide cell has to end where the other rows' Edited column ends, so
+    the trashcans stay in one line down the right edge. It should have no
+    checkbox and no star. Click it: the detail panel should say the run could
+    not be opened, give the reason, and note the folder is still on disk,
+    with no spinner and no charts left over from the run you had open before.
+    Then delete it from its row and confirm the confirmation names the right
+    folder and that it goes.
+134. **A run from a future version says so.** In another copied folder, edit
+    `metadata.json` and set `"schema_version": 99`. Reload. That row should
+    read `Saved by a newer version of this app (format 99). Update to open
+    it.`, and specifically must **not** say unreadable or corrupt: the run is
+    probably fine and this build is the old one. Wording matters here because
+    the wrong wording invites deleting a good run.
+135. **A new run carries `frames.jsonl` and reads back from it.** Save any run
+    and open its folder. Alongside `history.txt` there should be
+    `frames.jsonl`, one JSON object per line, and `metadata.json` should
+    carry `schema_version` and a `capture` block naming which signals the run
+    captured. Now rename `history.txt` aside and reload Analytics: the run's
+    charts and overlays should be unaffected, because nothing reads the
+    transcript any more. Put it back. Then do the same to an **older** run
+    (one saved before this session): that one *should* break, because the
+    transcript is all it has, and it should show as an invalid row rather
+    than failing the page.
