@@ -23,9 +23,9 @@ Three files carry the work, and they have different jobs:
 2. Read in full only the findings you intend to take. Each one carries its own
    Direction, Blast radius, and Verification, which is what you implement
    against.
-3. For orientation, `HANDOFF.md` lines 1 to 73 are the current architecture
-   summary. Skip the rest of that file until `META-01` restructures it, at
-   which point this instruction stops being needed.
+3. For orientation, read `HANDOFF.md`. `META-01` has since reduced it to a
+   bounded cold-start page, so the caveat that used to sit here, telling you
+   to read its first 73 lines and skip the rest, no longer applies.
 4. Tell the maintainer what you propose to take and why, and deliberate before
    planning. This is the repo's standing cadence and it matters more here than
    usual, because several findings have a fork in them that is the

@@ -38,12 +38,9 @@ commit, **M** a short multi-commit change, **L** a staged boundary migration.
 
 ## Ready now
 
-Two findings have no unmet blockers: the last gate the report wants installed
-before any boundary moves, and stage 3's first step, which `DATA-03`
-unblocked.
+One finding has no unmet blockers, and it is stage 3's first step, which
+`DATA-03` unblocked.
 
-- **META-01** (medium, M): reduce `HANDOFF.md` to a cold-start page and move
-  the 132-item verification ledger out of it.
 - **ORG-01** (medium, M): extract behavior-preserving storage operations out
   of `server.py`. Became ready when `DATA-03` made the root explicit, and it
   is the first step of the run-store stage rather than of stage 1.
@@ -100,7 +97,7 @@ is recorded under Deviations. One new entry arrived from that same pass:
 | DATA-03 | medium | S | done | none | Resolve the data root without asking the cwd |
 | TRUST-02 | high | M | done | none | Serve every page without a third-party origin |
 | QUALITY-02 | medium | M | done | none | Ratchet the lint baseline instead of remembering it |
-| META-01 | medium | M | ready | none | |
+| META-01 | medium | M | done | none | Three commits: checklist out, decisions to ROADMAP, page cut |
 | META-02 | medium | S | done | none | Put the agent contract where a clone can read it |
 | QUALITY-01 | medium | L | companion | lands with each seam | |
 | ORG-01 | medium | M | ready | DATA-03 (done) | |
@@ -438,6 +435,46 @@ revisions in the registry, resolved revisions and weight digests in run
 provenance, cache-space preflight against remaining bytes, and a completion
 manifest for the locally quantized DiffusionGemma artifact. The slice deals
 with availability only.
+
+### META-01
+
+**3,233 lines to 114.** Three commits, each a move rather than a copy so the
+tree never held the same content twice: the 132-item checklist and its
+activation-failure runbook to `MANUAL_VERIFICATION.md`, the settled decisions
+to `ROADMAP.md`, then the narrative deleted and the page rewritten.
+
+**The verification ledger's state was the thing to be careful with.** It
+records validation per range rather than per item, and the ranges say that
+**items 102 to 126 have never been validated**. That is 25 scenarios of real
+outstanding debt, predating the audit, and it was one careless paste away from
+being lost in a file move. It is now stated at the top of the new document and
+in the handoff.
+
+**Item 1 was inverted, exactly as the report said.** It asked the tester to
+confirm behavior with "Alternatives off (the default)" while
+`registry.py:319-327` has defaulted that capture on. A checklist item whose
+premise is backwards is worse than a missing one, because a correct result
+reads as a regression; the report is right that this class of staleness is the
+real cost of the file's size.
+
+**One thing turned out not to need a home.** The `results/` rename trap read
+as load-bearing operational knowledge, and the audit's own evidence cites it.
+But its stated cause is that `RESULTS_DIR` was relative to the process working
+directory, which `DATA-03` removed in stage 1. What was left is a historical
+incident already recorded in `AUDIT_REPORT.md`, so it was deleted rather than
+relocated.
+
+**Both entries numbered `0.` disappeared with their sections**, which resolves
+the duplicate numbering without a renumbering pass. `tests/test_handoff_bounded.py`
+now fails on duplicate top-level list numbers, on the phrases that grew the
+old file, and on any page over 200 lines. The bound is the point: this file
+did not get long through one bad decision, it got long through a hundred
+reasonable appends, and only a number that fails stops that.
+
+**`AGENTS.md`'s session-end habit was the upstream cause** and was rewritten
+to say which document takes what, rather than to ask for an append to the
+handoff. `IMPLEMENTATION_BRIEF.md`'s instruction to read only the first 73
+lines was removed, which the brief itself had predicted would happen.
 
 ### META-02
 

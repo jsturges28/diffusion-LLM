@@ -7,16 +7,16 @@ todos:
     status: completed
   - id: meta-02
     content: "META-02: add tracked TIGERSTYLE.md referencing pyproject.toml for its numbers, repoint AGENTS.md and HANDOFF.md at it, un-ignore .cursor/plans/ so the three ROADMAP references become true, rewrite the two local .mdc files as thin pointers that fix the venv contradiction, and add tests/test_docs_links.py"
-    status: in_progress
+    status: completed
   - id: meta-01-ledger
     content: "META-01 part one: extract the 132-item ledger and the activation-failure runbook into MANUAL_VERIFICATION.md, preserving the 1-101 validated / 102-126 outstanding / 127-132 confirmed state and correcting the stale Alternatives default against registry.py"
-    status: pending
+    status: completed
   - id: meta-01-roadmap
     content: "META-01 part two: fold the still-live decisions from HANDOFF lines 2094-2196 and 3124-3160 into ROADMAP.md, dropping the ones the audit superseded"
-    status: pending
+    status: completed
   - id: meta-01-cut
     content: "META-01 part three: cut HANDOFF.md to a cold-start page under 200 lines, fix the Alternatives wording at line 30, update AGENTS.md's session-end habit, and add tests/test_handoff_bounded.py"
-    status: pending
+    status: in_progress
   - id: docs-layout
     content: "Documentation layout: git mv the reference and campaign documents into docs/ and docs/audit/, leaving README.md, AGENTS.md and LICENSE at root, then rewrite every cross-reference and let tests/test_docs_links.py prove none broke"
     status: pending
