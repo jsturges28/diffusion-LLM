@@ -728,6 +728,12 @@ html, body {
   font-weight: 600;
   line-height: 1;
   vertical-align: middle;
+  /* vertical-align: middle centers on the parent's x-height, but the
+     column labels are uppercase, so their optical center sits half a
+     cap-height up. Lift the whole button (icon and count together) to
+     meet it. */
+  position: relative;
+  top: -1px;
   transition: color 0.15s, background 0.15s;
 }
 

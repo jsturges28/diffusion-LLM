@@ -77,7 +77,7 @@ compare runs in an analytics suite.
 collections.** Three independent arcs, three commits, in that order because the
 import control's "this fits" promise is only honest once the counting exists.
 `pytest` (265/265, up from 226), `node --check`, ReadLints and the 70-column
-audit are clean; `ruff` is held at its 156 baseline. Checklist items 114 to 131
+audit are clean; `ruff` is held at its 156 baseline. Checklist items 114 to 132
 carry the GPU and display work.
 
 - **The context window is read off the loaded object, not the registry.**
@@ -156,7 +156,7 @@ carry the GPU and display work.
   when a collection dialog is open, since both listeners fire on the same key
   and closing the modal underneath a chooser would be wrong.
 
-Three refinements followed on the maintainer's first look at the page:
+Four refinements followed from the maintainer's looks at the page:
 
 - **The star moved to its own column**, between the checkbox and Date, with
   the caret alongside it. Collecting belongs beside selecting rather than
@@ -182,6 +182,15 @@ Three refinements followed on the maintainer's first look at the page:
   them against a different system database. `.markdown` came out of `accept`
   to keep the list to two named types and stays in `isImportableTextFile`,
   so it still imports by drag.
+- **The bulk-delete button needed a nudge the row trashcan did not.** It
+  already carried `vertical-align: middle`, but that keyword centers a box on
+  the parent's *x-height*, and the column labels are `text-transform:
+  uppercase`, whose optical center sits half a cap-height above the baseline.
+  The gap is about a pixel at the header's 10px font, and it only shows here
+  because every other user of `middle` in the table sits beside mixed-case
+  text. A `position: relative; top: -1px` on `.bulk-delete-btn` lifts the icon
+  and the count together, so the existing `top: 1px` on `#bulk-delete-count`
+  keeps holding the count on the can's optical center.
 
 **Previous pass: rank everywhere, the chosen row, the edit tint, scrub dimming,
 and the retained KV cache.** Started as one reported discrepancy and ended in
@@ -3082,6 +3091,12 @@ in-sandbox (no display).*
     still allows it. Drag one onto the textarea and confirm it lands. In the
     browser as well as the desktop app, since the two use different file
     choosers and only the desktop one was the reason for this change.
+132. **The bulk trashcan sits on the column labels' centerline.** Tick two rows
+    and sight along the header: the can should straddle the caps of EDITED and
+    TIME rather than hang below them, and the count beside it should not have
+    drifted off the can. The correction is a single pixel against a 10px font,
+    so judge it at the window size you actually use; say so if it now reads
+    high and the lift can come back out.
 
 **0. The comparison surfaces (agreed with the maintainer, partly shipped).** The
 timing foundation exists to serve these, and the unifying idea is settled: **the
