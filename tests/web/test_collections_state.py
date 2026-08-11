@@ -35,6 +35,22 @@ from src.web.ui_state import (
 
 _KEY = "diffusion_collections"
 
+
+def _make_run(root: Path, run_id: str) -> None:
+    """A run folder the app would actually recognize.
+
+    Metadata included, because that file is what makes a directory a
+    run: the reconciliation asks the run store, and the store treats a
+    folder without one as a half-written save rather than something a
+    collection can point at.
+    """
+    run_dir = root / run_id
+    run_dir.mkdir()
+    (run_dir / "metadata.json").write_text(
+        json.dumps({"backend": "llada", "prompt": "p"}),
+        encoding="utf-8",
+    )
+
 _REAL = "2026-01-01_00-00-00_llada"
 _ALSO_REAL = "2026-01-02_00-00-00_smollm3"
 _DELETED = "2026-01-01_09-99-99_llada"
@@ -102,7 +118,7 @@ def test_an_oversized_value_is_refused(
 def test_a_deleted_run_leaves_no_id_behind(
     tmp_path: Path, client_with_results: TestClient
 ) -> None:
-    (tmp_path / _REAL).mkdir()
+    _make_run(tmp_path, _REAL)
     _seed(
         tmp_path,
         [_collection("Favorites", [_REAL, _DELETED])],
@@ -118,7 +134,7 @@ def test_the_pruned_list_is_written_back(
 ) -> None:
     """The paired check: pruning only the response would re-prune on
     every hydrate and lose the fix the moment the client wrote."""
-    (tmp_path / _REAL).mkdir()
+    _make_run(tmp_path, _REAL)
     _seed(
         tmp_path,
         [_collection("Favorites", [_REAL, _DELETED])],
@@ -138,7 +154,7 @@ def test_a_run_in_two_collections_stays_in_both(
 ) -> None:
     """Membership is a set, not an assignment. Pruning must not become
     the thing that quietly makes it exclusive."""
-    (tmp_path / _REAL).mkdir()
+    _make_run(tmp_path, _REAL)
     _seed(
         tmp_path,
         [
@@ -172,8 +188,8 @@ def test_nothing_is_rewritten_when_every_run_exists(
 ) -> None:
     """The common case, and the one that must not write on every page
     load: hydrate happens on every navigation."""
-    (tmp_path / _REAL).mkdir()
-    (tmp_path / _ALSO_REAL).mkdir()
+    _make_run(tmp_path, _REAL)
+    _make_run(tmp_path, _ALSO_REAL)
     _seed(
         tmp_path,
         [_collection("Favorites", [_REAL, _ALSO_REAL])],
@@ -195,7 +211,7 @@ def test_a_collection_of_only_deleted_runs_empties(
 ) -> None:
     """The boundary: every id is an orphan, so the collection is
     emptied rather than left whole or removed."""
-    (tmp_path / _REAL).mkdir()
+    _make_run(tmp_path, _REAL)
     _seed(
         tmp_path,
         [_collection("Stale", [_DELETED, "another-gone"])],

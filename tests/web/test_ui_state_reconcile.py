@@ -29,6 +29,22 @@ def client_with_results(
     return TestClient(server.app)
 
 
+def _make_run(root: Path, run_id: str) -> None:
+    """A run folder the app would actually recognize.
+
+    Metadata included, because that file is what makes a directory a
+    run: the reconciliation asks the run store, and the store treats a
+    folder without one as a half-written save rather than a run whose
+    cue is worth keeping alive.
+    """
+    run_dir = root / run_id
+    run_dir.mkdir()
+    (run_dir / "metadata.json").write_text(
+        json.dumps({"backend": "llada", "prompt": "p"}),
+        encoding="utf-8",
+    )
+
+
 def _seed_state(results_dir: Path, new_runs: list) -> None:
     (results_dir / "ui_state.json").write_text(
         json.dumps({"diffusion_new_runs": json.dumps(new_runs)}),
@@ -41,7 +57,7 @@ def test_get_prunes_orphan_run_ids(
 ) -> None:
     real = "2026-01-01_00-00-00_llada"
     orphan = "2026-01-01_09-99-99_llada"
-    (tmp_path / real).mkdir()
+    _make_run(tmp_path, real)
     _seed_state(tmp_path, [real, orphan])
 
     body = client_with_results.get("/api/ui-state").json()
@@ -57,7 +73,7 @@ def test_get_keeps_all_when_none_orphaned(
     tmp_path: Path, client_with_results: TestClient
 ) -> None:
     real = "2026-01-01_00-00-00_llada"
-    (tmp_path / real).mkdir()
+    _make_run(tmp_path, real)
     _seed_state(tmp_path, [real])
 
     body = client_with_results.get("/api/ui-state").json()

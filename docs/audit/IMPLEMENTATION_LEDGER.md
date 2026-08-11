@@ -107,7 +107,7 @@ is recorded under Deviations. One new entry arrived from that same pass:
 | META-01 | medium | M | done | none | Three commits: checklist out, decisions to ROADMAP, page cut |
 | META-02 | medium | S | done | none | Put the agent contract where a clone can read it |
 | QUALITY-01 | medium | L | companion | lands with each seam | |
-| ORG-01 | medium | M | ready | DATA-03 (done) | |
+| ORG-01 | medium | M | done | none | Extract the run store out of the supervisor |
 | DATA-01 | high | L | blocked | ORG-01 | |
 | DATA-05 | high | L | blocked | DATA-01 | |
 | DATA-04 | high | M | blocked | DATA-05 | |
@@ -445,6 +445,45 @@ revisions in the registry, resolved revisions and weight digests in run
 provenance, cache-space preflight against remaining bytes, and a completion
 manifest for the locally quantized DiffusionGemma artifact. The slice deals
 with availability only.
+
+### ORG-01
+
+**The traversal guard that was missing is now impossible to miss.**
+`_compute_run_metrics` joined `RESULTS_DIR / run_id` with no containment
+check, while its three siblings all resolved and compared the parent. Every
+run-id call site now goes through `run_store.resolve_run_dir`, so there is one
+answer to "is this a run I am allowed to touch". The gap was recorded under
+`DATA-03` as belonging to this stage; it is closed.
+
+**The named exceptions subclass the builtins on purpose.**
+`RunNotFoundError` extends `FileNotFoundError` and `InvalidRunIdError` extends
+`ValueError`, so every route that already turned those into a 404 or a 400
+keeps working without an edit. That is what let the extraction stay
+behavior-preserving across five endpoints.
+
+One follow-on: adding the guard to the metrics path meant a malformed id in a
+`/compare` request started raising `ValueError` where it used to fall through
+as not-found, which would have turned one bad row into a 500 for the whole
+comparison. That route now treats both as a per-run error entry.
+
+**One deliberate behavior change, small and worth naming.** Unifying "what is
+a run" on `run_store.is_run_dir` made it metadata-based rather than
+directory-based, and `_existing_run_ids` inherited that. A folder with no
+`metadata.json` is a half-written save that Analytics cannot open, so keeping
+a "new run" cue or a collection entry alive for one was never right. Six
+reconciliation fixtures created bare directories as shorthand for "a run
+exists" and now write metadata, which makes them describe a real run rather
+than the minimum that used to pass.
+
+**Verified byte-identical.** The extracted writer was diffed against the
+pre-extraction inline writer over the same bundle: same file set, same bytes
+in all four files, including the two-space metadata indent and the compact
+sidecar encoding. That mattered because 180 saved runs are read by parsers
+tuned to exactly this output.
+
+`_save_run_blocking`'s complexity 22 finding is gone rather than relocated:
+the optional-metadata chain became a table and the device branch became a
+helper, so the whole file dropped a `C901` and the ratchet moved 140 to 139.
 
 ### META-01
 

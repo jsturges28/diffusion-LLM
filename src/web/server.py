@@ -58,6 +58,7 @@ from src.analytics.metrics import (
 from src.backends.protocol import ModelInfo
 from src.backends.registry import DEFAULT_MODEL, REGISTRY
 from src.inference.render_gif import history_to_gif
+from src.web import run_store
 from src.web.data_root import (
     RESULTS_DIR_ENV,
     resolve_results_dir,
@@ -1250,52 +1251,9 @@ class SaveRunRequest(BaseModel):
     prompt_len: Optional[int] = Field(default=None, ge=0)
 
 
-def _make_run_dir(base: Path, model_id: str) -> Path:
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    safe_model = model_id.replace("/", "_")
-    run_dir = base / f"{timestamp}_{safe_model}"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    return run_dir
-
-
 def _display_run_path(run_dir: Path) -> str:
-    """Run folder as written in the repo, for the UI's status line.
-
-    Every save branch now produces an absolute path, since
-    ``RESULTS_DIR`` is resolved once at startup, but the status line
-    reads better as "results/2026-...". Shortening at the one point
-    the branches meet keeps the traversal guards in
-    ``_existing_run_dir`` intact and gives every message the same
-    short form.
-
-    Falls back to the path as given when it is not under the repo,
-    which is exactly what should happen for a ``--results-dir``
-    pointing elsewhere: naming the full path is how the UI tells the
-    user their runs are not in the usual place. An operating
-    condition, not a broken invariant, so it degrades to a longer
-    message rather than raising.
-    """
-    try:
-        return str(
-            run_dir.resolve().relative_to(REPO_ROOT)
-        )
-    except ValueError:
-        return str(run_dir)
-
-
-def _existing_run_dir(run_id: str) -> Path:
-    """Resolve an existing run folder for in-place update.
-
-    Path-guarded like the delete/frames endpoints: the resolved dir
-    must be a direct child of RESULTS_DIR and already exist.
-    """
-    results_root = RESULTS_DIR.resolve()
-    run_dir = (results_root / run_id).resolve()
-    if run_dir.parent != results_root:
-        raise ValueError(f"invalid run id: {run_id}")
-    if not run_dir.is_dir():
-        raise FileNotFoundError(f"Run not found: {run_id}")
-    return run_dir
+    """Run folder as written in the repo, for the UI's status line."""
+    return run_store.display_path(run_dir, REPO_ROOT)
 
 
 def _dump_frame_tokens(
@@ -1370,38 +1328,50 @@ def _context_metadata(
     return block
 
 
-def _save_run_blocking(body: SaveRunRequest) -> str:
-    model_id = body.model or DEFAULT_MODEL
-    checkpoint = ""
-    if model_id in REGISTRY:
-        checkpoint = REGISTRY[model_id].checkpoint
-    run_dir: Optional[Path] = None
-    if body.run_id:
-        # Update the pre-edit run's folder in place; if it is gone
-        # (e.g. deleted), fall back to a fresh folder rather than fail.
-        try:
-            run_dir = _existing_run_dir(body.run_id)
-        except (ValueError, FileNotFoundError):
-            run_dir = None
-    if run_dir is None:
-        run_dir = _make_run_dir(RESULTS_DIR, model_id)
+# Request fields copied into metadata verbatim when the client sent
+# them. Absent stays absent: the readers distinguish "this run never
+# recorded it" from "it recorded zero".
+_OPTIONAL_METADATA_FIELDS = (
+    "elapsed_seconds",
+    "per_frame_elapsed",
+    "canvas_index",
+    "mean_conf",
+    "original_per_frame_elapsed",
+    "original_elapsed_seconds",
+    "original_mean_conf",
+)
 
-    model_type = "diffusion"
-    if model_id in REGISTRY:
-        model_type = REGISTRY[model_id].capabilities.model_type
-    # Which device the resident worker ran on, for the analytics
-    # Processor column and per-run timing header. "Unknown" only when
-    # no device is recorded (older runs / an unexpected save path).
+
+def _describe_processor() -> Tuple[str, Optional[str]]:
+    """What ran the model, for the Processor column and the header.
+
+    Reads the supervisor's *current* device, which is the `DATA-04`
+    problem in miniature: a run finished before a model switch gets
+    the switch's answer. Left as is here and fixed there.
+    """
     device = manager.active_device
     if device == "cuda":
-        processor = "GPU"
-        processor_name = _gpu_name()
-    elif device == "cpu":
-        processor = "CPU"
-        processor_name = _cpu_name()
-    else:
-        processor = "Unknown"
-        processor_name = None
+        return "GPU", _gpu_name()
+    if device == "cpu":
+        return "CPU", _cpu_name()
+    return "Unknown", None
+
+
+def _build_metadata(body: SaveRunRequest) -> Dict[str, Any]:
+    """Assemble the metadata a saved run records.
+
+    Split out of the save so the write path is about writing. Note how
+    much of this comes from the supervisor's *current* state rather
+    than from the run being saved: that is `DATA-04`, and it is why a
+    run saved after a model switch can describe the wrong worker.
+    """
+    model_id = body.model or DEFAULT_MODEL
+    entry = REGISTRY.get(model_id)
+    checkpoint = entry.checkpoint if entry else ""
+    model_type = (
+        entry.capabilities.model_type if entry else "diffusion"
+    )
+    processor, processor_name = _describe_processor()
     metadata: Dict[str, Any] = {
         "backend": model_id,
         "model": checkpoint or model_id,
@@ -1419,24 +1389,14 @@ def _save_run_blocking(body: SaveRunRequest) -> str:
         "final_text": body.final_text,
         "params": body.params,
     }
-    if body.elapsed_seconds is not None:
-        metadata["elapsed_seconds"] = body.elapsed_seconds
-    if body.per_frame_elapsed is not None:
-        metadata["per_frame_elapsed"] = body.per_frame_elapsed
-    if body.canvas_index is not None:
-        metadata["canvas_index"] = body.canvas_index
-    if body.mean_conf is not None:
-        metadata["mean_conf"] = body.mean_conf
-    if body.original_per_frame_elapsed is not None:
-        metadata["original_per_frame_elapsed"] = (
-            body.original_per_frame_elapsed
-        )
-    if body.original_elapsed_seconds is not None:
-        metadata["original_elapsed_seconds"] = (
-            body.original_elapsed_seconds
-        )
-    if body.original_mean_conf is not None:
-        metadata["original_mean_conf"] = body.original_mean_conf
+    # Copied only when present, so an older run and a run that
+    # measured nothing stay distinguishable in the saved file. A table
+    # rather than a chain of ifs: they all do the same thing, and the
+    # chain was most of this function's complexity.
+    for name in _OPTIONAL_METADATA_FIELDS:
+        value = getattr(body, name)
+        if value is not None:
+            metadata[name] = value
     if body.remask_edits:
         metadata["remask_edits"] = [
             edit.model_dump() for edit in body.remask_edits
@@ -1457,57 +1417,58 @@ def _save_run_blocking(body: SaveRunRequest) -> str:
         # has been swapped out or its checkpoint has moved on.
         "tokenizer": dict(manager.active_tokenizer),
     }
+    return metadata
 
-    (run_dir / "metadata.json").write_text(
-        json.dumps(metadata, indent=2, ensure_ascii=False),
-        encoding="utf-8",
+
+def _build_bundle(body: SaveRunRequest) -> run_store.RunBundle:
+    """Turn a save request into the content of a run directory."""
+    return run_store.RunBundle(
+        metadata=_build_metadata(body),
+        final_text=body.final_text,
+        frames=list(body.frames),
+        frame_tokens=(
+            None
+            if body.frame_tokens is None
+            else _dump_frame_tokens(body.frame_tokens)
+        ),
+        original_frame_tokens=(
+            None
+            if body.original_frame_tokens is None
+            else _dump_frame_tokens(body.original_frame_tokens)
+        ),
+        alternatives=(
+            None
+            if body.alternatives is None
+            else _dump_alternatives(body.alternatives)
+        ),
+        original_alternatives=(
+            None
+            if body.original_alternatives is None
+            else _dump_alternatives(body.original_alternatives)
+        ),
     )
-    (run_dir / "final.txt").write_text(
-        body.final_text, encoding="utf-8"
-    )
-    with (run_dir / "history.txt").open(
-        "w", encoding="utf-8"
-    ) as handle:
-        for index, frame_text in enumerate(body.frames):
-            handle.write(f"\n===== FRAME {index} =====\n")
-            handle.write(frame_text)
-            handle.write("\n")
 
-    if body.frame_tokens is not None:
-        (run_dir / "tokens.json").write_text(
-            json.dumps(
-                _dump_frame_tokens(body.frame_tokens),
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
-    if body.original_frame_tokens is not None:
-        (run_dir / "original_tokens.json").write_text(
-            json.dumps(
-                _dump_frame_tokens(
-                    body.original_frame_tokens
-                ),
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
-    if body.alternatives is not None:
-        (run_dir / "alternatives.json").write_text(
-            json.dumps(
-                _dump_alternatives(body.alternatives),
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
-    if body.original_alternatives is not None:
-        (run_dir / "original_alternatives.json").write_text(
-            json.dumps(
-                _dump_alternatives(body.original_alternatives),
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
+
+def _save_run_blocking(body: SaveRunRequest) -> str:
+    run_dir: Optional[Path] = None
+    if body.run_id:
+        # Update the pre-edit run's folder in place; if it is gone
+        # (e.g. deleted), fall back to a fresh folder rather than fail.
+        try:
+            run_dir = run_store.resolve_run_dir(
+                RESULTS_DIR, body.run_id
+            )
+        except (
+            run_store.InvalidRunIdError,
+            run_store.RunNotFoundError,
+        ):
+            run_dir = None
+    if run_dir is None:
+        run_dir = run_store.make_run_dir(
+            RESULTS_DIR, body.model or DEFAULT_MODEL
         )
 
+    run_store.write_bundle(run_dir, _build_bundle(body))
     history_to_gif(
         body.frames,
         run_dir / "diffusion.gif",
@@ -1544,9 +1505,10 @@ async def analytics_list_runs() -> JSONResponse:
 
 
 def _compute_run_metrics(run_id: str) -> Dict[str, Any]:
-    run_dir = RESULTS_DIR / run_id
-    if not run_dir.is_dir():
-        raise FileNotFoundError(f"Run not found: {run_id}")
+    # Through the store's resolver like every other run-id endpoint.
+    # This one used to join the path unguarded, so a crafted id could
+    # walk out of the data root while its three siblings refused.
+    run_dir = run_store.resolve_run_dir(RESULTS_DIR, run_id)
     history_path = run_dir / "history.txt"
     if not history_path.is_file():
         raise FileNotFoundError(
@@ -1606,15 +1568,9 @@ def _compute_run_frames(run_id: str) -> Dict[str, Any]:
 
     Kept separate from ``_compute_run_metrics`` because token streams
     are large; the analytics UI fetches this only when a run's overlay
-    viewer opens. Guards against path traversal like the delete path.
+    viewer opens.
     """
-    results_root = RESULTS_DIR.resolve()
-    run_dir = (results_root / run_id).resolve()
-    if run_dir.parent != results_root:
-        raise ValueError(f"invalid run id: {run_id}")
-    if not run_dir.is_dir():
-        raise FileNotFoundError(f"Run not found: {run_id}")
-
+    run_dir = run_store.resolve_run_dir(RESULTS_DIR, run_id)
     meta = load_run_metadata(run_dir)
     data = load_run_frames(run_dir)
     return {
@@ -1668,7 +1624,10 @@ async def analytics_compare(ids: str = "") -> JSONResponse:
                 _compute_run_metrics, run_id
             )
             results.append(metrics)
-        except FileNotFoundError:
+        except (FileNotFoundError, ValueError):
+            # ValueError joined this once the metrics path gained the
+            # traversal guard: a malformed id in a comparison is one
+            # bad row, not a reason to fail the whole request.
             results.append(
                 {
                     "run_id": run_id,
@@ -1697,18 +1656,8 @@ async def analytics_system_info() -> JSONResponse:
 
 
 def _delete_run_blocking(run_id: str) -> None:
-    """Delete one saved run directory under results/.
-
-    Guards against path traversal: the resolved directory must be a
-    direct child of RESULTS_DIR.
-    """
-    results_root = RESULTS_DIR.resolve()
-    run_dir = (results_root / run_id).resolve()
-    if run_dir.parent != results_root:
-        raise ValueError(f"invalid run id: {run_id}")
-    if not run_dir.is_dir():
-        raise FileNotFoundError(f"Run not found: {run_id}")
-    shutil.rmtree(run_dir)
+    """Delete one saved run directory under the data root."""
+    run_store.delete(RESULTS_DIR, run_id)
 
 
 @app.delete("/api/analytics/runs/{run_id}")
@@ -1781,14 +1730,15 @@ def _reconcile_new_runs(state: Dict[str, str]) -> Dict[str, str]:
 
 
 def _existing_run_ids() -> Set[str]:
-    """Run IDs with a folder on disk (the folder name is the ID)."""
-    if not RESULTS_DIR.is_dir():
-        return set()
-    return {
-        child.name
-        for child in RESULTS_DIR.iterdir()
-        if child.is_dir()
-    }
+    """Run IDs with a saved run on disk (the folder name is the ID).
+
+    Through the store, so "is this a run" is decided in one place.
+    Slightly stricter than the directory scan this replaced: a folder
+    with no metadata is a half-written save, and counting one as a
+    live run is how the reconciliation would keep a cue alive for
+    something Analytics cannot open.
+    """
+    return set(run_store.list_run_ids(RESULTS_DIR))
 
 
 def _reconcile_collections(state: Dict[str, str]) -> Dict[str, str]:
