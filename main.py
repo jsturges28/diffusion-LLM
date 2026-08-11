@@ -1,8 +1,15 @@
 import argparse
 import ipaddress
+import os
 import sys
 
 import uvicorn
+
+# Only the environment variable's name, from a module that pulls in
+# nothing. Importing the server here instead would resolve its data
+# root before --results-dir had been written into the environment,
+# which is the one ordering this file has to get right.
+from src.web.data_root import RESULTS_DIR_ENV
 
 # Loopback, not 0.0.0.0. The same unauthenticated origin that renders
 # the UI can also activate models, submit saves, and permanently
@@ -32,6 +39,16 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_PORT,
         help=f"Bind port (default: {DEFAULT_PORT}).",
+    )
+    parser.add_argument(
+        "--results-dir",
+        type=str,
+        default=None,
+        help=(
+            "Directory holding saved runs and durable UI state"
+            " (default: the repository's results/, wherever you"
+            f" start from). Also settable as {RESULTS_DIR_ENV}."
+        ),
     )
     return parser.parse_args()
 
@@ -87,6 +104,11 @@ def _warn_if_exposed(host: str) -> None:
 def main() -> None:
     args = parse_args()
     _warn_if_exposed(args.host)
+    # Before uvicorn imports the server, which resolves its data
+    # root at import time. The flag wins over an inherited value so
+    # one command line beats a stale shell export.
+    if args.results_dir is not None:
+        os.environ[RESULTS_DIR_ENV] = args.results_dir
     uvicorn.run(
         "src.web.server:app",
         host=args.host,

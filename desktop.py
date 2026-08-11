@@ -29,10 +29,11 @@ from typing import Optional
 
 REPO_ROOT = Path(__file__).resolve().parent
 
-# The supervisor resolves results/ and the worker cwd relative to the
-# process working directory, so pin it to the repo root. This lets the
-# launcher behave correctly when invoked from a .desktop entry with an
-# arbitrary working directory.
+# Pin the working directory to the repo root so the launcher behaves
+# the same from a .desktop entry with an arbitrary one. The data root
+# no longer depends on this (the supervisor resolves it absolutely,
+# see src/web/data_root.py), but the worker subprocesses are still
+# spawned relative to the process cwd, so this stays.
 os.chdir(REPO_ROOT)
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))

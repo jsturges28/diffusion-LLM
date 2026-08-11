@@ -5102,8 +5102,14 @@ function loadAndRender() {
 
 // ---- Delete a run ----
 
+// Where saved runs actually live, as the server resolved it. Filled
+// by fetchSystemInfo on load; the default stands in until that
+// answers, and is what the server reports anyway unless the user
+// passed --results-dir.
+var resultsDirLabel = "results";
+
 function runPath(runId) {
-  return "results/" + runId;
+  return resultsDirLabel + "/" + runId;
 }
 
 // Update the confirmation modal copy for the staged deletion, then
@@ -5116,7 +5122,8 @@ function showDeleteModal() {
     deleteRunLabel.textContent = runPath(pendingDeleteIds[0]);
     deleteModalNote.innerHTML =
       "This permanently removes the saved run from "
-      + "<code>results/</code>. This cannot be undone.";
+      + "<code>" + escHtml(resultsDirLabel)
+      + "/</code>. This cannot be undone.";
   } else {
     deleteModalTitle.textContent =
       "Delete " + count + " runs?";
@@ -5124,7 +5131,8 @@ function showDeleteModal() {
       count + " selected runs will be removed.";
     deleteModalNote.innerHTML =
       "This permanently removes the saved runs from "
-      + "<code>results/</code>. This cannot be undone.";
+      + "<code>" + escHtml(resultsDirLabel)
+      + "/</code>. This cannot be undone.";
   }
   btnDeleteConfirm.disabled = false;
   modalDelete.classList.remove("hidden");
@@ -5570,6 +5578,9 @@ if (runBlendInput) {
 fetchSystemInfo().then(function (info) {
   if (info.gpu_name) {
     gpuName = info.gpu_name;
+  }
+  if (info.results_dir) {
+    resultsDirLabel = info.results_dir;
   }
 });
 

@@ -57,6 +57,10 @@ from src.analytics.metrics import (
 from src.backends.protocol import ModelInfo
 from src.backends.registry import DEFAULT_MODEL, REGISTRY
 from src.inference.render_gif import history_to_gif
+from src.web.data_root import (
+    RESULTS_DIR_ENV,
+    resolve_results_dir,
+)
 from src.web.ui_state import load_ui_state, set_ui_state_key
 
 # Disable the Xet download client before the first huggingface_hub
@@ -72,7 +76,12 @@ logger = logging.getLogger("diffusion_supervisor")
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RESULTS_DIR = Path("results")
+
+# Resolved once, here, rather than inherited from wherever the
+# process happened to be started (see src/web/data_root.py).
+RESULTS_DIR = resolve_results_dir(
+    os.environ.get(RESULTS_DIR_ENV), repo_root=REPO_ROOT
+)
 
 WORKER_START_TIMEOUT_S = 180.0
 WORKER_STOP_TIMEOUT_S = 30.0
@@ -810,6 +819,17 @@ app = FastAPI(title="Diffusion LLM Visualizer")
 
 @app.on_event("startup")
 async def _startup() -> None:
+    # Say where the data is before anything reads or writes it. The
+    # incident this guards against was silent: two result trees, no
+    # error, and a repository that looked like no work had happened.
+    source = (
+        "from " + RESULTS_DIR_ENV
+        if os.environ.get(RESULTS_DIR_ENV, "").strip()
+        else "default"
+    )
+    logger.info(
+        "results directory: %s (%s)", RESULTS_DIR, source
+    )
     # Reap any worker orphaned by a prior crashed supervisor before we
     # start serving, so stale workers cannot keep holding VRAM.
     await asyncio.to_thread(_sweep_orphan_workers)
@@ -1234,18 +1254,17 @@ def _make_run_dir(base: Path, model_id: str) -> Path:
 def _display_run_path(run_dir: Path) -> str:
     """Run folder as written in the repo, for the UI's status line.
 
-    The two save branches disagree about resolution: a fresh save
-    joins the relative ``RESULTS_DIR`` and stays relative, while an
-    in-place update goes through ``_existing_run_dir``, which must
-    ``resolve()`` for its traversal guard. Reporting that raw made the
-    same message read "results/..." after one save and
-    "/home/you/.../results/..." after the next. Normalizing at the one
-    point both branches meet keeps the guard intact and gives the
-    status line the short form either way.
+    Every save branch now produces an absolute path, since
+    ``RESULTS_DIR`` is resolved once at startup, but the status line
+    reads better as "results/2026-...". Shortening at the one point
+    the branches meet keeps the traversal guards in
+    ``_existing_run_dir`` intact and gives every message the same
+    short form.
 
-    Falls back to the path as given when it is not under the repo, for
-    example a ``results`` directory symlinked elsewhere or a server
-    started from another working directory. That is an operating
+    Falls back to the path as given when it is not under the repo,
+    which is exactly what should happen for a ``--results-dir``
+    pointing elsewhere: naming the full path is how the UI tells the
+    user their runs are not in the usual place. An operating
     condition, not a broken invariant, so it degrades to a longer
     message rather than raising.
     """
@@ -1654,8 +1673,20 @@ async def analytics_compare(ids: str = "") -> JSONResponse:
 
 @app.get("/api/analytics/system")
 async def analytics_system_info() -> JSONResponse:
-    """GPU name for the analytics UI (no torch in supervisor)."""
-    return JSONResponse(content={"gpu_name": _gpu_name()})
+    """GPU name and data root for the analytics UI.
+
+    The GPU name because the supervisor has no torch. The data root
+    because the delete confirmation used to spell it ``results/``
+    from a hardcoded string, which stopped being true the moment
+    the root became configurable, and a dialog about permanent
+    deletion is the worst place to name the wrong directory.
+    """
+    return JSONResponse(
+        content={
+            "gpu_name": _gpu_name(),
+            "results_dir": _display_run_path(RESULTS_DIR),
+        }
+    )
 
 
 def _delete_run_blocking(run_id: str) -> None:

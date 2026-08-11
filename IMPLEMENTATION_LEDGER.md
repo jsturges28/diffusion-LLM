@@ -29,14 +29,13 @@ commit, **M** a short multi-commit change, **L** a staged boundary migration.
 
 ## Ready now
 
-Six findings have no unmet blockers. The first three are the remaining
-isolated safety fixes; the last three are the gates the report wants
-installed before any boundary moves.
+Six findings have no unmet blockers. The first two are the remaining
+isolated safety fixes, the next three are the gates the report wants
+installed before any boundary moves, and the last one is stage 3's first
+step, which `DATA-03` has now unblocked.
 
 - **ANALYTICS-01** (high, S): a stale detail response can populate the panel
   of a different run.
-- **DATA-03** (medium, S): resolve the data directory independently of the
-  process working directory. This one also unblocks the whole run-store stage.
 - **TRUST-02** (high, M): vendor the Analytics chart dependencies so the page
   works without third-party networks. Independent of frontend modularization.
 - **QUALITY-02** (medium, M): install the lint ratchet now, burn down later
@@ -46,6 +45,9 @@ installed before any boundary moves.
 - **META-02** (medium, S): move the canonical agent contract into tracked
   files, since `.cursor/` is gitignored and its Python rule contradicts the
   three-environment matrix.
+- **ORG-01** (medium, M): extract behavior-preserving storage operations out
+  of `server.py`. Became ready when `DATA-03` made the root explicit, and it
+  is the first step of the run-store stage rather than of stage 1.
 
 `QUALITY-01` is not on this list because it is not a standalone task. The
 report asks for its lifecycle and browser-contract fixtures to land with each
@@ -93,13 +95,13 @@ standing measurement programme is separate and lives at
 | LIFE-07 | high | S | needs hardware | none | Commit LLaDA resume state only after the run lands |
 | TRUST-01 | high | S | done | none | Bind to loopback unless exposure is asked for |
 | ANALYTICS-01 | high | S | ready | none | |
-| DATA-03 | medium | S | ready | none | |
+| DATA-03 | medium | S | done | none | Resolve the data root without asking the cwd |
 | TRUST-02 | high | M | ready | none | |
 | QUALITY-02 | medium | M | ready | none | |
 | META-01 | medium | M | ready | none | |
 | META-02 | medium | S | ready | none | |
 | QUALITY-01 | medium | L | companion | lands with each seam | |
-| ORG-01 | medium | M | blocked | DATA-03 | |
+| ORG-01 | medium | M | ready | DATA-03 (done) | |
 | DATA-01 | high | L | blocked | ORG-01 | |
 | DATA-05 | high | L | blocked | DATA-01 | |
 | DATA-04 | high | M | blocked | DATA-05 | |
@@ -254,3 +256,35 @@ the unreachable half alone would also pass behind a firewall. Both skip on a
 host with no non-loopback address, which includes the agent sandbox, so they
 are worth re-running once on the maintainer's machine, where they were
 confirmed to run and pass during this session.
+
+### DATA-03
+
+The Direction's "explicit `--results-dir` or environment setting" was settled
+as both, with the flag winning, since the two serve different callers: the
+flag is for a person, the variable is what reaches a desktop entry or a bare
+`uvicorn src.web.server:app`.
+
+**The resolver lives in its own module**, `src/web/data_root.py`, for an
+ordering reason worth remembering. The supervisor resolves its root at import
+time, so `main.py` has to write `--results-dir` into the environment *before*
+importing the server; importing the server to learn the variable's name would
+already be too late. A module that pulls in nothing breaks that cycle, and it
+gives `ORG-01` somewhere obvious to grow the run store.
+
+`desktop.py` keeps its `os.chdir(REPO_ROOT)`. The data root no longer needs
+it, but worker subprocesses are still spawned relative to the process working
+directory, so removing it would have been a lifecycle change smuggled into a
+persistence fix. Its comment was corrected to say which of the two reasons
+still applies.
+
+**One UI correction came with it.** The Analytics delete confirmation built
+its label from a hardcoded `"results/"`, which stops being true the moment the
+root is configurable, and a dialog about permanent deletion is the worst place
+to name the wrong directory. The resolved root now rides along on
+`/api/analytics/system`, which that page already fetches.
+
+**Noted, not fixed (adjacent).** `_compute_run_metrics` joins
+`RESULTS_DIR / run_id` with no containment guard, unlike `_existing_run_dir`,
+`_compute_run_frames`, and `_delete_run_blocking`, which all resolve and check
+the parent. That is a pre-existing traversal gap and belongs to the run-store
+stage rather than to making the root absolute.
