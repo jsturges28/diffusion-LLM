@@ -261,8 +261,10 @@ On an X11 session (rather than Wayland), the Qt backend needs the `xcb` platform
 ## Quickstart
 
 ```bash
-python3 main.py            # or: python3 main.py --host 0.0.0.0 --port 8000
+python3 main.py            # or: python3 main.py --port 8000
 ```
+
+The app binds to `127.0.0.1`, so it is reachable only from this machine. You can serve it to your network with `--host 0.0.0.0`, and it will warn you when you do: there is no authentication, so anyone who can reach the port can load and unload models, save runs, and permanently delete them. Treat that as a trusted-network convenience rather than a supported deployment.
 
 Open [http://localhost:8000](http://localhost:8000). You land on the **Main Menu** (titled **LLM Visualizer**): a looping title screen over a model picker that shows the detected GPU (with free VRAM) and CPU (with free RAM). Each row carries a family glyph (diffusion vs autoregressive) beside its name and a device tag on the right: a static **GPU** for the diffusion models, and a **GPU / CPU** toggle for the autoregressive model. A small pill extending left of each tag shows the signed **VRAM headroom** (green `+X.X GiB` if it fits, red `-X.X GiB` if it is short); hovering it details required vs available VRAM. Available counts memory reclaimed from unloading the current model, so switching accounts for the resident one freeing up.
 

@@ -29,12 +29,10 @@ commit, **M** a short multi-commit change, **L** a staged boundary migration.
 
 ## Ready now
 
-Seven findings have no unmet blockers. The first four are the remaining
+Six findings have no unmet blockers. The first three are the remaining
 isolated safety fixes; the last three are the gates the report wants
 installed before any boundary moves.
 
-- **TRUST-01** (high, S): bind to loopback unless network exposure is
-  explicit.
 - **ANALYTICS-01** (high, S): a stale detail response can populate the panel
   of a different run.
 - **DATA-03** (medium, S): resolve the data directory independently of the
@@ -93,7 +91,7 @@ standing measurement programme is separate and lives at
 | ID | Sev | Eff | Status | Blocked by | Commits |
 |---|---|---|---|---|---|
 | LIFE-07 | high | S | needs hardware | none | Commit LLaDA resume state only after the run lands |
-| TRUST-01 | high | S | ready | none | |
+| TRUST-01 | high | S | done | none | Bind to loopback unless exposure is asked for |
 | ANALYTICS-01 | high | S | ready | none | |
 | DATA-03 | medium | S | ready | none | |
 | TRUST-02 | high | M | ready | none | |
@@ -235,3 +233,24 @@ from, so `_validate_resume` bounds-checks the frame index against one and
 computes remaining steps from the other. That is pre-existing and does not
 prevent LIFE-07's Verification clause from passing, so it was left alone. It
 belongs with `LIFE-01`'s retained-state contract.
+
+### TRUST-01
+
+**Deliberately narrowed, with the maintainer's agreement.** The Direction ends
+with "and, before treating it as supported, an authentication and origin
+policy". That is a design project, not a one-line default, and holding a high
+severity one-line fix behind it would have been the wrong trade. What landed
+is the safe default, an explicit `--host` that warns before serving, and
+README copy that calls remote use a trusted-network convenience rather than a
+supported deployment. Authentication and WebSocket origin policy remain
+unaddressed and unclaimed; if remote access is ever to be supported, they need
+a finding of their own.
+
+**The Verification clause turned out to be fully automatable**, which the
+report did not assume. `tests/test_main.py` binds real sockets and reaches for
+them across this host's own network address, proving a loopback listener is
+unreachable there while a `0.0.0.0` listener is reachable. The pair matters:
+the unreachable half alone would also pass behind a firewall. Both skip on a
+host with no non-loopback address, which includes the agent sandbox, so they
+are worth re-running once on the maintainer's machine, where they were
+confirmed to run and pass during this session.
