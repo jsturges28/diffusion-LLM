@@ -22,7 +22,7 @@ todos:
     status: completed
   - id: stage2-handback
     content: "Stage boundary: full verification, finalize the ledger deviations, and hand back with the clone test as the one manual item"
-    status: in_progress
+    status: completed
 isProject: false
 ---
 
