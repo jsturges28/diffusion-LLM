@@ -100,6 +100,11 @@ RESULTS_DIR = resolve_results_dir(
 
 WORKER_START_TIMEOUT_S = 180.0
 WORKER_STOP_TIMEOUT_S = 30.0
+# How long to wait for a killed worker to actually be gone. Short,
+# because SIGKILL is not refusable: anything still here after this is
+# stuck in the kernel and waiting longer will not change that. It
+# exists so the supervisor can say it waited rather than assumed.
+WORKER_KILL_TIMEOUT_S = 5.0
 # How often the startup monitor reads the worker's /health. Two
 # cadences, because the two halves of startup want different things.
 # Before the worker answers at all, every poll is a refused connection
@@ -440,6 +445,7 @@ class ModelManager:
         probe: ProbeHealth = _probe_health,
         start_timeout_s: float = WORKER_START_TIMEOUT_S,
         stop_timeout_s: float = WORKER_STOP_TIMEOUT_S,
+        kill_timeout_s: float = WORKER_KILL_TIMEOUT_S,
         health_poll_s: float = WORKER_HEALTH_POLL_S,
         progress_poll_s: float = WORKER_PROGRESS_POLL_S,
     ) -> None:
@@ -451,6 +457,7 @@ class ModelManager:
         self._probe = probe
         self._start_timeout_s = start_timeout_s
         self._stop_timeout_s = stop_timeout_s
+        self._kill_timeout_s = kill_timeout_s
         self._health_poll_s = health_poll_s
         self._progress_poll_s = progress_poll_s
         self.active_id: Optional[str] = None
@@ -521,9 +528,34 @@ class ModelManager:
         )
 
     def status(self, model_id: str) -> str:
+        """Whether this model's worker process exists right now.
+
+        Deliberately still about the process rather than about
+        readiness. Its callers are the menu's residency label and the
+        VRAM accounting in ``_models_snapshot``, and a worker that is
+        halfway through loading really is holding that memory. Asking
+        "can this serve a request" is a different question with a
+        different answer; see ``is_serving``.
+        """
         if self.active_id == model_id and self._alive():
             return "active"
         return "inactive"
+
+    def is_serving(self, model_id: str) -> bool:
+        """Whether this model can answer a request right now.
+
+        The gates in front of the generator page and the WebSocket
+        proxy used to ask ``status``, which is only "a process
+        exists". A worker that timed out or reported a load failure
+        stayed alive, so both gates let traffic through to a model
+        that was never going to answer. Readiness is the question
+        they were always trying to ask.
+        """
+        return (
+            self.active_id == model_id
+            and self._alive()
+            and self.load_state == "ready"
+        )
 
     def ws_url(self) -> str:
         assert self._port is not None
@@ -596,6 +628,9 @@ class ModelManager:
             self.active_context_length = None
             self.load_state = "starting"
             self.load_progress = None
+            # Clears the previous failure, which `_finalize` keeps
+            # around so the menu can explain a redirect. Trying again
+            # is the moment it stops being news.
             self.load_error = None
             self._monitor_task = asyncio.create_task(
                 self._monitor_startup(proc, port)
@@ -621,22 +656,27 @@ class ModelManager:
         while True:
             code = proc.poll()
             if code is not None:
-                self.load_state = "error"
-                self.load_error = (
-                    f"worker exited during startup (code {code})"
+                await self._fail_startup(
+                    proc,
+                    f"worker exited during startup (code {code})",
                 )
                 return
             if (
                 not responded
                 and time.monotonic() > startup_deadline
             ):
-                self.load_state = "error"
-                self.load_error = "worker did not start in time"
+                await self._fail_startup(
+                    proc, "worker did not start in time"
+                )
                 return
             body = await self._probe(url)
             if body is not None:
                 responded = True
-                if self._apply_health(body):
+                failure = self._apply_health(body)
+                if failure is not None:
+                    await self._fail_startup(proc, failure)
+                    return
+                if self.load_state == "ready":
                     return
             await asyncio.sleep(
                 self._progress_poll_s
@@ -644,22 +684,52 @@ class ModelManager:
                 else self._health_poll_s
             )
 
-    def _apply_health(self, body: Dict[str, Any]) -> bool:
-        """Fold one /health body into load state. True when terminal."""
+    async def _fail_startup(
+        self, proc: WorkerHandle, message: str
+    ) -> None:
+        """End a worker that will never become ready.
+
+        Called from inside the monitor, so it must not cancel the
+        monitor task (that is this task) and must not take the lock
+        (``_stop_locked`` awaits this task while holding it, which
+        would deadlock). ``_finalize``'s identity check is what makes
+        both omissions safe.
+
+        Before this existed, all three of these exits set the state
+        to "error" and returned with the worker still running: it
+        kept its VRAM, and the page gates, which asked only whether a
+        process was alive, went on letting traffic through to it.
+        """
+        logger.error(
+            "worker %s failed to start: %s",
+            self.active_id,
+            message,
+        )
+        await self._finalize(proc, error=message)
+
+    def _apply_health(
+        self, body: Dict[str, Any]
+    ) -> Optional[str]:
+        """Fold one /health body into load state.
+
+        Returns the failure message when the worker reports one, and
+        None otherwise. The caller ends the run on a message or on
+        reaching "ready"; a message additionally means the worker has
+        to be terminated, which is why it is returned rather than
+        just recorded.
+        """
         status = body.get("status")
         if status == "error":
-            self.load_state = "error"
-            self.load_error = body.get(
-                "message", "model failed to load"
+            return str(
+                body.get("message", "model failed to load")
             )
-            return True
         if status == "ready":
             self.active_versions = body.get("versions", {})
             self.active_tokenizer = body.get("tokenizer", {})
             self.active_context_length = _read_context_length(body)
             self.load_progress = None
             self.load_state = "ready"
-            return True
+            return None
         if status == "downloading":
             self.load_state = "downloading"
             self.load_progress = body.get("progress")
@@ -670,7 +740,7 @@ class ModelManager:
             # indeterminate spinner.
             self.load_state = "loading"
             self.load_progress = body.get("progress")
-        return False
+        return None
 
     async def cancel_activation(self) -> None:
         """Cancel an in-flight activation and free the worker/VRAM.
@@ -785,27 +855,63 @@ class ModelManager:
             await self._stop_locked()
 
     async def _stop_locked(self) -> None:
-        if self._monitor_task is not None:
-            self._monitor_task.cancel()
-            # Cancelling is expected here, but this also swallows a
-            # monitor that died of a real fault, with nothing logged.
-            # Left as is rather than compressed into a suppress():
-            # the shape is the problem, not the syntax, and making
-            # termination a verified transition is LIFE-02's job.
-            try:
-                await self._monitor_task
-            except (asyncio.CancelledError, Exception):
-                pass
-            self._monitor_task = None
-        if self._proc is not None and self._alive():
-            logger.info("stopping worker %s", self.active_id)
-            self._proc.terminate()
-            try:
-                await asyncio.to_thread(
-                    self._proc.wait, self._stop_timeout_s
-                )
-            except Exception:
-                self._proc.kill()
+        """Stop the resident worker and prove it is gone.
+
+        The monitor is cancelled first because this is not the
+        monitor calling; a failure detected inside the monitor takes
+        the same finalization without that step (see
+        ``_monitor_startup``), since a task cannot await its own
+        cancellation.
+        """
+        await self._cancel_monitor()
+        await self._finalize(self._proc, error=None)
+
+    async def _cancel_monitor(self) -> None:
+        """Stop watching a worker's startup, if we still are."""
+        task = self._monitor_task
+        if task is None:
+            return
+        self._monitor_task = None
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:  # noqa: BLE001 - reported, not raised
+            # A monitor that died of a real fault used to be
+            # swallowed here with nothing logged, so a bug in startup
+            # tracking looked like a worker that never became ready.
+            logger.exception("startup monitor failed")
+
+    async def _finalize(
+        self, handle: Optional[WorkerHandle], *, error: Optional[str]
+    ) -> None:
+        """End a worker and clear the state that described it.
+
+        The one terminal path. Every way a worker stops, a switch, a
+        cancel, a shutdown, a startup timeout, a load failure, comes
+        through here, so "the process is gone" and "the supervisor
+        says it is gone" cannot disagree.
+
+        ``error`` carries the reason when there is one. It outlives
+        the process on purpose: the page that would have shown it is
+        often a redirect away, and clearing it here is what used to
+        leave the menu with nothing to say. The next activation
+        clears it.
+
+        Safe to call from the startup monitor, which is why the state
+        clearing is guarded by an identity check rather than by the
+        lock: by the time a slow termination finishes, a newer
+        activation may already own the manager's fields, and this
+        must not wipe them.
+        """
+        if handle is not None:
+            await self._end_process(handle)
+        if handle is not None and self._proc is not handle:
+            # Superseded while we were terminating. The process we
+            # were asked to end is gone, which was the job; the state
+            # now describes somebody else's worker.
+            return
         self._proc = None
         self._port = None
         self.active_id = None
@@ -813,9 +919,55 @@ class ModelManager:
         self.active_versions = {}
         self.active_tokenizer = {}
         self.active_context_length = None
-        self.load_state = "idle"
         self.load_progress = None
-        self.load_error = None
+        self.load_state = "error" if error else "idle"
+        self.load_error = error
+
+    async def _end_process(self, handle: WorkerHandle) -> None:
+        """Terminate, escalate to kill, and wait for the exit.
+
+        The wait after the kill is the point. Without it the manager
+        cleared every field the instant it signalled, so a
+        replacement could be spawned against VRAM whose release
+        nothing had confirmed, and the eight-second settle window in
+        ``_preflight_vram`` was left standing in for a wait that
+        never happened.
+        """
+        if handle.poll() is not None:
+            return
+        logger.info(
+            "stopping worker %s (pid %s)",
+            self.active_id,
+            handle.pid,
+        )
+        handle.terminate()
+        if await self._await_exit(handle, self._stop_timeout_s):
+            return
+        logger.warning(
+            "worker %s ignored SIGTERM; killing", handle.pid
+        )
+        handle.kill()
+        if await self._await_exit(handle, self._kill_timeout_s):
+            return
+        # Nothing further to try: SIGKILL is not refusable, so a
+        # process still here is stuck in the kernel (uninterruptible
+        # I/O, or a wedged GPU driver call). Say so loudly rather
+        # than reporting a clean stop that did not happen.
+        logger.error(
+            "worker %s survived SIGKILL; its resources are not"
+            " confirmed released",
+            handle.pid,
+        )
+
+    async def _await_exit(
+        self, handle: WorkerHandle, timeout_s: float
+    ) -> bool:
+        """Wait for one process to exit. True if it did."""
+        try:
+            await asyncio.to_thread(handle.wait, timeout_s)
+        except Exception:  # noqa: BLE001 - timeout or reap race
+            return handle.poll() is not None
+        return True
 
 
 def _read_context_length(
@@ -1135,7 +1287,7 @@ async def _pipe(browser: WebSocket, worker: Any) -> None:
 async def websocket_proxy(browser: WebSocket) -> None:
     await browser.accept()
     active_id = manager.active_id
-    if active_id is None or manager.status(active_id) != "active":
+    if active_id is None or not manager.is_serving(active_id):
         # Model selection happens on the Main Menu; the generator
         # never auto-boots a worker. Tell the client to go back.
         await browser.send_json(
@@ -2146,7 +2298,7 @@ async def serve_generate() -> Response:
     the menu to choose one, rather than silently booting a default.
     """
     active_id = manager.active_id
-    if active_id is None or manager.status(active_id) != "active":
+    if active_id is None or not manager.is_serving(active_id):
         return RedirectResponse(url="/", status_code=307)
     return _serve_stamped_page("index.html")
 

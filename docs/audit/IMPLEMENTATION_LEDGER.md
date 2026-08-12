@@ -470,6 +470,30 @@ the handle, and the manager takes the spawn function, the health
 probe and its four timeouts as constructor arguments defaulting to
 today's values.
 
+**The gates were the bug, not `status()`.** The finding reads as
+though "active" is defined wrong, and the fix looks like redefining
+it. But `status()` has a second caller: `_models_snapshot` uses it for
+the menu's residency label and for `resident_reclaimable_gib`, and a
+worker halfway through loading really is holding that VRAM, so making
+`status()` mean "ready" would have quietly changed VRAM accounting
+during every load. The two questions are different, so there are now
+two predicates: `status()` still answers "does a process exist", and
+`is_serving()` answers "can this take a request". Only the `/generate`
+and `/ws` gates moved.
+
+**The failure has to outlive the process.** Finalization clears the
+manager's fields, which is the point, but it was also clearing the
+reason, and with the `/generate` gate now honest a failed load
+redirects to a menu that had nothing to say. `_finalize` keeps
+`load_state` and `load_error` when it is given a reason; the next
+activation clears them. A deliberate stop passes no reason and lands
+on idle as before.
+
+**Mutation-checked, since these tests are new and the code they
+cover had none.** Restoring the old monitor behavior (record the
+error, return with the worker alive) fails six of them; removing the
+wait after SIGKILL fails two more.
+
 Two things fell out of it. Moving the health read behind an injected
 probe flattened the monitor's loop enough to clear a nesting finding,
 taking the lint ratchet to 131. And an agent sandbox will not let
