@@ -192,9 +192,14 @@ non-authoritative derivatives (`RUNTIME-02`), which publication semantics now
 allow. `ANALYTICS-02`, `ANALYTICS-03` and `ANALYTICS-04` are unblocked;
 `ROADMAP-04` still waits on its own stage.
 
-**Stage 4, explicit process and socket ownership.** Extract and test the
-manager process adapter, then make termination and pre-eviction validation
-reliable (`LIFE-02`, `LIFE-06`). Share activation orchestration (`ORG-04`)
+**Stage 4, explicit process and socket ownership. Pass one done.** The manager
+process adapter is extracted and tested, termination is a verified transition
+and pre-eviction validation is in place (`LIFE-02`, `LIFE-06`), in three
+commits. It is much the largest stage, ten findings plus `DATA-02` in
+parallel, so it is being worked in passes the way stage 3 was; pass two is
+`ORG-04` then `LIFE-03`. The rest of the sequence, unchanged:
+
+Share activation orchestration (`ORG-04`)
 before adding activation and resident epochs with run ownership (`LIFE-03`,
 `LIFE-01`) and operation-scoped envelopes (`PROTOCOL-01`), which move
 together. With run ownership explicit, preserve complete intervention

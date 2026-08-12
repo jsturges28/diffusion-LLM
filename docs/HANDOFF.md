@@ -87,17 +87,25 @@ then `docs/audit/IMPLEMENTATION_LEDGER.md` for what is done, ready, and blocked.
 `docs/audit/AUDIT_REPORT.md` is the immutable analysis behind it; read only the findings
 you intend to take, since it is 2,000 lines.
 
-Stages 1 and 2 are complete, and so is stage 3, the run-store boundary. Saved
-runs now publish whole or not at all (`DATA-01`) out of an extracted store
-(`ORG-01`), declare a schema version and what they captured (`DATA-05`), carry
-the worker's own account of what produced them (`DATA-04`), and render a
-bounded GIF (`RUNTIME-02`). Stage 4 is next; the ledger is the authority on all
-of this and is updated in the same commit as each change.
+Stages 1 to 3 are complete. Saved runs publish whole or not at all
+(`DATA-01`) out of an extracted store (`ORG-01`), declare a schema version and
+what they captured (`DATA-05`), carry the worker's own account of what produced
+them (`DATA-04`), and render a bounded GIF (`RUNTIME-02`).
+
+**Stage 4, explicit process and socket ownership, is in progress.** Pass one
+has landed: worker spawning moved to `src/web/worker_process.py` behind a seam
+the manager can be tested through, stopping a worker is a verified transition
+rather than a signal and a hope (`LIFE-02`), and a switch to a model that
+cannot run is refused before the working model is evicted (`LIFE-06`). Pass two
+is the shared activation client (`ORG-04`) and then operation identity
+(`LIFE-03`, the campaign's only critical). The ledger is the authority and is
+updated in the same commit as each change.
 
 **Hardware debt.** The campaign's queue at the top of
-`docs/audit/IMPLEMENTATION_LEDGER.md` holds one entry, the `TRUST-03` offline
-slice. Separately, items 102 to 126 of `docs/MANUAL_VERIFICATION.md` predate
-the campaign and have never been validated.
+`docs/audit/IMPLEMENTATION_LEDGER.md` holds `LIFE-02`, `LIFE-06` and the
+`TRUST-03` offline slice, covered by items 142 to 146 of
+`docs/MANUAL_VERIFICATION.md`. Separately, items 102 to 126 of that file
+predate the campaign and have never been validated.
 
 ## Conventions
 
