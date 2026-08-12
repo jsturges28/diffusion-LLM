@@ -76,6 +76,16 @@ class ModelCapabilities(BaseModel):
     supports_cfg: bool = False
     # Character shown for an unresolved token in the UI.
     unresolved_char: str = "\u2591"
+    # Placements this model can actually load onto. Declared here so
+    # the supervisor can refuse an impossible activation before it
+    # evicts the working model; a backend that raises inside load()
+    # has already cost the user their resident worker by the time it
+    # speaks. Both devices by default, which is true of every model
+    # that does not say otherwise.
+    #
+    # A minimal version of what ROADMAP-01 will fold into a proper
+    # device-support axis alongside family and stream shape.
+    supported_devices: Tuple[str, ...] = ("cuda", "cpu")
 
 
 class ModelInfo(BaseModel):

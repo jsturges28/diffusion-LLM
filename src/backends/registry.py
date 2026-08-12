@@ -129,6 +129,11 @@ DGEMMA = ModelInfo(
         supports_resume=True,
         supports_cfg=False,
         unresolved_char="\u2591",
+        # The NF4 experts run through bitsandbytes, which needs a
+        # CUDA compute path. The worker has always refused anything
+        # else, but it did so inside load(), by which point the
+        # previous model had already been evicted for it.
+        supported_devices=("cuda",),
     ),
     param_specs=[
         ParamSpec(

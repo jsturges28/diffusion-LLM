@@ -1305,6 +1305,15 @@
           return;
         }
         if (status.state === "ready") {
+          // Discarded here, not before the request. A fresh worker
+          // is up, so the previous model's run must not be waiting
+          // on the generator we are about to open. Doing it up
+          // front meant a switch the server refused, for a model
+          // that could never have loaded, threw away a run that was
+          // never replaced.
+          if (!(activeSelection && activeSelection.resident)) {
+            overlaysClearLastRun();
+          }
           finishActivationProgress(function () {
             window.location.assign(GENERATE_URL);
           });
@@ -1348,16 +1357,14 @@
       return;
     }
     selecting = true;
-    activeSelection = { model: model, li: li };
     var resident = isResidentSelection(model, li);
-    if (!resident) {
-      // Activating from here ends on the generator with a fresh
-      // worker, so the previous model's run must not be waiting
-      // there. The generator's own switch path does the same on its
-      // way out. Re-selecting the resident model spawns nothing, so
-      // its run is still the current one and has to survive.
-      overlaysClearLastRun();
-    }
+    // `resident` is carried on the selection because the poll below
+    // needs it: re-selecting the model that is already loaded must
+    // leave its run alone, while any other selection replaces the
+    // worker and so must not leave the old run waiting.
+    activeSelection = {
+      model: model, li: li, resident: resident
+    };
     clearError();
     if (!resident) {
       beginLoadingUi(li);
@@ -1472,6 +1479,34 @@
       });
   }
 
+  // A load that failed leaves its reason on the server after the
+  // worker is gone, and the generator page now turns any model away
+  // that is not actually serving. Without this, arriving here after
+  // that redirect looks like the menu bounced you for no reason.
+  // Only on arrival: a failure that happens while you are watching
+  // is already reported by pollActivation.
+  function showPriorLoadFailure() {
+    if (selecting) {
+      return;
+    }
+    fetch("/api/models/activation")
+      .then(function (response) {
+        return response.json();
+      })
+      .then(function (status) {
+        if (selecting || !status || status.state !== "error") {
+          return;
+        }
+        showError(
+          status.message || "The last model failed to load."
+        );
+      })
+      .catch(function () {
+        // The model list's own fetch reports an unreachable
+        // server; a second message would just be noise.
+      });
+  }
+
   if (activationCancel) {
     activationCancel.addEventListener("click", cancelSelection);
   }
@@ -1503,4 +1538,5 @@
   // video and model list load immediately; only the badge waits.
   persistHydrate(refreshAnalyticsNewBadge);
   loadModels();
+  showPriorLoadFailure();
 })();

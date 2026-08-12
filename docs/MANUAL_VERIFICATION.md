@@ -22,6 +22,10 @@ kept when these were written:
 - **133 to 141**: confirmed on 2026-08-11, as each landed. Added by
   `DATA-05`, `DATA-04` and `RUNTIME-02`, all of which needed a display, a GPU,
   or two windows at once.
+- **142 to 146**: **not yet validated.** Added by `LIFE-02` and `LIFE-06`.
+  The logic is covered by fake-process tests; what needs hardware is whether
+  real VRAM actually comes back and whether a real refused switch leaves a
+  usable model behind.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -1027,3 +1031,33 @@ in-sandbox (no display).*
     between should look even rather than jumping at the end. Watch the
     supervisor's memory while it saves: it should stay flat rather than
     climbing by gigabytes, which is the actual point of the change.
+142. **A refused switch costs you nothing.** With LLaDA loaded and a finished
+    run on screen, use the header selector to switch to DiffusionGemma on
+    **CPU** (or temporarily rename `.venv-dgemma` to force a missing
+    interpreter). The switch should be refused with a readable reason, and
+    critically: LLaDA should still be loaded, still generating, and the run
+    should still be on screen. Before this change the resident model was
+    unloaded first and the run discarded, both for an error that needed no
+    VRAM to discover. Try the same from the Main Menu: the row should show the
+    error and the previously loaded model should still be resident.
+143. **A worker that fails to load is really gone.** Force a load failure (the
+    easiest is to request more VRAM than is free, or to corrupt the
+    DiffusionGemma checkpoint directory), then watch `nvidia-smi` and
+    `ps aux | rg run_worker`. The worker process must disappear and its VRAM
+    must come back. Before this change it stayed alive holding memory while
+    the supervisor reported an error.
+144. **A failed load lands you on the menu, with the reason.** After 143,
+    navigate to `/generate` directly. You should be redirected to the Main
+    Menu and the menu should show the load error. Previously the generator
+    page opened and appeared usable, because the gate asked only whether a
+    process existed. Then activate any model successfully and return to the
+    menu: the old error must be gone.
+145. **Cancel still frees the worker.** Start a slow load and hit Cancel
+    mid-load. VRAM should come back, the menu should be usable, and no error
+    should be shown, since cancelling is not a failure. Then check the
+    supervisor log: a cancel should not produce a stack trace.
+146. **A stubborn worker is killed and waited for.** Hard to force
+    deliberately; if you ever see a worker refuse to exit on a switch, check
+    the supervisor log for `ignored SIGTERM; killing`. Seeing
+    `survived SIGKILL` would mean a process wedged in the kernel and is worth
+    reporting rather than ignoring.

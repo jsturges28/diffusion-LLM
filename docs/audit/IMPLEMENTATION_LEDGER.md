@@ -97,8 +97,15 @@ showed is recorded under Deviations. `DATA-04`, `DATA-05` and `RUNTIME-02`
 were cleared on 2026-08-11 in the same sitting: the maintainer confirmed items
 133 to 141 of `docs/MANUAL_VERIFICATION.md`, including the two the sandbox
 could say least about, the amber invalid row's alignment against its
-neighbours and the two-window model switch. One entry is open:
+neighbours and the two-window model switch. Two entries are open:
 
+- **LIFE-02 and LIFE-06**: the logic is covered by fake-process tests, which
+  is what the process seam was extracted for, and both were mutation-checked
+  against the behavior they replace. What no sandbox can answer is whether
+  real VRAM actually comes back when a worker is terminated, and whether a
+  real refused switch leaves a usable model behind:
+  `docs/MANUAL_VERIFICATION.md` items 142 to 146. Item 143 is the one that
+  matters most, since it is the finding's whole claim.
 - **TRUST-03 (offline slice)**: the automated half asserts that both Hub
   workers pin every `from_pretrained` call to local files, and that being
   offline with nothing cached now reports what happened instead of a urllib3
@@ -128,8 +135,8 @@ neighbours and the two-window model switch. One entry is open:
 | ANALYTICS-02 | high | M | ready | DATA-05 (done), see decision above | |
 | ANALYTICS-03 | medium | L | ready | DATA-01, DATA-05 (both done) | |
 | ANALYTICS-04 | high | M | blocked | DATA-01 | |
-| LIFE-02 | high | M | blocked | stage 4 order | |
-| LIFE-06 | medium | M | blocked | LIFE-02 | |
+| LIFE-02 | high | M | needs hardware | none | Two commits: the process seam, then verified termination |
+| LIFE-06 | medium | M | needs hardware | none | Validate a switch target before evicting the working model |
 | ORG-04 | medium | S | blocked | stage 4 order | |
 | LIFE-03 | critical | L | blocked | ORG-04 | |
 | LIFE-01 | high | M | blocked | LIFE-03 | |
@@ -459,6 +466,50 @@ revisions in the registry, resolved revisions and weight digests in run
 provenance, cache-space preflight against remaining bytes, and a completion
 manifest for the locally quantized DiffusionGemma artifact. The slice deals
 with availability only.
+
+### LIFE-06
+
+**The VRAM check cannot move, so it was split rather than moved.**
+The finding asks for validation before eviction, and three of the
+four checks move cleanly. The fourth cannot: the real reading is only
+meaningful once the resident worker's memory has come back, which is
+what `_preflight_vram`'s settle loop waits for. So there are now two,
+answering different questions. Before eviction, a non-destructive
+estimate counting the resident model's VRAM as reclaimable, which
+refuses only the case that was already hopeless. After eviction, the
+existing check, unchanged and still authoritative.
+
+**Device support needed a registry field, which overlaps
+`ROADMAP-01`.** DiffusionGemma has always refused a non-CUDA device,
+but from inside `load()`, after the previous model was evicted for
+it. The supervisor had no way to know. `ModelCapabilities` gains
+`supported_devices`, defaulting to both, and the maintainer agreed to
+the minimal version rather than deferring the check: `LIFE-06`'s
+Verification names "unsupported device" as a case that must leave the
+resident worker usable, so skipping it would have meant a Verification
+clause knowingly unmet. `ROADMAP-01` will fold it into a proper
+device-support axis.
+
+**A refusal is not a fault.** With validation in front, a switch to
+an impossible target returns an ordinary answer, but the route's
+generic handler turned it into a 500 with a stack trace in the log.
+`ActivationRefused` (a `RuntimeError`, so existing handlers still
+catch it) gets a 409 and a single log line, which keeps real faults
+findable.
+
+**The client half was half the bug.** Both entry paths discarded the
+run before the POST, so a refusal the server now makes cheaply would
+still have cost the user the run on screen. The discard moved into
+the branch where a worker is actually ready. The menu's
+re-select-the-resident-model case had different semantics already (it
+spawns nothing, so its run must survive) and that is carried on the
+selection rather than recomputed.
+
+**The honest `/generate` gate needed somewhere to land.** `LIFE-02`
+made a failed load stop satisfying the gate, which means a redirect
+to a menu that never read activation state and would have bounced the
+user with no explanation. The menu now reads it once on arrival, and
+stays quiet during a selection it is already reporting on.
 
 ### LIFE-02
 

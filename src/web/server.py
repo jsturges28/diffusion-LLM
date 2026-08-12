@@ -126,6 +126,16 @@ VRAM_SETTLE_TIMEOUT_S = 8.0
 # cannot afford to do for real: start a process, and read a socket.
 # Named so the injection points below read as contracts rather than
 # as "some callable".
+class ActivationRefused(RuntimeError):
+    """This model cannot be activated, and we knew before trying.
+
+    Distinct from a fault so the route can answer with the reason
+    instead of a 500 and a stack trace. A missing interpreter or a
+    model that cannot fit is an ordinary answer to an ordinary
+    request; logging it as a server error buries the real ones.
+    """
+
+
 SpawnWorker = Callable[..., WorkerHandle]
 ProbeHealth = Callable[
     [str], Awaitable[Optional[Dict[str, Any]]]
@@ -446,6 +456,7 @@ class ModelManager:
         start_timeout_s: float = WORKER_START_TIMEOUT_S,
         stop_timeout_s: float = WORKER_STOP_TIMEOUT_S,
         kill_timeout_s: float = WORKER_KILL_TIMEOUT_S,
+        vram_settle_timeout_s: float = VRAM_SETTLE_TIMEOUT_S,
         health_poll_s: float = WORKER_HEALTH_POLL_S,
         progress_poll_s: float = WORKER_PROGRESS_POLL_S,
     ) -> None:
@@ -458,6 +469,7 @@ class ModelManager:
         self._start_timeout_s = start_timeout_s
         self._stop_timeout_s = stop_timeout_s
         self._kill_timeout_s = kill_timeout_s
+        self._vram_settle_timeout_s = vram_settle_timeout_s
         self._health_poll_s = health_poll_s
         self._progress_poll_s = progress_poll_s
         self.active_id: Optional[str] = None
@@ -571,6 +583,13 @@ class ModelManager:
         ``/api/models/activation``. Keeping the load off the lock lets
         ``stop`` / ``cancel_activation`` terminate a still-loading
         worker instead of deadlocking behind a held lock.
+
+        Four phases, in this order for a reason. Everything knowable
+        without freeing anything is checked first, so a switch to a
+        model that cannot run leaves the working one running. The
+        resident worker is evicted only once the target has passed;
+        anything that can only be known after eviction (the real VRAM
+        reading) follows it.
         """
         if model_id not in REGISTRY:
             raise KeyError(model_id)
@@ -582,13 +601,9 @@ class ModelManager:
                 and self._alive()
             ):
                 return
-            await self._stop_locked()
             info = REGISTRY[model_id]
-            python = REPO_ROOT / info.venv_python
-            if not python.exists():
-                raise RuntimeError(
-                    f"venv python not found: {python}"
-                )
+            python = self._validate_target(info, device)
+            await self._stop_locked()
             # CPU placement has no VRAM cost, so skip the GPU
             # pre-flight (which would otherwise block on nvidia-smi).
             if device != "cpu":
@@ -634,6 +649,81 @@ class ModelManager:
             self.load_error = None
             self._monitor_task = asyncio.create_task(
                 self._monitor_startup(proc, port)
+            )
+
+    def _validate_target(
+        self, info: ModelInfo, device: str
+    ) -> Path:
+        """Everything knowable before anything is freed.
+
+        Activation used to stop the resident worker first and only
+        then look at the target, so picking a model that could never
+        have run cost the user a loaded model and the run on screen
+        in front of it, for an error that needed no VRAM to discover.
+        Every check here raises, and raising here means nothing has
+        been evicted.
+
+        Returns the interpreter to launch, since finding it is one of
+        the checks.
+        """
+        python = REPO_ROOT / info.venv_python
+        if not python.exists():
+            raise ActivationRefused(
+                f"{info.display_name} is not installed:"
+                f" no interpreter at {info.venv_python}."
+            )
+        supported = info.capabilities.supported_devices
+        if device not in supported:
+            raise ActivationRefused(
+                f"{info.display_name} cannot run on"
+                f" {device.upper()}; it supports"
+                f" {', '.join(d.upper() for d in supported)}."
+            )
+        # Only for checkpoints that are a directory on this machine.
+        # A Hub id is not checked here: an uncached one downloads on
+        # first activation, which is a supported path rather than a
+        # failure, and the menu already marks it.
+        if not _is_repo_checkpoint(info.checkpoint):
+            path = Path(info.checkpoint).expanduser()
+            if not path.is_dir():
+                raise ActivationRefused(
+                    f"{info.display_name} checkpoint not found"
+                    f" at {path}."
+                )
+        self._validate_headroom(info, device)
+        return python
+
+    def _validate_headroom(
+        self, info: ModelInfo, device: str
+    ) -> None:
+        """Refuse a model that cannot fit even after the switch.
+
+        Non-destructive, which is the whole point: it counts the
+        resident worker's VRAM as reclaimable rather than reclaiming
+        it to find out. ``_preflight_vram`` still runs after eviction
+        and remains the authority; this only catches the case that
+        was already hopeless.
+        """
+        if device == "cpu" or info.min_vram_gib <= 0:
+            return
+        free = _free_vram_gib()
+        if free is None:
+            return  # unreadable; the post-eviction check will say so
+        reclaimable = 0.0
+        if (
+            self.active_id is not None
+            and self._alive()
+            and self.active_device == "cuda"
+            and self.active_id in REGISTRY
+        ):
+            reclaimable = REGISTRY[self.active_id].min_vram_gib
+        if free + reclaimable < info.min_vram_gib:
+            raise ActivationRefused(
+                f"Not enough GPU memory for {info.display_name}:"
+                f" needs about {info.min_vram_gib:.0f} GiB, and"
+                f" only {free + reclaimable:.1f} GiB would be free"
+                " after unloading the current model. The current"
+                " model is still loaded."
             )
 
     async def _monitor_startup(
@@ -825,7 +915,9 @@ class ModelManager:
         required = info.min_vram_gib
         if required <= 0:
             return
-        deadline = time.monotonic() + VRAM_SETTLE_TIMEOUT_S
+        deadline = (
+            time.monotonic() + self._vram_settle_timeout_s
+        )
         free = _free_vram_gib()
         while (
             free is not None
@@ -842,7 +934,7 @@ class ModelManager:
             )
             return
         if free < required:
-            raise RuntimeError(
+            raise ActivationRefused(
                 f"Not enough free GPU memory to load"
                 f" {info.display_name}: needs about"
                 f" {required:.0f} GiB but only {free:.1f} GiB"
@@ -1163,6 +1255,17 @@ async def activate_model(
     except ValueError as exc:
         return JSONResponse(
             status_code=400,
+            content={"ok": False, "message": str(exc)},
+        )
+    except ActivationRefused as exc:
+        # Expected, and already explained. Logged as a line rather
+        # than a stack trace so real faults stay findable, and 409
+        # rather than 500 because nothing here is the server's
+        # fault: the request asked for something this machine
+        # cannot currently do.
+        logger.info("activation refused: %s", exc)
+        return JSONResponse(
+            status_code=409,
             content={"ok": False, "message": str(exc)},
         )
     except Exception as exc:  # noqa: BLE001

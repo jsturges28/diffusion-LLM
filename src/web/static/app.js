@@ -1408,13 +1408,6 @@ function switchModel(id, device) {
   if (id === activeModelId && (device || activeDevice) === activeDevice) {
     return;
   }
-  // A switch ends in location.reload(), which the restore path cannot
-  // tell from a trip to Analytics and back. Dropping the snapshot
-  // here, where the reload is known to be a switch, is what makes the
-  // new model start on a blank canvas. The identity check alone
-  // cannot do it: switching away and back lands on a matching
-  // (model, device) pair again, so the stale run would return.
-  clearSessionState();
   suppressReconnect = true;
   if (ws) {
     try {
@@ -1468,6 +1461,17 @@ function pollSwitch(name) {
     })
     .then(function (status) {
       if (status.state === "ready") {
+        // Dropped here rather than before the request, which is
+        // where it used to happen. A switch ends in a reload, and
+        // the restore path cannot tell that from a trip to
+        // Analytics and back, so the snapshot has to go before the
+        // reload; the identity check alone cannot do it, since
+        // switching away and back lands on a matching (model,
+        // device) pair again and the stale run would return. But
+        // clearing it up front meant a switch that was refused, for
+        // a missing venv or a model that could not fit, threw away
+        // the run on screen for nothing.
+        clearSessionState();
         finishLoadingProgress(function () {
           location.reload();
         });
