@@ -19,7 +19,7 @@ todos:
     status: completed
   - id: pass-two-handback
     content: "Pass boundary: full verification including loading all 182 real runs through the adapters, ledger deviations recorded, and hand back with the hardware checks"
-    status: in_progress
+    status: completed
 isProject: false
 ---
 

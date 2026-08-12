@@ -1820,6 +1820,12 @@ function showInvalidDetail(run) {
   // this run's title, which reads as this run's data.
   clearRunCharts();
   clearOverlay();
+  // A class on the panel rather than hiding each section, because
+  // every section owns its own `hidden` flag for its own reasons
+  // (model type, the timing/rate pager, whether entropy was
+  // captured). Hiding them here would mean restoring them there,
+  // and getting that wrong loses a chart on the next valid run.
+  detailPanel.classList.add("detail-unreadable");
   renderTable();
 }
 
@@ -1838,6 +1844,7 @@ function showDetail(runId) {
   var token = detailRequests.begin(runId);
   comparePanel.hidden = true;
   detailPanel.classList.remove("hidden");
+  detailPanel.classList.remove("detail-unreadable");
 
   // Opening a run clears its "new" dot (and decrements the generator's
   // count on the next visit). Remove just this row's dot in place.

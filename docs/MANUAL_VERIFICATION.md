@@ -19,13 +19,9 @@ kept when these were written:
 - **102 to 126**: **not yet validated.** This is the outstanding debt,
   and it predates the audit campaign.
 - **127 to 132**: confirmed as each one landed.
-- **133 to 135**: **not yet validated.** Added by `DATA-05`; they need a
-  display, so the sandbox could only check the server's half.
-- **136 to 139**: **not yet validated.** Added by `DATA-04`; they need two
-  windows, a GPU, and a real model switch, none of which the sandbox has.
-- **140 to 141**: **not yet validated.** Added by `RUNTIME-02`; the frame
-  count and the heading are covered by tests, but whether a sampled
-  animation still reads well is a judgement only a person can make.
+- **133 to 141**: confirmed on 2026-08-11, as each landed. Added by
+  `DATA-05`, `DATA-04` and `RUNTIME-02`, all of which needed a display, a GPU,
+  or two windows at once.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer

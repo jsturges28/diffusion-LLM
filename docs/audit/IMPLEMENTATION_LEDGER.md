@@ -93,23 +93,12 @@ standing measurement programme is separate and lives at
 All four stage 1 entries were cleared on 2026-08-11, as was `DATA-01`: the
 maintainer confirmed a fresh save reaching Analytics with its GIF and a guided
 edit through Confirm exercising the compare-and-swap replacement. What each
-showed is recorded under Deviations. Three entries are open:
+showed is recorded under Deviations. `DATA-04`, `DATA-05` and `RUNTIME-02`
+were cleared on 2026-08-11 in the same sitting: the maintainer confirmed items
+133 to 141 of `docs/MANUAL_VERIFICATION.md`, including the two the sandbox
+could say least about, the amber invalid row's alignment against its
+neighbours and the two-window model switch. One entry is open:
 
-- **DATA-04**: the automated half covers both ends and the middle. The worker
-  attests where it actually loaded
-  (`tests/backends/test_worker_provenance.py`), the save prefers the run's
-  envelope over the supervisor's current state
-  (`tests/web/test_run_provenance.py`), and the browser carries it across the
-  save and the session snapshot (`tests/web/test_app_provenance_threading.py`).
-  Outstanding is everything that needs a GPU and a second window:
-  `docs/MANUAL_VERIFICATION.md` items 136 to 139, of which 136 (finish a run in
-  one window, switch the model in another, then save) is the scenario the
-  finding is about.
-- **DATA-05**: the server's half is covered by execution and all 182 real runs
-  were loaded through the adapters here, but the Analytics table's amber
-  invalid row needs eyes on it: `docs/MANUAL_VERIFICATION.md` items 133 to 135.
-  Item 133's alignment check is the one worth doing carefully, since the
-  spanning cell's width is arithmetic no test in the sandbox can see.
 - **TRUST-03 (offline slice)**: the automated half asserts that both Hub
   workers pin every `from_pretrained` call to local files, and that being
   offline with nothing cached now reports what happened instead of a urllib3
@@ -134,7 +123,7 @@ showed is recorded under Deviations. Three entries are open:
 | ORG-01 | medium | M | done | none | Extract the run store out of the supervisor |
 | DATA-01 | high | L | done | none | Publish saved runs whole or not at all |
 | DATA-05 | high | L | done | none | Three commits: strict boundary, version and frame stream, invalid runs |
-| DATA-04 | high | M | needs hardware | none | Persist run provenance from the run, not manager state |
+| DATA-04 | high | M | done | none | Persist run provenance from the run, not manager state |
 | RUNTIME-02 | medium | M | done | none | Bound the GIF and label the model that produced it |
 | ANALYTICS-02 | high | M | ready | DATA-05 (done), see decision above | |
 | ANALYTICS-03 | medium | L | ready | DATA-01, DATA-05 (both done) | |

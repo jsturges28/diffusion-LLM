@@ -94,12 +94,10 @@ the worker's own account of what produced them (`DATA-04`), and render a
 bounded GIF (`RUNTIME-02`). Stage 4 is next; the ledger is the authority on all
 of this and is updated in the same commit as each change.
 
-**Hardware debt.** Two lists, both real. The campaign's own queue is at the
-top of `docs/audit/IMPLEMENTATION_LEDGER.md`: `DATA-04`, `DATA-05` and the
-`TRUST-03` offline slice are all waiting on a GPU, a display, or two windows,
-covered by items 133 to 141 of `docs/MANUAL_VERIFICATION.md`. Separately,
-items 102 to 126 of that file predate the campaign and have never been
-validated.
+**Hardware debt.** The campaign's queue at the top of
+`docs/audit/IMPLEMENTATION_LEDGER.md` holds one entry, the `TRUST-03` offline
+slice. Separately, items 102 to 126 of `docs/MANUAL_VERIFICATION.md` predate
+the campaign and have never been validated.
 
 ## Conventions
 

@@ -708,6 +708,13 @@ html, body {
   background: var(--bg-surface-hover);
 }
 
+/* A run that could not be read has nothing to chart, and an empty
+   framed chart under a heading reads as a chart that failed to draw
+   rather than as one with no data behind it. */
+.detail-unreadable .chart-section {
+  display: none;
+}
+
 /* The detail panel for a run that could not be opened. It replaces
    the metadata block, so it carries its own padding rather than
    inheriting the meta-row rhythm. */

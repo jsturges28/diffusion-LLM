@@ -196,6 +196,18 @@ def _is_repo_path(path: str, roots: Set[str]) -> bool:
         return False
     if path.split("/", 1)[0] in roots:
         return True
+    if "/" not in path.rstrip("/"):
+        # A bare filename is a name, not a location. The docs are
+        # full of them (`metadata.json`, `frames.jsonl`) naming files
+        # inside a run folder, which is gitignored and so is in no
+        # clone by design. Tracked root files still reach the check
+        # through `roots` above.
+        #
+        # Without this, the heuristic below made the suite depend on
+        # a clean working tree: a stray metadata.json dropped at the
+        # root during manual verification failed four documents at
+        # once, for a reference that was correct.
+        return False
     return (REPO_ROOT / path.rstrip("/")).exists()
 
 

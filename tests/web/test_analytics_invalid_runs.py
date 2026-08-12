@@ -109,6 +109,27 @@ def test_opening_a_broken_run_clears_the_previous_one() -> None:
     assert "clearOverlay()" in region
 
 
+def test_opening_a_broken_run_hides_the_chart_frames() -> None:
+    """Nothing to chart, so no empty framed chart under a heading.
+
+    Done with a class on the panel rather than by hiding each
+    section, because each one owns its own visibility for its own
+    reasons and restoring them on the next valid run is where a
+    chart goes missing.
+    """
+    region = _region("function showInvalidDetail", 1400)
+
+    assert 'classList.add("detail-unreadable")' in region
+
+
+def test_a_valid_run_gets_its_charts_back() -> None:
+    """The other half. Opening a readable run after a broken one
+    must not inherit the broken one's empty panel."""
+    region = _region("function showDetail(runId)", 900)
+
+    assert 'classList.remove("detail-unreadable")' in region
+
+
 def test_the_panel_says_the_folder_is_still_there() -> None:
     """The one useful action is deleting it, and that is only an
     obvious choice if the user knows nothing was lost yet."""
