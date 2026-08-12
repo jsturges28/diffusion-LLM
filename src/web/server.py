@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import ctypes
 import json
 import logging
 import os
@@ -24,11 +23,19 @@ import shutil
 import signal
 import socket
 import subprocess
-import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Set,
+    Tuple,
+)
 
 import httpx
 import websockets
@@ -65,6 +72,11 @@ from src.web.data_root import (
     resolve_results_dir,
 )
 from src.web.ui_state import load_ui_state, set_ui_state_key
+from src.web.worker_process import (
+    WorkerHandle,
+    spawn_worker,
+    worker_command,
+)
 
 # Disable the Xet download client before the first huggingface_hub
 # import. Here huggingface_hub is imported lazily (in _is_downloaded /
@@ -104,6 +116,15 @@ VRAM_SETTLE_TIMEOUT_S = 8.0
 
 
 # -- Model worker manager --
+
+# The two things `ModelManager` does to the outside world that a test
+# cannot afford to do for real: start a process, and read a socket.
+# Named so the injection points below read as contracts rather than
+# as "some callable".
+SpawnWorker = Callable[..., WorkerHandle]
+ProbeHealth = Callable[
+    [str], Awaitable[Optional[Dict[str, Any]]]
+]
 
 
 # nvidia-smi is often absent from PATH when the app is launched from a
@@ -384,36 +405,25 @@ def _venv_cuda_lib_dirs(python_path: Path) -> List[str]:
     return dirs
 
 
-def _set_pdeathsig() -> None:
-    """Child-side: ask the kernel to SIGTERM this worker if the
-    supervisor dies (Linux ``PR_SET_PDEATHSIG``).
+async def _probe_health(
+    url: str,
+) -> Optional[Dict[str, Any]]:
+    """One read of a worker's /health, or None if it did not answer.
 
-    Belt-and-suspenders against orphaned workers holding VRAM: even if
-    the supervisor is hard-killed (e.g. the desktop window closes mid
-    load before the graceful stop can run), the worker is signalled.
-    Best-effort and Linux-only; a failure here must not block spawn.
+    A worker that is still importing torch refuses the connection,
+    which is expected rather than exceptional for the first several
+    seconds of every activation. None says "no answer yet"; the
+    caller decides whether that has gone on too long.
     """
-    try:
-        libc = ctypes.CDLL("libc.so.6", use_errno=True)
-        pr_set_pdeathsig = 1
-        libc.prctl(pr_set_pdeathsig, signal.SIGTERM)
-    except Exception:  # noqa: BLE001 - best-effort orphan guard
-        pass
-
-
-def _worker_popen_kwargs() -> Dict[str, Any]:
-    """Extra ``Popen`` kwargs to keep workers from being orphaned.
-
-    On Linux, put the worker in its own session and arm PDEATHSIG.
-    Elsewhere, return nothing (``preexec_fn`` is POSIX-only and the
-    app targets Linux).
-    """
-    if sys.platform.startswith("linux"):
-        return {
-            "start_new_session": True,
-            "preexec_fn": _set_pdeathsig,
-        }
-    return {}
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(url, timeout=2.0)
+        except Exception:  # noqa: BLE001 - worker still coming up
+            return None
+    if response.status_code != 200:
+        return None
+    body: Dict[str, Any] = response.json()
+    return body
 
 
 class ModelManager:
@@ -423,7 +433,26 @@ class ModelManager:
     already saturates the 24 GB GPU.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        spawn: SpawnWorker = spawn_worker,
+        probe: ProbeHealth = _probe_health,
+        start_timeout_s: float = WORKER_START_TIMEOUT_S,
+        stop_timeout_s: float = WORKER_STOP_TIMEOUT_S,
+        health_poll_s: float = WORKER_HEALTH_POLL_S,
+        progress_poll_s: float = WORKER_PROGRESS_POLL_S,
+    ) -> None:
+        # Injected so a test can drive the lifecycle without a real
+        # subprocess, a real socket, or a three-minute deadline. The
+        # defaults are the production values, so nothing that builds
+        # a manager the old way behaves differently.
+        self._spawn = spawn
+        self._probe = probe
+        self._start_timeout_s = start_timeout_s
+        self._stop_timeout_s = stop_timeout_s
+        self._health_poll_s = health_poll_s
+        self._progress_poll_s = progress_poll_s
         self.active_id: Optional[str] = None
         self.active_device: Optional[str] = None
         self.active_versions: Dict[str, str] = {}
@@ -445,7 +474,7 @@ class ModelManager:
         self.load_state: str = "idle"
         self.load_progress: Optional[Dict[str, Any]] = None
         self.load_error: Optional[str] = None
-        self._proc: Optional[subprocess.Popen] = None
+        self._proc: Optional[WorkerHandle] = None
         self._port: Optional[int] = None
         self._monitor_task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
@@ -548,23 +577,15 @@ class ModelManager:
                 port,
                 device,
             )
-            proc = subprocess.Popen(
-                [
-                    str(python),
-                    "-m",
-                    "src.backends.run_worker",
-                    "--model",
-                    model_id,
-                    "--host",
-                    "127.0.0.1",
-                    "--port",
-                    str(port),
-                    "--device",
-                    device,
-                ],
-                cwd=str(REPO_ROOT),
+            proc = self._spawn(
+                worker_command(
+                    python=python,
+                    model_id=model_id,
+                    port=port,
+                    device=device,
+                ),
+                cwd=REPO_ROOT,
                 env=env,
-                **_worker_popen_kwargs(),
             )
             self._proc = proc
             self._port = port
@@ -581,7 +602,7 @@ class ModelManager:
             )
 
     async def _monitor_startup(
-        self, proc: subprocess.Popen, port: int
+        self, proc: WorkerHandle, port: int
     ) -> None:
         """Poll the worker's /health until ready/error/exit.
 
@@ -594,40 +615,34 @@ class ModelManager:
         """
         url = f"http://127.0.0.1:{port}/health"
         startup_deadline = (
-            time.monotonic() + WORKER_START_TIMEOUT_S
+            time.monotonic() + self._start_timeout_s
         )
         responded = False
-        async with httpx.AsyncClient() as client:
-            while True:
-                if proc.poll() is not None:
-                    self.load_state = "error"
-                    self.load_error = (
-                        "worker exited during startup"
-                        f" (code {proc.returncode})"
-                    )
-                    return
-                if (
-                    not responded
-                    and time.monotonic() > startup_deadline
-                ):
-                    self.load_state = "error"
-                    self.load_error = (
-                        "worker did not start in time"
-                    )
-                    return
-                try:
-                    resp = await client.get(url, timeout=2.0)
-                    if resp.status_code == 200:
-                        responded = True
-                        if self._apply_health(resp.json()):
-                            return
-                except Exception:  # noqa: BLE001 - worker still coming up
-                    pass
-                await asyncio.sleep(
-                    WORKER_PROGRESS_POLL_S
-                    if responded
-                    else WORKER_HEALTH_POLL_S
+        while True:
+            code = proc.poll()
+            if code is not None:
+                self.load_state = "error"
+                self.load_error = (
+                    f"worker exited during startup (code {code})"
                 )
+                return
+            if (
+                not responded
+                and time.monotonic() > startup_deadline
+            ):
+                self.load_state = "error"
+                self.load_error = "worker did not start in time"
+                return
+            body = await self._probe(url)
+            if body is not None:
+                responded = True
+                if self._apply_health(body):
+                    return
+            await asyncio.sleep(
+                self._progress_poll_s
+                if responded
+                else self._health_poll_s
+            )
 
     def _apply_health(self, body: Dict[str, Any]) -> bool:
         """Fold one /health body into load state. True when terminal."""
@@ -787,7 +802,7 @@ class ModelManager:
             self._proc.terminate()
             try:
                 await asyncio.to_thread(
-                    self._proc.wait, WORKER_STOP_TIMEOUT_S
+                    self._proc.wait, self._stop_timeout_s
                 )
             except Exception:
                 self._proc.kill()

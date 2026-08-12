@@ -460,6 +460,27 @@ provenance, cache-space preflight against remaining bytes, and a completion
 manifest for the locally quantized DiffusionGemma artifact. The slice deals
 with availability only.
 
+### LIFE-02
+
+**The seam had to come before the fix.** Nothing in the suite touched
+`ModelManager`, and the finding's Verification asks for five process
+scenarios, so the first commit of this pass buys testability and
+changes no behavior: `src/web/worker_process.py` owns spawning and
+the handle, and the manager takes the spawn function, the health
+probe and its four timeouts as constructor arguments defaulting to
+today's values.
+
+Two things fell out of it. Moving the health read behind an injected
+probe flattened the monitor's loop enough to clear a nesting finding,
+taking the lint ratchet to 131. And an agent sandbox will not let
+this process signal a child in its own session, which is exactly what
+`spawn_worker` creates, so `tests/web/test_worker_process.py` checks
+terminate and kill by delegation against a stand-in and keeps its
+real subprocesses to ones that exit on their own. That is not a
+weaker test than it looks: whether SIGTERM ends a process is
+CPython's business, and whether terminate-then-kill is the right
+sequence is the manager's, tested against a fake.
+
 ### RUNTIME-02
 
 **Streaming frames into the encoder bounds nothing on its own.** The
