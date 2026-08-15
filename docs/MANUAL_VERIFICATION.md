@@ -43,6 +43,9 @@ kept when these were written:
 - **153**: confirmed on 2026-08-15. A second launch from the desktop icon
   opens no second window.
 - **154**: **not yet validated.**
+- **155**: **not yet validated**, and it is a judgement call rather than a
+  pass or fail. The change it covers is meant to be reverted if you do not
+  like it.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -1183,3 +1186,15 @@ does nothing at all.
     thing holding 8760 is not one of ours. The terminal says it is falling
     back to an ephemeral port and that web storage will not persist for that
     launch, which is the pre-existing behaviour and still correct.
+155. **The page cross-fade, which is an experiment with an exit.** Move between
+    the Main Menu, Generation and Analytics in the desktop app. The document
+    swap should cross-fade rather than hard-cut. Judge it *with* the loading
+    overlay in place, since that is the shipped combination: the transition
+    covers the swap and the overlay covers the page assembling afterwards.
+    If it does not clearly improve on the hard cut, say so and the rule comes
+    out. It is one commit and one CSS block precisely so that is cheap.
+    Two things not to read as bugs. In a browser that does not support it
+    (Firefox on the `main.py` entry point) there is simply no transition,
+    which is why the two entry points may feel different. And the fade is
+    generic, with nothing morphing between pages, because naming elements is
+    the follow-on work rather than part of the experiment.

@@ -2,6 +2,28 @@
    LLaDA Diffusion Visualizer: dark terminal theme
    ================================================ */
 
+/* Cross-fade between pages instead of hard-cutting. Every page loads
+   this stylesheet, and the rule has to be present in both the
+   outgoing and incoming document for a cross-document transition to
+   run, so one declaration here covers all four navigations.
+
+   An experiment, and a narrow one. It softens the document swap and
+   does nothing for the page assembling itself afterwards, which is
+   the larger problem recorded under ORG-02; the loading overlay is
+   what covers that, and this transition is judged with the overlay
+   in place rather than instead of it. Chromium-only in practice, so
+   the desktop app gets it (QtWebEngine 6.11 is Chromium 140, well
+   past the 126 that shipped cross-document transitions) and a
+   Firefox tab on the browser entry point keeps today's hard cut.
+   Unsupported means no transition, not a broken page.
+
+   Deliberately bare: no view-transition-name on anything, so this is
+   a generic cross-fade rather than elements morphing between pages.
+   Naming them is real UI work and wants its own pass. */
+@view-transition {
+  navigation: auto;
+}
+
 :root {
   /* Render native controls (number-input steppers, any native
      scrollbars) in dark mode so they match the theme instead of
