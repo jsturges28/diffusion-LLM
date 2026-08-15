@@ -92,7 +92,11 @@ def test_the_menu_does_not_discard_before_asking() -> None:
 
 
 def test_the_menu_discards_once_the_worker_is_ready() -> None:
-    region = _region(MENU_JS, "function pollActivation()", 1400)
+    """Anchored on the selection's activation callbacks rather than
+    the old `pollActivation`, which `ORG-04` replaced with the shared
+    client. The property is unchanged: the discard sits in the ready
+    path, ahead of the navigation."""
+    region = _region(MENU_JS, "function activationCallbacks()", 1400)
 
     discard = region.find("overlaysClearLastRun()")
     navigate = region.find("window.location.assign(GENERATE_URL)")
@@ -106,7 +110,7 @@ def test_reselecting_the_resident_model_keeps_its_run() -> None:
     """Behavior that predates this change and has to survive it.
     Re-selecting the loaded model spawns nothing, so the run showing
     on the generator is still that model's own."""
-    region = _region(MENU_JS, "function pollActivation()", 1400)
+    region = _region(MENU_JS, "function activationCallbacks()", 1400)
 
     assert "activeSelection.resident" in region
 
@@ -124,11 +128,13 @@ def test_the_menu_reports_a_load_that_failed_earlier() -> None:
 
 
 def test_the_report_reads_the_activation_endpoint() -> None:
+    """Through the shared client's single read, since `ORG-04` took
+    the endpoint's URL out of both pages."""
     region = _region(
         MENU_JS, "function showPriorLoadFailure()", 900
     )
 
-    assert '"/api/models/activation"' in region
+    assert "readOnce()" in region
     assert 'status.state !== "error"' in region
 
 

@@ -11,13 +11,6 @@
 (function () {
   var GENERATE_URL = "/generate";
   var FLOATER_COUNT = 30;
-  // The supervisor samples the worker every 250ms, so reading at the
-  // same rate is the fastest the bar can actually be told anything.
-  // Anything slower stacks staleness on staleness, and a load that is
-  // over in a couple of seconds gets only one or two readings before
-  // the page moves on.
-  var ACTIVATION_POLL_MS = 250;
-
   var video = document.getElementById("menu-video");
   var systemBox = document.getElementById("menu-system");
   var systemText = document.getElementById("menu-system-text");
@@ -69,6 +62,10 @@
   var lastDownloadStatus = null;
   var prevDownloadState = null;
   var pollTimer = null;
+  // The shared activation client watching the selection in flight,
+  // or null when nothing is loading. It owns its own timer, which is
+  // why it is stopped alongside pollTimer rather than through it.
+  var activationWatch = null;
   // The row element whose weights are currently pre-downloading.
   var downloadRow = null;
 
@@ -688,10 +685,18 @@
     }
   }
 
+  // Stop whatever this page is polling: the download veneer's timer,
+  // and the activation watch, which owns its own. Both are folded in
+  // here because every caller means "stop watching", and stopping
+  // one that is not running is a no-op.
   function stopPolling() {
     if (pollTimer !== null) {
       clearTimeout(pollTimer);
       pollTimer = null;
+    }
+    if (activationWatch !== null) {
+      activationWatch.stop();
+      activationWatch = null;
     }
   }
 
@@ -1291,56 +1296,42 @@
     setTimeout(done, OVERLAYS_LOAD_COMPLETE_HOLD_MS);
   }
 
-  // Poll activation state until ready / error (or cancelled).
-  function pollActivation() {
-    if (!selecting) {
-      return;
-    }
-    fetch("/api/models/activation")
-      .then(function (response) {
-        return response.json();
-      })
-      .then(function (status) {
+  // The shared client's callbacks for a selection made here. Built
+  // per selection so an abandoned one cannot report into the next.
+  function activationCallbacks() {
+    return {
+      onProgress: function (state, progress) {
         if (!selecting) {
           return;
         }
-        if (status.state === "ready") {
-          // Discarded here, not before the request. A fresh worker
-          // is up, so the previous model's run must not be waiting
-          // on the generator we are about to open. Doing it up
-          // front meant a switch the server refused, for a model
-          // that could never have loaded, threw away a run that was
-          // never replaced.
-          if (!(activeSelection && activeSelection.resident)) {
-            overlaysClearLastRun();
-          }
-          finishActivationProgress(function () {
-            window.location.assign(GENERATE_URL);
-          });
-          return;
-        }
-        if (status.state === "error") {
-          var label = selectionLabel();
-          finishSelecting();
-          showError(
-            "Could not load " + label + ": "
-            + (status.message || "load failed")
-          );
-          return;
-        }
-        updateActivationProgress(
-          status.state, status.progress
-        );
-        pollTimer = setTimeout(
-          pollActivation, ACTIVATION_POLL_MS
-        );
-      })
-      .catch(function () {
+        updateActivationProgress(state, progress);
+      },
+      onReady: function () {
         if (!selecting) {
           return;
         }
-        pollTimer = setTimeout(pollActivation, 800);
-      });
+        // Discarded here, not before the request. A fresh worker is
+        // up, so the previous model's run must not be waiting on
+        // the generator we are about to open. Doing it up front
+        // meant a switch the server refused, for a model that could
+        // never have loaded, threw away a run that was never
+        // replaced.
+        if (!(activeSelection && activeSelection.resident)) {
+          overlaysClearLastRun();
+        }
+        finishActivationProgress(function () {
+          window.location.assign(GENERATE_URL);
+        });
+      },
+      onFailed: function (message) {
+        if (!selecting) {
+          return;
+        }
+        var label = selectionLabel();
+        finishSelecting();
+        showError("Could not load " + label + ": " + message);
+      },
+    };
   }
 
   // Raise the "this is loading" UI: the row's cycling status and the
@@ -1370,47 +1361,31 @@
       beginLoadingUi(li);
     }
     // AR rows carry a device toggle; send the choice so the worker
-    // loads on CPU or GPU. Other rows post no body (server default).
-    var options = { method: "POST" };
-    if (li._getDevice) {
-      options.headers = { "Content-Type": "application/json" };
-      options.body = JSON.stringify({ device: li._getDevice() });
-    }
-    fetch(
-      "/api/models/" + encodeURIComponent(model.id) + "/activate",
-      options
-    )
-      .then(function (response) {
-        return response.json();
+    // loads on CPU or GPU. Other rows send none (server default).
+    activationWatch = activationClientCreate(
+      activationCallbacks()
+    );
+    activationWatch
+      .start(model.id, {
+        device: li._getDevice ? li._getDevice() : null,
       })
       .then(function (result) {
         if (!selecting) {
           return;
         }
-        // Activation is non-blocking; the worker loads in the
-        // background and we poll for progress until it is ready.
-        if (result && result.ok) {
-          // A no-op activation answers "ready" in the same breath,
-          // which is the server confirming there was nothing to do.
-          // Anything else means the worker had died since the menu
-          // was drawn and this POST respawned it, so the load UI
-          // still has to come up.
-          if (resident && result.state === "ready") {
-            window.location.assign(GENERATE_URL);
-            return;
-          }
-          if (resident) {
-            beginLoadingUi(li);
-          }
-          pollActivation();
+        // A no-op activation answers "ready" in the same breath,
+        // which is the server confirming there was nothing to do.
+        // Anything else means the worker had died since the menu
+        // was drawn and this POST respawned it, so the load UI
+        // still has to come up.
+        if (resident && result.state === "ready") {
+          stopPolling();
+          window.location.assign(GENERATE_URL);
           return;
         }
-        var label = selectionLabel();
-        finishSelecting();
-        showError(
-          "Could not load " + label + ": "
-          + ((result && result.message) || "activation failed")
-        );
+        if (resident) {
+          beginLoadingUi(li);
+        }
       })
       .catch(function (err) {
         finishSelecting();
@@ -1424,18 +1399,29 @@
 
   // Cancel an in-flight load: stop the worker (freeing VRAM) and
   // reset the UI so the user can pick again.
+  //
+  // Taken before finishSelecting, which stops the watch and drops
+  // it, because the watch is what knows which activation this window
+  // started. Cancelling without that would stop whatever happens to
+  // be loading, including another window's.
   function cancelSelection() {
     if (!selecting) {
       return;
     }
-    stopPolling();
-    fetch(
-      "/api/models/activate/cancel", { method: "POST" }
-    ).catch(function () {
-      // Best-effort; the UI resets regardless.
-    });
+    var watch = activationWatch;
     finishSelecting();
     clearError();
+    if (watch === null) {
+      return;
+    }
+    watch.cancel().catch(function (err) {
+      // The server refuses a cancel for an activation this window
+      // does not own. Saying so beats a button that appears to do
+      // nothing, which is what silence would look like.
+      showError(
+        err && err.message ? err.message : "Could not cancel."
+      );
+    });
   }
 
   // ---- "New runs" badge on the Analytics link ----
@@ -1484,15 +1470,13 @@
   // that is not actually serving. Without this, arriving here after
   // that redirect looks like the menu bounced you for no reason.
   // Only on arrival: a failure that happens while you are watching
-  // is already reported by pollActivation.
+  // is already reported by the selection's own watch.
   function showPriorLoadFailure() {
     if (selecting) {
       return;
     }
-    fetch("/api/models/activation")
-      .then(function (response) {
-        return response.json();
-      })
+    activationClientCreate({})
+      .readOnce()
       .then(function (status) {
         if (selecting || !status || status.state !== "error") {
           return;
