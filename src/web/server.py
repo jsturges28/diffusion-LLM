@@ -98,6 +98,13 @@ RESULTS_DIR = resolve_results_dir(
     os.environ.get(RESULTS_DIR_ENV), repo_root=REPO_ROOT
 )
 
+# What this server calls itself when asked. Read by the desktop
+# launcher to tell its own supervisor from an unrelated process
+# holding the same port. A constant rather than a version string:
+# the question is "is this us", and pinning it to a version would
+# make two builds of the same app fail to recognise each other.
+APP_IDENTITY = "diffusion-llm-supervisor"
+
 WORKER_START_TIMEOUT_S = 180.0
 WORKER_STOP_TIMEOUT_S = 30.0
 # How long to wait for a killed worker to actually be gone. Short,
@@ -1268,6 +1275,24 @@ def _models_snapshot() -> Dict[str, Any]:
         "cpu_name": _cpu_name(),
         "free_ram_gib": _free_ram_gib(),
     }
+
+
+@app.get("/api/app")
+async def app_identity() -> JSONResponse:
+    """Say what is listening here, for a launcher deciding to start.
+
+    Exists because "is port 8760 free" and "is *this app* already on
+    port 8760" need opposite answers. A bind that fails could be our
+    own supervisor, in which case a second one must not be started,
+    or something unrelated, in which case the desktop app should get
+    out of its way and take another port. Only this can tell them
+    apart.
+
+    Deliberately the cheapest route on the server: no GPU probe, no
+    disk, no manager state. It is called on a launch path where the
+    user is waiting for a window to appear.
+    """
+    return JSONResponse({"app": APP_IDENTITY, "pid": os.getpid()})
 
 
 @app.get("/api/models")

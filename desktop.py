@@ -19,13 +19,18 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import json
 import os
+import shutil
 import socket
+import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 REPO_ROOT = Path(__file__).resolve().parent
 
@@ -41,7 +46,7 @@ if str(REPO_ROOT) not in sys.path:
 import uvicorn  # noqa: E402  (imported after cwd/sys.path setup)
 import webview  # noqa: E402
 
-from src.web.server import app  # noqa: E402
+from src.web.server import APP_IDENTITY, app  # noqa: E402
 
 WINDOW_TITLE = "LLM Visualizer"
 APP_ID = "llm-xai-visualizer"
@@ -86,6 +91,90 @@ def _port_available(port: int) -> bool:
         except OSError:
             return False
     return True
+
+
+# How long to wait for whatever holds the port to identify itself.
+# Short on purpose: this runs while the user is waiting for a window,
+# and something listening that will not answer promptly is, for this
+# decision, indistinguishable from something that is not ours.
+IDENTITY_PROBE_TIMEOUT_S = 1.5
+
+
+def probe_supervisor(
+    port: int, *, timeout_seconds: float = IDENTITY_PROBE_TIMEOUT_S
+) -> Optional[Dict[str, Any]]:
+    """Ask whatever is on ``port`` whether it is one of ours.
+
+    Returns its identity payload, or None for a port that is empty,
+    unresponsive, or held by something else. "Something else" is the
+    case that makes this necessary: a failed bind alone cannot tell a
+    second copy of this app from an unrelated process, and the two
+    want opposite responses.
+    """
+    assert 0 < port < 65536, "port must be in the valid range"
+    url = f"http://{HOST}:{port}/api/app"
+    try:
+        with urllib.request.urlopen(
+            url, timeout=timeout_seconds
+        ) as response:
+            if response.status != 200:
+                return None
+            body = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ValueError):
+        # Refused, timed out, not HTTP, or not JSON. All of them mean
+        # the same thing here: nothing of ours answered.
+        return None
+    if not isinstance(body, dict):
+        return None
+    if body.get("app") != APP_IDENTITY:
+        return None
+    return body
+
+
+def find_running_instance(
+    port: int = DESKTOP_PORT,
+) -> Optional[Dict[str, Any]]:
+    """The already-running copy of this app, if there is one.
+
+    The bind test comes first because it is local and instant, and
+    answers the common case (nothing is there) without a network
+    round trip on every launch.
+    """
+    if _port_available(port):
+        return None
+    return probe_supervisor(port)
+
+
+def focus_running_window() -> bool:
+    """Best-effort raise of the window that is already open.
+
+    Deliberately best-effort, and the caller must not depend on it.
+    Activating another process's window is the window manager's to
+    allow, and under Wayland these tools generally cannot. The
+    guarantee this whole path provides is that a second supervisor is
+    not started; raising the first one is a courtesy on top, and the
+    printed message below is the fallback that always works.
+    """
+    attempts = (
+        ["wmctrl", "-x", "-a", APP_ID],
+        ["xdotool", "search", "--class", APP_ID,
+         "windowactivate"],
+    )
+    for command in attempts:
+        if shutil.which(command[0]) is None:
+            continue
+        try:
+            done = subprocess.run(
+                command,
+                timeout=2.0,
+                capture_output=True,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if done.returncode == 0:
+            return True
+    return False
 
 
 def _resolve_port() -> int:
@@ -247,6 +336,24 @@ def _start_window(gui: Optional[str]) -> None:
 
 
 def main() -> None:
+    # Before anything else, and before any GUI library is touched.
+    # A second launch used to start a second supervisor on a fallback
+    # port, and two supervisors each enforce "one resident model"
+    # over a GPU neither knows it shares: both spawn a worker, and
+    # the second one dies of CUDA out-of-memory after the user has
+    # already waited out its load. Double-clicking a launcher twice
+    # is not an exotic thing to do.
+    running = find_running_instance()
+    if running is not None:
+        print(
+            "desktop: already running (pid "
+            + str(running.get("pid", "unknown"))
+            + f") on port {DESKTOP_PORT}; focusing that window"
+            " instead of starting a second copy.",
+            file=sys.stderr,
+        )
+        focus_running_window()
+        return
     gui = _select_gui()
     _set_app_identity(gui)
     port = _resolve_port()

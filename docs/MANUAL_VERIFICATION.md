@@ -37,7 +37,10 @@ kept when these were written:
   setup is refused outright unless both models can genuinely load, and 149
   does nothing at all if the two windows pick the same model on the same
   device. Neither attempt showed the behaviour failing.
-- **151**: **not yet validated.** Added while following up on 150.
+- **151**: superseded by 152. The overlay was removed, which surfaced the
+  reflow it had been covering; 152 checks the actual fix.
+- **152 to 154**: **not yet validated.** 152 needs a display, and 153 and 154
+  need the desktop launcher.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -1082,6 +1085,17 @@ in-sandbox (no display).*
     escalation working, and `survived SIGKILL` means a process stuck in
     uninterruptible I/O or a wedged driver call, which is worth reporting
     rather than ignoring.
+**Items 147 to 150 are robustness probes, not descriptions of normal use.**
+Nobody keeps two generator windows open on purpose; the setup exists to prove
+a property that a stale background tab or a double-clicked launcher can reach
+by accident. Two things make them easy to run wrongly. **Both windows must be
+on the same supervisor**, so two browser tabs on the same address, because
+`desktop.py` and `main.py` bind different ports and a second desktop launch
+now stands down rather than starting a rival (see `LIFE-05` under Deviations).
+And **both windows must pick different models**, since the server treats
+re-selecting the resident model on the same device as a no-op and correctly
+does nothing at all.
+
 147. **Two windows cannot navigate for each other.** Open the Main Menu in two
     windows. In A, select LLaDA and watch it load. Before it finishes, in B,
     select SmolLM3. A should stop where it is rather than jumping to the
@@ -1141,3 +1155,28 @@ in-sandbox (no display).*
     cover it: a run restored from a trip to Analytics may now be briefly
     visible settling into place. If that reads badly, say so, because the
     answer is to fix the restore rather than to put the curtain back.
+152. **Nothing moves on the way into the generator.** The follow-up to 151:
+    the overlay was covering a layout reflow, not a model load. Navigate from
+    Analytics back to Generation with a completed run to restore. The
+    placeholder must not slide, and the canvas must not resize as the run
+    appears; the scrubber row now holds its height whether or not there is
+    anything to scrub. Check the other direction too, on a fresh launch with
+    no run: there will be a reserved gap below the canvas where the scrubber
+    will eventually be. That gap is the trade for nothing moving later, so
+    say if it looks worse than the jump did.
+153. **A second launch joins the first instead of fighting it.** With the
+    desktop app already open, launch it again from the icon. No second window
+    should appear and no second supervisor should start; the terminal prints
+    `desktop: already running (pid N)`. Whether the existing window actually
+    comes to the front depends on your window manager and is best-effort, so
+    a message with no raise is a pass, not a failure. Confirm the important
+    half with `nvidia-smi` and `ps aux | rg run_worker`: exactly one
+    supervisor, and loading a model must still work normally in the original
+    window.
+154. **An unrelated process on 8760 does not lock the app out.** Occupy the
+    port with something that is not this app, for instance
+    `python3 -m http.server 8760`, then launch the desktop app. It should
+    start normally on a fallback port rather than standing down, because the
+    thing holding 8760 is not one of ours. The terminal says it is falling
+    back to an ephemeral port and that web storage will not persist for that
+    launch, which is the pre-existing behaviour and still correct.

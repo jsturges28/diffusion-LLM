@@ -97,7 +97,7 @@ showed is recorded under Deviations. `DATA-04`, `DATA-05` and `RUNTIME-02`
 were cleared on 2026-08-11 in the same sitting: the maintainer confirmed items
 133 to 141 of `docs/MANUAL_VERIFICATION.md`, including the two the sandbox
 could say least about, the amber invalid row's alignment against its
-neighbours and the two-window model switch. Three entries are open:
+neighbours and the two-window model switch. Four entries are open:
 
 - **LIFE-02 and LIFE-06**: partly cleared on 2026-08-14. The maintainer
   confirmed items 142 and 145 of `docs/MANUAL_VERIFICATION.md`, which between
@@ -121,6 +121,12 @@ neighbours and the two-window model switch. Three entries are open:
   the server correctly treats that as a no-op, and its messages are brief
   enough that the outcome to judge is where the page lands and what reaches
   Analytics. Item 151 was added alongside them for the loading overlay.
+- **LIFE-05 (single-instance slice)**: the probe and the launch decision are
+  tested against real HTTP servers on ephemeral ports, and mutation-checked
+  (removing the guard fails three cases in under three seconds rather than
+  hanging, which the first version of those tests did). Outstanding is the
+  launcher itself: `docs/MANUAL_VERIFICATION.md` items 153 and 154. Item 153
+  is the one that matters, since it is the accident that produced the OOM.
 - **TRUST-03 (offline slice)**: the automated half asserts that both Hub
   workers pin every `from_pretrained` call to local files, and that being
   offline with nothing cached now reports what happened instead of a urllib3
@@ -158,7 +164,7 @@ neighbours and the two-window model switch. Three entries are open:
 | PROTOCOL-01 | medium | M | ready | LIFE-03 (done) | |
 | XAI-01 | high | M | blocked | LIFE-01 | |
 | LIFE-04 | high | L | blocked | LIFE-03 | |
-| LIFE-05 | high | M | blocked | LIFE-02 | |
+| LIFE-05 | high | M | partial | none | Single-instance the desktop launcher; host lease deferred, see Deviations |
 | TRUST-04 | medium | L | blocked | LIFE-04 | |
 | DATA-02 | high | L | blocked | maintainer decision | |
 | RUNTIME-01 | medium | L | blocked | LIFE-04, then ORG-02 + DATA-05 | |
@@ -533,6 +539,54 @@ made a failed load stop satisfying the gate, which means a redirect
 to a menu that never read activation state and would have bounced the
 user with no explanation. The menu now reads it once on arrival, and
 stays quiet during a selection it is already reporting on.
+
+### LIFE-05
+
+**Confirmed on hardware, by accident, on 2026-08-14.** The
+maintainer opened two windows from the desktop launcher to test
+`LIFE-03` and got a CUDA out-of-memory instead: one worker holding
+15.31 GiB while a second tried to take 6.17 more from a 23.49 GiB
+card. That is the finding reproduced, and more convincingly than the
+synchronised-preflight experiment the report proposes, because it
+came from doing something ordinary.
+
+The mechanism is `desktop.py:_resolve_port`. A second launch finds
+port 8760 taken and deliberately falls back to an ephemeral one, so
+there are two supervisors, two `ModelManager`s, and two enforcements
+of "one resident model" over a GPU neither knows it shares.
+`LIFE-03` cannot help, and was never meant to: it fences operations
+inside one supervisor. It also explains why the maintainer's Cancel
+worked when item 148 expected a refusal, since that window's
+supervisor genuinely owned that load.
+
+**Only the cheap half was taken, deliberately.** A second desktop
+launch now identifies the running instance and stands down instead of
+starting a rival supervisor, which removes the accident. The rest of
+the finding, a host-level lease covering the browser supervisor and a
+manually launched `main.py` too, is deferred.
+
+The reasoning, which is a partial disagreement with the report's
+severity. `LIFE-05` is rated high partly on invariant purity: "the
+product's central resource invariant no longer matches what the
+machine is doing." For a single-user local tool the residual failure
+after this change is loud, self-inflicted and recoverable by closing
+a window, which is a much weaker case than a silent wrong answer. It
+is worth contrasting with `LIFE-03`, rated critical and taken in
+full, whose failure is a page generating against a model it was not
+configured for and producing overlays that look right. In an
+explainability tool, quiet and plausible beats loud and obvious as a
+thing to spend effort on.
+
+What remains open, for whoever picks it up: browser and desktop
+running together, and a deliberately launched `main.py` alongside
+either. Both are two-step acts rather than a slip, which is why they
+wait.
+
+**Raising the existing window is best-effort and the code says so.**
+Activating another process's window is the window manager's to allow
+and generally refused under Wayland, so `focus_running_window` tries
+`wmctrl` then `xdotool` and shrugs. The guarantee is that no second
+supervisor starts; the printed message is the part that always works.
 
 ### Found while verifying, not yet fixed
 
