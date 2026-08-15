@@ -1516,6 +1516,9 @@ function scheduleReconnect() {
 
 function handleMessage(data) {
   switch (data.type) {
+    case "resident":
+      handleResident(data);
+      break;
     case "model_status":
       handleModelStatus(data);
       break;
@@ -1574,6 +1577,84 @@ function handleModelStatus(data) {
       }
     });
   }
+}
+
+// The supervisor's statement of who this socket reaches, sent before
+// any worker traffic. Almost always the model this page was built
+// for, in which case there is nothing to do.
+//
+// When it is not, another window switched the model out from under
+// us. This page's cached model, device, capability gates and entire
+// parameter form describe a worker that no longer exists, so a
+// Generate from here would be labelled and parameterised for one
+// model and answered by another, often accepted through defaults
+// rather than refused. Reloading is what makes the page describe
+// what is actually there.
+function handleResident(data) {
+  if (!data || !data.model) {
+    return;
+  }
+  var sameModel = data.model === activeModelId;
+  var sameDevice =
+    !data.device || !activeDevice || data.device === activeDevice;
+  if (sameModel && sameDevice) {
+    return;
+  }
+  // Nothing here may be generated against, and the reconnect loop
+  // must not race the reload by pulling the page back onto the new
+  // worker as though it belonged here.
+  modelReady = false;
+  suppressReconnect = true;
+  updateGenerateButton();
+  var name = models[data.model]
+    ? models[data.model].display_name
+    : data.model;
+  setBadge("loading");
+  setLoadingText("Model changed to " + name + "\u2026");
+  setLoadingProgress("idle", null);
+  loadingOverlay.classList.remove("hidden");
+  statusMessage.textContent =
+    "The model was changed to " + name + " in another window.";
+  rescueRunThenReload();
+}
+
+// How long to let a rescue save finish before reloading anyway. The
+// page is describing a worker that no longer exists, so it cannot be
+// left here indefinitely on the chance that a request completes.
+var RESCUE_SAVE_TIMEOUT_MS = 8000;
+
+// Save an unsaved run, then reload onto the model that is actually
+// resident.
+//
+// The run itself cannot be continued: resume, What If and probe all
+// read state held by the worker that produced it, and that process
+// is gone. Keeping it on screen would preserve something to look at
+// and nothing to act on. It can still be *saved*, though, because a
+// disconnect does not disable saving and, since `DATA-04`, a save
+// carries its own provenance instead of reading whatever worker is
+// resident. So the run outlives its worker exactly long enough to be
+// written down, which is the one thing worth rescuing.
+//
+// Auto-saving rather than asking follows what entering What If
+// already does with an unsaved run. An unwanted run can be deleted
+// from Analytics; a lost one cannot be recovered.
+function rescueRunThenReload() {
+  if (runSaved || frameHistory.length === 0 || !lastFinalText) {
+    location.reload();
+    return;
+  }
+  startRunStatus("Saving run before reloading");
+  var timeout = new Promise(function (resolve) {
+    setTimeout(resolve, RESCUE_SAVE_TIMEOUT_MS);
+  });
+  Promise.race([saveRun(), timeout]).then(
+    function () {
+      location.reload();
+    },
+    function () {
+      location.reload();
+    }
+  );
 }
 
 function handleFrame(data) {
@@ -6330,15 +6411,22 @@ function showAnalyticsCue(runId) {
   }
 }
 
+// Returns a promise that settles when the save has finished, one way
+// or the other. Every existing caller ignores it, which is why
+// handing it back is safe; the one caller that needs it is the model
+// mismatch below, which has to let a rescue finish before it reloads
+// the page out from under it. Refusing to save resolves immediately
+// rather than rejecting: "there was nothing to save" is an answer,
+// not a failure.
 function saveRun() {
   if (isSaving) {
-    return;
+    return Promise.resolve();
   }
   if (
     frameHistory.length === 0
     || !lastFinalText
   ) {
-    return;
+    return Promise.resolve();
   }
 
   isSaving = true;
@@ -6436,7 +6524,7 @@ function saveRun() {
     }
   }
 
-  fetch("/api/save", {
+  return fetch("/api/save", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
