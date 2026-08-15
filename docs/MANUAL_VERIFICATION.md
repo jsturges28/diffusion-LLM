@@ -31,6 +31,9 @@ kept when these were written:
   143). Worth doing once, not routinely.
 - **146**: cannot be forced, and is a log-watch note rather than a scenario.
   See the item.
+- **147 to 150**: **not yet validated.** Added by `LIFE-03`. They need two
+  windows against one supervisor, which is the whole subject of the finding
+  and the one thing a sandbox cannot arrange.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -1075,3 +1078,29 @@ in-sandbox (no display).*
     escalation working, and `survived SIGKILL` means a process stuck in
     uninterruptible I/O or a wedged driver call, which is worth reporting
     rather than ignoring.
+147. **Two windows cannot navigate for each other.** Open the Main Menu in two
+    windows. In A, select LLaDA and watch it load. Before it finishes, in B,
+    select SmolLM3. A should stop where it is rather than jumping to the
+    generator when SmolLM3 becomes ready; B should navigate normally. Before
+    this change A polled a global "is it ready" and navigated for whichever
+    load finished, so it could land on the generator configured for a model it
+    never asked for.
+148. **Cancel reaches only your own load.** Same setup: A is loading LLaDA, B
+    replaces it with SmolLM3. Press **Cancel** in A. It should refuse with a
+    message naming SmolLM3 and saying it was started elsewhere, and B's load
+    should keep going. Then press Cancel in B: that one should work and free
+    the VRAM. Before this change A's Cancel killed B's load silently.
+149. **A generator reloads when its model is taken, and keeps the run.** Load
+    LLaDA, generate something, and leave the run on screen **without saving**.
+    In a second window, go to the Main Menu and switch to SmolLM3. Watch the
+    first window: it should say the model changed, briefly show that it is
+    saving the run, and reload onto SmolLM3. Then open Analytics: the run must
+    be there, saved, correctly attributed to LLaDA. This is the item worth
+    doing carefully, because the rescue save is the part that can lose work.
+    Repeat with a run you *have* already saved: it should reload without
+    filing a duplicate.
+150. **The ordinary case is untouched.** The resident frame is sent on every
+    socket open, so the common path has to be invisible. Load a model, use it
+    normally, navigate to Analytics and back, let the socket drop and
+    reconnect (stop and restart nothing, just leave it idle a while). At no
+    point should the page reload itself or mention a model change.

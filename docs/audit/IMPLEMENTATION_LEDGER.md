@@ -97,7 +97,7 @@ showed is recorded under Deviations. `DATA-04`, `DATA-05` and `RUNTIME-02`
 were cleared on 2026-08-11 in the same sitting: the maintainer confirmed items
 133 to 141 of `docs/MANUAL_VERIFICATION.md`, including the two the sandbox
 could say least about, the amber invalid row's alignment against its
-neighbours and the two-window model switch. Two entries are open:
+neighbours and the two-window model switch. Three entries are open:
 
 - **LIFE-02 and LIFE-06**: partly cleared on 2026-08-14. The maintainer
   confirmed items 142 and 145 of `docs/MANUAL_VERIFICATION.md`, which between
@@ -110,6 +110,14 @@ neighbours and the two-window model switch. Two entries are open:
   staged deliberately. The lever is in item 143. Item 146 was reclassified as
   a log-watch note, since a process wedged in the kernel is not something to
   arrange on purpose.
+- **LIFE-03**: everything the sandbox can reach passes. The supervisor's half
+  is tested by execution against the endpoints, including the interleaved
+  two-caller case, and mutation-checked (removing the ownership test on cancel
+  fails four cases); the shared client's operation filtering is tested under
+  `node --test` with an injected scheduler. What needs two real windows is the
+  half a user would notice: `docs/MANUAL_VERIFICATION.md` items 147 to 150.
+  Item 149 is the one to do carefully, since the rescue save is the part that
+  can lose work if it is wrong.
 - **TRUST-03 (offline slice)**: the automated half asserts that both Hub
   workers pin every `from_pretrained` call to local files, and that being
   offline with nothing cached now reports what happened instead of a urllib3
@@ -141,10 +149,10 @@ neighbours and the two-window model switch. Two entries are open:
 | ANALYTICS-04 | high | M | blocked | DATA-01 | |
 | LIFE-02 | high | M | needs hardware | none | Two commits: the process seam, then verified termination |
 | LIFE-06 | medium | M | needs hardware | none | Validate a switch target before evicting the working model |
-| ORG-04 | medium | S | blocked | stage 4 order | |
-| LIFE-03 | critical | L | blocked | ORG-04 | |
-| LIFE-01 | high | M | blocked | LIFE-03 | |
-| PROTOCOL-01 | medium | M | blocked | LIFE-03 | |
+| ORG-04 | medium | S | done | none | Two commits: the shared activation client, then the menu |
+| LIFE-03 | critical | L | needs hardware | none | Two commits: operation identity, then the resident mismatch |
+| LIFE-01 | high | M | ready | LIFE-03 (done) | |
+| PROTOCOL-01 | medium | M | ready | LIFE-03 (done) | |
 | XAI-01 | high | M | blocked | LIFE-01 | |
 | LIFE-04 | high | L | blocked | LIFE-03 | |
 | LIFE-05 | high | M | blocked | LIFE-02 | |
@@ -196,17 +204,20 @@ non-authoritative derivatives (`RUNTIME-02`), which publication semantics now
 allow. `ANALYTICS-02`, `ANALYTICS-03` and `ANALYTICS-04` are unblocked;
 `ROADMAP-04` still waits on its own stage.
 
-**Stage 4, explicit process and socket ownership. Pass one done.** The manager
-process adapter is extracted and tested, termination is a verified transition
-and pre-eviction validation is in place (`LIFE-02`, `LIFE-06`), in three
-commits. It is much the largest stage, ten findings plus `DATA-02` in
-parallel, so it is being worked in passes the way stage 3 was; pass two is
-`ORG-04` then `LIFE-03`. The rest of the sequence, unchanged:
+**Stage 4, explicit process and socket ownership. Passes one and two done.**
+Pass one extracted and tested the manager process adapter, made termination a
+verified transition and put validation before eviction (`LIFE-02`, `LIFE-06`),
+in three commits. Pass two shared activation orchestration behind one client
+(`ORG-04`) and gave every activation an operation identity, with a resident
+handshake on the socket (`LIFE-03`, the stage's only critical), in four. It is
+much the largest stage, ten findings plus `DATA-02` in parallel, so it is being
+worked in passes the way stage 3 was.
 
-Share activation orchestration (`ORG-04`)
-before adding activation and resident epochs with run ownership (`LIFE-03`,
-`LIFE-01`) and operation-scoped envelopes (`PROTOCOL-01`), which move
-together. With run ownership explicit, preserve complete intervention
+`LIFE-01` and `PROTOCOL-01` were deliberately held back from pass two. The
+report says the three move together, but `LIFE-03` alone was four commits, and
+both of the others build on the operation identity it establishes rather than
+being needed by it. They are pass three. With run ownership explicit, preserve
+complete intervention
 checkpoints (`XAI-01`). Propagate disconnect and cancel through inference and
 bounded queues (`LIFE-04`), which carries the first bounded-queue step of
 `RUNTIME-01`. Add host-level ownership (`LIFE-05`) once one manager's
@@ -519,6 +530,72 @@ made a failed load stop satisfying the gate, which means a redirect
 to a menu that never read activation state and would have bounced the
 user with no explanation. The menu now reads it once on arrival, and
 stays quiet during a selection it is already reporting on.
+
+### ORG-04
+
+**The duplication was worse than the finding counted, and pass one
+had just added to it.** The finding names two clients. There were
+four readers of the activation endpoint, three of them polling loops:
+the generator's boot watch, its switch poll, the menu's selection
+poll, and the one-shot read `LIFE-06` added a pass earlier. The
+finding's argument for extracting was a load-bar fix that needed
+coordinated edits in both clients; pass one repeated the mistake,
+putting the ready-branch discard in both files and the failure
+surfacing in only one.
+
+**Injecting the scheduler is what made the loop testable.** Injecting
+`fetch` alone would have tested one turn of the poll. With the
+scheduler injected too, a test holds the pending callback and decides
+when the next tick happens, so "does this stop when it should" is
+answerable, which is most of what a poll loop can get wrong.
+
+**Four pass-one source-inspection tests broke and were re-anchored,
+not relaxed.** They asserted properties (the run is discarded only in
+the ready path, re-selecting the resident model keeps its run) whose
+anchors were function names this finding deleted. Worth noting as the
+predictable cost of testing a classic script by inspection, which
+`ORG-02` is meant to end.
+
+### LIFE-03
+
+**The operation id has to outlive the worker.** The obvious reading
+is that finalization should clear it along with everything else
+describing a dead activation. That breaks the case it exists for: a
+client polls for the outcome of the load *it* started, so if the id
+is cleared when the load fails, the client sees an id that is not its
+own, concludes the activation was superseded, and stops without
+reporting the failure to anyone. The number now survives exactly the
+way the error message `LIFE-02` retained does.
+
+**An absent operation on cancel is refused, not waved through.** It
+was tempting to treat a body-less cancel as legacy and allow it,
+since that is what every caller sent before this change. But not
+naming an activation is not the same as owning one, and allowing it
+would have left the cross-window Cancel exactly as it was. Cancelling
+when *nothing* is loading is still a no-op: there is nothing to
+protect, and a stale window tidying up after itself should not be
+told off for it.
+
+**The handshake is supervisor-side, with a worker-side cross-check.**
+The finding says to include resident identity in the WebSocket
+handshake, and the obvious place is the worker's own `model_status`.
+The supervisor sends it instead, as a `resident` frame before any
+worker traffic, because the supervisor is what owns the operation id
+and because it needs no change in three virtualenvs. The worker's
+`model_status` gained its model id anyway: it is two lines, and a
+disagreement between the two is the only thing that could catch a
+proxy pointed at the wrong worker, which the supervisor's own
+statement by definition cannot.
+
+**Saving outliving its worker is what made the rescue possible**, and
+that was an accident of `DATA-04` rather than a design for this. A
+save no longer reads the resident worker for provenance, and
+`ws.onclose` never disabled the Save button, so an unsaved run can
+still be written down after the worker that produced it is gone.
+Continuing it cannot: resume, What If and probe all read retained
+state that died with the process. That asymmetry is the whole
+argument for saving the run and then letting it go, rather than
+keeping it on screen where it would look actionable.
 
 ### LIFE-02
 

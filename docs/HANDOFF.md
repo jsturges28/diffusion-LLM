@@ -92,18 +92,22 @@ Stages 1 to 3 are complete. Saved runs publish whole or not at all
 what they captured (`DATA-05`), carry the worker's own account of what produced
 them (`DATA-04`), and render a bounded GIF (`RUNTIME-02`).
 
-**Stage 4, explicit process and socket ownership, is in progress.** Pass one
-has landed: worker spawning moved to `src/web/worker_process.py` behind a seam
+**Stage 4, explicit process and socket ownership, is in progress.** Two passes
+have landed. Worker spawning moved to `src/web/worker_process.py` behind a seam
 the manager can be tested through, stopping a worker is a verified transition
 rather than a signal and a hope (`LIFE-02`), and a switch to a model that
-cannot run is refused before the working model is evicted (`LIFE-06`). Pass two
-is the shared activation client (`ORG-04`) and then operation identity
-(`LIFE-03`, the campaign's only critical). The ledger is the authority and is
-updated in the same commit as each change.
+cannot run is refused before the working model is evicted (`LIFE-06`).
+Activation then moved behind one shared client, `src/web/static/activation_client.js`
+(`ORG-04`), and every activation now carries an operation id so two windows
+cannot navigate or cancel for each other, with the socket opening on a
+`resident` frame naming the model that answered it (`LIFE-03`). Pass three is
+run tokens on stateful follow-ups (`LIFE-01`) and operation-scoped error
+envelopes (`PROTOCOL-01`). The ledger is the authority and is updated in the
+same commit as each change.
 
 **Hardware debt.** The campaign's queue at the top of
-`docs/audit/IMPLEMENTATION_LEDGER.md` holds `LIFE-02`, `LIFE-06` and the
-`TRUST-03` offline slice, covered by items 142 to 146 of
+`docs/audit/IMPLEMENTATION_LEDGER.md` holds `LIFE-02`, `LIFE-06`, `LIFE-03` and
+the `TRUST-03` offline slice, covered by items 142 to 150 of
 `docs/MANUAL_VERIFICATION.md`. Separately, items 102 to 126 of that file
 predate the campaign and have never been validated.
 
