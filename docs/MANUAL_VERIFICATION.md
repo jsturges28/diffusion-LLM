@@ -22,10 +22,15 @@ kept when these were written:
 - **133 to 141**: confirmed on 2026-08-11, as each landed. Added by
   `DATA-05`, `DATA-04` and `RUNTIME-02`, all of which needed a display, a GPU,
   or two windows at once.
-- **142 to 146**: **not yet validated.** Added by `LIFE-02` and `LIFE-06`.
-  The logic is covered by fake-process tests; what needs hardware is whether
-  real VRAM actually comes back and whether a real refused switch leaves a
-  usable model behind.
+- **142 and 145**: confirmed on 2026-08-14. Between them they carry the
+  user-facing claim of both findings: a refused switch costs nothing, and
+  cancelling frees the worker.
+- **143 and 144**: **not yet validated**, and deliberately awkward. Item 142
+  is the reason: every cheap way of breaking a model is now caught before a
+  worker spawns, so reaching a post-spawn load failure means staging one (see
+  143). Worth doing once, not routinely.
+- **146**: cannot be forced, and is a log-watch note rather than a scenario.
+  See the item.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -1040,12 +1045,18 @@ in-sandbox (no display).*
     unloaded first and the run discarded, both for an error that needed no
     VRAM to discover. Try the same from the Main Menu: the row should show the
     error and the previously loaded model should still be resident.
-143. **A worker that fails to load is really gone.** Force a load failure (the
-    easiest is to request more VRAM than is free, or to corrupt the
-    DiffusionGemma checkpoint directory), then watch `nvidia-smi` and
-    `ps aux | rg run_worker`. The worker process must disappear and its VRAM
-    must come back. Before this change it stayed alive holding memory while
-    the supervisor reported an error.
+143. **A worker that fails to load is really gone.** Harder to stage than it
+    looks, because item 142 now catches every cheap way of breaking a model
+    before a worker is ever spawned. This one needs a failure that happens
+    *after* the process starts, and the lever is that validation checks only
+    that the checkpoint *directory* exists while the worker reads one file
+    inside it. From `~/models/diffusiongemma-26B-A4B-it-nf4`, run
+    `mv model_nf4.pt model_nf4.pt.bak` (same filesystem, instant, reversible),
+    then activate DiffusionGemma. It passes validation, spawns, and fails
+    inside `load()`. Watch `nvidia-smi` and `ps aux | rg run_worker`: the
+    process must disappear and its VRAM must come back. Before this change it
+    stayed alive holding memory while the supervisor reported an error. Move
+    the file back afterwards.
 144. **A failed load lands you on the menu, with the reason.** After 143,
     navigate to `/generate` directly. You should be redirected to the Main
     Menu and the menu should show the load error. Previously the generator
@@ -1056,8 +1067,11 @@ in-sandbox (no display).*
     mid-load. VRAM should come back, the menu should be usable, and no error
     should be shown, since cancelling is not a failure. Then check the
     supervisor log: a cancel should not produce a stack trace.
-146. **A stubborn worker is killed and waited for.** Hard to force
-    deliberately; if you ever see a worker refuse to exit on a switch, check
-    the supervisor log for `ignored SIGTERM; killing`. Seeing
-    `survived SIGKILL` would mean a process wedged in the kernel and is worth
-    reporting rather than ignoring.
+146. **A stubborn worker is killed and waited for.** Not a scenario you can
+    run: forcing it needs a process wedged in the kernel, which is not
+    something to arrange on purpose. Kept as a numbered item only so the
+    escalation has somewhere to be recorded if it ever fires. Two lines to
+    watch for in the supervisor log: `ignored SIGTERM; killing` is the
+    escalation working, and `survived SIGKILL` means a process stuck in
+    uninterruptible I/O or a wedged driver call, which is worth reporting
+    rather than ignoring.

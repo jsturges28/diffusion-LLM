@@ -99,13 +99,17 @@ were cleared on 2026-08-11 in the same sitting: the maintainer confirmed items
 could say least about, the amber invalid row's alignment against its
 neighbours and the two-window model switch. Two entries are open:
 
-- **LIFE-02 and LIFE-06**: the logic is covered by fake-process tests, which
-  is what the process seam was extracted for, and both were mutation-checked
-  against the behavior they replace. What no sandbox can answer is whether
-  real VRAM actually comes back when a worker is terminated, and whether a
-  real refused switch leaves a usable model behind:
-  `docs/MANUAL_VERIFICATION.md` items 142 to 146. Item 143 is the one that
-  matters most, since it is the finding's whole claim.
+- **LIFE-02 and LIFE-06**: partly cleared on 2026-08-14. The maintainer
+  confirmed items 142 and 145 of `docs/MANUAL_VERIFICATION.md`, which between
+  them carry both findings' user-facing claim: a refused switch leaves the
+  loaded model and its run alone, and cancelling a load frees the worker.
+  Items 143 and 144 (a worker that fails *after* spawning is terminated, and
+  the redirect that follows) are open, and are awkward for a reason worth
+  recording: `LIFE-06` now catches every cheap way of breaking a model before
+  a worker is ever spawned, so the failure mode `LIFE-02` fixes has to be
+  staged deliberately. The lever is in item 143. Item 146 was reclassified as
+  a log-watch note, since a process wedged in the kernel is not something to
+  arrange on purpose.
 - **TRUST-03 (offline slice)**: the automated half asserts that both Hub
   workers pin every `from_pretrained` call to local files, and that being
   offline with nothing cached now reports what happened instead of a urllib3
