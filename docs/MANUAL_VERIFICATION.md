@@ -31,9 +31,13 @@ kept when these were written:
   143). Worth doing once, not routinely.
 - **146**: cannot be forced, and is a log-watch note rather than a scenario.
   See the item.
-- **147 to 150**: **not yet validated.** Added by `LIFE-03`. They need two
-  windows against one supervisor, which is the whole subject of the finding
-  and the one thing a sandbox cannot arrange.
+- **147 and 150**: confirmed on 2026-08-14.
+- **148 and 149**: **not yet validated.** Both were attempted and both were
+  hard to stage, for reasons now written into the items themselves: 148's
+  setup is refused outright unless both models can genuinely load, and 149
+  does nothing at all if the two windows pick the same model on the same
+  device. Neither attempt showed the behaviour failing.
+- **151**: **not yet validated.** Added while following up on 150.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -1090,17 +1094,50 @@ in-sandbox (no display).*
     message naming SmolLM3 and saying it was started elsewhere, and B's load
     should keep going. Then press Cancel in B: that one should work and free
     the VRAM. Before this change A's Cancel killed B's load silently.
+
+    **Setting this up is the hard part**, and the first attempt failed on it.
+    Both windows have to reach an in-flight load, so both models must actually
+    be loadable *at that moment*: item 142's pre-eviction check will refuse the
+    second one outright if the GPU cannot hold it, and you get that refusal
+    instead of the scenario. Start from an idle GPU with nothing resident.
+    Beware the Main Menu's numbers while doing this; they are a snapshot from
+    when the page was drawn and do not refresh, so a row can still claim a
+    model fits after that stopped being true (recorded under Deviations in
+    `docs/audit/IMPLEMENTATION_LEDGER.md`). Reload the menu to get a current
+    reading before judging what will fit.
 149. **A generator reloads when its model is taken, and keeps the run.** Load
-    LLaDA, generate something, and leave the run on screen **without saving**.
-    In a second window, go to the Main Menu and switch to SmolLM3. Watch the
-    first window: it should say the model changed, briefly show that it is
-    saving the run, and reload onto SmolLM3. Then open Analytics: the run must
-    be there, saved, correctly attributed to LLaDA. This is the item worth
-    doing carefully, because the rescue save is the part that can lose work.
-    Repeat with a run you *have* already saved: it should reload without
-    filing a duplicate.
+    a model, generate something, and leave the run on screen **without
+    saving**. In a second window, go to the Main Menu and switch to a
+    *different* model, or the same model on the other device. Then open
+    Analytics: the run must be there, saved, and attributed to the model that
+    produced it. This is the item worth doing carefully, because the rescue
+    save is the part that can lose work. Repeat with a run you *have* already
+    saved: it should reload without filing a duplicate.
+
+    Three things about the timing, all of which made the first attempt hard to
+    read. **The two models must differ.** Re-selecting the resident model on
+    the same device is a no-op the server does nothing for, so no worker is
+    replaced, the socket never drops, and correctly nothing happens.
+    **The reload waits for a reconnect.** The page learns about the change
+    when its WebSocket reopens, which takes about two seconds after the new
+    model finishes loading, and until then it shows a red "No model is active"
+    while it retries. That is expected, not the failure.
+    **The messages are brief.** "The model was changed to X" and the saving
+    line are up only until the reload fires, which on a fast save is a
+    fraction of a second. Judge this item by where the page lands and what is
+    in Analytics, not by catching the message.
 150. **The ordinary case is untouched.** The resident frame is sent on every
     socket open, so the common path has to be invisible. Load a model, use it
     normally, navigate to Analytics and back, let the socket drop and
     reconnect (stop and restart nothing, just leave it idle a while). At no
     point should the page reload itself or mention a model change.
+151. **Arriving at the generator shows no loading screen.** Navigate from
+    Analytics back to Generation with a model already loaded. The black
+    "Loading model" overlay should not appear at all, not even for the
+    half-second flash it used to give while waiting for the WebSocket
+    handshake. Then confirm it still appears when it should: switch models
+    from the header and it must come up for the whole load. What to watch for
+    instead is the moment after the page paints, since the overlay used to
+    cover it: a run restored from a trip to Analytics may now be briefly
+    visible settling into place. If that reads badly, say so, because the
+    answer is to fix the restore rather than to put the curtain back.

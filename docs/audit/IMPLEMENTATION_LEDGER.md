@@ -110,14 +110,17 @@ neighbours and the two-window model switch. Three entries are open:
   staged deliberately. The lever is in item 143. Item 146 was reclassified as
   a log-watch note, since a process wedged in the kernel is not something to
   arrange on purpose.
-- **LIFE-03**: everything the sandbox can reach passes. The supervisor's half
-  is tested by execution against the endpoints, including the interleaved
-  two-caller case, and mutation-checked (removing the ownership test on cancel
-  fails four cases); the shared client's operation filtering is tested under
-  `node --test` with an injected scheduler. What needs two real windows is the
-  half a user would notice: `docs/MANUAL_VERIFICATION.md` items 147 to 150.
-  Item 149 is the one to do carefully, since the rescue save is the part that
-  can lose work if it is wrong.
+- **LIFE-03**: partly cleared on 2026-08-14. The maintainer confirmed items
+  147 and 150 of `docs/MANUAL_VERIFICATION.md`: one window does not navigate
+  for another's load, and the ordinary path is untouched by the new handshake.
+  Items 148 and 149 are open, and both were attempted without showing a
+  failure; they were awkward to stage rather than broken, and the reasons are
+  now in the items. 148 needs both models to be genuinely loadable at once,
+  which `LIFE-06`'s pre-eviction check will otherwise refuse first. 149 does
+  nothing when both windows pick the same model on the same device, because
+  the server correctly treats that as a no-op, and its messages are brief
+  enough that the outcome to judge is where the page lands and what reaches
+  Analytics. Item 151 was added alongside them for the loading overlay.
 - **TRUST-03 (offline slice)**: the automated half asserts that both Hub
   workers pin every `from_pretrained` call to local files, and that being
   offline with nothing cached now reports what happened instead of a urllib3
@@ -530,6 +533,46 @@ made a failed load stop satisfying the gate, which means a redirect
 to a menu that never read activation state and would have bounced the
 user with no explanation. The menu now reads it once on arrival, and
 stays quiet during a selection it is already reporting on.
+
+### Found while verifying, not yet fixed
+
+Two gaps surfaced by the maintainer's hardware pass on 2026-08-14,
+both real, neither a regression from the pass that found them. Left
+alone deliberately: one wants a measurement first, and the other
+belongs to a finding nobody has opened yet.
+
+**The Main Menu's VRAM numbers are a boot snapshot.** `loadModels()`
+runs once at page load (`src/web/static/menu.js`) and nothing
+re-reads `/api/models` afterwards, so every free-VRAM figure and
+every green headroom pill is as old as the page. The maintainer hit
+the visible consequence: the LLaDA row said `+5.2 GiB` and the header
+said 22.2 GiB free, and activating it was refused because only 15.3
+GiB would actually have been free. Both numbers were honest when
+written; only one of them was current.
+
+`LIFE-06` made this more visible rather than causing it. Before, the
+stale row led to an eviction and a failure; now it leads to an
+accurate refusal that contradicts the screen it was clicked from. The
+cheap fix is to re-read `/api/models` after a refused activation, so
+the row that was just proved wrong stops claiming otherwise. It is
+not `ANALYTICS-03`'s pagination work and it is not `ORG-04`, which is
+why it is recorded here rather than folded into either.
+
+**The pre-eviction headroom check does not wait for VRAM to
+settle.** `_validate_headroom` takes one instantaneous
+`_free_vram_gib()` reading, while its post-eviction counterpart
+`_preflight_vram` polls for up to `VRAM_SETTLE_TIMEOUT_S` waiting for
+a stopped worker's memory to come back. So a switch attempted soon
+after another switch can be refused on a reading that would have
+cleared a second later. The maintainer's numbers fit that shape: the
+shortfall was roughly one small worker's worth of memory against a
+menu snapshot taken before anything was loaded.
+
+Deliberately not fixed by guessing a second settle window. The
+report's own measurement programme has the terminate-to-VRAM-release
+timings for every model, and that measurement is what should decide
+whether this reading needs a wait, whether the existing eight seconds
+is right, and whether the two checks should share one number.
 
 ### ORG-04
 

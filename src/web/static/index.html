@@ -581,8 +581,18 @@
 
   <!-- Model loading overlay. The bar stays hidden until a poll
        reports a measurable phase, so an unmeasurable checkpoint
-       falls back to the spinner alone rather than an empty track. -->
-  <div id="loading-overlay">
+       falls back to the spinner alone rather than an empty track.
+
+       Starts hidden, and is raised only by something that is
+       actually loading: a worker reporting "loading", a switch
+       started here, or a model swapped out from another window.
+       It used to open on every arrival at this page, so coming back
+       from Analytics with a model already resident showed "Loading
+       model" for the length of a handshake and then faded out.
+       Reaching this page at all now means a model is serving, since
+       /generate turns away anything that is not, so on the ordinary
+       path there is nothing to wait for and nothing to say. -->
+  <div id="loading-overlay" class="hidden">
     <div id="loading-content">
       <div class="spinner"></div>
       <p id="loading-text">Loading model…</p>
