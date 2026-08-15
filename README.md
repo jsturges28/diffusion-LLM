@@ -410,7 +410,7 @@ The metadata captures the model, prompt, hyperparameters, any remask edits, per-
 - [x] Reproducibility metadata (seed, GPU, git commit, library versions) and deterministic seeding
 - [x] Graceful VRAM handling: pre-flight free-memory check and worker load-error reporting
 - [x] Save runs (metadata, history, final text, GIF) with per-frame timing and confidence
-- [x] Optional desktop app: pywebview native window that owns the server lifecycle (graceful shutdown frees VRAM) plus a Linux app-menu launcher
+- [x] Optional desktop app: pywebview native window that owns the server lifecycle (graceful shutdown frees VRAM) plus a Linux app-menu launcher; launching it a second time joins the window already open instead of starting a rival server, since two servers each enforce "one model at a time" over a GPU neither knows it shares and the second load dies of out-of-memory after you have waited for it
 - [x] Prompt history (persisted per-browser) with a browse control, and a New Run flow that clears the canvas after a finalized run
 - [x] Main Menu landing page: looping title-screen video (WebM/MP4) over a GPU/VRAM-aware model picker (Available / Insufficient VRAM) that greys out models that will not fit; generation gated behind model selection
 - [x] Analytics layered "Diff vs Original" overlay (Original/Edited opacity sliders + difference blend) mirroring the generator

@@ -74,10 +74,14 @@ in an analytics suite.
   the Analytics detail panel's fetches. Third-party chart libraries and the
   webfont are vendored under `static/vendor/`, so every page works offline.
 - **Desktop**: `desktop.py` (pywebview; owns the server lifecycle: uvicorn on
-  a stable localhost port `DESKTOP_PORT=8760` with an ephemeral fallback, on a
-  daemon thread, graceful shutdown frees worker VRAM on close; persistent
-  web-storage profile; prefers Qt/QtWebEngine, falls back to GTK).
+  a stable localhost port `DESKTOP_PORT=8760`, on a daemon thread, graceful
+  shutdown frees worker VRAM on close; persistent web-storage profile; prefers
+  Qt/QtWebEngine, falls back to GTK).
   `scripts/install_desktop_entry.sh` generates a Linux `.desktop` entry.
+  **Single-instance**: a launch asks `/api/app` who holds 8760. Our own
+  supervisor means stand down and try to raise that window; anything else
+  keeps the ephemeral fallback. Two supervisors used to mean two workers on
+  one GPU, which is `LIFE-05`.
 
 ## Where things stand
 
