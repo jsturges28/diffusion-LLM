@@ -596,6 +596,7 @@ async def _await_model_ready(
     model_ready: asyncio.Event,
     load_failed: asyncio.Event,
     load_error: Dict[str, str],
+    model_id: str,
 ) -> bool:
     """Hold the socket until the model is usable.
 
@@ -604,6 +605,12 @@ async def _await_model_ready(
     handler because it is a distinct phase with its own three-way
     outcome, and inlining it put four branches in front of the
     message loop that has nothing to do with them.
+
+    ``model_id`` rides on the status frames so the page can tell
+    which model is answering it. The supervisor sends its own
+    statement of that on connect; this is the worker's, and the two
+    disagreeing is the only way to catch a proxy pointed at the
+    wrong worker.
     """
     if load_failed.is_set():
         await _send_load_error(ws, load_error)
@@ -612,7 +619,11 @@ async def _await_model_ready(
         return True
 
     await ws.send_json(
-        {"type": MSG_MODEL_STATUS, "status": "loading"}
+        {
+            "type": MSG_MODEL_STATUS,
+            "status": "loading",
+            "model": model_id,
+        }
     )
     ready_task = asyncio.ensure_future(model_ready.wait())
     failed_task = asyncio.ensure_future(load_failed.wait())
@@ -754,12 +765,20 @@ def create_worker_app(
         }
         try:
             ready = await _await_model_ready(
-                ws, model_ready, load_failed, load_error
+                ws,
+                model_ready,
+                load_failed,
+                load_error,
+                backend.model_info.id,
             )
             if not ready:
                 return
             await ws.send_json(
-                {"type": MSG_MODEL_STATUS, "status": "ready"}
+                {
+                    "type": MSG_MODEL_STATUS,
+                    "status": "ready",
+                    "model": backend.model_info.id,
+                }
             )
             while True:
                 data = await ws.receive_json()

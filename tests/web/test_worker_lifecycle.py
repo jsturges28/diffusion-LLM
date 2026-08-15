@@ -414,13 +414,19 @@ def test_a_stopped_manager_holds_no_worker() -> None:
 
 def test_a_cancelled_activation_frees_the_worker() -> None:
     """Cancel arrives mid-load, which is the case the lock is left
-    free for."""
+    free for.
+
+    Cancelling names the activation since `LIFE-03`, which is why
+    the operation the activate returned is carried here.
+    """
     harness = Harness(health=[LOADING])
 
     async def scenario() -> None:
-        await harness.manager.activate(MODEL_ID, device="cuda")
+        operation = await harness.manager.activate(
+            MODEL_ID, device="cuda"
+        )
         await asyncio.sleep(0.01)
-        await harness.manager.cancel_activation()
+        await harness.manager.cancel_activation(operation)
 
     asyncio.run(scenario())
 

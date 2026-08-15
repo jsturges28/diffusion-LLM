@@ -493,6 +493,13 @@ class ModelManager:
         self.load_state: str = "idle"
         self.load_progress: Optional[Dict[str, Any]] = None
         self.load_error: Optional[str] = None
+        # Which activation the current state describes. Monotonic and
+        # never reset, including by finalization: a client polling
+        # for the outcome of a load that failed needs to recognise
+        # the failure as its own, so the number has to outlive the
+        # worker exactly the way the error message does. Zero means
+        # nothing has ever been activated.
+        self.activation_id: int = 0
         self._proc: Optional[WorkerHandle] = None
         self._port: Optional[int] = None
         self._monitor_task: Optional[asyncio.Task] = None
@@ -575,7 +582,7 @@ class ModelManager:
 
     async def activate(
         self, model_id: str, *, device: Optional[str] = None
-    ) -> None:
+    ) -> int:
         """Spawn the worker and return immediately (non-blocking).
 
         A background monitor task then tracks startup (download /
@@ -590,6 +597,11 @@ class ModelManager:
         resident worker is evicted only once the target has passed;
         anything that can only be known after eviction (the real VRAM
         reading) follows it.
+
+        Returns the activation's operation id, which is how the
+        caller later recognises the outcome as its own. Two browser
+        windows share one supervisor, so "is this load finished" is
+        not a question with a single answer.
         """
         if model_id not in REGISTRY:
             raise KeyError(model_id)
@@ -600,7 +612,10 @@ class ModelManager:
                 and self.active_device == device
                 and self._alive()
             ):
-                return
+                # Nothing to do, so nothing new to number: the caller
+                # is handed the activation that produced the worker
+                # already running.
+                return self.activation_id
             info = REGISTRY[model_id]
             python = self._validate_target(info, device)
             await self._stop_locked()
@@ -647,9 +662,11 @@ class ModelManager:
             # around so the menu can explain a redirect. Trying again
             # is the moment it stops being news.
             self.load_error = None
+            self.activation_id += 1
             self._monitor_task = asyncio.create_task(
                 self._monitor_startup(proc, port)
             )
+            return self.activation_id
 
     def _validate_target(
         self, info: ModelInfo, device: str
@@ -832,15 +849,47 @@ class ModelManager:
             self.load_progress = body.get("progress")
         return None
 
-    async def cancel_activation(self) -> None:
+    async def cancel_activation(
+        self, operation: Optional[int] = None
+    ) -> None:
         """Cancel an in-flight activation and free the worker/VRAM.
 
-        Safe to call anytime: it stops the current worker (and its
-        monitor). The lock is free during load, so this never
-        deadlocks against ``activate``.
+        ``operation`` is the id the caller was given when it started
+        the activation. It has to match, because this used to stop
+        whatever worker was loading regardless of who asked for it:
+        two windows share one supervisor, so one window's Cancel
+        could kill the other's load, which is half of `LIFE-03`.
+
+        Cancelling when nothing is loading stays a no-op rather than
+        a refusal. There is nothing to protect, and a stale window
+        tidying up after itself should not be told off for it.
+
+        The lock is free during load, so this never deadlocks against
+        ``activate``.
         """
         async with self._lock:
+            if not self._alive():
+                return
+            if operation != self.activation_id:
+                raise ActivationRefused(self._not_yours_message())
             await self._stop_locked()
+
+    def _not_yours_message(self) -> str:
+        """Why a cancel was refused, in terms of what is loading."""
+        entry = (
+            REGISTRY.get(self.active_id)
+            if self.active_id is not None
+            else None
+        )
+        name = (
+            entry.display_name
+            if entry is not None
+            else str(self.active_id)
+        )
+        return (
+            f"{name} is loading, and it was started somewhere"
+            " else. Cancel it from the window that started it."
+        )
 
     # -- download-only (pre-fetch weights, no VRAM) --
 
@@ -1243,7 +1292,7 @@ async def activate_model(
 ) -> JSONResponse:
     device = body.device if body is not None else None
     try:
-        await manager.activate(model_id, device=device)
+        operation = await manager.activate(model_id, device=device)
     except KeyError:
         return JSONResponse(
             status_code=404,
@@ -1275,12 +1324,15 @@ async def activate_model(
             content={"ok": False, "message": str(exc)},
         )
     # Non-blocking: the worker is spawned and loading in the
-    # background. The client polls /api/models/activation for progress.
+    # background. The client polls /api/models/activation for
+    # progress, and carries the operation id so it can tell its own
+    # load's outcome from one another window started.
     return JSONResponse(
         {
             "ok": True,
             "active": manager.active_id,
             "state": manager.load_state,
+            "operation": operation,
         }
     )
 
@@ -1295,14 +1347,39 @@ async def activation_status() -> JSONResponse:
             "state": manager.load_state,
             "progress": manager.load_progress,
             "message": manager.load_error,
+            # Which activation this state describes. A client that
+            # started one compares it, so a second window's load
+            # cannot be mistaken for the first window's finishing.
+            "operation": manager.activation_id,
         }
     )
 
 
+class CancelActivationRequest(BaseModel):
+    """Which activation the caller believes it is cancelling.
+
+    Optional so the endpoint stays parseable for a caller that sends
+    nothing, but an absent operation is refused just as a stale one
+    is: not naming an activation is not the same as owning it.
+    """
+
+    operation: Optional[int] = None
+
+
 @app.post("/api/models/activate/cancel")
-async def cancel_activation() -> JSONResponse:
+async def cancel_activation(
+    body: Optional[CancelActivationRequest] = None,
+) -> JSONResponse:
     """Cancel an in-flight load, stopping the worker and freeing VRAM."""
-    await manager.cancel_activation()
+    operation = body.operation if body is not None else None
+    try:
+        await manager.cancel_activation(operation)
+    except ActivationRefused as exc:
+        logger.info("cancel refused: %s", exc)
+        return JSONResponse(
+            status_code=409,
+            content={"ok": False, "message": str(exc)},
+        )
     return JSONResponse({"ok": True})
 
 
@@ -1410,6 +1487,22 @@ async def websocket_proxy(browser: WebSocket) -> None:
         async with websockets.connect(
             url, max_size=None
         ) as worker:
+            # Who the page is actually talking to, sent before any
+            # worker traffic so the answer is the first thing it
+            # reads. A generator caches its model, device, capability
+            # flags and whole parameter form at boot and only
+            # refreshes them by reloading, so a page whose worker was
+            # replaced from another window would otherwise go on
+            # labelling and parameterising requests for a model that
+            # is no longer there.
+            await browser.send_json(
+                {
+                    "type": "resident",
+                    "model": active_id,
+                    "device": manager.active_device,
+                    "operation": manager.activation_id,
+                }
+            )
             await _pipe(browser, worker)
     except WebSocketDisconnect:
         return
