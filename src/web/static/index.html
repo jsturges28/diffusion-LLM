@@ -201,8 +201,15 @@
       </div>
     </section>
 
-    <!-- Frame scrubber (visible after generation completes) -->
-    <section id="scrubber-section" hidden>
+    <!-- Frame scrubber (revealed after generation completes).
+
+         Reserved rather than removed: `is-idle` makes it invisible
+         but keeps its height, because it is a sibling of the output
+         canvas in a flex column and taking it out of the layout
+         means every restore shoves the canvas around. Returning
+         from Analytics used to show the placeholder sliding as this
+         row appeared underneath it. -->
+    <section id="scrubber-section" class="is-idle">
       <div id="scrubber-controls">
         <button id="btn-scrub-start" class="scrub-btn" title="First frame">&laquo;</button>
         <button id="btn-scrub-prev" class="scrub-btn" title="Previous frame">&lsaquo;</button>

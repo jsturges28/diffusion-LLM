@@ -4853,7 +4853,7 @@ function activateScrubber() {
   scrubberSlider.disabled = false;
   updateScrubberLabel();
 
-  scrubberSection.hidden = false;
+  setScrubberVisible(true);
   btnEditFrames.hidden = !(
     activeModel
     && activeModel.capabilities
@@ -4887,9 +4887,18 @@ function activateScrubber() {
   updateEntropyProfileVisibility();
 }
 
+// Show or hide the scrubber without moving anything around it. It
+// keeps its height either way, so the output canvas above it is the
+// same size before and after a run: see the `is-idle` note in
+// index.html for why that matters on a page that restores a run
+// after its first paint.
+function setScrubberVisible(visible) {
+  scrubberSection.classList.toggle("is-idle", !visible);
+}
+
 function deactivateScrubber() {
   scrubberActive = false;
-  scrubberSection.hidden = true;
+  setScrubberVisible(false);
   guidedEditControls.hidden = true;
   if (overlaySelectGroup) {
     overlaySelectGroup.hidden = true;
@@ -5637,7 +5646,7 @@ function handleGuidedDone() {
     );
 
     scrubberActive = true;
-    scrubberSection.hidden = false;
+    setScrubberVisible(true);
     guidedEditControls.hidden = false;
     btnEditFrames.hidden = true;
     if (overlaySelectGroup) {
@@ -5676,7 +5685,7 @@ function enterReviewMode() {
   perFrameRemasked = {};
   remaskMode = "review";
   scrubberActive = true;
-  scrubberSection.hidden = false;
+  setScrubberVisible(true);
   guidedEditControls.hidden = false;
   btnEditFrames.hidden = true;
   if (overlaySelectGroup) {

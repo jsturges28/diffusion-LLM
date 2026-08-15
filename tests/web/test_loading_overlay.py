@@ -1,8 +1,15 @@
-"""The loading overlay appears only when something is loading.
+"""Nothing moves on the way into the generator.
 
-Strategy: read the shipped markup and `app.js`. The overlay's whole
-behaviour is which class it carries at rest and which code paths take
-that class off, so both are checkable without a browser.
+Strategy: read the shipped markup, CSS and `app.js`. Both properties
+here are about which class an element carries at rest and which code
+paths take it off, so both are checkable without a browser.
+
+Two changes that belong together, because the first one exposed the
+second. The overlay stopped covering every arrival at the page, and
+what it had been covering turned out not to be a model load at all
+but a layout reflow: the scrubber row appearing during a session
+restore and shoving the canvas above it. Hiding one without
+reserving the other traded a wrong message for a visible jump.
 
 What passing proves is a small honesty property that pass one made
 possible. The overlay used to be in the markup with no `hidden`
@@ -118,3 +125,41 @@ def test_a_failed_switch_lowers_it() -> None:
     region = _region("function switchFailed(err)", 900)
 
     assert 'loadingOverlay.classList.add("hidden")' in region
+
+
+# -- and nothing moves underneath it --
+
+
+def test_the_scrubber_holds_its_place_when_idle() -> None:
+    """It is a sibling of the output canvas in a flex column, so
+    taking it out of the layout resizes the canvas every time a run
+    appears. Reserved rather than removed."""
+    html = INDEX_HTML.read_text(encoding="utf-8")
+
+    match = re.search(
+        r'<section id="scrubber-section"[^>]*>', html
+    )
+    assert match is not None
+    assert 'class="is-idle"' in match.group(0)
+    assert "hidden" not in match.group(0)
+
+
+def test_idle_means_invisible_not_absent() -> None:
+    """`display: none` would reserve nothing and put the reflow
+    straight back."""
+    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    start = css.find("#scrubber-section.is-idle")
+
+    assert start != -1
+    rule = css[start : start + 120]
+    assert "visibility: hidden" in rule
+    assert "display: none" not in rule
+
+
+def test_one_helper_owns_the_scrubber_s_visibility() -> None:
+    """Four call sites toggled it directly before this, which is how
+    one of them ends up using a mechanism the others do not."""
+    source = APP_JS.read_text(encoding="utf-8")
+
+    assert "function setScrubberVisible(visible)" in source
+    assert "scrubberSection.hidden" not in source
