@@ -1,31 +1,33 @@
-"""Nothing moves on the way into the generator.
+"""The generator is covered while it assembles itself.
 
-Strategy: read the shipped markup, CSS and `app.js`. Both properties
-here are about which class an element carries at rest and which code
-paths take it off, so both are checkable without a browser.
+Strategy: read the shipped markup, CSS and `app.js`. Every property
+here is about which class an element carries at rest and which code
+paths take it off, so all of them are checkable without a browser.
 
-Two changes that belong together, because the first one exposed the
-second. The overlay stopped covering every arrival at the page, and
-what it had been covering turned out not to be a model load at all
-but a layout reflow: the scrubber row appearing during a session
-restore and shoving the canvas above it. Hiding one without
-reserving the other traded a wrong message for a visible jump.
+The overlay is deliberately up at boot, and the reason is not the one
+its name suggests. Since `LIFE-02` the `/generate` gate turns away any
+model that is not serving, so arriving at this page is proof no model
+load is pending. What the curtain is actually over is the page
+building itself: `buildParamPanel` empties a container and fills it
+from `param_specs` once `/api/models` answers, and around twenty
+elements sit `hidden` in the markup waiting on runtime state. First
+paint is a skeleton and the second is the real page.
 
-What passing proves is a small honesty property that pass one made
-possible. The overlay used to be in the markup with no `hidden`
-class, so it painted on every arrival at the generator and said
-"Loading model" while the page waited for a WebSocket handshake on a
-model that was already resident: half a second of a message that was
-not true, on the most ordinary navigation in the app. Since `LIFE-02`
-the `/generate` gate turns away any model that is not actually
-serving, so reaching the page is itself proof there is nothing to
-wait for, and the overlay can start down.
+This file briefly asserted the opposite. The overlay was removed on
+the gate argument above, which was correct about model loading and
+missed everything else the curtain covered; the maintainer saw the
+page visibly reassemble and asked for it back. That is recorded under
+`ORG-02` in the ledger, along with the fix that would make the
+curtain unnecessary rather than merely opaque: rendering boot state
+into the HTML at serve time, which is `ORG-02`'s to do.
 
-It still has to come up for the three things that really are loads,
-which is the other half of what is checked here. An overlay that
-never appeared would be a worse bug than one that appeared too
-often, because a model switch takes tens of seconds and a page that
-looked idle through it would read as broken.
+The scrubber reservation stays from that attempt, because it is worth
+having either way. It removes one source of movement rather than
+hiding it, which is what the whole page needs eventually.
+
+What passing proves, then, is narrow: the curtain is up when the page
+cannot yet be trusted to look right, it comes down when it can, and
+one element that used to shove the canvas around no longer does.
 """
 
 from __future__ import annotations
@@ -63,11 +65,11 @@ def _region(anchor: str, chars: int) -> str:
 # -- at rest --
 
 
-def test_the_overlay_starts_hidden() -> None:
-    """Arriving at the generator means a model is already serving,
-    because the gate refuses anything else, so there is nothing to
-    wait for and nothing to say."""
-    assert 'class="hidden"' in _overlay_tag()
+def test_the_overlay_covers_the_page_being_built() -> None:
+    """Up at boot on purpose. Not for a model load, which the gate
+    already rules out, but for the two-phase render underneath: a
+    skeleton first, the real page once the fetch answers."""
+    assert "hidden" not in _overlay_tag()
 
 
 def test_the_progress_track_starts_hidden_too() -> None:

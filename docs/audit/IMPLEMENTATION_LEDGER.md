@@ -540,6 +540,56 @@ to a menu that never read activation state and would have bounced the
 user with no explanation. The menu now reads it once on arrival, and
 stays quiet during a selection it is already reporting on.
 
+### ORG-02
+
+**The generator paints twice, and the loading overlay is a curtain
+over the second paint.** Found by removing the curtain and watching
+what it had been hiding, which is a more concrete account of the
+problem than the finding currently carries, so it is worth writing
+down before stage 5 opens.
+
+Every navigation is a full document load, and the served HTML knows
+nothing about the session. So the browser paints a skeleton, and
+then `boot()` fetches `/api/models` and rebuilds the page into its
+real shape. Concretely:
+
+- `buildParamPanel` starts with `paramFields.innerHTML = ""` and
+  fills the whole hyperparameter column from `param_specs`, after the
+  fetch resolves. That is the largest movement on the page.
+- `index.html` carries 45 `hidden` occurrences, around twenty of them
+  elements whose visibility is decided by runtime state: the
+  scrubber, the overlay picker, the thinking panel, the edit
+  controls, the entropy row.
+- `restoreSessionState` reads `sessionStorage`, which is synchronous,
+  but runs inside the same `.then()` because it needs `activeModelId`
+  from the fetch.
+
+None of this is slow, and none of it is untidy code. It is what
+happens when the page's opening state lives behind a request instead
+of in the document.
+
+**The fix that removes it rather than hides it** is rendering that
+opening state into the HTML at serve time, so first paint is already
+correct. No framework and no bundler, which the report rules out
+anyway, and the machinery exists: `_serve_stamped_page` already
+rewrites the HTML on its way out to stamp asset versions. That is
+`ORG-02`'s work, because the run-session core it describes is exactly
+what would own the state being rendered.
+
+**Recorded because I got it wrong once.** The overlay was removed on
+the argument that `LIFE-02`'s `/generate` gate proves a model is
+already serving, so nothing is waiting for a load. True, and it
+answered only the job the overlay is named after. The maintainer saw
+the page visibly assemble and asked for the curtain back, which is
+where it now is. A future session should not repeat the removal
+without doing the server-render first; the comment in `index.html`
+next to the overlay says so too.
+
+**One thing was kept from the detour.** `#scrubber-section` now holds
+its height when idle instead of leaving the layout, which removes a
+source of movement rather than covering it. That is the shape the
+rest of the fix should take.
+
 ### LIFE-05
 
 **Confirmed on hardware, by accident, on 2026-08-14.** The

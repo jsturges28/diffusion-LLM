@@ -590,16 +590,21 @@
        reports a measurable phase, so an unmeasurable checkpoint
        falls back to the spinner alone rather than an empty track.
 
-       Starts hidden, and is raised only by something that is
-       actually loading: a worker reporting "loading", a switch
-       started here, or a model swapped out from another window.
-       It used to open on every arrival at this page, so coming back
-       from Analytics with a model already resident showed "Loading
-       model" for the length of a handshake and then faded out.
-       Reaching this page at all now means a model is serving, since
-       /generate turns away anything that is not, so on the ordinary
-       path there is nothing to wait for and nothing to say. -->
-  <div id="loading-overlay" class="hidden">
+       Visible at boot, and that is doing more than its name says.
+       Since `LIFE-02` the /generate gate turns away any model that
+       is not serving, so nothing here is waiting for a *model*. What
+       it covers is the page assembling itself: the parameter column
+       is built from an empty container after /api/models answers,
+       and around twenty elements are hidden here and revealed by
+       runtime state, so first paint is a skeleton and the second is
+       the real thing.
+
+       It was briefly removed on the reasoning above, which was true
+       about model loading and wrong about everything else the
+       curtain was over. Rendering boot state into this HTML at serve
+       time is the fix that makes the curtain unnecessary rather than
+       merely opaque; that is `ORG-02`'s, and until then this stays. -->
+  <div id="loading-overlay">
     <div id="loading-content">
       <div class="spinner"></div>
       <p id="loading-text">Loading model…</p>

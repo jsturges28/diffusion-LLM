@@ -37,10 +37,12 @@ kept when these were written:
   setup is refused outright unless both models can genuinely load, and 149
   does nothing at all if the two windows pick the same model on the same
   device. Neither attempt showed the behaviour failing.
-- **151**: superseded by 152. The overlay was removed, which surfaced the
-  reflow it had been covering; 152 checks the actual fix.
-- **152 to 154**: **not yet validated.** 152 needs a display, and 153 and 154
-  need the desktop launcher.
+- **151 and 152**: **not yet validated.** 151 asks you to confirm the overlay
+  is back to its pre-change feel after being removed and restored; 152 covers
+  the one improvement kept from that detour.
+- **153**: confirmed on 2026-08-15. A second launch from the desktop icon
+  opens no second window.
+- **154**: **not yet validated.**
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -1145,25 +1147,26 @@ does nothing at all.
     normally, navigate to Analytics and back, let the socket drop and
     reconnect (stop and restart nothing, just leave it idle a while). At no
     point should the page reload itself or mention a model change.
-151. **Arriving at the generator shows no loading screen.** Navigate from
-    Analytics back to Generation with a model already loaded. The black
-    "Loading model" overlay should not appear at all, not even for the
-    half-second flash it used to give while waiting for the WebSocket
-    handshake. Then confirm it still appears when it should: switch models
-    from the header and it must come up for the whole load. What to watch for
-    instead is the moment after the page paints, since the overlay used to
-    cover it: a run restored from a trip to Analytics may now be briefly
-    visible settling into place. If that reads badly, say so, because the
-    answer is to fix the restore rather than to put the curtain back.
-152. **Nothing moves on the way into the generator.** The follow-up to 151:
-    the overlay was covering a layout reflow, not a model load. Navigate from
-    Analytics back to Generation with a completed run to restore. The
-    placeholder must not slide, and the canvas must not resize as the run
-    appears; the scrubber row now holds its height whether or not there is
-    anything to scrub. Check the other direction too, on a fresh launch with
-    no run: there will be a reserved gap below the canvas where the scrubber
-    will eventually be. That gap is the trade for nothing moving later, so
-    say if it looks worse than the jump did.
+151. **The generator still opens behind its curtain.** This item briefly said
+    the opposite. The overlay was removed on the reasoning that the
+    `/generate` gate makes a model load impossible to be waiting for, which
+    was true and beside the point: the curtain also covers the page building
+    itself, and without it the parameter column and the restored run were
+    visibly assembling. It is back. Navigate from Analytics to Generation and
+    expect the brief black "Loading model" flash, then a page that is already
+    correct when it appears. Confirm it also still covers a real load: switch
+    models from the header and it should stay up for the whole thing.
+    The flash is a placeholder, not the destination. Removing the need for it
+    means rendering the page's opening state into the HTML at serve time,
+    which is `ORG-02`'s in stage 5 and is recorded there. Do not delete the
+    overlay again without doing that first.
+152. **The scrubber holds its place.** Kept from the attempt above, because
+    it removes a source of movement rather than hiding one. Behind the
+    curtain, a restored run must not resize the canvas as it appears. Easiest
+    to judge on a fresh launch with no run: there is a reserved gap below the
+    canvas where the scrubber will eventually be, and it should stay exactly
+    that size once a run fills it. Say if the empty gap reads worse than the
+    jump did.
 153. **A second launch joins the first instead of fighting it.** With the
     desktop app already open, launch it again from the icon. No second window
     should appear and no second supervisor should start; the terminal prints
