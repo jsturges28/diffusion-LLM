@@ -560,51 +560,24 @@ function finishLoadingProgress(done) {
 // The boot path raises the same overlay without going through
 // switchModel, so until now nothing polled for progress there: the
 // first load of a session, reliably the slowest, was the one with no
-// bar. This drives it from the endpoint pollSwitch already uses.
-var loadProgressTimer = null;
-// Matched to the supervisor's own sampling of the worker, so the bar
-// is told as soon as there is anything to tell it. Both pollers here
-// use it; their 800ms error retries stay slower on purpose, since a
-// failing poll should back off rather than hammer.
-var ACTIVATION_POLL_MS = 250;
+// bar. It observes rather than starts, because the worker was
+// already coming up when this page opened; nothing here owns that
+// activation, so nothing here may cancel or navigate for it.
+var bootWatch = activationClientCreate({
+  onProgress: setLoadingProgress,
+});
+
+// The switch's own watch, made per switch so an abandoned one cannot
+// keep writing the overlay under its replacement. Null until the
+// first switch of the session.
+var switchWatch = null;
 
 function startLoadProgressPoll() {
-  if (loadProgressTimer !== null) {
-    return;
-  }
-
-  function tick() {
-    fetch("/api/models/activation")
-      .then(function (r) {
-        return r.json();
-      })
-      .then(function (status) {
-        if (loadProgressTimer === null) {
-          return;
-        }
-        setLoadingProgress(status.state, status.progress);
-      })
-      .catch(function () {
-        // One dropped poll leaves the last reading on screen; the
-        // next one corrects it. The load is unaffected either way.
-      })
-      .then(function () {
-        if (loadProgressTimer !== null) {
-          loadProgressTimer = setTimeout(
-            tick, ACTIVATION_POLL_MS
-          );
-        }
-      });
-  }
-
-  loadProgressTimer = setTimeout(tick, 0);
+  bootWatch.observe();
 }
 
 function stopLoadProgressPoll() {
-  if (loadProgressTimer !== null) {
-    clearTimeout(loadProgressTimer);
-    loadProgressTimer = null;
-  }
+  bootWatch.stop();
 }
 
 function fetchModels() {
@@ -1418,82 +1391,41 @@ function switchModel(id, device) {
   }
   var name = models[id] ? models[id].display_name : id;
   setLoadingText("Loading " + name + "\u2026");
-  // pollSwitch drives the bar from here on; stop the boot poller so
-  // the two are never writing the same overlay. Seeding with the same
-  // state the first poll will report keeps the opening frame from
-  // saying "Loading" for a poll interval before correcting itself to
-  // "Starting worker".
+  // The switch's own watch drives the bar from here on; stop the
+  // boot one so the two are never writing the same overlay. Seeding
+  // with the same state the first poll will report keeps the opening
+  // frame from saying "Loading" for a poll interval before
+  // correcting itself to "Starting worker".
   stopLoadProgressPoll();
   setLoadingProgress("starting", null);
   loadingOverlay.classList.remove("hidden");
   setModelSelectDisabled(true);
 
-  var options = { method: "POST" };
-  if (device) {
-    options.headers = { "Content-Type": "application/json" };
-    options.body = JSON.stringify({ device: device });
-  }
-  fetch(
-    "/api/models/" + encodeURIComponent(id) + "/activate",
-    options
-  )
-    .then(function (r) {
-      return r.json();
-    })
-    .then(function (res) {
-      // Non-blocking activation: poll until the new worker is ready,
-      // then reload so the page picks up the new model/device.
-      if (res && res.ok) {
-        pollSwitch(name);
-      } else {
-        throw new Error(
-          (res && res.message) || "activation failed"
-        );
-      }
-    })
-    .catch(switchFailed);
-}
-
-function pollSwitch(name) {
-  fetch("/api/models/activation")
-    .then(function (r) {
-      return r.json();
-    })
-    .then(function (status) {
-      if (status.state === "ready") {
-        // Dropped here rather than before the request, which is
-        // where it used to happen. A switch ends in a reload, and
-        // the restore path cannot tell that from a trip to
-        // Analytics and back, so the snapshot has to go before the
-        // reload; the identity check alone cannot do it, since
-        // switching away and back lands on a matching (model,
-        // device) pair again and the stale run would return. But
-        // clearing it up front meant a switch that was refused, for
-        // a missing venv or a model that could not fit, threw away
-        // the run on screen for nothing.
-        clearSessionState();
-        finishLoadingProgress(function () {
-          location.reload();
-        });
-        return;
-      }
-      if (status.state === "error") {
-        switchFailed(
-          new Error(status.message || "load failed")
-        );
-        return;
-      }
+  switchWatch = activationClientCreate({
+    onProgress: function (state, progress) {
       setLoadingText("Loading " + name + "\u2026");
-      setLoadingProgress(status.state, status.progress);
-      setTimeout(function () {
-        pollSwitch(name);
-      }, ACTIVATION_POLL_MS);
-    })
-    .catch(function () {
-      setTimeout(function () {
-        pollSwitch(name);
-      }, 800);
-    });
+      setLoadingProgress(state, progress);
+    },
+    onReady: function () {
+      // Dropped here rather than before the request, which is where
+      // it used to happen. A switch ends in a reload, and the
+      // restore path cannot tell that from a trip to Analytics and
+      // back, so the snapshot has to go before the reload; the
+      // identity check alone cannot do it, since switching away and
+      // back lands on a matching (model, device) pair again and the
+      // stale run would return. But clearing it up front meant a
+      // switch that was refused, for a missing venv or a model that
+      // could not fit, threw away the run on screen for nothing.
+      clearSessionState();
+      finishLoadingProgress(function () {
+        location.reload();
+      });
+    },
+    onFailed: function (message) {
+      switchFailed(new Error(message));
+    },
+  });
+  switchWatch.start(id, { device: device }).catch(switchFailed);
 }
 
 function switchFailed(err) {
@@ -1501,6 +1433,10 @@ function switchFailed(err) {
   setModelSelectDisabled(false);
   setModelSelectValue(activeModelId);
   stopLoadProgressPoll();
+  if (switchWatch) {
+    switchWatch.stop();
+    switchWatch = null;
+  }
   // Tear the track down rather than leaving it to the next switch to
   // re-sync. The overlay hides by going transparent, not by leaving
   // the layout, so a sweep left on it would keep animating unseen for

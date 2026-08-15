@@ -55,8 +55,16 @@ def test_the_generator_does_not_discard_before_asking() -> None:
 def test_the_generator_discards_once_the_worker_is_ready() -> None:
     """The other half: it still has to happen, because a switch ends
     in a reload that the restore path cannot tell from a trip to
-    Analytics and back."""
-    region = _region(APP_JS, "function pollSwitch(name)", 1400)
+    Analytics and back.
+
+    Anchored on the switch's activation watch rather than on the old
+    `pollSwitch`, which `ORG-04` replaced with the shared client. The
+    property is the same: the discard sits in the ready path, ahead
+    of the reload.
+    """
+    region = _region(
+        APP_JS, "switchWatch = activationClientCreate", 1400
+    )
 
     discard = region.find("clearSessionState()")
     reload_call = region.find("location.reload()")
