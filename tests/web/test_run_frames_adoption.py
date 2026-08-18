@@ -29,7 +29,10 @@ APP_JS = STATIC / "app.js"
 INDEX_HTML = STATIC / "index.html"
 MODULE_JS = STATIC / "run_frames.js"
 
-# What the six used to be called as free variables.
+# What the two families used to be called as free variables. The
+# second is the baseline: the run as it was before the first edit,
+# frozen once and read by everything that compares an edited run
+# against what it branched from.
 FORMER_NAMES = (
     "frameHistory",
     "frameTokens",
@@ -37,6 +40,12 @@ FORMER_NAMES = (
     "frameMeanConf",
     "perFrameElapsed",
     "frameRevealed",
+    "originalFrameHistory",
+    "originalFrameTokens",
+    "originalPerFrameElapsed",
+    "originalMeanConf",
+    "originalPositionAlts",
+    "originalTotalFrames",
 )
 
 
@@ -153,3 +162,30 @@ def test_the_snapshot_is_read_back_through_it() -> None:
 
     assert "runFramesFromJson(s)" in region
     assert "runFramesRestore(runFrames, restored)" in region
+
+
+# -- and so does the baseline --
+
+
+def test_the_baseline_is_declared_once_and_held() -> None:
+    source = _app()
+    writes = re.findall(r"(?<![\w.$])originalRun\s*=(?!=)", source)
+
+    assert source.count("var originalRun = originalRunCreate()") == 1
+    assert len(writes) == 1
+
+
+def test_the_baseline_is_frozen_through_the_module() -> None:
+    """The module refuses a second capture, so the guard that used to
+    sit around this at the call site is gone."""
+    region = _region("function handleDone(data)", 1600)
+
+    assert "originalRunCapture(originalRun, runFrames" in region
+
+
+def test_the_baseline_is_cleared_and_stored_through_it() -> None:
+    source = _app()
+
+    assert "originalRunClear(originalRun)" in source
+    assert "originalRunToJson(originalRun)" in source
+    assert "originalRunRestore(originalRun, s," in source

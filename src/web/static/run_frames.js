@@ -200,3 +200,111 @@ function runFramesFromJson(source) {
   }
   return frames;
 }
+
+// -- the run as it was before the first edit --
+//
+// A second family, frozen once when a run first completes and never
+// appended to. Everything that compares an edited run against what it
+// branched from reads it: the Diff overlay, the Original/Edited
+// crossfade, the commit-order chart, and the save, which carries the
+// pre-edit series alongside the new one.
+//
+// Deliberately a subset. It keeps four of the six live arrays plus
+// the candidate sets, and not `canvasIndex` or `revealed`, because
+// nothing compares those and the session snapshot is already large
+// enough to be refused by the storage quota. Its own family rather
+// than a sixth field on the live one for the same reason: the shapes
+// differ, and pretending otherwise would either copy two arrays
+// nobody reads or hide which ones are actually there.
+
+var ORIGINAL_RUN_FIELDS = [
+  "history",
+  "tokens",
+  "elapsed",
+  "meanConf",
+  "positionAlts",
+];
+
+var ORIGINAL_RUN_JSON_KEYS = {
+  history: "originalFrameHistory",
+  tokens: "originalFrameTokens",
+  elapsed: "originalPerFrameElapsed",
+  meanConf: "originalMeanConf",
+  positionAlts: "originalPositionAlts",
+};
+
+function originalRunCreate() {
+  return {
+    // How long the run was before any edit shortened it. Zero means
+    // nothing has been captured, which is also the gate every
+    // comparison checks before reading the arrays below.
+    totalFrames: 0,
+    history: [],
+    tokens: [],
+    elapsed: [],
+    meanConf: [],
+    positionAlts: [],
+  };
+}
+
+function originalRunCaptured(original) {
+  return original.totalFrames > 0;
+}
+
+// Freeze the live run as the baseline. Called once, on the first
+// terminal frame, and a no-op afterwards: every later `done` belongs
+// to a branch, and overwriting the baseline with one would leave
+// the comparison views diffing a run against itself.
+function originalRunCapture(original, frames, positionAlts) {
+  if (originalRunCaptured(original)) {
+    return;
+  }
+  original.totalFrames = frames.history.length;
+  original.history = frames.history.slice();
+  original.tokens = frames.tokens.slice();
+  original.elapsed = frames.elapsed.slice();
+  original.meanConf = frames.meanConf.slice();
+  original.positionAlts = positionAlts.slice();
+}
+
+function originalRunClear(original) {
+  original.totalFrames = 0;
+  for (var i = 0; i < ORIGINAL_RUN_FIELDS.length; i++) {
+    original[ORIGINAL_RUN_FIELDS[i]] = [];
+  }
+}
+
+function originalRunToJson(original) {
+  var out = { originalTotalFrames: original.totalFrames };
+  for (var i = 0; i < ORIGINAL_RUN_FIELDS.length; i++) {
+    var name = ORIGINAL_RUN_FIELDS[i];
+    out[ORIGINAL_RUN_JSON_KEYS[name]] = original[name];
+  }
+  return out;
+}
+
+// `fallbackTotal` is the live run's length, used when a snapshot
+// predates the field. Without it a restored run would read as having
+// no baseline and quietly lose its comparison views.
+function originalRunFromJson(source, fallbackTotal) {
+  var original = originalRunCreate();
+  original.totalFrames = source.originalTotalFrames || fallbackTotal;
+  for (var i = 0; i < ORIGINAL_RUN_FIELDS.length; i++) {
+    var name = ORIGINAL_RUN_FIELDS[i];
+    var stored = source[ORIGINAL_RUN_JSON_KEYS[name]];
+    original[name] = Array.isArray(stored) ? stored : [];
+  }
+  return original;
+}
+
+// In place, for the same reason the live family is: whoever holds
+// the baseline keeps the same object, so a reference taken anywhere
+// stays valid.
+function originalRunRestore(original, source, fallbackTotal) {
+  var parsed = originalRunFromJson(source, fallbackTotal);
+  original.totalFrames = parsed.totalFrames;
+  for (var i = 0; i < ORIGINAL_RUN_FIELDS.length; i++) {
+    var name = ORIGINAL_RUN_FIELDS[i];
+    original[name] = parsed[name];
+  }
+}

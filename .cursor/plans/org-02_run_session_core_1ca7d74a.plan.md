@@ -7,10 +7,10 @@ todos:
     status: completed
   - id: run-frames
     content: Extract run_frames.js owning the six aligned arrays, adopt it in app.js, and test the invariant and the historical bug
-    status: in_progress
+    status: completed
   - id: original-frames
     content: Move the frozen original-run family into the same core
-    status: pending
+    status: in_progress
   - id: run-phases
     content: Extract run_phases.js owning legal phase transitions and what each clears, leaving rendering in app.js
     status: pending

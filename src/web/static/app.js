@@ -295,17 +295,12 @@ var activeRunToken = "";
 // windows share one supervisor, so those differ more easily than it
 // sounds. Null for a run that finished before this existed.
 var lastRunProvenance = null;
-var originalTotalFrames = 0;
-var originalFrameHistory = [];
-var originalFrameTokens = [];
+var originalRun = originalRunCreate();
 // The pre-edit run's own signals, captured once when the first run
 // completes. Timing and mean confidence could in principle be
 // recovered from the saved frames, but the candidate sets cannot:
 // doSubstitute truncates positionAlts at the edit and the branch
 // overwrites the rest, so this is the only chance to keep them.
-var originalPerFrameElapsed = [];
-var originalMeanConf = [];
-var originalPositionAlts = [];
 
 // Per-position competing candidates, indexed by token position (not
 // by frame): a position's candidate set is fixed the moment it is
@@ -1842,14 +1837,7 @@ function handleDone(data) {
     }
   }
   lastRunParams = getParamValues();
-  if (originalTotalFrames === 0) {
-    originalTotalFrames = runFrames.history.length;
-    originalFrameHistory = runFrames.history.slice();
-    originalFrameTokens = runFrames.tokens.slice();
-    originalPerFrameElapsed = runFrames.elapsed.slice();
-    originalMeanConf = runFrames.meanConf.slice();
-    originalPositionAlts = positionAlts.slice();
-  }
+  originalRunCapture(originalRun, runFrames, positionAlts);
 
   setSaveAvailable(true);
 
@@ -2128,8 +2116,8 @@ function computeDiff() {
   var cur = runFrames.tokens.length
     ? runFrames.tokens[runFrames.tokens.length - 1]
     : null;
-  var orig = originalFrameTokens.length
-    ? originalFrameTokens[originalFrameTokens.length - 1]
+  var orig = originalRun.tokens.length
+    ? originalRun.tokens[originalRun.tokens.length - 1]
     : null;
   return overlaysComputeDiff(cur, orig, remaskEdits);
 }
@@ -2146,10 +2134,10 @@ function renderDiffOverlay(frameIndex) {
   var diff = currentDiffData();
   var editedTokens = runFrames.tokens[frameIndex] || [];
   var oIdx = Math.min(
-    frameIndex, originalFrameTokens.length - 1
+    frameIndex, originalRun.tokens.length - 1
   );
   var origTokens =
-    (oIdx >= 0 ? originalFrameTokens[oIdx] : null) || [];
+    (oIdx >= 0 ? originalRun.tokens[oIdx] : null) || [];
 
   outputArea.textContent = "";
   tokenHighlightPos = null;
@@ -2198,7 +2186,7 @@ function commitStepsFor(isOriginal) {
   if (isOriginal) {
     if (originalCommitSteps === null) {
       originalCommitSteps =
-        overlaysComputeCommitSteps(originalFrameTokens);
+        overlaysComputeCommitSteps(originalRun.tokens);
     }
     return originalCommitSteps;
   }
@@ -2241,7 +2229,7 @@ function tokenColorAt(index, tok, isOriginal) {
     if (step === null) {
       return null;
     }
-    var frames = isOriginal ? originalFrameTokens : runFrames.tokens;
+    var frames = isOriginal ? originalRun.tokens : runFrames.tokens;
     return commitColor(step, frames.length - 1);
   }
   if (mode === "diff") {
@@ -2409,9 +2397,9 @@ function updateDiffSummary() {
 // a branch to compare against the retained original run.
 function diffAvailable() {
   return (
-    originalTotalFrames > 0
+    originalRun.totalFrames > 0
     && remaskEdits.length > 0
-    && originalFrameTokens.length > 0
+    && originalRun.tokens.length > 0
   );
 }
 
@@ -2525,7 +2513,7 @@ function altsPageable(pos) {
   if (divergence === null || pos < divergence) {
     return false;
   }
-  var original = originalPositionAlts[pos];
+  var original = originalRun.positionAlts[pos];
   var edited = positionAlts[pos];
   return !!(
     original && original.length > 0
@@ -2586,7 +2574,7 @@ function renderAltsPopover(pos, span) {
   }
   var original = altsPopoverPage === "original";
   var alts = original
-    ? originalPositionAlts[pos] : positionAlts[pos];
+    ? originalRun.positionAlts[pos] : positionAlts[pos];
   if (!alts || alts.length === 0) {
     hideAltsPopover();
     return;
@@ -2594,7 +2582,7 @@ function renderAltsPopover(pos, span) {
   // Each page marks the token its own run drew, so the Original page
   // does not mark the branch's substitution as chosen.
   var tokens = original
-    ? originalFrameTokens[originalFrameTokens.length - 1]
+    ? originalRun.tokens[originalRun.tokens.length - 1]
     : runFrames.tokens[currentScrubFrame];
   var chosen = tokens && tokens[pos] ? tokens[pos].id : null;
 
@@ -3261,7 +3249,7 @@ function originalEntropyProfileValues() {
     return [];
   }
   return entropyValuesFrom(
-    originalFrameTokens[originalFrameTokens.length - 1]
+    originalRun.tokens[originalRun.tokens.length - 1]
   );
 }
 
@@ -3744,9 +3732,9 @@ function metricsFrameTokens() {
     return runFrames.tokens[currentScrubFrame] || null;
   }
   var index = Math.min(
-    currentScrubFrame, originalFrameTokens.length - 1
+    currentScrubFrame, originalRun.tokens.length - 1
   );
-  return index >= 0 ? originalFrameTokens[index] : null;
+  return index >= 0 ? originalRun.tokens[index] : null;
 }
 
 // Assemble one reading, or null when the held position no longer
@@ -4601,10 +4589,10 @@ function renderFrameWithTokensDraw(frameIndex) {
 // rather than emptying out.
 function buildCrossfadedLayers(frameIndex, editedTokens) {
   var oIdx = Math.min(
-    frameIndex, originalFrameTokens.length - 1
+    frameIndex, originalRun.tokens.length - 1
   );
   var origTokens =
-    (oIdx >= 0 ? originalFrameTokens[oIdx] : null) || [];
+    (oIdx >= 0 ? originalRun.tokens[oIdx] : null) || [];
   var editedTakes = overlaysEditedOwnsPointer(
     1 - runBlend, runBlend
   );
@@ -4686,8 +4674,8 @@ function renderTargetPlaceholder(frameIndex) {
   );
   outputArea.appendChild(notice);
 
-  var origTokens = originalFrameTokens[frameIndex];
-  var origText = originalFrameHistory[frameIndex];
+  var origTokens = originalRun.tokens[frameIndex];
+  var origText = originalRun.history[frameIndex];
 
   if (origTokens || origText) {
     var wrapper = document.createElement("div");
@@ -4976,8 +4964,8 @@ function deactivateScrubber() {
 function updateScrubberLabel() {
   var maxLabel = (
     remaskMode === "select_target"
-    && originalTotalFrames > 0
-  ) ? originalTotalFrames - 1
+    && originalRun.totalFrames > 0
+  ) ? originalRun.totalFrames - 1
     : runFrames.history.length - 1;
   scrubberLabel.textContent =
     "Frame " + currentScrubFrame
@@ -4993,8 +4981,8 @@ function navigateToFrame(index) {
   ) ? scrubberMinFrame : 0;
   var maxFrame = (
     remaskMode === "select_target"
-    && originalTotalFrames > 0
-  ) ? originalTotalFrames - 1
+    && originalRun.totalFrames > 0
+  ) ? originalRun.totalFrames - 1
     : runFrames.history.length - 1;
   index = Math.max(
     minFrame,
@@ -5572,8 +5560,8 @@ function updateGuidedUI() {
       scrubberSlider.min =
         String(scrubberMinFrame);
       scrubberSlider.max = String(
-        (originalTotalFrames > 0)
-          ? originalTotalFrames - 1
+        (originalRun.totalFrames > 0)
+          ? originalRun.totalFrames - 1
           : runFrames.history.length - 1
       );
       unlockScrubberNav();
@@ -6233,12 +6221,7 @@ function resetRunState() {
   // under way, so a token surviving here names a run neither end
   // holds.
   activeRunToken = "";
-  originalTotalFrames = 0;
-  originalFrameHistory = [];
-  originalFrameTokens = [];
-  originalPerFrameElapsed = [];
-  originalMeanConf = [];
-  originalPositionAlts = [];
+  originalRunClear(originalRun);
   positionAlts = [];
   entropyHoverPos = null;
   clearTokenHighlight();
@@ -6375,19 +6358,19 @@ function tokenRecordsFrom(frames) {
 // omitted when the original never recorded it (older sessions, or
 // Alternatives left off), so the reader can tell absent from empty.
 function addOriginalRunSignals(payload) {
-  if (originalPerFrameElapsed.length > 0) {
+  if (originalRun.elapsed.length > 0) {
     payload.original_per_frame_elapsed =
-      originalPerFrameElapsed.slice();
+      originalRun.elapsed.slice();
     payload.original_elapsed_seconds =
-      originalPerFrameElapsed[
-        originalPerFrameElapsed.length - 1
+      originalRun.elapsed[
+        originalRun.elapsed.length - 1
       ];
   }
-  if (originalMeanConf.length > 0) {
-    payload.original_mean_conf = originalMeanConf.slice();
+  if (originalRun.meanConf.length > 0) {
+    payload.original_mean_conf = originalRun.meanConf.slice();
   }
   var originalAlts = alternativeRecordsFrom(
-    originalPositionAlts
+    originalRun.positionAlts
   );
   if (originalAlts !== null) {
     payload.original_alternatives = originalAlts;
@@ -6573,9 +6556,9 @@ function saveRun() {
     payload.remask_edits = remaskEdits;
     // Persist the pre-edit snapshot so the counterfactual diff is
     // reviewable post-hoc (only meaningful for edited runs).
-    if (originalFrameTokens.length > 0) {
+    if (originalRun.tokens.length > 0) {
       payload.original_frame_tokens =
-        tokenRecordsFrom(originalFrameTokens);
+        tokenRecordsFrom(originalRun.tokens);
     }
     addOriginalRunSignals(payload);
     // Replace the pre-edit run so the bundled edited run is one
@@ -6892,8 +6875,8 @@ btnScrubEnd.addEventListener(
   function () {
     var endFrame = (
       remaskMode === "select_target"
-      && originalTotalFrames > 0
-    ) ? originalTotalFrames - 1
+      && originalRun.totalFrames > 0
+    ) ? originalRun.totalFrames - 1
       : runFrames.history.length - 1;
     navigateToFrame(endFrame);
   }
@@ -7049,8 +7032,8 @@ btnEditAnother.addEventListener(
     scrubberMinFrame =
       lastEdit.frame_index + 1;
     remaskMode = "select_target";
-    var maxFrame = (originalTotalFrames > 0)
-      ? originalTotalFrames - 1
+    var maxFrame = (originalRun.totalFrames > 0)
+      ? originalRun.totalFrames - 1
       : runFrames.history.length - 1;
     scrubberSlider.min =
       String(scrubberMinFrame);
@@ -7354,8 +7337,8 @@ document.addEventListener(
       e.preventDefault();
       var endFrame = (
         remaskMode === "select_target"
-        && originalTotalFrames > 0
-      ) ? originalTotalFrames - 1
+        && originalRun.totalFrames > 0
+      ) ? originalRun.totalFrames - 1
         : runFrames.history.length - 1;
       navigateToFrame(endFrame);
     }
@@ -7502,7 +7485,6 @@ function saveSessionState() {
         ? thinkingContent.textContent
         : "",
     remaskEdits: remaskEdits,
-    originalTotalFrames: originalTotalFrames,
     editedRunSaved: editedRunSaved,
     runSaved: runSaved,
     lastSavedRunId: lastSavedRunId,
@@ -7518,13 +7500,8 @@ function saveSessionState() {
     base, runFramesToJson(runFrames, RUN_FRAME_LIGHT_FIELDS)
   );
   var full = Object.assign({}, base, runFramesToJson(runFrames), {
-    originalFrameHistory: originalFrameHistory,
-    originalFrameTokens: originalFrameTokens,
-    originalPerFrameElapsed: originalPerFrameElapsed,
-    originalMeanConf: originalMeanConf,
-    originalPositionAlts: originalPositionAlts,
     positionAlts: positionAlts,
-  });
+  }, originalRunToJson(originalRun));
   // Prefer the token-rich payload; fall back to a lighter one
   // if it exceeds the sessionStorage quota (long runs).
   try {
@@ -7603,13 +7580,7 @@ function restoreSessionState() {
       ? s.provenance
       : null;
   remaskEdits = s.remaskEdits || [];
-  originalTotalFrames =
-    s.originalTotalFrames || runFrames.history.length;
-  originalFrameHistory = s.originalFrameHistory || [];
-  originalFrameTokens = s.originalFrameTokens || [];
-  originalPerFrameElapsed = s.originalPerFrameElapsed || [];
-  originalMeanConf = s.originalMeanConf || [];
-  originalPositionAlts = s.originalPositionAlts || [];
+  originalRunRestore(originalRun, s, runFrames.history.length);
   positionAlts = s.positionAlts || [];
   editedRunSaved = !!s.editedRunSaved;
   runSaved = !!s.runSaved;

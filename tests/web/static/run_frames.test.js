@@ -377,3 +377,121 @@ test("a non-array in a snapshot is ignored", () => {
   assert.equal(api.runFramesLength(frames), 2);
   assert.equal(frames.tokens.length, 0);
 });
+
+// -- the baseline: the run as it was before the first edit --
+//
+// A second family, frozen once and never appended to, read by every
+// view that compares an edited run against what it branched from.
+// Deliberately four of the six live arrays plus the candidate sets:
+// nothing compares canvas index or reveal counts, and the session
+// snapshot is already large enough to be refused by the quota.
+
+function baselineFrom(api, count) {
+  const frames = api.runFramesCreate();
+  for (let i = 0; i < count; i += 1) {
+    api.runFramesAppend(frames, entry(i));
+  }
+  return frames;
+}
+
+test("a fresh baseline reports nothing captured", () => {
+  const api = load();
+
+  const original = api.originalRunCreate();
+
+  assert.equal(api.originalRunCaptured(original), false);
+  assert.equal(original.totalFrames, 0);
+});
+
+test("capturing takes the live run's length and arrays", () => {
+  const api = load();
+  const original = api.originalRunCreate();
+
+  api.originalRunCapture(original, baselineFrom(api, 4), ["alts"]);
+
+  assert.equal(api.originalRunCaptured(original), true);
+  assert.equal(original.totalFrames, 4);
+  assert.equal(original.history.length, 4);
+  assert.equal(original.positionAlts.length, 1);
+});
+
+test("capturing twice keeps the first run", () => {
+  // Every later terminal frame belongs to a branch, and overwriting
+  // the baseline with one would leave the comparison views diffing a
+  // run against itself.
+  const api = load();
+  const original = api.originalRunCreate();
+  api.originalRunCapture(original, baselineFrom(api, 4), []);
+
+  api.originalRunCapture(original, baselineFrom(api, 2), []);
+
+  assert.equal(original.totalFrames, 4);
+});
+
+test("the baseline does not move when the live run does", () => {
+  const api = load();
+  const frames = baselineFrom(api, 3);
+  const original = api.originalRunCreate();
+  api.originalRunCapture(original, frames, []);
+
+  api.runFramesTruncate(frames, 1);
+
+  assert.equal(original.history.length, 3);
+  assert.equal(api.runFramesLength(frames), 1);
+});
+
+test("clearing forgets the baseline", () => {
+  const api = load();
+  const original = api.originalRunCreate();
+  api.originalRunCapture(original, baselineFrom(api, 3), ["a"]);
+
+  api.originalRunClear(original);
+
+  assert.equal(api.originalRunCaptured(original), false);
+  assert.equal(original.positionAlts.length, 0);
+});
+
+test("the baseline round-trips under its old key names", () => {
+  const api = load();
+  const original = api.originalRunCreate();
+  api.originalRunCapture(original, baselineFrom(api, 3), ["a"]);
+
+  const json = api.originalRunToJson(original);
+
+  assert.equal(json.originalTotalFrames, 3);
+  assert.equal(json.originalFrameHistory.length, 3);
+  assert.equal(json.originalPerFrameElapsed.length, 3);
+  assert.equal(api.originalRunFromJson(json, 0).totalFrames, 3);
+});
+
+test("a snapshot predating the count falls back to the run", () => {
+  // Without the fallback a restored run reads as having no baseline
+  // and silently loses its comparison views.
+  const api = load();
+
+  const original = api.originalRunFromJson({}, 7);
+
+  assert.equal(original.totalFrames, 7);
+  assert.equal(api.originalRunCaptured(original), true);
+});
+
+test("restoring the baseline keeps the same object", () => {
+  const api = load();
+  const original = api.originalRunCreate();
+  const held = original;
+
+  api.originalRunRestore(original, { originalTotalFrames: 5 }, 0);
+
+  assert.equal(held.totalFrames, 5);
+});
+
+test("a non-array in a stored baseline is ignored", () => {
+  const api = load();
+
+  const original = api.originalRunFromJson(
+    { originalTotalFrames: 2, originalFrameTokens: "nope" },
+    0
+  );
+
+  assert.equal(original.tokens.length, 0);
+});
