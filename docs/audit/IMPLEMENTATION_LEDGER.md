@@ -75,20 +75,20 @@ commit, **M** a short multi-commit change, **L** a staged boundary migration.
 
 ## Ready now
 
-Five findings have no unmet blockers. The hardware queue clearing on
-2026-08-17 released three of them at once, and one of those, `ORG-02`, has
-since been worked and moved on.
+Five findings have no unmet blockers.
 
-**The rest of stage 4**, all three unblocked by pass three.
+**The rest of stage 4**, two of them.
 
 - **XAI-01** (high, M), released by `LIFE-01`: preserve complete
   intervention checkpoints rather than only token IDs. Run ownership being
   explicit is the condition the report attaches to it.
-`LIFE-04` was on this list and is done; see its entry below. `TRUST-04`
-is released by it.
+- **TRUST-04** (medium, L), released by `LIFE-04`: move downloads into the
+  same owned-operation model as activation, now that a long-running
+  operation can be cancelled and its disconnect is bounded.
 
-`ORG-02` was on this list and is now in the hardware queue instead. Its
-state core is written and tested; none of its callers has been run.
+`LIFE-04` was on this list and is done; see its entry below. `ORG-02` was
+on it too and is now in the hardware queue instead: its state core is
+written and tested, but none of its callers has been run.
 
 **The analytics trio**, unlocked by stage 3 and still unstarted. None of it
 touches the worker protocol, so it is the group that cannot collide with
@@ -234,7 +234,7 @@ on real hardware.
 | XAI-01 | high | M | ready | LIFE-01 (done) | |
 | LIFE-04 | high | L | done | LIFE-03 (done) | Carried RUNTIME-01's queue bound, as its own Direction asks |
 | LIFE-05 | high | M | partial | none | Single-instance the desktop launcher; host lease deferred, see Deviations |
-| TRUST-04 | medium | L | blocked | LIFE-04 | |
+| TRUST-04 | medium | L | ready | LIFE-04 (done) | |
 | DATA-02 | high | L | partial | maintainer decision | Lost-update slice only; conflict semantics still forked |
 | RUNTIME-01 | medium | L | partial | ORG-02 + DATA-05 | Queue bound landed with LIFE-04; append-only frames remain |
 | ORG-02 | medium | L | partial | none | State core verified; download client, ES modules and server-rendered boot remain |
