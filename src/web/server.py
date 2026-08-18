@@ -1692,6 +1692,11 @@ class SaveRunRequest(BaseModel):
     # snapshot predates this field, which then falls back to the
     # supervisor's current view, as every save used to do.
     provenance: Optional[RunProvenance] = None
+    # Which generation produced this run, from the same terminal
+    # frame (`LIFE-01`). The store publishes under it, so a save that
+    # was already made once lands on the run it made rather than on a
+    # second copy. Absent for a run whose snapshot predates it.
+    run_token: Optional[str] = None
     # When set, replace this existing run instead of creating a new
     # one. Used when a saved run is edited-and-resumed: the edited
     # (bundled) run replaces its pre-edit original so it is a single
@@ -1910,6 +1915,9 @@ def _build_metadata(body: SaveRunRequest) -> Dict[str, Any]:
         metadata["remask_edits"] = [
             edit.model_dump() for edit in body.remask_edits
         ]
+    # The run token is deliberately not set here. The store stamps it
+    # beside the revision, so the identity a run is published under
+    # and the identity recorded in its metadata cannot disagree.
     # Absent, not zeroed, when the length is unknown: an older run and
     # a run with an empty prompt must stay distinguishable, and the
     # Analytics rows are built to skip a missing block.
@@ -1991,6 +1999,10 @@ def _save_run_blocking(body: SaveRunRequest) -> Dict[str, Any]:
     Returns the id and revision as well as the display path, because
     an edited run has to be able to replace what it just saved, and
     doing that safely means quoting the revision it is replacing.
+
+    Which run is written is the store's decision, not this one: it
+    resolves the run token first and falls back to the id below. All
+    that happens here is the older fallback's own check.
     """
     replacing: Optional[str] = None
     if body.run_id:
@@ -2015,6 +2027,7 @@ def _save_run_blocking(body: SaveRunRequest) -> Dict[str, Any]:
         expected_revision=(
             body.expected_revision if replacing else None
         ),
+        run_token=body.run_token,
     )
     run_dir = RESULTS_DIR / run_id
 

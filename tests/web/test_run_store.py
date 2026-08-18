@@ -796,3 +796,211 @@ def _install_write_failure(
 
     monkeypatch.setattr(Path, "write_text", failing_write_text)
     monkeypatch.setattr(Path, "open", failing_open)
+
+
+# -- publishing under the run's own identity --
+#
+# A save used to be published under whatever the client remembered:
+# a run id if it had one, a new run otherwise. That is fine until the
+# client stops remembering, which happens on an ordinary sequence of
+# clicks. Save a run, navigate before the reply lands, and the server
+# has published a run the page never learns about; the next save
+# makes a second copy of the same generation.
+#
+# The run token from `LIFE-01` already names the generation, so the
+# store resolves it first and the client's memory becomes a fallback.
+# What these prove is that one generation cannot become two runs,
+# including when two saves for it arrive together.
+
+
+def _metadata_of(root: Path, run_id: str) -> Dict[str, Any]:
+    return json.loads(
+        (root / run_id / run_store.METADATA_NAME).read_text(
+            encoding="utf-8"
+        )
+    )
+
+
+def test_a_saved_run_records_which_generation_made_it(
+    tmp_path: Path,
+) -> None:
+    run_id, _ = _save(
+        tmp_path,
+        bundle=_bundle(metadata={"backend": "llada"}),
+        run_token="a3f9c1:1",
+    )
+
+    stored = _metadata_of(tmp_path, run_id)
+    assert stored[run_store.RUN_TOKEN_KEY] == "a3f9c1:1"
+
+
+def test_saving_one_generation_twice_makes_one_run(
+    tmp_path: Path,
+) -> None:
+    """The bug, stated directly. The second save is a client that
+    never saw the first one's answer, so it asks for a new run."""
+    first, _ = _save(tmp_path, run_token="a3f9c1:1")
+
+    second, revision = _save(tmp_path, run_token="a3f9c1:1")
+
+    assert second == first
+    assert revision == 2
+    assert len(run_store.list_run_ids(tmp_path)) == 1
+
+
+def test_the_second_save_is_a_write_not_a_no_op(
+    tmp_path: Path,
+) -> None:
+    """It must not shortcut. Once the auto-save on entering an editor
+    is gone, confirming an edit is a save that carries no run id, and
+    treating a known token as 'already done' would drop the edit."""
+    run_id, _ = _save(tmp_path, run_token="a3f9c1:1")
+
+    _save(
+        tmp_path,
+        bundle=_bundle(final_text="edited"),
+        run_token="a3f9c1:1",
+    )
+
+    saved = (tmp_path / run_id / run_store.FINAL_TEXT_NAME)
+    assert saved.read_text(encoding="utf-8") == "edited"
+
+
+def test_two_generations_are_two_runs(tmp_path: Path) -> None:
+    _save(tmp_path, run_token="a3f9c1:1")
+    _save(tmp_path, run_token="a3f9c1:2")
+
+    assert len(run_store.list_run_ids(tmp_path)) == 2
+
+
+def test_a_save_with_no_token_still_creates(
+    tmp_path: Path,
+) -> None:
+    """The upgrade path. Every run saved before this existed has no
+    token, and so does any worker too old to issue one."""
+    _save(tmp_path)
+    _save(tmp_path)
+
+    assert len(run_store.list_run_ids(tmp_path)) == 2
+
+
+def test_an_empty_token_matches_nothing(tmp_path: Path) -> None:
+    """Absent has to mean 'no identity', not 'match anything', or the
+    first tokenless run becomes the destination for every save from a
+    worker that cannot name its runs."""
+    _save(tmp_path, run_token="")
+    _save(tmp_path, run_token="")
+
+    assert len(run_store.list_run_ids(tmp_path)) == 2
+
+
+def test_a_token_beats_the_run_id_the_client_remembers(
+    tmp_path: Path,
+) -> None:
+    """They disagree exactly when the client's memory is stale, which
+    is the case worth getting right."""
+    first, _ = _save(tmp_path, run_token="a3f9c1:1")
+    other, _ = _save(tmp_path, run_token="a3f9c1:2")
+
+    landed, _ = _save(
+        tmp_path, run_id=other, run_token="a3f9c1:1"
+    )
+
+    assert landed == first
+
+
+def test_a_run_id_still_works_without_a_token(
+    tmp_path: Path,
+) -> None:
+    """The older path, kept for clients that have no token to send."""
+    run_id, _ = _save(tmp_path)
+
+    landed, revision = _save(tmp_path, run_id=run_id)
+
+    assert landed == run_id
+    assert revision == 2
+
+
+def test_racing_saves_of_one_generation_make_one_run(
+    tmp_path: Path,
+) -> None:
+    """Resolution and publication are one step for the same reason
+    the revision check is: two saves arriving together would each
+    find no existing run and each create one, which is the duplicate
+    the token exists to prevent."""
+    lock = threading.Lock()
+    landed: List[str] = []
+
+    def worker(marker: int) -> None:
+        run_id, _ = run_store.save(
+            tmp_path,
+            _bundle(final_text=f"body {marker}"),
+            model_id="llada",
+            run_token="a3f9c1:1",
+        )
+        with lock:
+            landed.append(run_id)
+
+    threads = [
+        threading.Thread(target=worker, args=(i,))
+        for i in range(8)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert len(landed) == 8
+    assert len(set(landed)) == 1
+    assert len(run_store.list_run_ids(tmp_path)) == 1
+
+
+def test_a_lookup_ignores_a_run_it_cannot_read(
+    tmp_path: Path,
+) -> None:
+    """A run whose metadata is corrupt is not a run a save should
+    silently overwrite, so it is skipped rather than matched."""
+    run_id, _ = _save(tmp_path, run_token="a3f9c1:1")
+    (tmp_path / run_id / run_store.METADATA_NAME).write_text(
+        "{not json", encoding="utf-8"
+    )
+
+    assert (
+        run_store.find_run_by_token(tmp_path, "a3f9c1:1") is None
+    )
+
+
+def test_a_lookup_finds_nothing_in_an_empty_root(
+    tmp_path: Path,
+) -> None:
+    assert run_store.find_run_by_token(tmp_path, "a3f9c1:1") is None
+
+
+def test_a_tokenless_replace_keeps_the_identity(
+    tmp_path: Path,
+) -> None:
+    """A client with no token replacing by id must not strip the
+    identity off the run, or the next lost reply makes the duplicate
+    the token was there to prevent."""
+    run_id, _ = _save(tmp_path, run_token="a3f9c1:1")
+
+    _save(tmp_path, run_id=run_id)
+    landed, _ = _save(tmp_path, run_token="a3f9c1:1")
+
+    assert landed == run_id
+    assert len(run_store.list_run_ids(tmp_path)) == 1
+
+
+def test_a_recorded_empty_token_is_not_an_identity(
+    tmp_path: Path,
+) -> None:
+    """Metadata is a file on disk that a person can edit, so the
+    lookup refuses an empty needle rather than trusting that nothing
+    ever wrote an empty one."""
+    run_id, _ = _save(tmp_path)
+    path = tmp_path / run_id / run_store.METADATA_NAME
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    stored[run_store.RUN_TOKEN_KEY] = ""
+    path.write_text(json.dumps(stored), encoding="utf-8")
+
+    assert run_store.find_run_by_token(tmp_path, "") is None

@@ -6531,6 +6531,17 @@ function saveRun() {
     payload.provenance = lastRunProvenance;
   }
 
+  // Which generation this is, so the store publishes under the run's
+  // own identity instead of under what this page happens to
+  // remember. The two differ exactly when it matters: a save whose
+  // reply never arrived, because the page navigated while it was in
+  // flight, leaves this page believing nothing was written. Sending
+  // the token means the retry lands on the run already made rather
+  // than making a second one.
+  if (activeRunToken) {
+    payload.run_token = activeRunToken;
+  }
+
   // canvas_index must be a clean List[int] matching the frame count.
   // If it is sparse or misaligned (e.g. a resumed run whose pre-resume
   // indices were not restored), omit it rather than send nulls that

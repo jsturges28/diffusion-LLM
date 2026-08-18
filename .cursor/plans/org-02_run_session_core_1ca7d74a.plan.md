@@ -19,7 +19,7 @@ todos:
     status: completed
   - id: records
     content: Record the deviations, add the two manual items, and verify
-    status: in_progress
+    status: completed
 isProject: false
 ---
 

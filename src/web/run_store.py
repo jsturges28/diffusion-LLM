@@ -89,6 +89,17 @@ SCHEMA_VERSION_KEY = "schema_version"
 # which is why this is a separate field from the one above.
 CAPTURE_KEY = "capture"
 
+# Which generation produced this run, as the worker named it on the
+# terminal frame (see `LIFE-01`). Present so a save can be published
+# under the run's own identity rather than under whatever the client
+# still remembers, which is the difference between saving a run twice
+# and saving it once.
+#
+# Absent on every run saved before this existed, and on any run whose
+# worker predates run tokens. Absent means "no identity", not "match
+# anything": a save with no token creates, exactly as it always did.
+RUN_TOKEN_KEY = "run_token"
+
 
 class RunNotFoundError(FileNotFoundError):
     """No run by that id.
@@ -323,44 +334,75 @@ def save(
     model_id: str,
     run_id: Optional[str] = None,
     expected_revision: Optional[int] = None,
+    run_token: Optional[str] = None,
 ) -> Tuple[str, int]:
     """Publish a run, new or replacing, returning id and revision.
 
-    The one entry point a caller needs. ``run_id`` names a run to
-    replace, in which case ``expected_revision`` must match what is on
-    disk; the check and the publication both happen here so a caller
-    cannot read a revision, be overtaken, and then write anyway.
+    The one entry point a caller needs. Which run is being written is
+    decided here, in this order:
+
+    ``run_token`` names the generation. If a run was already published
+    for it, that run is the destination, whatever the caller believes.
+    This is what makes a save idempotent per generation: a client that
+    posted a save and never saw the answer, because the page navigated
+    while the request was in flight, will post again and land on the
+    run it already made rather than making a second one.
+
+    ``run_id`` is the older way of saying the same thing, kept for a
+    caller that has no token: every run saved before `LIFE-01`, and
+    any worker too old to issue one.
+
+    Neither means a new run.
+
+    ``expected_revision`` still guards a replacement against a
+    concurrent writer; the check and the publication happen here so a
+    caller cannot read a revision, be overtaken, and write anyway.
 
     Nothing is published if anything raises. The staging directory is
     discarded on failure, and the reservation for a new run is left
     behind empty, which no reader counts.
     """
-    if run_id is None:
-        return _publish_new(root, bundle, model_id)
-    # Serialized against other replacements, because the revision
-    # check and the write that acts on it have to be one step. Two
-    # callers reading the same revision, both passing, and both
-    # publishing is precisely the last-writer-wins the check exists
-    # to prevent. One lock for all replacements rather than one per
-    # run: a replacement is a user pressing Confirm, so there is no
-    # contention worth a more complicated structure.
-    with _REPLACE_LOCK:
+    # One lock over resolution and publication both, because they are
+    # one decision. Two saves for the same generation arriving
+    # together would otherwise each find no existing run and each
+    # create one, which is the duplicate this exists to prevent, and
+    # the same shape as the revision race below. Creates serialise
+    # too as a result, which costs nothing: a save is a person
+    # pressing a button.
+    with _PUBLISH_LOCK:
+        target = run_id
+        published = find_run_by_token(root, run_token or "")
+        if published is not None:
+            target = published
+        if target is None:
+            return _publish_new(root, bundle, model_id, run_token)
+        # A replacement from a client with no token must not erase the
+        # identity the run already has, or the run becomes findable
+        # only by an id that the next lost reply will forget again.
+        token = run_token or read_run_token(root, target)
         return _publish_replacement(
-            root, bundle, run_id, expected_revision
+            root, bundle, target, expected_revision, token
         )
 
 
-# Guards read-revision-then-publish. In-process only, which is the
-# right scope today because one supervisor owns the data root;
-# `LIFE-05` is where a second one becomes possible.
-_REPLACE_LOCK = threading.Lock()
+# Guards resolve-identity-then-publish, and within that
+# read-revision-then-publish. In-process only, which is the right
+# scope today because one supervisor owns the data root; `LIFE-05` is
+# where a second one becomes possible, and `ui_state.py` carries the
+# interprocess pattern to copy if it ever does.
+_PUBLISH_LOCK = threading.Lock()
 
 
 def _publish_new(
-    root: Path, bundle: RunBundle, model_id: str
+    root: Path,
+    bundle: RunBundle,
+    model_id: str,
+    run_token: Optional[str],
 ) -> Tuple[str, int]:
     run_id = allocate(root, model_id)
-    _stage_and_publish(root, run_id, bundle, revision=1)
+    _stage_and_publish(
+        root, run_id, bundle, revision=1, run_token=run_token
+    )
     return run_id, 1
 
 
@@ -369,6 +411,7 @@ def _publish_replacement(
     bundle: RunBundle,
     run_id: str,
     expected_revision: Optional[int],
+    run_token: Optional[str],
 ) -> Tuple[str, int]:
     actual = read_revision(root, run_id)
     expected = (
@@ -377,7 +420,9 @@ def _publish_replacement(
     if expected != actual:
         raise RevisionConflictError(run_id, expected, actual)
     revision = actual + 1
-    _stage_and_publish(root, run_id, bundle, revision=revision)
+    _stage_and_publish(
+        root, run_id, bundle, revision=revision, run_token=run_token
+    )
     return run_id, revision
 
 
@@ -396,13 +441,26 @@ def capture_manifest(bundle: RunBundle) -> Dict[str, bool]:
 
 
 def _stage_and_publish(
-    root: Path, run_id: str, bundle: RunBundle, *, revision: int
+    root: Path,
+    run_id: str,
+    bundle: RunBundle,
+    *,
+    revision: int,
+    run_token: Optional[str] = None,
 ) -> None:
-    """Write the bundle aside, validate it, then move it in."""
+    """Write the bundle aside, validate it, then move it in.
+
+    The token is stamped here, beside the revision, rather than by
+    whoever built the bundle. Resolution and persistence are then one
+    function's business and cannot disagree: a caller cannot ask to
+    publish under a token and leave the run unfindable by it.
+    """
     stamped = dict(bundle.metadata)
     stamped[REVISION_KEY] = revision
     stamped[SCHEMA_VERSION_KEY] = SCHEMA_VERSION
     stamped[CAPTURE_KEY] = capture_manifest(bundle)
+    if run_token:
+        stamped[RUN_TOKEN_KEY] = run_token
     staged = RunBundle(
         metadata=stamped,
         final_text=bundle.final_text,
@@ -500,6 +558,56 @@ def read_revision(root: Path, run_id: str) -> int:
     if isinstance(revision, int):
         return revision
     return 0
+
+
+def read_run_token(root: Path, run_id: str) -> Optional[str]:
+    """The generation a saved run came from, or None if unrecorded."""
+    try:
+        raw = json.loads(
+            (root / run_id / METADATA_NAME).read_text(
+                encoding="utf-8"
+            )
+        )
+    except (OSError, ValueError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    token = raw.get(RUN_TOKEN_KEY)
+    return token if isinstance(token, str) and token else None
+
+
+def find_run_by_token(root: Path, token: str) -> Optional[str]:
+    """The run this generation was already published as, if any.
+
+    A linear scan of the run directories, reading each metadata. That
+    is affordable because ``list_runs`` in the analytics layer already
+    does strictly more work on every Analytics page load, while this
+    runs once per save. If it ever stops being affordable, an index is
+    the answer, and it should be built for the listing first.
+
+    An empty token matches nothing, deliberately. Runs saved before
+    this field existed have no token, and treating "no identity" as a
+    match would make one of them the destination for every save from a
+    worker too old to issue tokens.
+    """
+    if not token:
+        return None
+    for run_id in list_run_ids(root):
+        try:
+            raw = json.loads(
+                (root / run_id / METADATA_NAME).read_text(
+                    encoding="utf-8"
+                )
+            )
+        except (OSError, ValueError):
+            # A run whose metadata cannot be read is not a run this
+            # save should silently overwrite.
+            continue
+        if not isinstance(raw, dict):
+            continue
+        if raw.get(RUN_TOKEN_KEY) == token:
+            return run_id
+    return None
 
 
 def delete(root: Path, run_id: str) -> None:
