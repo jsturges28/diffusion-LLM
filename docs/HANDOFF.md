@@ -112,13 +112,15 @@ scope, so a probe refused as busy no longer tears down What If
 `TRUST-04`. The ledger is the authority and is updated in the same commit as
 each change.
 
-**Hardware debt, which is now the bottleneck.** The queue at the top of
-`docs/audit/IMPLEMENTATION_LEDGER.md` holds `LIFE-02`, `LIFE-06`, `LIFE-03`,
-`LIFE-01`, `PROTOCOL-01`, the `DATA-02` lost-update slice and the `TRUST-03`
-offline slice, covered by items 142 to 161 of `docs/MANUAL_VERIFICATION.md`.
-Three findings are blocked on nothing else, so clearing that queue is what
-releases the next stage. Separately, items 102 to 126 of that file predate
-the campaign and have never been validated.
+**Hardware debt, mostly paid.** The queue at the top of
+`docs/audit/IMPLEMENTATION_LEDGER.md` emptied on 2026-08-17 except for the
+`TRUST-03` offline retest and two staged-failure items belonging to
+`LIFE-02`. That is what released `XAI-01`, `LIFE-04` and `ORG-02`, so six
+findings are ready rather than three. One item, 148, is recorded as
+unreachable on this hardware rather than pending: it needs two models
+resident at once on a card that cannot hold both. Separately, items 102 to
+126 of `docs/MANUAL_VERIFICATION.md` predate the campaign and have never been
+validated.
 
 ## Conventions
 

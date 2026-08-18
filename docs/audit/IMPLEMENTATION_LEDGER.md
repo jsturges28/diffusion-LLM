@@ -29,13 +29,19 @@ envelope without the validation token that `LIFE-03` now owns. The three
 analytics findings it unlocked are unstarted and belong to no stage of their
 own; see Ready now.
 
-**Stage 4's three passes have all landed.** Pass three took `LIFE-01` and
-`PROTOCOL-01` together, in three commits, because the envelope one defines
-is what carries the token the other issues. It also pulled forward the half
-of `DATA-02` that needs no fork settled, and closed the `QUALITY-01` gap
-those two findings sat on: the worker's message loop had no tests at all.
-What remains of stage 4 is `XAI-01` and `LIFE-04`, both of which `LIFE-01`
-has now unblocked, plus `TRUST-04` behind `LIFE-04`.
+**Stage 4's three passes have all landed and cleared hardware.** Pass three
+took `LIFE-01` and `PROTOCOL-01` together, in three commits, because the
+envelope one defines is what carries the token the other issues. It also
+pulled forward the half of `DATA-02` that needs no fork settled, and closed
+the `QUALITY-01` gap those two findings sat on: the worker's message loop had
+no tests at all. What remains of stage 4 is `XAI-01` and `LIFE-04`, both now
+ready, plus `TRUST-04` behind `LIFE-04`.
+
+**The hardware queue is nearly empty**, which changed the shape of the board
+on 2026-08-17. Six findings are ready where three were, and `ORG-02` opens
+stage 5. One item, 148, was reclassified as unreachable on this hardware
+rather than left pending, because the scenario needs two models resident at
+once on a card that cannot hold both.
 
 Baselines: 728 tests passing (from 265 at the campaign's start), 66 browser
 tests under `node --test`, and Ruff at 128 in `src tests`, gated per file and
@@ -62,43 +68,38 @@ commit, **M** a short multi-commit change, **L** a staged boundary migration.
 
 ## Ready now
 
-Three findings have no unmet blockers, and they are all the same group.
-Stage 3 unlocked the analytics trio and none of it has been started. None
-touches the worker protocol, which matters more than usual right now, for
-the reason under the heading after this one.
+Six findings have no unmet blockers, which is the widest this list has been.
+The hardware queue clearing on 2026-08-17 released three of them at once.
+
+**The rest of stage 4**, all three unblocked by pass three.
+
+- **XAI-01** (high, M), released by `LIFE-01`: preserve complete
+  intervention checkpoints rather than only token IDs. Run ownership being
+  explicit is the condition the report attaches to it.
+- **LIFE-04** (high, L), released by `LIFE-03`: propagate disconnect and
+  cancel through inference and bounded queues, carrying `RUNTIME-01`'s first
+  bounded-queue step. Take it with the observation under `QUALITY-01`:
+  `cancel` cannot interrupt a generation today, because the message loop
+  awaits its handler inline, so the message type reads as though it works
+  and does not. `TRUST-04` waits behind this one.
+- **ORG-02** (medium, L), released by `PROTOCOL-01`: the frontend state
+  core, and the start of stage 5. Also the finding that ends the two-phase
+  render the loading overlay hides, so it retires a placeholder two sessions
+  have now touched without fixing.
+
+**The analytics trio**, unlocked by stage 3 and still unstarted. None of it
+touches the worker protocol, so it is the group that cannot collide with
+anything above.
 
 - **ANALYTICS-02** (high, M): exact token summaries. See the decision note
   below; its position in the order is the open question, not its readiness.
 - **ANALYTICS-03** (medium, L): lightweight pagination.
-- **ANALYTICS-04** (high, M): the guarded compare boundary. This sat at
-  `blocked` on `DATA-01` after `DATA-01` was done, which was a bookkeeping
-  lag rather than a real edge.
+- **ANALYTICS-04** (high, M): the guarded compare boundary.
 
 `QUALITY-01` is not on this list because it is not a standalone task. The
 report asks for its lifecycle and browser-contract fixtures to land with each
 seam as that seam is extracted, rather than as a test-only prelude with no
 production owner. Track it as an obligation attached to other findings.
-
-## Waiting only on the hardware queue
-
-Three findings whose code has landed and whose blockers are satisfied apart
-from a maintainer's confirmation on real hardware. The brief says not to
-start a finding whose blockers are not **done**, and `needs hardware` is not
-done, so these are listed here rather than above. Clearing items 142 to 161
-of `docs/MANUAL_VERIFICATION.md` releases all of them at once, which makes
-that queue the highest-leverage thing on the board.
-
-- **XAI-01** (high, M), behind `LIFE-01`: preserve complete intervention
-  checkpoints rather than only token IDs. Run ownership being explicit is
-  the condition the report attaches to it, and that is what pass three did.
-- **LIFE-04** (high, L), behind `LIFE-03`: propagate disconnect and cancel
-  through inference and bounded queues, carrying `RUNTIME-01`'s first
-  bounded-queue step. Take it with the observation under `QUALITY-01`:
-  `cancel` cannot interrupt a generation today, because the message loop
-  awaits its handler inline. `TRUST-04` waits behind this one.
-- **ORG-02** (medium, L), behind `PROTOCOL-01`: the frontend state core.
-  This is also the finding that ends the two-phase render the loading
-  overlay hides, so it retires a placeholder two sessions have now touched.
 
 ## Needs a maintainer decision before it can start
 
@@ -133,7 +134,13 @@ showed is recorded under Deviations. `DATA-04`, `DATA-05` and `RUNTIME-02`
 were cleared on 2026-08-11 in the same sitting: the maintainer confirmed items
 133 to 141 of `docs/MANUAL_VERIFICATION.md`, including the two the sandbox
 could say least about, the amber invalid row's alignment against its
-neighbours and the two-window model switch. Four entries are open:
+neighbours and the two-window model switch.
+
+**As of 2026-08-17 one entry is genuinely open.** `LIFE-03`, `LIFE-05`,
+`LIFE-01`, `PROTOCOL-01` and the `DATA-02` slice all cleared, leaving
+`TRUST-03`'s offline retest and `LIFE-02`'s two staged-failure items. That
+matters beyond bookkeeping: the queue was the only thing standing between
+this campaign and three findings it had already earned.
 
 - **LIFE-02 and LIFE-06**: partly cleared on 2026-08-14. The maintainer
   confirmed items 142 and 145 of `docs/MANUAL_VERIFICATION.md`, which between
@@ -146,36 +153,40 @@ neighbours and the two-window model switch. Four entries are open:
   staged deliberately. The lever is in item 143. Item 146 was reclassified as
   a log-watch note, since a process wedged in the kernel is not something to
   arrange on purpose.
-- **LIFE-03**: partly cleared on 2026-08-14. The maintainer confirmed items
-  147 and 150 of `docs/MANUAL_VERIFICATION.md`: one window does not navigate
-  for another's load, and the ordinary path is untouched by the new handshake.
-  Items 148 and 149 are open, and both were attempted without showing a
-  failure; they were awkward to stage rather than broken, and the reasons are
-  now in the items. 148 needs both models to be genuinely loadable at once,
-  which `LIFE-06`'s pre-eviction check will otherwise refuse first. 149 does
-  nothing when both windows pick the same model on the same device, because
-  the server correctly treats that as a no-op, and its messages are brief
-  enough that the outcome to judge is where the page lands and what reaches
-  Analytics. Item 151 was added alongside them for the loading overlay.
+- **LIFE-03**: cleared, with one item unreachable rather than pending. Items
+  147 and 150 were confirmed on 2026-08-14 and 149 on 2026-08-17, which
+  between them carry the finding's user-facing claim: one window does not
+  navigate for another's load, a window whose model is taken saves its run
+  and reloads, and the ordinary path is untouched by the handshake.
+  Item 148 cannot be staged on this hardware and is recorded that way rather
+  than left open. It needs two models loading at once, and `LIFE-06`'s
+  pre-eviction check correctly refuses the second on a card that cannot hold
+  both; LLaDA and SmolLM3 together come to roughly the whole 23.49 GiB. The
+  same fence is covered automatically in
+  `tests/web/test_activation_identity.py`, where a cancel naming another
+  operation is refused, and the maintainer met the behaviour by accident
+  during the `LIFE-05` incident. A larger card makes the item live again.
 - **LIFE-05 (single-instance slice)**: the probe and the launch decision are
   tested against real HTTP servers on ephemeral ports, and mutation-checked
   (removing the guard fails three cases in under three seconds rather than
   hanging, which the first version of those tests did). Item 153, the one
   that matters because it is the accident that produced the OOM, was
   confirmed on 2026-08-15: a second launch from the icon opens no second
-  window. Item 154, the fallback when an unrelated process holds 8760, is
-  still open and is the lesser half.
-- **LIFE-01 and PROTOCOL-01**: the automated halves cover both clauses,
-  including the two-socket interleaving, against a real worker app with a
-  stub backend. What the sandbox cannot do is show that the fences leave the
-  ordinary path alone with a model actually loaded, which is
-  `docs/MANUAL_VERIFICATION.md` items 157 to 161. Item 157 comes first
-  deliberately: it confirms nothing was fenced that should not have been,
-  and if it fails the rest do not matter. 159 and 160 are the findings' own
-  scenarios and need two windows.
-- **DATA-02 (lost-update slice)**: threads and forked processes prove the
-  locking, but the debounce and the flush are browser lifecycle events that
-  only a browser fires. Item 161.
+  window. Item 154, the fallback when an unrelated process holds 8760, was
+  confirmed on 2026-08-17. The slice is cleared; the host-level lease it
+  deliberately left out is still deferred, and is described under Deviations.
+- **LIFE-01, PROTOCOL-01 and the DATA-02 slice**: cleared on 2026-08-17,
+  items 157 to 161. The ordinary single-window path is undisturbed, a run
+  survives a reload and stays editable, a second window's generation refuses
+  the first window's resume, a refused probe leaves What If open, and a
+  collection filed just before a navigation is still there afterwards.
+  Two of those took three attempts, and both were the items' fault rather
+  than the code's. The reasons are now written into 159 and 160, because
+  each would otherwise cost the next session the same hour: a second window
+  comes from a browser rather than a second launch, which item 153 makes
+  counter-intuitive, and a typed token that matches a captured candidate is
+  answered from the run's own record without a probe ever being sent, so the
+  refusal under test never happens.
 - **TRUST-03 (offline slice)**: the automated half asserts that both Hub
   workers pin every `from_pretrained` call to local files, and that being
   offline with nothing cached now reports what happened instead of a urllib3
@@ -208,16 +219,16 @@ neighbours and the two-window model switch. Four entries are open:
 | LIFE-02 | high | M | needs hardware | none | Two commits: the process seam, then verified termination |
 | LIFE-06 | medium | M | needs hardware | none | Validate a switch target before evicting the working model |
 | ORG-04 | medium | S | done | none | Two commits: the shared activation client, then the menu |
-| LIFE-03 | critical | L | needs hardware | none | Two commits: operation identity, then the resident mismatch |
-| LIFE-01 | high | M | needs hardware | none | Name every run and refuse a stateful request that means another |
-| PROTOCOL-01 | medium | M | needs hardware | none | Two commits: scoped error envelopes, then the client routing |
-| XAI-01 | high | M | blocked | LIFE-01 (needs hardware) | |
-| LIFE-04 | high | L | blocked | LIFE-03 (needs hardware) | |
+| LIFE-03 | critical | L | done | none | Two commits: operation identity, then the resident mismatch |
+| LIFE-01 | high | M | done | none | Name every run and refuse a stateful request that means another |
+| PROTOCOL-01 | medium | M | done | none | Two commits: scoped error envelopes, then the client routing |
+| XAI-01 | high | M | ready | LIFE-01 (done) | |
+| LIFE-04 | high | L | ready | LIFE-03 (done) | |
 | LIFE-05 | high | M | partial | none | Single-instance the desktop launcher; host lease deferred, see Deviations |
 | TRUST-04 | medium | L | blocked | LIFE-04 | |
 | DATA-02 | high | L | partial | maintainer decision | Lost-update slice only; conflict semantics still forked |
 | RUNTIME-01 | medium | L | blocked | LIFE-04, then ORG-02 + DATA-05 | |
-| ORG-02 | medium | L | blocked | PROTOCOL-01 (needs hardware) | |
+| ORG-02 | medium | L | ready | PROTOCOL-01 (done) | |
 | RUNTIME-03 | medium | S | blocked | ORG-02, paired | |
 | ROADMAP-01 | high | M | blocked | stage 6 order | |
 | ROADMAP-05 | high | M | blocked | stage 6 order | |

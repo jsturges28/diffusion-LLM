@@ -32,17 +32,24 @@ kept when these were written:
 - **146**: cannot be forced, and is a log-watch note rather than a scenario.
   See the item.
 - **147 and 150**: confirmed on 2026-08-14.
-- **148 and 149**: **not yet validated.** Both were attempted and both were
-  hard to stage, for reasons now written into the items themselves: 148's
-  setup is refused outright unless both models can genuinely load, and 149
-  does nothing at all if the two windows pick the same model on the same
-  device. Neither attempt showed the behaviour failing.
+- **148**: **not reachable on this hardware**, which is a different answer
+  from failing. The scenario needs two models loading at once, and item 142's
+  pre-eviction check refuses the second on a card that cannot hold both;
+  LLaDA and SmolLM3 together come to roughly the whole 23.49 GiB. The
+  automated half covers the same fence in
+  `tests/web/test_activation_identity.py`, where a cancel naming another
+  operation is refused. Leave it here rather than deleting it: a larger card
+  makes it stageable again.
+- **149**: confirmed on 2026-08-17, after a first attempt that was hard to
+  read. The trap is in the item: two windows picking the same model on the
+  same device is a no-op the server correctly does nothing for.
 - **151 and 152**: confirmed on 2026-08-15. The restored overlay reads as it
   did before the detour, and the reserved scrubber was the better of the two
   changes.
 - **153**: confirmed on 2026-08-15. A second launch from the desktop icon
   opens no second window.
-- **154**: **not yet validated.**
+- **154**: confirmed on 2026-08-17. An unrelated process on 8760 sends the
+  app to a fallback port instead of locking it out.
 - **155**: **kept**, judged on 2026-08-15. The cross-fade itself was worth
   having. What it exposed was that several elements still moved just after
   the fade settled, which is 156 and is now fixed, so the experiment stays
@@ -50,11 +57,20 @@ kept when these were written:
 - **156**: confirmed on 2026-08-17. The three reservations hold and the
   entropy row stays absent on a diffusion model, which is the half that
   would have been easy to get backwards.
-- **157 to 161**: **not yet validated**, and they are stage 4 pass three's
-  whole hardware queue. Take 157 first: it confirms the ordinary
-  single-window path still works, and if it fails the rest are moot. 159
-  and 160 are the two findings' own scenarios and need two windows; 161 is
-  the persistence slice and needs only one.
+- **157 to 161**: confirmed on 2026-08-17, stage 4 pass three's whole queue.
+  Two of them took three attempts each, and not because anything was broken.
+  Both failures were the items' own fault and both are now fixed in place, so
+  read 159 and 160 as they stand rather than assuming they are hard:
+
+  The first was **how to get a second window**. Item 153 had just established
+  that a second desktop launch stands down, which makes "two windows" read as
+  impossible. A browser pointed at the running app's address is the answer,
+  and neither item said so.
+
+  The second was **which token to type**, in 160. Typing one of the five
+  candidates on screen is answered from the run's own record without a probe
+  ever being sent, so nothing could be refused and the item looked like it
+  had failed when it had simply not been exercised.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -1240,29 +1256,53 @@ does nothing at all.
     still on screen, then Edit Frames and resume. It should work exactly as
     if you had not reloaded. The same applies to going to Analytics and
     coming back.
-159. **The second window's run locks the first out, and says so.** Two
-    windows, same model. Generate in window one and leave its output on
-    screen. Generate in window two. Now go back to window one and try Edit
-    Frames plus a resume: it should refuse with a message about the run
-    having been replaced, and roll back to the output it had rather than
-    stranding a half-truncated run.
-    This is the finding's own scenario. Worth doing a second time with the
-    *same prompt in both windows*, because equal shapes are what used to let
-    the request through and produce a plausible wrong answer instead of an
-    error.
+159. **The second window's run locks the first out, and says so.**
+    **Getting two windows is the part to read first**, because item 153 makes
+    it look impossible: a second launch from the icon deliberately stands
+    down. Launch once, then point an ordinary browser at the address the app
+    is serving. That is a second client on the same supervisor and the same
+    worker, which is exactly what this needs. Only **one** model is required,
+    so a single GPU is no obstacle.
+    Launch from a terminal rather than the icon while doing any of these:
+    `.venv/bin/python desktop.py` prints the port it chose, and it does not
+    always choose 8760. Anything else holding that port sends it to a
+    fallback (item 154), and a browser tab on 8760 then reaches the wrong
+    thing, or nothing. Check with
+    `python3 -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8760/api/app').read().decode())"`,
+    which answers with a pid when it is ours.
+    **The scenario.** Generate in window one and leave its output on screen.
+    Generate in window two. Back in window one, Edit Frames and resume: it
+    should refuse with a message about the run having been replaced, and roll
+    back to the output it had rather than stranding a half-truncated run.
+    Worth doing a second time with the *same prompt in both windows*, because
+    equal shapes are what used to let the request through and produce a
+    plausible wrong answer instead of an error.
     Then confirm window two still works: its own Edit Frames and resume
     should succeed. Refusing both windows would look like a fix and is not.
-160. **A refused probe no longer closes What If.** SmolLM3 only, and this is
-    the one that needs a little staging. In one window, open What If on a
-    finished run and type a token so the measurement row is showing. In a
-    second window, start a long generation. Back in the first window, type
-    another token to trigger a fresh measurement while that generation is
-    running.
-    What should happen: an error message about a generation already running,
-    and What If stays open with your edit intact. What used to happen, and
-    what to report if you see it: the What If panel closes and the edit is
-    discarded, because a refused measurement was treated as though the run
-    itself had died.
+160. **A refused probe no longer closes What If.** SmolLM3 only, two windows
+    as set up in 159.
+    **Type a token that is not one of the five candidates on screen.** This
+    is the whole trick, and the first two attempts at this item failed on it.
+    A typed token that matches a captured candidate is answered from the
+    run's own record without any probe being sent, deliberately, because the
+    recorded figure is the run's real arithmetic. So nothing reaches the
+    worker, nothing is refused, and the item looks broken when it has simply
+    not run. Gibberish, backspaced until the row says it resolves to one
+    token, is the quickest way there.
+    **Do not race the generation.** Let window two's run finish completely.
+    Window one's probe then names a run the worker no longer holds and is
+    refused as stale, which needs no timing at all. Racing it works too and
+    gives a busy refusal instead, but SmolLM3 finishes faster than you can
+    type.
+    **The scenario.** Generate in window one with Alternatives on. Generate
+    in window two and let it finish. Back in window one, open What If, pick a
+    position, type a token from outside the five, and confirm.
+    What should happen: no measurement appears, an error says the run has
+    been replaced, and What If stays open with your edit intact. The error
+    goes to the resting status line on the right of the status bar, in red,
+    not into the popover you are working in. What used to happen, and what to
+    report if you see it: the panel closes and the edit is discarded, because
+    a refused measurement was treated as though the run itself had died.
 161. **Collections survive a fast navigation.** In Analytics, file a run into
     a collection and immediately click through to another page, faster than
     a quarter second if you can. Come back. The run should still be in the
