@@ -590,9 +590,7 @@ function stopLoadProgressPoll() {
 }
 
 function fetchModels() {
-  return fetch("/api/models").then(function (r) {
-    return r.json();
-  });
+  return modelClientLoad();
 }
 
 function modelIsAR(model) {
@@ -7863,23 +7861,23 @@ function boot() {
   refreshAnalyticsCue();
   fetchModels()
     .then(function (info) {
-      var list = info.models || [];
+      var list = modelClientList(info);
       for (var i = 0; i < list.length; i++) {
         models[list[i].id] = list[i];
       }
       activeModelId =
-        info.active
+        modelClientActiveId(info)
         || info.default
         || (list[0] && list[0].id);
       activeModel =
         models[activeModelId] || list[0] || null;
-      activeDevice = info.active_device || null;
+      activeDevice = modelClientActiveDevice(info);
       activeTokenizer = info.active_tokenizer || {};
       activeContextLength =
         typeof info.active_context_length === "number"
           ? info.active_context_length
           : null;
-      gpuPresent = !!info.gpu_name;
+      gpuPresent = modelClientGpuPresent(info);
       renderModelSelector(list, activeModelId);
       if (activeModel) {
         buildParamPanel(activeModel);

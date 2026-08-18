@@ -588,26 +588,20 @@ function buildGlowClassSelect() {
 // Best-effort: the picker defaults to diffusion and stays there if
 // the fetch fails or nothing is loaded.
 function selectGlowClassForActiveModel(info) {
-  if (!info || !info.active) {
+  var active = modelClientActiveModel(info);
+  if (active === null) {
     return;
   }
-  var list = info.models || [];
-  for (var i = 0; i < list.length; i++) {
-    if (list[i].id !== info.active) {
-      continue;
-    }
-    var caps = list[i].capabilities;
-    var type = caps ? caps.model_type : null;
-    // Only when it actually differs: this lands a moment after boot
-    // already played the default class, so re-running it for the same
-    // class would restart the sequence for no reason.
-    if (type && GLOW_KEYS[type] && type !== glowClass) {
-      glowClass = type;
-      buildGlowPreviewCopy();
-      syncGlowControls();
-      playGlowPreview();
-    }
-    return;
+  var caps = active.capabilities;
+  var type = caps ? caps.model_type : null;
+  // Only when it actually differs: this lands a moment after boot
+  // already played the default class, so re-running it for the same
+  // class would restart the sequence for no reason.
+  if (type && GLOW_KEYS[type] && type !== glowClass) {
+    glowClass = type;
+    buildGlowPreviewCopy();
+    syncGlowControls();
+    playGlowPreview();
   }
 }
 
@@ -657,10 +651,7 @@ function wireTabs() {
 // depend on which model is resident. Shared rather than fetched
 // twice, since neither consumer needs it before the other.
 function hydrateFromActiveModel() {
-  fetch("/api/models")
-    .then(function (response) {
-      return response.json();
-    })
+  modelClientLoad()
     .then(function (info) {
       revealGenerationLink(info);
       selectGlowClassForActiveModel(info);
@@ -679,7 +670,7 @@ function revealGenerationLink(info) {
   if (!link) {
     return;
   }
-  if (info && info.active) {
+  if (modelClientHasActive(info)) {
     link.hidden = false;
   }
 }

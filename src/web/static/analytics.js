@@ -5769,12 +5769,9 @@ if (runBlendInput) {
   if (!link) {
     return;
   }
-  fetch("/api/models")
-    .then(function (response) {
-      return response.json();
-    })
+  modelClientLoad()
     .then(function (info) {
-      if (info && info.active) {
+      if (modelClientHasActive(info)) {
         link.hidden = false;
       }
     })

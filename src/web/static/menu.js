@@ -1444,14 +1444,13 @@
   // ---- Boot ----
 
   function loadModels() {
-    fetch("/api/models")
-      .then(function (response) {
-        return response.json();
-      })
+    modelClientLoad()
       .then(function (info) {
-        activeDevice = info.active_device || null;
+        activeDevice = modelClientActiveDevice(info);
         renderSystem(info);
-        renderModels(info.models || [], !!info.gpu_name);
+        renderModels(
+          modelClientList(info), modelClientGpuPresent(info)
+        );
         reattachDownload();
       })
       .catch(function (err) {

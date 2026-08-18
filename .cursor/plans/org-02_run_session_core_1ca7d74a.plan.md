@@ -13,10 +13,10 @@ todos:
     status: completed
   - id: run-phases
     content: Extract run_phases.js owning legal phase transitions and what each clears, leaving rendering in app.js
-    status: in_progress
+    status: completed
   - id: model-client
     content: Replace the four independent /api/models fetches with one client plus page adapters
-    status: pending
+    status: in_progress
   - id: records
     content: Record the deviations, add the two manual items, and verify
     status: pending

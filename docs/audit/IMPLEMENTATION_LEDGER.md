@@ -937,6 +937,31 @@ of them: a diffusion edit to review, an edit-another loop, What If,
 and Retry. Six mutants on the table, all caught, including making
 Confirm reachable from a locked edit that was never generated.
 
+**The model client turned out to be about agreement, not transport.**
+Four pages fetched `/api/models` and each then decided for itself
+what the answer meant: whether a model counts as resident, what an
+absent device defaults to, whether a missing `gpu_name` is false or
+undefined. Analytics and Settings implement the same rule for the
+same link, and the second said so in a comment rather than in code. A
+reading that drifts is worse than a fetch written twice, because the
+pages disagree about one response while both look right.
+
+**No request epoch, against the Direction's wording.** It asks to
+"extract the remaining API clients with request epochs", but every
+page calls this once at boot, so nothing can be in flight twice and a
+fence would be machinery with no caller, which is what
+`QUALITY-01`'s brief warns against. The pattern already exists in
+`detail_requests.js` for the page that genuinely needs it, and the
+comment in `model_client.js` says where to add it if a page ever
+reloads its model list.
+
+**Two of the accessors are load-bearing rather than tidy.** An absent
+device reads as null instead of defaulting to `cuda`, because a guess
+there labels a run with hardware it never touched, which is the
+failure `DATA-04` exists to prevent. And an `active` id naming a
+model the list does not carry reads as none rather than falling back
+to the first entry, for the same reason.
+
 ### PROTOCOL-01
 
 **Landed in two commits with `LIFE-01` between them**, which is not
