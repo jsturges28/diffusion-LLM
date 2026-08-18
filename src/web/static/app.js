@@ -6235,6 +6235,11 @@ function resetRunState() {
   lastFinalText = null;
   lastRunPromptLen = null;
   lastRunProvenance = null;
+  // Retired with the rest of what the last run left behind. The
+  // worker has already discarded its side by the time a new run is
+  // under way, so a token surviving here names a run neither end
+  // holds.
+  activeRunToken = "";
   originalTotalFrames = 0;
   originalFrameHistory = [];
   originalFrameTokens = [];
