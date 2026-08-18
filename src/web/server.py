@@ -54,13 +54,19 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.analytics.metrics import (
+    CONVERGENCE_BASIS_CHARACTERS,
+    CONVERGENCE_BASIS_TOKENS,
     UnsupportedRunVersionError,
     canvas_boundaries,
     compute_convergence,
+    convergence_from_records,
     list_runs,
     load_run_frames,
     load_run_metadata,
     read_frame_texts,
+    records_match_frames,
+    run_schema_version,
+    tokens_produced_series,
     total_elapsed_seconds,
 )
 from src.backends.protocol import (
@@ -2123,6 +2129,46 @@ async def analytics_list_runs() -> JSONResponse:
     return JSONResponse(content=runs)
 
 
+# How many runs one comparison may carry. The chart is a legend and
+# a handful of lines; past this it is unreadable before it is slow,
+# and the list used to be unbounded, so a crafted request could ask
+# the server to read the whole archive in one breath.
+COMPARE_RUNS_MAX = 12
+
+# Parameters a legend label may name before it stops being a label.
+COMPARE_LABEL_PARAMS_MAX = 3
+
+# What became of one selection. Every id gets exactly one of these,
+# which is the difference from silently returning fewer lines than
+# the user asked for.
+COMPARE_STATUS_DATA = "data"
+COMPARE_STATUS_UNAVAILABLE = "unavailable"
+COMPARE_STATUS_ERROR = "error"
+
+# Why a selection carries no data. Separate from the message so the
+# browser can group or style them without matching on prose.
+COMPARE_NOT_FOUND = "not_found"
+COMPARE_INVALID_ID = "invalid_id"
+COMPARE_UNSUPPORTED = "unsupported_version"
+COMPARE_UNREADABLE = "unreadable"
+COMPARE_NO_CURVE = "no_curve"
+
+COMPARE_REASONS = (
+    COMPARE_NOT_FOUND,
+    COMPARE_INVALID_ID,
+    COMPARE_UNSUPPORTED,
+    COMPARE_UNREADABLE,
+    COMPARE_NO_CURVE,
+)
+
+assert COMPARE_RUNS_MAX > 1, "a comparison needs two runs"
+assert len(set(COMPARE_REASONS)) == len(COMPARE_REASONS)
+
+# The capability value marking a left-to-right model, which has no
+# masked canvas and therefore no convergence curve.
+MODEL_TYPE_AUTOREGRESSIVE = "autoregressive"
+
+
 def _compute_run_metrics(run_id: str) -> Dict[str, Any]:
     # Through the store's resolver like every other run-id endpoint.
     # This one used to join the path unguarded, so a crafted id could
@@ -2132,12 +2178,22 @@ def _compute_run_metrics(run_id: str) -> Dict[str, Any]:
     # Which file holds the frames is the schema version's business,
     # so the check for its absence belongs to the reader too.
     frames = read_frame_texts(run_dir, meta)
-    convergence = compute_convergence(frames)
+    convergence, basis = _run_convergence(run_dir, frames)
 
     result: Dict[str, Any] = {
         "run_id": run_id,
         "convergence": convergence,
+        # Named so the chart can caption a weaker measure rather than
+        # present it as the stronger one.
+        "convergence_basis": basis,
         "total_frames": len(frames),
+        # Carried so compare can decide what a run can contribute
+        # without consulting the catalog. The browser used to look
+        # this up in its in-memory run list, which coupled the two
+        # endpoints for one string.
+        "model_type": str(
+            meta.get("model_type", "diffusion")
+        ),
     }
     for key in (
         "per_frame_elapsed",
@@ -2162,7 +2218,51 @@ def _compute_run_metrics(run_id: str) -> Dict[str, Any]:
         result["canvas_boundaries"] = canvas_boundaries(
             canvas_index
         )
+    # Computed here rather than in the browser because it needs the
+    # canvas each frame belongs to, and getting it wrong is invisible:
+    # the old client-side version read plausibly and undercounted a
+    # whole committed canvas.
+    result["tokens_produced"] = tokens_produced_series(
+        convergence, canvas_index
+    )
     return result
+
+
+def _run_convergence(
+    run_dir: Path, frames: List[str]
+) -> Tuple[List[Dict[str, Any]], str]:
+    """A run's convergence series and how it was measured.
+
+    Prefers the per-token records, which count positions and are what
+    the chart claims to show. Falls back to counting mask glyphs
+    against characters for a run that saved no usable records, which
+    is roughly a tenth of the archive here: the older runs, and the
+    few that stored token ids without the mask flag.
+
+    A malformed token stream falls back rather than raising. The
+    weaker curve is worth more than no page, and the basis says which
+    one the reader is looking at.
+    """
+    try:
+        loaded = load_run_frames(run_dir)
+    except (ValueError, OSError):
+        logger.warning(
+            "token records unreadable for %s; counting characters",
+            run_dir.name,
+        )
+        loaded = None
+
+    if loaded is not None and loaded.get("records_available"):
+        token_frames = loaded.get("frames")
+        if records_match_frames(token_frames, len(frames)):
+            return (
+                convergence_from_records(token_frames),
+                CONVERGENCE_BASIS_TOKENS,
+            )
+    return (
+        compute_convergence(frames),
+        CONVERGENCE_BASIS_CHARACTERS,
+    )
 
 
 def _unsupported_version_response(
@@ -2204,6 +2304,52 @@ async def analytics_run_metrics(run_id: str) -> JSONResponse:
             status_code=400, content={"error": str(exc)}
         )
     return JSONResponse(content=result)
+
+
+@app.get("/api/analytics/runs/{run_id}/metadata")
+async def analytics_run_metadata(run_id: str) -> JSONResponse:
+    """Everything about one run that the catalog no longer carries.
+
+    The list used to hand back whole metadata files, so the detail
+    panel could build its rows from a row it already had. It cannot
+    any more, and that is the point: the list pays for every run and
+    this pays for the one the user opened.
+    """
+    try:
+        meta = await asyncio.to_thread(_run_metadata, run_id)
+    except FileNotFoundError as exc:
+        return JSONResponse(
+            status_code=404, content={"error": str(exc)}
+        )
+    except UnsupportedRunVersionError as exc:
+        return _unsupported_version_response(exc)
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=400, content={"error": str(exc)}
+        )
+    return JSONResponse(content=meta)
+
+
+def _run_metadata(run_id: str) -> Dict[str, Any]:
+    """One run's full metadata, guarded like every other read."""
+    run_dir = run_store.resolve_run_dir(RESULTS_DIR, run_id)
+    meta = load_run_metadata(run_dir)
+    # The version is checked here rather than trusted, so a run this
+    # build cannot read is refused instead of rendered from fields it
+    # does not understand.
+    run_schema_version(meta)
+    # Both are computed rather than stored, and the detail panel
+    # shows them, so they travel with the metadata rather than
+    # leaving the panel to work out which run list to consult.
+    meta["has_diff"] = (
+        run_dir / "original_tokens.json"
+    ).is_file()
+    repaired = total_elapsed_seconds(
+        meta.get("per_frame_elapsed")
+    )
+    if repaired is not None:
+        meta["elapsed_seconds"] = repaired
+    return meta
 
 
 def _compute_run_frames(run_id: str) -> Dict[str, Any]:
@@ -2254,32 +2400,151 @@ async def analytics_run_frames(run_id: str) -> JSONResponse:
 
 @app.get("/api/analytics/compare")
 async def analytics_compare(ids: str = "") -> JSONResponse:
-    run_ids = [
-        rid.strip() for rid in ids.split(",") if rid.strip()
-    ]
+    """Compare a bounded set of runs, accounting for every one.
+
+    The contract is that a selection is never silently dropped. Each
+    id comes back as exactly one record saying what happened to it,
+    because a chart with fewer lines than the user ticked, and
+    nothing explaining which are missing, is worse than an error.
+    """
+    run_ids = _compare_selection(ids)
     if len(run_ids) == 0:
         return JSONResponse(
             status_code=400,
             content={"error": "ids parameter is required"},
         )
-    results: List[Dict[str, Any]] = []
-    for run_id in run_ids:
-        try:
-            metrics = await asyncio.to_thread(
-                _compute_run_metrics, run_id
-            )
-            results.append(metrics)
-        except (FileNotFoundError, ValueError):
-            # ValueError joined this once the metrics path gained the
-            # traversal guard: a malformed id in a comparison is one
-            # bad row, not a reason to fail the whole request.
-            results.append(
-                {
-                    "run_id": run_id,
-                    "error": f"Run not found: {run_id}",
-                }
-            )
+    if len(run_ids) > COMPARE_RUNS_MAX:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": (
+                    f"Compare accepts up to {COMPARE_RUNS_MAX}"
+                    f" runs; {len(run_ids)} were selected."
+                )
+            },
+        )
+    results = [
+        await _compare_one(run_id) for run_id in run_ids
+    ]
+    assert len(results) == len(run_ids), "one record per id"
     return JSONResponse(content=results)
+
+
+def _compare_selection(ids: str) -> List[str]:
+    """The ids to compare: trimmed, non-empty, first occurrence.
+
+    Deduplicated because the same run twice is one line drawn twice,
+    and it would otherwise count against the cap below while adding
+    nothing.
+    """
+    seen: Set[str] = set()
+    ordered: List[str] = []
+    for raw in ids.split(","):
+        run_id = raw.strip()
+        if not run_id:
+            continue
+        if run_id in seen:
+            continue
+        seen.add(run_id)
+        ordered.append(run_id)
+    return ordered
+
+
+async def _compare_one(run_id: str) -> Dict[str, Any]:
+    """One selection's outcome: data, unavailable, or an error.
+
+    Every failure is caught here rather than escaping. The batch used
+    to survive only the two exception types it named, so a run whose
+    frames were corrupt in an unanticipated way took down the whole
+    comparison, including the runs that were fine.
+    """
+    try:
+        record = await asyncio.to_thread(
+            _compute_run_metrics, run_id
+        )
+    except run_store.RunNotFoundError:
+        return _compare_error(
+            run_id, COMPARE_NOT_FOUND, "This run no longer exists."
+        )
+    except run_store.InvalidRunIdError:
+        return _compare_error(
+            run_id, COMPARE_INVALID_ID, "Not a valid run id."
+        )
+    except UnsupportedRunVersionError:
+        return _compare_error(
+            run_id,
+            COMPARE_UNSUPPORTED,
+            "Saved by a newer version of this app.",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("compare failed for %s", run_id)
+        return _compare_error(
+            run_id, COMPARE_UNREADABLE, f"Could not be read: {exc}"
+        )
+
+    record["status"] = COMPARE_STATUS_DATA
+    record["label"] = _compare_label(run_id)
+    if record.get("model_type") == MODEL_TYPE_AUTOREGRESSIVE:
+        # Real run, no comparable curve: an autoregressive run has no
+        # masked canvas to converge. Said out loud rather than
+        # dropped, which is what the chart used to do.
+        record["status"] = COMPARE_STATUS_UNAVAILABLE
+        record["reason"] = COMPARE_NO_CURVE
+        record["message"] = (
+            "Autoregressive runs have no convergence curve."
+        )
+    return record
+
+
+def _compare_error(
+    run_id: str, reason: str, message: str
+) -> Dict[str, Any]:
+    """One refused selection, in the shape the chart legend reads."""
+    assert reason in COMPARE_REASONS, reason
+    return {
+        "run_id": run_id,
+        "status": COMPARE_STATUS_ERROR,
+        "reason": reason,
+        "message": message,
+        # Kept so the legend can name the run it could not draw.
+        "label": run_id,
+    }
+
+
+def _compare_label(run_id: str) -> str:
+    """A legend label built from the model's own parameters.
+
+    The browser used to assemble this from ``steps``, ``gen_length``
+    and ``block_length``, which only LLaDA has, so a DiffusionGemma
+    or SmolLM3 run was labelled with the word ``undefined`` three
+    times. The registry knows each model's parameters and what to
+    call them, and only the server can read the registry, so the
+    label is built here.
+    """
+    try:
+        run_dir = run_store.resolve_run_dir(RESULTS_DIR, run_id)
+        meta = load_run_metadata(run_dir)
+    except (ValueError, OSError):
+        return run_id
+
+    entry = REGISTRY.get(str(meta.get("backend", "")))
+    if entry is None:
+        return run_id
+
+    params = meta.get("params")
+    if not isinstance(params, dict):
+        return entry.display_name
+
+    parts: List[str] = []
+    for spec in entry.param_specs:
+        if len(parts) >= COMPARE_LABEL_PARAMS_MAX:
+            break
+        if spec.name not in params:
+            continue
+        parts.append(f"{spec.label}={params[spec.name]}")
+    if not parts:
+        return entry.display_name
+    return entry.display_name + " " + " ".join(parts)
 
 
 @app.get("/api/analytics/system")

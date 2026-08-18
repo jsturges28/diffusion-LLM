@@ -1142,6 +1142,42 @@ html, body {
   display: none;
 }
 
+/* Caption for a chart drawn from a weaker measure than the one it is
+   labelled with. Same dim italic as the overlay note above, because
+   it says the same kind of thing: what this run could not give us. */
+.chart-basis-note {
+  padding: 0 2px 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.chart-basis-note[hidden] {
+  display: none;
+}
+
+/* Selections that produced no line, listed above the chart they are
+   missing from. Warm rather than red: an autoregressive run has no
+   convergence curve by construction, which is an explanation and not
+   a fault. */
+.compare-omitted {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 159, 28, 0.35);
+  border-radius: var(--radius);
+  background: rgba(255, 159, 28, 0.08);
+}
+
+.compare-omitted[hidden] {
+  display: none;
+}
+
+.compare-omitted-row {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
 /* Shown in place of the charts when their request fails, so the
    slots do not just sit empty and read as "this run has no data". */
 .charts-error {

@@ -235,6 +235,13 @@
               <p id="charts-error" class="charts-error" hidden></p>
 
               <div class="chart-section" id="convergence-section">
+                <!-- Shown only for a run with no usable per-token
+                     records, where the curve counts mask glyphs
+                     against characters instead of positions. The
+                     shape is close but not the same, and a reader
+                     comparing two runs deserves to know which one
+                     they are looking at. -->
+                <div id="convergence-basis-note" class="chart-basis-note" hidden></div>
                 <div class="chart-header-row">
                   <h3>Convergence</h3>
                   <div class="zoom-controls">
@@ -449,6 +456,12 @@
             class="btn-icon" title="Close">&times;
           </button>
         </div>
+
+        <!-- Every selection that produced no line, named. Picking
+             three runs and seeing one used to say nothing about
+             whether the others were autoregressive, deleted or
+             unreadable. -->
+        <div id="compare-omitted" class="compare-omitted" hidden></div>
 
         <div class="chart-section">
           <h3>Convergence Overlay</h3>

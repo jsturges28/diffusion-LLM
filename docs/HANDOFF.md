@@ -71,8 +71,15 @@ in an analytics suite.
   `src/web/static/` holds `menu`, `index`/`app`, `analytics`, `settings`, plus
   `overlays.js` for the shared color ramps, the layered-diff builder, the "new
   run" registry, and the durable-UI-state layer. `detail_requests.js` fences
-  the Analytics detail panel's fetches. Third-party chart libraries and the
-  webfont are vendored under `static/vendor/`, so every page works offline.
+  the Analytics detail panel's fetches and, through a second instance, the
+  compare panel's. Third-party chart libraries and the webfont are vendored
+  under `static/vendor/`, so every page works offline.
+- **Analytics reads** are split by cost: `/api/analytics/runs` carries only
+  what the table draws (about 326 bytes a run), and the prompt, parameters
+  and per-frame arrays are fetched per run from `/runs/{id}/metadata` when
+  one is opened. Convergence counts token positions from `tokens.json` and
+  reports the basis it used, since older runs without those records fall
+  back to counting characters.
 - **Desktop**: `desktop.py` (pywebview; owns the server lifecycle: uvicorn on
   a stable localhost port `DESKTOP_PORT=8760`, on a daemon thread, graceful
   shutdown frees worker VRAM on close; persistent web-storage profile; prefers
@@ -113,8 +120,14 @@ socket loop keeps reading while a generation runs as a task, so Cancel and
 disconnect land while there is still something to stop, producer queues are
 bounded (`RUNTIME-01`'s first step), and every model ends a stopped run with
 one `done` carrying `cancelled`. Generate becomes Stop in the browser. What
-remains of the stage is `XAI-01` and `TRUST-04`. The ledger is the authority
-and is updated in the same commit as each change.
+remains of the stage is `XAI-01` and `TRUST-04`.
+
+**The analytics read path is done** (`ANALYTICS-03`, `ANALYTICS-04`, and
+`ANALYTICS-02`'s repair half, one plan because they shared one seam).
+Convergence measures positions rather than characters, throughput carries
+committed canvases forward, compare accounts for every selection it was
+given, and the catalog stopped shipping whole metadata files. The ledger is
+the authority and is updated in the same commit as each change.
 
 **Stage 5, frontend state, has started.** The generator's run state used to
 be loose variables in a 7,900-line script: six arrays indexed by frame that

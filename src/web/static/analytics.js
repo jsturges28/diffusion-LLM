@@ -536,6 +536,16 @@ var gpuName = null;
 // above says what is on screen; this says which attempt is allowed
 // to paint it, which is the part run id alone cannot answer.
 var detailRequests = detailRequestsCreate();
+// Compare gets its own counter rather than sharing the detail
+// panel's, which is why detailRequestsCreate is a factory. The two
+// surfaces open and close independently, and one epoch between them
+// would have each cancelling the other's work.
+var compareRequests = detailRequestsCreate();
+// The fence keys its token by run id, and a comparison is not one
+// run. A fixed key gives every comparison the same identity, so only
+// the epoch distinguishes them, which is exactly what is wanted:
+// each new comparison supersedes the last.
+var COMPARE_REQUEST_KEY = "compare";
 
 var chartConvergence = null;
 var chartTiming = null;
@@ -639,11 +649,35 @@ function fetchMetrics(runId, signal) {
   return fetchDetailJson(url, signal);
 }
 
-function fetchCompare(ids) {
+function fetchCompare(ids, signal) {
   var url = "/api/analytics/compare?ids="
     + ids.map(encodeURIComponent).join(",");
-  return fetch(url)
-    .then(function (r) { return r.json(); });
+  return fetch(url, { signal: signal })
+    .then(function (r) {
+      // A refused selection set (too many, or none) answers with a
+      // status rather than an array, and reading it as one would
+      // draw an empty chart instead of saying what was wrong.
+      if (!r.ok) {
+        return r.json().then(function (body) {
+          throw new Error(
+            (body && body.error) || "Comparison failed."
+          );
+        });
+      }
+      return r.json();
+    });
+}
+
+function fetchRunMeta(runId, signal) {
+  var url = "/api/analytics/runs/"
+    + encodeURIComponent(runId) + "/metadata";
+  return fetch(url, { signal: signal })
+    .then(function (r) {
+      if (!r.ok) {
+        throw new Error("metadata " + r.status);
+      }
+      return r.json();
+    });
 }
 
 function fetchFrames(runId, signal) {
@@ -1010,6 +1044,7 @@ function loadCollections() {
       collections.push(entry);
     }
   }
+  rebuildMembershipIndex();
 }
 
 // One stored entry, or null when it is not one. Validated on read
@@ -1090,12 +1125,43 @@ function ensureFavorites() {
   return favorites;
 }
 
+// Membership, indexed by run rather than scanned per collection.
+//
+// The stored shape is a list of runs per collection, which is the
+// wrong way round for every question this page asks: a table render
+// asks "which collections is this run in" once per row, and did it
+// by scanning up to 24 arrays each time. This is the same data keyed
+// the way it is read.
+//
+// It is also the shape the server-authoritative collections decided
+// under DATA-02 will want. Once add and remove are operations rather
+// than a whole-array write, the client stops owning that array, and
+// an index keyed by run survives that change where a local copy of
+// the list does not.
+var membershipIndex = Object.create(null);
+
+function rebuildMembershipIndex() {
+  membershipIndex = Object.create(null);
+  for (var i = 0; i < collections.length; i++) {
+    var collection = collections[i];
+    for (var j = 0; j < collection.runs.length; j++) {
+      var runId = collection.runs[j];
+      if (!membershipIndex[runId]) {
+        membershipIndex[runId] = Object.create(null);
+      }
+      membershipIndex[runId][collection.id] = true;
+    }
+  }
+}
+
 // Whether a run is filed anywhere. What the filled star reports, so
 // it answers "did I save this" rather than "is this a favorite": a
 // run filed only under Papers is still saved.
 function runIsCollected(runId) {
-  for (var i = 0; i < collections.length; i++) {
-    if (collections[i].runs.indexOf(runId) !== -1) {
+  var entry = membershipIndex[runId];
+  if (!entry) { return false; }
+  for (var id in entry) {
+    if (Object.prototype.hasOwnProperty.call(entry, id)) {
       return true;
     }
   }
@@ -1103,7 +1169,8 @@ function runIsCollected(runId) {
 }
 
 function collectionHasRun(collection, runId) {
-  return collection.runs.indexOf(runId) !== -1;
+  var entry = membershipIndex[runId];
+  return !!(entry && entry[collection.id]);
 }
 
 // Add or remove one run from one collection. Returns whether anything
@@ -1151,10 +1218,12 @@ function toggleFavorite(runId) {
   afterCollectionsChanged();
 }
 
-// Persist, then repaint everything that reads membership: the tabs
-// (their counts changed), and the table (its stars, and its rows if a
-// collection is the active view).
+// Reindex, persist, then repaint everything that reads membership:
+// the tabs (their counts changed), and the table (its stars, and its
+// rows if a collection is the active view). The reindex comes first
+// because both of those repaints read through the index.
 function afterCollectionsChanged() {
+  rebuildMembershipIndex();
   saveCollections();
   renderCollectionTabs();
   renderTable();
@@ -1885,13 +1954,44 @@ function showDetail(runId) {
 
   detailTitle.textContent =
     "Run: " + run.run_id;
+  // The catalog row is a summary now, so the panel's rows arrive
+  // separately. Shown from the summary first so the panel is never
+  // blank, then replaced when the full record lands.
+  detailMeta.innerHTML = renderRunMeta(run);
 
+  renderTable();
+  loadRunMeta(runId, run, token);
+  loadRunCharts(runId, run, token);
+  loadRunOverlays(runId, run, token);
+}
+
+// The catalog carries only what the table draws, so everything else
+// the panel shows (the whole prompt, the hyperparameters, the
+// tokenizer and context blocks) is fetched for the one run opened.
+// Behind the same epoch as the charts and overlays, so a slow answer
+// cannot land on a run the user has already moved on from.
+function loadRunMeta(runId, summary, token) {
+  fetchRunMeta(runId, token && token.signal).then(
+    function (meta) {
+      if (!detailRequests.accepts(token)) { return; }
+      detailMeta.innerHTML = renderRunMeta(meta);
+    }
+  ).catch(function (error) {
+    if (error && error.name === "AbortError") { return; }
+    if (!detailRequests.accepts(token)) { return; }
+    // The summary is still on screen from above, so a failure here
+    // costs the extra rows rather than the panel.
+    detailMeta.innerHTML = renderRunMeta(summary);
+  });
+}
+
+function renderRunMeta(run) {
   var html = "";
   html += '<div class="meta-row">'
     + '<span class="meta-label">Prompt:</span>'
     + '</div>';
   html += '<div class="meta-prompt">'
-    + escHtml(run.prompt || "N/A") + '</div>';
+    + escHtml(promptWithEllipsis(run)) + '</div>';
 
   var modelName = run.backend || run.model;
   if (modelName) {
@@ -1939,11 +2039,19 @@ function showDetail(runId) {
 
   html += elapsedMetaRows(run);
 
-  detailMeta.innerHTML = html;
+  return html;
+}
 
-  renderTable();
-  loadRunCharts(runId, run, token);
-  loadRunOverlays(runId, run, token);
+// A summary's prompt is cut to a fixed length, and saying so beats
+// showing a sentence that stops mid-word as though the user typed it
+// that way. The full record that follows carries no such flag.
+function promptWithEllipsis(run) {
+  var prompt = run.prompt || "";
+  if (!prompt) { return "N/A"; }
+  if (run.prompt_truncated) {
+    return prompt + "...";
+  }
+  return prompt;
 }
 
 // An edited run has two totals worth reading: how long the run it
@@ -2701,17 +2809,6 @@ function wireTimingPager() {
 // takes its slot.
 function runIsAutoregressive(run) {
   return !!(run && run.model_type === "autoregressive");
-}
-
-// The compare metrics payload carries no model fields, so resolve a
-// run's type from the already-loaded run list by id.
-function runIdIsAutoregressive(runId) {
-  for (var i = 0; i < allRuns.length; i++) {
-    if (allRuns[i].run_id === runId) {
-      return runIsAutoregressive(allRuns[i]);
-    }
-  }
-  return false;
 }
 
 function loadRunCharts(runId, run, token) {
@@ -3915,10 +4012,35 @@ function wireOverlayScrubber() {
   );
 }
 
+// The curve counts resolved positions when the run saved per-token
+// records, and mask glyphs against characters when it did not. Both
+// are drawn, but only one is the thing the axis is labelled with, so
+// the weaker one says so instead of passing for the other.
+function renderConvergenceBasis(data) {
+  var note = document.getElementById(
+    "convergence-basis-note"
+  );
+  if (!note) { return; }
+  var isCharacters =
+    data.convergence_basis === "characters";
+  note.hidden = !isCharacters;
+  if (isCharacters) {
+    note.textContent =
+      "Approximate: this run saved no per-token records, so"
+      + " the curve counts mask characters rather than token"
+      + " positions. A position resolving into a long token"
+      + " moves it further than one resolving into a short"
+      + " token.";
+  } else {
+    note.textContent = "";
+  }
+}
+
 function renderConvergenceChart(data, remaskSet) {
   var canvas = document.getElementById(
     "chart-convergence"
   );
+  renderConvergenceBasis(data);
 
   var labels = [];
   var values = [];
@@ -4160,10 +4282,12 @@ function tpsElapsedValues(data, remaskSet) {
 // Tokens resolved by frame i, counted from the start of the run.
 //
 // Autoregressive runs emit exactly one token per frame, so the frame
-// index is the count. Diffusion runs get it from the convergence
-// series: a masked token renders as exactly one mask glyph, so
-// mask_count is a token count, and frame 0 (all masked) gives the
-// canvas length to subtract from.
+// index is the count and no data is needed. Diffusion runs read the
+// series the endpoint computes, because it needs the canvas each
+// frame belongs to: this used to subtract every frame's mask count
+// from the first frame's, which is right only while there is one
+// canvas, and undercounted a whole committed canvas on multi-canvas
+// DiffusionGemma runs.
 //
 // Returns null when the run carries nothing to count from, which
 // hides the chart rather than drawing a flat zero.
@@ -4179,17 +4303,19 @@ function tokensProducedSeries(data, frames, isAutoregressive) {
     }
     return produced;
   }
-  var convergence = data.convergence;
-  if (!convergence || convergence.length === 0) {
+  var series = data.tokens_produced;
+  if (!series || series.length === 0) {
     return null;
   }
-  var start = convergence[0].mask_count;
   for (i = 0; i < frames; i++) {
-    var point = convergence[i];
-    var masked = point ? point.mask_count : 0;
-    // Clamped because DiffusionGemma's mask count can rise between
-    // drafts, which would otherwise read as negative production.
-    produced.push(Math.max(0, start - masked));
+    // Frames beyond the served series hold their last value rather
+    // than dropping to zero, which the stitched elapsed axis can
+    // reach on an edited run.
+    produced.push(
+      i < series.length
+        ? series[i]
+        : series[series.length - 1]
+    );
   }
   return produced;
 }
@@ -5014,97 +5140,118 @@ function showComparison(ids) {
     return;
   }
 
-  fetchCompare(ids).then(function (results) {
-    chartCompareConv = destroyChart(
-      chartCompareConv
-    );
-
-    var convCanvas = document.getElementById(
-      "chart-compare-conv"
-    );
-
-    var convDatasets = [];
-    var maxConvLen = 0;
-
-    for (var i = 0; i < results.length; i++) {
-      if (results[i].error) { continue; }
-      // AR runs have no meaningful convergence curve; omit them.
-      if (runIdIsAutoregressive(results[i].run_id)) {
-        continue;
-      }
-      if (results[i].convergence.length
-        > maxConvLen) {
-        maxConvLen =
-          results[i].convergence.length;
-      }
-    }
-
-    var convLabels = [];
-    for (var cl = 0; cl < maxConvLen; cl++) {
-      convLabels.push(cl);
-    }
-
-    for (var j = 0; j < results.length; j++) {
-      var res = results[j];
-      if (res.error) { continue; }
-      if (runIdIsAutoregressive(res.run_id)) { continue; }
-      var color = COMPARE_COLORS[
-        j % COMPARE_COLORS.length
-      ];
-      var label = buildCompareLabel(res.run_id);
-
-      var cData = [];
-      for (
-        var ci = 0;
-        ci < res.convergence.length;
-        ci++
-      ) {
-        cData.push(
-          +(res.convergence[ci].resolved_ratio
-            * 100).toFixed(2)
-        );
-      }
-      convDatasets.push({
-        label: label,
-        data: cData,
-        borderColor: color,
-        backgroundColor: "transparent",
-        tension: 0.2,
-        pointRadius: 0,
-        borderWidth: 1.5,
-      });
-    }
-
-    chartCompareConv = new Chart(
-      convCanvas.getContext("2d"),
-      {
-        type: "line",
-        data: {
-          labels: convLabels,
-          datasets: convDatasets,
-        },
-        options: compareChartOptions(
-          "Frame", "% Resolved"
-        ),
-      }
-    );
+  // Compare gets its own fence rather than sharing the detail
+  // panel's. Two comparisons in flight used to race, and whichever
+  // answered last painted, so reopening with a different selection
+  // could leave the first one's lines on the chart. Closing
+  // cancelled nothing either, which let a dismissed panel repopulate
+  // itself.
+  var token = compareRequests.begin(COMPARE_REQUEST_KEY);
+  fetchCompare(ids, token.signal).then(function (results) {
+    if (!compareRequests.accepts(token)) { return; }
+    renderComparison(results);
+  }).catch(function (error) {
+    if (error && error.name === "AbortError") { return; }
+    if (!compareRequests.accepts(token)) { return; }
+    renderCompareOmissions([{
+      run_id: "",
+      status: "error",
+      label: "Comparison failed",
+      message: String(error && error.message ? error.message : error),
+    }]);
   });
 }
 
-function buildCompareLabel(runId) {
-  var run = null;
-  for (var i = 0; i < allRuns.length; i++) {
-    if (allRuns[i].run_id === runId) {
-      run = allRuns[i];
-      break;
+function renderComparison(results) {
+  chartCompareConv = destroyChart(chartCompareConv);
+
+  var convCanvas = document.getElementById(
+    "chart-compare-conv"
+  );
+
+  var drawable = [];
+  var omitted = [];
+  var maxConvLen = 0;
+  var i;
+  for (i = 0; i < results.length; i++) {
+    var entry = results[i];
+    // The server accounts for every selection now, so a run without
+    // data arrives saying why rather than simply not arriving.
+    if (entry.status === "data" && entry.convergence) {
+      drawable.push(entry);
+      if (entry.convergence.length > maxConvLen) {
+        maxConvLen = entry.convergence.length;
+      }
+    } else {
+      omitted.push(entry);
     }
   }
-  if (!run || !run.params) { return runId; }
+  renderCompareOmissions(omitted);
 
-  return "s=" + run.params.steps
-    + " g=" + run.params.gen_length
-    + " b=" + run.params.block_length
-    + " t=" + run.params.temperature;
+  var convLabels = [];
+  for (i = 0; i < maxConvLen; i++) {
+    convLabels.push(i);
+  }
+
+  var convDatasets = [];
+  for (i = 0; i < drawable.length; i++) {
+    var res = drawable[i];
+    var color = COMPARE_COLORS[i % COMPARE_COLORS.length];
+    var cData = [];
+    for (var ci = 0; ci < res.convergence.length; ci++) {
+      cData.push(
+        +(res.convergence[ci].resolved_ratio
+          * 100).toFixed(2)
+      );
+    }
+    convDatasets.push({
+      // Built by the server, which is the only side that can read
+      // the registry and so the only side that knows what a given
+      // model's parameters are called.
+      label: res.label || res.run_id,
+      data: cData,
+      borderColor: color,
+      backgroundColor: "transparent",
+      tension: 0.2,
+      pointRadius: 0,
+      borderWidth: 1.5,
+    });
+  }
+
+  chartCompareConv = new Chart(
+    convCanvas.getContext("2d"),
+    {
+      type: "line",
+      data: {
+        labels: convLabels,
+        datasets: convDatasets,
+      },
+      options: compareChartOptions(
+        "Frame", "% Resolved"
+      ),
+    }
+  );
+}
+
+// Name every selection that produced no line. Silence here was the
+// defect: pick three runs, see one line, and nothing on screen says
+// whether the other two were autoregressive, deleted, or unreadable.
+function renderCompareOmissions(omitted) {
+  var box = document.getElementById("compare-omitted");
+  if (!box) { return; }
+  box.innerHTML = "";
+  box.hidden = omitted.length === 0;
+  if (omitted.length === 0) { return; }
+
+  for (var i = 0; i < omitted.length; i++) {
+    var entry = omitted[i];
+    var row = document.createElement("div");
+    row.className = "compare-omitted-row";
+    var name = entry.label || entry.run_id || "A selected run";
+    row.textContent =
+      name + ": " + (entry.message || "No data.");
+    box.appendChild(row);
+  }
 }
 
 function compareChartOptions(xLabel, yLabel) {
@@ -5154,6 +5301,10 @@ function compareChartOptions(xLabel, yLabel) {
 
 function hideComparison() {
   comparePanel.hidden = true;
+  // Closing used to leave the fetch running, so a slow comparison
+  // could paint itself into a panel the user had already dismissed
+  // and then reappear on the next open.
+  compareRequests.cancel();
 }
 
 // ---- Zoom button handlers ----
@@ -5487,6 +5638,9 @@ function dropDeletedFromCollections(removed) {
     }
   }
   if (changed) {
+    // The one membership change that does not go through
+    // afterCollectionsChanged, because the caller repaints itself.
+    rebuildMembershipIndex();
     saveCollections();
   }
 }

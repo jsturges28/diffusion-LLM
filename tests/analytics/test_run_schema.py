@@ -32,6 +32,7 @@ from src.analytics.metrics import (
     SCHEMA_VERSION_LEGACY,
     UnsupportedRunVersionError,
     compute_convergence,
+    convergence_from_records,
     list_runs,
     load_run_frames,
     load_run_metadata,
@@ -211,9 +212,12 @@ def test_convergence_is_identical_across_eras(
     """Downstream analytics must not be able to tell the eras apart,
     which is what makes the version dispatch safe to add.
 
-    This is also what makes the transcript's trailing newline a
-    non-issue: convergence strips each frame before counting, so the
-    two eras produce identical numbers from slightly different text.
+    This is the character fallback, the measure a run gets when it
+    saved no usable token records. It is still era-parity that
+    matters here, not the measure itself: the transcript's trailing
+    newline is a non-issue because convergence strips each frame
+    before counting, so the two eras produce identical numbers from
+    slightly different text.
     """
     legacy = _write_v0_run(tmp_path, "20251102_143107_legacy")
     current = _write_v1_run(tmp_path)
@@ -221,6 +225,55 @@ def test_convergence_is_identical_across_eras(
     assert compute_convergence(
         read_frame_texts(legacy)
     ) == compute_convergence(read_frame_texts(current))
+
+
+def test_token_convergence_is_identical_across_eras(
+    tmp_path: Path,
+) -> None:
+    """The same parity for the measure runs actually get.
+
+    Both eras store per-token records, so both should be counted in
+    positions rather than characters. The eras declare that
+    differently, a v1 manifest against a v0 sniff of the first token,
+    which is exactly the sort of difference that could leak into the
+    numbers if the two paths ever diverged.
+    """
+    legacy = _write_v0_run(tmp_path, "20251102_143107_legacy")
+    current = _write_v1_run(tmp_path)
+
+    from_legacy = load_run_frames(legacy)
+    from_current = load_run_frames(current)
+    assert from_legacy["records_available"] is True
+    assert from_current["records_available"] is True
+
+    assert convergence_from_records(
+        from_legacy["frames"]
+    ) == convergence_from_records(from_current["frames"])
+
+
+def test_the_two_measures_disagree_on_this_fixture(
+    tmp_path: Path,
+) -> None:
+    """The reason the basis has to be reported at all.
+
+    The fixture's tokens are different lengths ("The" against
+    " cat"), which is the whole defect: counting characters makes a
+    long token look like more progress than a short one. If these
+    two ever agreed, the token path would not be doing anything and
+    the caption would be pointless.
+    """
+    current = _write_v1_run(tmp_path)
+
+    by_chars = compute_convergence(read_frame_texts(current))
+    by_tokens = convergence_from_records(
+        load_run_frames(current)["frames"]
+    )
+
+    chars_mid = by_chars[1]["resolved_ratio"]
+    tokens_mid = by_tokens[1]["resolved_ratio"]
+    assert chars_mid != tokens_mid
+    # One of two positions resolved, whatever the text says.
+    assert tokens_mid == 0.5
 
 
 def test_token_stream_keys_match_across_eras(

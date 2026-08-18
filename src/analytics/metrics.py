@@ -221,16 +221,99 @@ def parse_history(
     return frames
 
 
+# How a convergence series was arrived at. A run says which, because
+# the two are not equally trustworthy and the chart has to be able to
+# say so rather than let the reader assume the better one.
+#
+# ``tokens`` counts positions, from the per-token records the run
+# saved. It is what the chart has always claimed to show.
+#
+# ``characters`` counts mask glyphs against decoded characters, which
+# is all a run without token records can offer. It answers a slightly
+# different question, because resolving one position into a long token
+# moves it further than resolving one into a short token.
+CONVERGENCE_BASIS_TOKENS = "tokens"
+CONVERGENCE_BASIS_CHARACTERS = "characters"
+
+CONVERGENCE_BASES = (
+    CONVERGENCE_BASIS_TOKENS,
+    CONVERGENCE_BASIS_CHARACTERS,
+)
+
+assert len(set(CONVERGENCE_BASES)) == len(CONVERGENCE_BASES)
+
+
+def convergence_from_records(
+    token_frames: List[Any],
+) -> List[Dict[str, Any]]:
+    """Convergence counted in positions, not characters.
+
+    Each token record carries its own mask flag, so this counts the
+    thing the chart is labelled with. Returns one dict per frame with
+    ``frame``, ``mask_count``, ``total_tokens`` and
+    ``resolved_ratio``; the denominator is named for what it counts,
+    which is the difference from the character path below.
+
+    A frame with no positions reports fully resolved, matching the
+    character path, because a canvas with nothing in it has nothing
+    left to resolve.
+    """
+    assert len(token_frames) > 0, "a run has at least one frame"
+
+    results: List[Dict[str, Any]] = []
+    for i, frame in enumerate(token_frames):
+        records = frame if isinstance(frame, list) else []
+        total = len(records)
+        masked = 0
+        for record in records:
+            if isinstance(record, dict) and record.get("m"):
+                masked += 1
+        if total == 0:
+            ratio = 1.0
+        else:
+            ratio = round((total - masked) / total, 6)
+        results.append({
+            "frame": i,
+            "mask_count": masked,
+            "total_tokens": total,
+            "resolved_ratio": ratio,
+        })
+    return results
+
+
+def records_match_frames(
+    token_frames: Any, frame_count: int
+) -> bool:
+    """Can the token records stand in for the frame texts?
+
+    Only when there is one record list per frame. A stream of a
+    different length describes a different run, or a partly written
+    one, and silently pairing frame *i* of one with frame *i* of the
+    other would produce a curve that looks right and is not.
+    """
+    if not isinstance(token_frames, list):
+        return False
+    if len(token_frames) != frame_count:
+        return False
+    return frame_count > 0
+
+
 def compute_convergence(
     frames: List[str],
 ) -> List[Dict[str, Any]]:
     """Compute mask-count convergence across frames.
 
+    The character fallback, used only for runs that saved no usable
+    token records. Counts mask glyphs against decoded characters, so
+    a position resolving into a long token advances it further than
+    one resolving into a short token. ``convergence_from_records``
+    above is the honest measure where the records exist.
+
     Returns one dict per frame with keys:
       frame:          0-based frame index
       mask_count:     number of mask characters
       total_chars:    total non-whitespace characters
-      resolved_ratio: fraction of tokens resolved
+      resolved_ratio: fraction of characters resolved
     """
     assert len(frames) > 0
 
@@ -276,6 +359,64 @@ def canvas_boundaries(
         for i in range(1, len(canvas_index))
         if canvas_index[i] != canvas_index[i - 1]
     ]
+
+
+def tokens_produced_series(
+    convergence: List[Dict[str, Any]],
+    canvas_index: Any = None,
+) -> List[int]:
+    """Positions resolved by frame *i*, counted from the run's start.
+
+    The numerator of the Tokens/s chart, and the reason it moved off
+    the client. It used to be ``first_frame_mask_count - mask_count``,
+    one baseline for the whole run, which is right only while there is
+    one canvas. DiffusionGemma commits a canvas and starts the next
+    from fresh noise, so the mask count jumps back up while the
+    baseline stays behind, and the series fell instead of carrying the
+    committed canvas forward.
+
+    Each canvas is therefore counted against its own size and added to
+    what came before. ``canvas_index`` says which canvas a frame
+    belongs to; without it every frame is treated as one canvas, which
+    is correct for LLaDA and for autoregressive runs.
+
+    Monotone by construction. A draft can un-resolve a position, and
+    that is real, but it is churn rather than negative production;
+    the resolution trace is the convergence chart's job, and letting
+    it sawtooth here would say more about the sampler's schedule than
+    about throughput.
+    """
+    assert len(convergence) > 0, "a run has at least one frame"
+
+    indices: List[int] = []
+    if isinstance(canvas_index, list):
+        indices = [
+            value if isinstance(value, int) else 0
+            for value in canvas_index
+        ]
+
+    produced: List[int] = []
+    carried = 0
+    peak = 0
+    current_canvas = 0 if not indices else indices[0]
+    for i, point in enumerate(convergence):
+        canvas = indices[i] if i < len(indices) else current_canvas
+        if canvas != current_canvas:
+            # The canvas just committed. Everything it resolved is
+            # banked before the next one starts counting from zero.
+            carried += peak
+            peak = 0
+            current_canvas = canvas
+        total = point.get("total_tokens")
+        if total is None:
+            total = point.get("total_chars", 0)
+        resolved = int(total) - int(point.get("mask_count", 0))
+        if resolved > peak:
+            peak = resolved
+        produced.append(carried + peak)
+
+    assert len(produced) == len(convergence), "one count per frame"
+    return produced
 
 
 def total_elapsed_seconds(
@@ -604,11 +745,80 @@ def _read_catalog_entry(
 
     # A durable counterfactual diff is available only when the
     # pre-edit snapshot was saved alongside the run.
-    meta["has_diff"] = (run_dir / "original_tokens.json").is_file()
+    meta["has_diff"] = (
+        run_dir / "original_tokens.json"
+    ).is_file()
     # Repairs edited runs saved before the elapsed series was made
     # cumulative, whose stored value covers only the final segment. A
     # no-op for every other run.
     repaired = total_elapsed_seconds(meta.get("per_frame_elapsed"))
     if repaired is not None:
         meta["elapsed_seconds"] = repaired
-    return meta
+    return run_summary(meta)
+
+
+# How much of a prompt the catalog carries. The table shows the first
+# 37 characters and the row's tooltip shows more, so this is sized for
+# the tooltip rather than the cell. The full text is a metadata fetch
+# away, and prompt import allows 200,000 characters, which is the
+# number this exists to keep out of a list of every run.
+SUMMARY_PROMPT_MAX_CHARS = 240
+
+# Everything the run table reads, and nothing else.
+#
+# Deliberately a list rather than a set of exclusions: a field added
+# to a saved run should not silently join the catalog, because the
+# whole defect being fixed here was the catalog returning whatever
+# happened to be on disk. That included the full output text, every
+# hyperparameter, the reproducibility block, and the per-frame arrays,
+# which for a two-thousand-token run means two-thousand-element lists
+# in a row the table renders as one line.
+#
+# Sort and group keys are all in here by construction: they are fixed
+# in the markup as created_at, model, processor, prompt,
+# elapsed_seconds and has_diff.
+SUMMARY_FIELDS = (
+    "run_id",
+    "created_at",
+    "backend",
+    "model",
+    "model_type",
+    "processor",
+    "elapsed_seconds",
+    "has_diff",
+    "partial",
+    # Present only on a run that could not be read, and carrying the
+    # reason. The table renders those rows differently and offers no
+    # checkbox, so both have to survive the projection.
+    "invalid",
+    "error",
+)
+
+assert "run_id" in SUMMARY_FIELDS, "a row needs its identity"
+assert len(set(SUMMARY_FIELDS)) == len(SUMMARY_FIELDS)
+
+
+def run_summary(meta: Dict[str, Any]) -> Dict[str, Any]:
+    """One catalog row: what the table needs, at bounded size.
+
+    Everything left out is still available, one metadata fetch away,
+    for the run the user actually opens. That is the trade: the list
+    pays for every run, the detail pays for one.
+
+    Absent fields stay absent rather than being filled with nulls, so
+    a reader still cannot tell "this run recorded nothing here" from
+    "this build did not ask", which is the distinction the rest of
+    this file works to preserve.
+    """
+    summary: Dict[str, Any] = {}
+    for field in SUMMARY_FIELDS:
+        if field in meta:
+            summary[field] = meta[field]
+
+    prompt = meta.get("prompt")
+    if isinstance(prompt, str):
+        summary["prompt"] = prompt[:SUMMARY_PROMPT_MAX_CHARS]
+        summary["prompt_truncated"] = (
+            len(prompt) > SUMMARY_PROMPT_MAX_CHARS
+        )
+    return summary
