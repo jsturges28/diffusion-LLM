@@ -944,9 +944,30 @@ var PERSIST_KEYS = [
 var PERSIST_PUT_DEBOUNCE_MS = 250;
 var persistPutTimers = {};
 
+// Written straight out, no debounce. The debounce exists to coalesce
+// streams of writes, and collections do not arrive in streams: they
+// change on discrete acts, a star click, a rename, a delete, a
+// checkbox. What they do have is no way back if one is lost, so the
+// 250 ms during which a change exists only in this tab is a window
+// worth not having. Navigating inside it used to drop the write
+// entirely, and the next page's hydrate then restored the older
+// server copy over it.
+var PERSIST_IMMEDIATE_KEYS = ["diffusion_collections"];
+
+// Values whose PUT is still waiting on a timer, so the flush below
+// can send them when the page is going away.
+var persistPending = {};
+
+// Keepalive requests share a small per-origin budget (64 KiB is the
+// usual figure) and are rejected wholesale above it. Two of these
+// keys are allowed to reach 262,144 characters, so the flag is only
+// set when the body comfortably fits; a larger body goes as an
+// ordinary request and takes its chances.
+var PERSIST_KEEPALIVE_MAX_CHARS = 50000;
+
 // Write `value` to localStorage immediately (so the many synchronous
-// reads see it at once) and debounce a write-through PUT to the server.
-// Unknown keys are stored locally only.
+// reads see it at once) and write through to the server, debounced
+// unless the key cannot afford to wait. Unknown keys stay local only.
 function persistSet(key, value) {
   try {
     localStorage.setItem(key, value);
@@ -956,27 +977,106 @@ function persistSet(key, value) {
   if (PERSIST_KEYS.indexOf(key) === -1) {
     return;
   }
+  if (PERSIST_IMMEDIATE_KEYS.indexOf(key) !== -1) {
+    persistPutKey(key, value, false);
+    return;
+  }
   if (persistPutTimers[key]) {
     clearTimeout(persistPutTimers[key]);
   }
+  persistPending[key] = value;
   persistPutTimers[key] = setTimeout(function () {
     persistPutTimers[key] = null;
-    persistPutKey(key, value);
+    delete persistPending[key];
+    persistPutKey(key, value, false);
   }, PERSIST_PUT_DEBOUNCE_MS);
 }
 
-function persistPutKey(key, value) {
-  try {
-    fetch("/api/ui-state/" + encodeURIComponent(key), {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ value: value }),
-    }).catch(function () {
-      // Non-fatal: the in-session localStorage copy still holds.
-    });
-  } catch (_e) {
-    // Ignore: server persistence is best-effort.
+// Send every debounced write that has not fired yet. Called when the
+// page is being hidden or torn down, which is the moment a pending
+// timer would otherwise be discarded along with the document.
+function persistFlushPending() {
+  var keys = Object.keys(persistPending);
+  for (var i = 0; i < keys.length; i++) {
+    var key = keys[i];
+    var value = persistPending[key];
+    if (persistPutTimers[key]) {
+      clearTimeout(persistPutTimers[key]);
+      persistPutTimers[key] = null;
+    }
+    delete persistPending[key];
+    persistPutKey(key, value, true);
   }
+}
+
+// Per-key callbacks for a write that did not reach disk. Only keys
+// whose loss the user needs to know about register one; for a cache
+// a silent retry next session is the right amount of noise.
+var persistFailureHandlers = {};
+
+function persistOnFailure(key, handler) {
+  persistFailureHandlers[key] = handler;
+}
+
+function persistReportFailure(key) {
+  var handler = persistFailureHandlers[key];
+  if (typeof handler !== "function") {
+    return;
+  }
+  try {
+    handler(key);
+  } catch (_e) {
+    // A broken reporter must not break the next write.
+  }
+}
+
+function persistPutKey(key, value, urgent) {
+  var body = JSON.stringify({ value: value });
+  var init = {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: body,
+  };
+  if (urgent && body.length <= PERSIST_KEEPALIVE_MAX_CHARS) {
+    // Lets the request outlive the document that started it.
+    init.keepalive = true;
+  }
+  try {
+    fetch("/api/ui-state/" + encodeURIComponent(key), init)
+      .then(function (response) {
+        // A 4xx or 5xx resolves rather than rejecting, so the status
+        // has to be read: the server answers a rejected write with
+        // {"success": false} and this used to ignore it.
+        if (!response.ok) {
+          persistReportFailure(key);
+        }
+      })
+      .catch(function () {
+        persistReportFailure(key);
+      });
+  } catch (_e) {
+    persistReportFailure(key);
+  }
+}
+
+// Armed once per page, from the one call every page already makes.
+// `visibilitychange` is the reliable half: `pagehide` does not fire
+// in every teardown, and `beforeunload` is worse still. Both are
+// registered because hiding a tab is not always followed by
+// unloading it, and unloading is not always preceded by hiding.
+var persistFlushArmed = false;
+
+function persistArmFlush() {
+  if (persistFlushArmed) {
+    return;
+  }
+  persistFlushArmed = true;
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "hidden") {
+      persistFlushPending();
+    }
+  });
+  window.addEventListener("pagehide", persistFlushPending);
 }
 
 // Fetch server state, mirror it into localStorage, then run `onReady`.
@@ -984,6 +1084,7 @@ function persistPutKey(key, value) {
 // hangs on a persistence hiccup. Server values overwrite any stale
 // local copy left by a previous window origin.
 function persistHydrate(onReady) {
+  persistArmFlush();
   var done = false;
   function finish() {
     if (done) {

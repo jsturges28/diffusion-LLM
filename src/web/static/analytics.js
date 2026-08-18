@@ -1037,6 +1037,19 @@ function saveCollections() {
   persistSet(COLLECTIONS_KEY, JSON.stringify(collections));
 }
 
+// The one key here worth interrupting the user over. Every other
+// persisted value is a cache that costs a preference; this is filing
+// they did by hand, and a silent failure means the tab keeps showing
+// it as saved right up until another window hydrates it away. Says
+// what is true, that the change is in this tab only, rather than
+// naming a cause the page cannot know.
+persistOnFailure(COLLECTIONS_KEY, function () {
+  showToast(
+    "Collections could not be saved. This change is in this"
+      + " window only and will be lost on reload."
+  );
+});
+
 function findCollection(id) {
   for (var i = 0; i < collections.length; i++) {
     if (collections[i].id === id) {

@@ -738,6 +738,36 @@ problem. It was left alone; one supervisor still owns the run
 directory in practice, and widening this commit into the run store
 would have mixed two boundaries.
 
+**The client half needed no second window either.** The report frames
+`DATA-02` around two clients racing, but the write path lost changes
+with one. `persistSet` debounced every PUT by 250 ms and nothing
+flushed on the way out, so filing a run and navigating inside that
+window discarded the timer with the document, and the next page's
+hydrate wrote the older server copy back over it.
+
+Collections now skip the debounce entirely rather than being flushed
+more carefully. The debounce exists to coalesce streams of writes,
+and collections do not arrive in streams: a star click, a rename, a
+delete, a checkbox. The keys that genuinely do stream keep it, and
+gain a flush on `visibilitychange` and `pagehide`, with `keepalive`
+set only when the body fits the small shared budget that flag draws
+on. Two of these keys may reach 262,144 characters, and a keepalive
+request over the budget is refused outright rather than slowed.
+
+**A failed write used to look like a successful one.** `persistPutKey`
+caught rejections into an empty block and never read the status, so a
+4xx resolved as success. Since `persistSet` writes localStorage
+first, the tab kept showing the change as saved and the value only
+disappeared later, in another window, with nothing connecting the two
+events. Failures now reach a per-key handler; collections is the only
+key that registers one, because it is the only one whose loss the
+user cannot shrug off, and the message says the change is local to
+that window rather than guessing at a cause.
+
+Mutation-checked the same way as the store half: putting collections
+back on the debounce, removing the flush, ignoring the status, and
+setting `keepalive` unconditionally each fail the suite.
+
 ### Found while verifying, not yet fixed
 
 Two gaps surfaced by the maintainer's hardware pass on 2026-08-14,
