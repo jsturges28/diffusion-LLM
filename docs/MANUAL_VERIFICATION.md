@@ -93,6 +93,21 @@ kept when these were written:
   inside it was the truncated one, so the Original/Edited comparison reads
   as though the intervention lengthened the run.
 
+- **171 to 175**: confirmed on 2026-08-18, the analytics read path's whole
+  queue. The table survives its catalog being cut to a twentieth of the
+  size, the detail panel still knows everything now that it fetches its own
+  record, convergence stops depending on word length, multi-canvas
+  throughput carries committed canvases forward, and compare names what it
+  leaves out.
+
+  174 was the one worth doing slowly. The generator footer read `T/s: 14.8`
+  and the Analytics curve landed at about 15 on the same run, which is the
+  agreement that did not exist before. Looking at the same run's convergence
+  chart then turned up something the item did not ask for and the ledger now
+  records: for DiffusionGemma the curve counts stability rather than
+  settlement, and a canvas reading 90% resolved can have a mean model
+  confidence of 0.165.
+
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
 matches the app is worse than no scenario, because it costs a session to
@@ -1446,3 +1461,54 @@ does nothing at all.
     it must still read **Done.** rather than **Stopped.**: it is a
     completed request. Saving it should produce a run with no Completion
     row and no `(stopped)` marker.
+171. **The Analytics list against the real archive.** The change with the
+    widest blast radius and no GPU requirement, so do this one first.
+    Open Analytics on your 222 runs and confirm the page still behaves
+    exactly as it did: sort by every column header, group by each of
+    Date, Model, Processor, Prompt and Edited, switch between collection
+    tabs, star and unstar a run, select several rows and check the count,
+    and delete one. The catalog now carries about a twentieth of what it
+    did, so the thing to watch for is a column that has gone blank or a
+    count that has gone wrong, not a crash.
+    Worth timing the load, since that is the point: it was fetching
+    roughly 1.3 MB of metadata for a table that draws six fields.
+172. **A run's detail panel still knows everything.** Follows from 171,
+    and is where a field dropped too eagerly would show up. Open a run
+    and check the panel lists its full prompt, every hyperparameter, the
+    processor, the tokenizer and vocabulary rows, the context block and
+    the elapsed total. Those used to come from the row; they arrive in
+    their own request now.
+    Open one with a very long prompt too. The row's tooltip shows the
+    first 240 characters with an ellipsis, and the panel shows the whole
+    thing.
+173. **Convergence stops depending on word length.** Two SmolLM3 runs are
+    the wrong tool here (they have no convergence chart); use LLaDA or
+    DiffusionGemma. Generate two runs at the same **Steps** and
+    **Gen Length**, one on a prompt that produces long words and one on
+    a prompt that produces short ones, and compare their convergence
+    curves in Analytics. They should have close to the same shape,
+    because they resolved the same number of positions per step. Before
+    this the long-word run climbed faster for no reason but its spelling.
+    Then open an older run, from before token records were saved, and
+    confirm the chart carries an italic line above it saying the curve
+    counts characters. A recent run must not carry that line.
+174. **Multi-canvas throughput no longer falls off a cliff.** Needs
+    DiffusionGemma and a prompt long enough to chain a second canvas
+    (over 256 tokens). Save the run, open it in Analytics, and page the
+    timing chart across to **Tokens per Second**. The curve should carry
+    on across the canvas boundary marker rather than dropping toward
+    zero when the second canvas starts, which is what it used to do.
+    Cross-check the figure against what the generator's own **T/s**
+    footer read during the run. The two used to disagree on multi-canvas
+    runs; they should now agree closely.
+175. **Compare explains what it left out.** Select a diffusion run and a
+    SmolLM3 run together and press Compare. The chart draws the
+    diffusion run, and a note above it names the SmolLM3 one and says
+    autoregressive runs have no convergence curve. Before this it simply
+    vanished.
+    Then check the legend on a DiffusionGemma run: it should name the
+    model and real parameters, not `undefined`. Try selecting more than
+    twelve runs, which should be refused with a message rather than
+    quietly working. And open a comparison, close it immediately, and
+    open a different one: the second must not be overwritten by the
+    first arriving late.

@@ -1207,6 +1207,80 @@ The framing to aim at is a researcher's working notebook over the run history
 rather than a comment field: sectioned, cross-referenced, and traversable in
 the order the questions actually arrived rather than the order the runs did.
 
+**Candidate reveal for DiffusionGemma, in place of the mask glyph.** Raised on
+2026-08-18 while reading a multi-canvas run's convergence curve, and worth
+scoping properly because most of the data already exists. Three layers, in
+increasing cost.
+
+*Layer one is free and retroactive.* DiffusionGemma has no mask token; the `░`
+is substituted into the frame text at render time while the token record keeps
+the real guess, so `{'t': ' properties', 'm': True, 'id': 5082}` is a typical
+"masked" position. Showing the model's current best guess instead of a block
+needs no new capture and works on every DiffusionGemma run already saved. It
+would also make a finding self-evident that currently needs a paragraph to
+explain: early in a canvas the display would fill with `" the"` and then be
+eaten by real content, which is precisely why the convergence curve overstates
+(see the ledger).
+
+*Layer two is opacity, and it needs one small change.* Fade each unsettled
+token by the model's confidence in it. Confidence is already computed with
+Entropy Signal on and then discarded for exactly the positions that would be
+faded, because `_emit` writes `c` only `if not unresolved`. Writing it
+unconditionally is the whole capture change.
+
+An earlier worry, recorded because it was wrong and the correction is the
+useful part: the streamed logits are temperature-scaled, and the schedule
+anneals `t` from `t_max` to `t_min` across a canvas, so the concern was that
+opacity would trace the sampler's schedule rather than per-position certainty.
+The measurement says otherwise. Across one canvas the temperature moved 0.800
+to 0.642, a 1.25x sharpening, while mean confidence moved 0.165 to 1.000. A
+1.25x rescale cannot produce a sixfold rise, so the climb is overwhelmingly
+genuine settling and the temperature contributes a few percent. **Do not undo
+the temperature**; the signal is trustworthy as it stands.
+
+*Layer three is the top-k stack*, unsettled tokens rendered as their top five
+candidates with opacity by probability share, expanding on click into
+something like SmolLM3's alternatives popover. This is the expensive one and
+it is already sequenced: `ROADMAP-03`'s axis-aware signal manifest "precedes
+its native XAI phase and diffusion entropy and top-k", and `ORG-03`
+consolidates the LLaDA sampling kernel before top-k goes into it. The shape is
+also new, per-frame *and* per-position, where `alternatives.json` today is
+per-position only, which suffices for an autoregressive run because a position
+is decided once and does not for a diffusion draft that is re-decided every
+step. Budget roughly frames x canvas width x k records.
+
+Note one asymmetry if this is ever mapped onto LLaDA as a display preference,
+which it could be. On DiffusionGemma layer one reveals something currently
+thrown away; on LLaDA a mask is a real token with nothing behind it, so the
+same display would require newly computing what the model was considering.
+Identical on screen, quite different underneath.
+
+**A live adaptive-stopping readout, which pairs with the above.** Same signal
+at a canvas scale rather than a token scale. DiffusionGemma halts a canvas
+when two conditions hold, both from the checkpoint's `generation_config.json`:
+the accepted canvas is unchanged for `stability_threshold` steps (1), and the
+mean entropy of the processed logits falls below `confidence_threshold`
+(0.005 nats).
+
+It is a threshold, not a probability, so the honest readout is a distance
+rather than a percent chance of stopping; inventing the latter would be the
+plausible-but-false number this project keeps trying not to draw.
+
+The cheap version is already in hand. A mean entropy under 0.005 nats forces
+max-probability to about 0.9995, which is the quantity `c` already holds. On
+the 2026-08-18 entropy-signal run the implied entropy crossed 0.005 one to two
+frames before each canvas actually halted, the lag being the stability
+condition plus the fact that a binary-entropy floor understates a 262k-way
+distribution. The exact version is one more reduction over a softmax
+`_from_logits` already materialises; the heavy part, moving the logits to the
+CPU, is paid already whenever Entropy Signal is on.
+
+One measurement caveat for whoever picks this up: those confidence figures
+average over the positions carrying `c`, which is the stable subset rather
+than the whole canvas the criterion uses. Near a halt they coincide because
+everything is stable, so the tail is trustworthy; the early numbers are on a
+biased sample, and the `c` change above is what removes the bias.
+
 Shipped from this backlog (see `README.md`):
 - Token commit-order coloring: tokens are tinted by the step at which they
   resolved (light green early to red-orange late), as a persistent overlay. Now
@@ -1218,7 +1292,10 @@ Shipped from this backlog (see `README.md`):
 - Confidence-driven mask opacity (LLaDA): a still-masked token's opacity tracks
   the model's live predicted confidence for that position, rising from a solid
   floor to full as it nears the reveal, so the "heating up" before a commit is
-  visible live and while scrubbing. DiffusionGemma is a separate follow-up.
+  visible live and while scrubbing. DiffusionGemma is a separate follow-up, now
+  scoped under "Candidate reveal for DiffusionGemma" above: it needs a capture
+  change first, because confidence is discarded for exactly the positions that
+  would be faded.
 - Randomize remasks in Edit Frames (slider + N-of-M + Shuffle): seeds the
   meta-explainability question of whether a remask pattern shapes convergence.
 - "New run saved" analytics cue: a persisted count badge (generator + Main Menu)

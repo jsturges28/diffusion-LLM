@@ -75,9 +75,8 @@ commit, **M** a short multi-commit change, **L** a staged boundary migration.
 
 ## Ready now
 
-Five findings have no unmet blockers.
-
-**The rest of stage 4**, two of them.
+Two findings have no unmet blockers, both from stage 4. The analytics
+trio was the rest of this list and is done; see its entry below.
 
 - **XAI-01** (high, M), released by `LIFE-01`: preserve complete
   intervention checkpoints rather than only token IDs. Run ownership being
@@ -90,38 +89,56 @@ Five findings have no unmet blockers.
 on it too and is now in the hardware queue instead: its state core is
 written and tested, but none of its callers has been run.
 
-**The analytics trio**, unlocked by stage 3 and still unstarted. None of it
-touches the worker protocol, so it is the group that cannot collide with
-anything above.
-
-- **ANALYTICS-02** (high, M): exact token summaries. See the decision note
-  below; its position in the order is the open question, not its readiness.
-- **ANALYTICS-03** (medium, L): lightweight pagination.
-- **ANALYTICS-04** (high, M): the guarded compare boundary.
+`ANALYTICS-03` and `ANALYTICS-04` were the analytics trio and are done,
+as is `ANALYTICS-02`'s repair half. They went together because they
+shared one seam: three separate plans would each have rebuilt the same
+resolver, selection model and label path. Only `ANALYTICS-02`'s persist
+half remains, and it belongs with `XAI-01` rather than here.
 
 `QUALITY-01` is not on this list because it is not a standalone task. The
 report asks for its lifecycle and browser-contract fixtures to land with each
 seam as that seam is extracted, rather than as a test-only prelude with no
 production owner. Track it as an obligation attached to other findings.
 
-## Needs a maintainer decision before it can start
+## Decided, awaiting implementation
 
-- **DATA-02** offers two paths and the sequencing says it should not begin
-  until one is chosen: make collections server-authoritative through bounded
-  semantic operations, or add a revision and ETag scheme that rejects stale
-  replacements and lets the client reload and merge. Either way it is paired
-  with an interprocess file lock and a visible persistence failure. The choice
-  affects the UI-state API shape, so it wants deciding before code.
-- **ANALYTICS-02 has an unresolved position in the order.** The executive
-  summary lists it among the small safety commits that should precede the
-  larger seams (`AUDIT_REPORT.md:46-51`), while the sequencing places it as
-  something the run-store stage unlocks (`AUDIT_REPORT.md:1866-1868`). Both
-  readings are defensible: the finding's Direction persists new per-frame
-  counts, which touches the saved-run contract and therefore wants `DATA-05`
-  first, but it also says modern runs can be repaired from existing token
-  records, which needs no format change. It is parked at `blocked` on the
-  sequencing's reading. Reopening it early is reasonable if the fix derives
-  from records already saved and adds no unversioned fields.
+- **DATA-02 takes the server-authoritative path**, decided on 2026-08-18.
+  Collections become bounded semantic operations (add, remove, rename)
+  rather than a revision and ETag scheme that rejects stale replacements
+  and leaves the client to reload and merge.
+
+  The reason is precedent rather than taste. `run_store.save` already made
+  this exact move: identity is resolved server-side under `_PUBLISH_LOCK`,
+  and the duplicate-save bug went away precisely because the client stopped
+  being the authority on which run it was writing. Collections have the same
+  shape, a set the client mutates, and the ETag path hands conflict
+  resolution back to the client, which is the half that already failed here
+  once.
+
+  The cost is that collections stop being just another `ui_state` key and
+  get their own endpoints, which is a wider API change than an ETag. That is
+  accepted: it makes the lost update unrepresentable instead of detectable.
+
+  The interprocess file lock and the visible persistence failure the finding
+  pairs with this have already shipped, so what remains is the semantics.
+  `ANALYTICS-03` was written against this decision: collection membership is
+  now indexed by run rather than held as a client-owned array per
+  collection, which is the shape the operations will want.
+
+- **ANALYTICS-02's split is resolved**, on the reading its own Direction
+  offers. The executive summary listed it among the small safety commits
+  (`AUDIT_REPORT.md:46-51`) while the sequencing placed it behind the
+  run-store stage (`AUDIT_REPORT.md:1866-1868`), and both were right about
+  different halves of it.
+
+  The **repair half** is done; see the entry below. It derives from token
+  records already on disk and adds no persisted field, which is the
+  condition this list previously set for reopening it early.
+
+  The **persist half** remains: compact per-frame counts emitted by the
+  samplers and stored with the run. That touches the saved-run contract and
+  the worker, so it belongs with `XAI-01`, which changes what a worker
+  records about a run for the same kind of reason.
 
 ## Hardware validation queue
 
@@ -222,9 +239,9 @@ on real hardware.
 | DATA-05 | high | L | done | none | Three commits: strict boundary, version and frame stream, invalid runs |
 | DATA-04 | high | M | done | none | Persist run provenance from the run, not manager state |
 | RUNTIME-02 | medium | M | done | none | Bound the GIF and label the model that produced it |
-| ANALYTICS-02 | high | M | ready | DATA-05 (done), see decision above | |
-| ANALYTICS-03 | medium | L | ready | DATA-01, DATA-05 (both done) | Gained evidence: 211 dirs scanned per load, plus ~10s to paint one long run |
-| ANALYTICS-04 | high | M | ready | DATA-01 (done) | |
+| ANALYTICS-02 | high | M | partial | none | Repair half done; persist half belongs with XAI-01 |
+| ANALYTICS-03 | medium | L | done | DATA-01, DATA-05 (both done) | Catalog 1.33 MiB to 70.6 KiB over 222 runs |
+| ANALYTICS-04 | high | M | done | DATA-01 (done) | Path escape was already closed by DATA-01; see entry |
 | LIFE-02 | high | M | needs hardware | none | Two commits: the process seam, then verified termination |
 | LIFE-06 | medium | M | needs hardware | none | Validate a switch target before evicting the working model |
 | ORG-04 | medium | S | done | none | Two commits: the shared activation client, then the menu |
@@ -235,7 +252,7 @@ on real hardware.
 | LIFE-04 | high | L | done | LIFE-03 (done) | Carried RUNTIME-01's queue bound, as its own Direction asks |
 | LIFE-05 | high | M | partial | none | Single-instance the desktop launcher; host lease deferred, see Deviations |
 | TRUST-04 | medium | L | ready | LIFE-04 (done) | |
-| DATA-02 | high | L | partial | maintainer decision | Lost-update slice only; conflict semantics still forked |
+| DATA-02 | high | L | partial | none | Lost-update slice done; server-authoritative path decided, semantics remain |
 | RUNTIME-01 | medium | L | partial | ORG-02 + DATA-05 | Queue bound landed with LIFE-04; append-only frames remain |
 | ORG-02 | medium | L | partial | none | State core verified; download client, ES modules and server-rendered boot remain |
 | RUNTIME-03 | medium | S | blocked | ORG-02, paired | |
@@ -1088,6 +1105,148 @@ check catches `None` anyway. The branch stayed, since a client that
 never learned the run is a different situation to report than an
 ordinary two-window race, but the test now pins that the two
 *messages differ* rather than pinning either string.
+
+### The analytics read path (ANALYTICS-02 repair, 03, 04)
+
+**Done on 2026-08-18**, as one plan. Three findings, one seam: the
+metrics reader, the analytics endpoints, and the read path in
+`analytics.js`. Nothing touched a worker, a sampler or the saved-run
+format, which is what let it run alongside the stage-4 work.
+
+**Three of the report's claims did not survive contact.** Recorded
+here so a later session does not spend an hour re-verifying them.
+
+- **`ANALYTICS-04`'s path escape was already fixed.** `DATA-01`
+  landed the guarded resolver, and `_compute_run_metrics` has gone
+  through it since. What remained of the finding was the bound, the
+  dedup, the epoch, the error taxonomy and the labels. There was no
+  compare-specific traversal test, so one now exists.
+- **`ANALYTICS-03`'s cited evidence was stale.** `server.py:1379-1393`
+  is `activation_status` today, and `app.js:4021` is prompt history
+  rather than the runs API. Only `analytics.js` calls the catalog,
+  which made the contract change far cheaper than the report implied.
+- **A defect the report does not name:** the live generator's
+  Tokens/s and the Analytics chart disagreed. The generator sums
+  per-frame reveals, which accumulates across canvases; Analytics
+  subtracted from a first-frame baseline, which does not. The same
+  run read as two speeds depending on the page. Fixed with the rest,
+  and pinned by a test that reproduces the generator's definition in
+  Python and asserts the two agree.
+
+**Convergence counts positions now.** It divided mask glyphs by
+decoded characters while the axis read "% Resolved", so a position
+resolving into a ten-character token advanced the curve ten times as
+far as one resolving into a single character: two runs with the same
+token schedule could show different convergence purely because their
+words were longer. It reads the mask flag in `tokens.json` instead,
+which needed no new persisted field because 200 of the 222 runs here
+already carry those records. The other 22 (13 with bare ids, 9 with
+no token stream) keep the character measure and **say so on the
+chart**, which is why the response now carries a basis.
+
+**Throughput accumulates across canvases**, computed server-side
+because it needs the canvas each frame belongs to. `canvas_index` was
+already saved and already surfaced for the boundary markers; it was
+simply unused by the numerator.
+
+**Compare accounts for every selection.** Capped at 12,
+deduplicated, and each id returns exactly one record: data,
+unavailable, or an error with a reason that distinguishes missing
+from malformed from unreadable from a future schema. An unexpected
+exception now costs its own row rather than the whole batch, which it
+used to. On the page, compare got its own `detailRequestsCreate`
+fence, so two comparisons can no longer race and closing the panel
+stops the fetch, and omissions are listed above the chart instead of
+skipped with a bare `continue`. Labels are built server-side from the
+registry's `param_specs`, because the browser assembled them from
+`steps`, `gen_length` and `block_length`, so anything but LLaDA
+rendered the word `undefined` three times.
+
+**The catalog carries the table and nothing else.** It used to return
+each run's whole `metadata.json`: the full prompt, the full output,
+every hyperparameter, the reproducibility block, and the per-frame
+arrays, so a 2,047-token run contributed 2,047-element lists to a row
+drawn as one line. Measured against the real archive here, **222 runs
+went from 1,362 KiB to 71 KiB, a 94.8 percent reduction, and a row no
+longer grows with its run.** Everything dropped is served by a new
+per-run metadata endpoint, which the detail panel fetches behind the
+epoch it already uses for charts and overlays.
+
+Collection membership is indexed by run rather than scanned per
+collection, which removed up to 24 linear scans per row per render,
+and is the shape `DATA-02`'s server-authoritative operations will
+want.
+
+**Not done here, deliberately:** genuine pagination. The report asks
+for a paged API, and its verification targets 5,000 runs. At 326
+bytes a row the payload is no longer the constraint, so what remains
+at that scale is rendering rather than transfer, and paging the API
+would cost cross-page sort, group, select-all and collection counts.
+Reopen it with a measurement rather than a projection.
+
+### Found while verifying: convergence still lies for DiffusionGemma
+
+**Not an audit finding, and partly this campaign's own doing.** The
+maintainer found it on 2026-08-18 while working manual item 174, by
+looking at the convergence chart of the run that item is about.
+
+`ANALYTICS-02`'s repair fixed the counting *unit* and inherited the
+counting *signal*. For LLaDA that is fine: a mask is a real
+`<|mdm_mask|>` token, so the flag the reader now trusts is ground
+truth. DiffusionGemma has no mask token. It renoises unsettled
+positions to fresh real tokens, so the sampler infers resolution from
+a position holding the same id as the previous step
+(`src/inference/dgemma_sampler.py`, `_emit`). That is stability, not
+settlement, and the two are far apart:
+
+| canvas 1, frame 1 | value |
+| --- | --- |
+| chart reads | 90.2% resolved |
+| positions holding what the canvas commits | 8.6% |
+| mean model confidence in those same tokens | 0.165 |
+
+The mechanism is worth keeping. Early in a canvas the model's
+low-information argmax is the most frequent token in the language, so
+it lands nearly everywhere; on the earlier run 210 of 217 "resolved"
+positions were the single token `" the"`. Filler is perfectly stable,
+so the app reads it as settled. It is a third state the two-value
+model has no name for: not noise, not committed, the model's default
+guess holding still.
+
+**Also discovered: the mask glyph is drawn, not received.** For
+DiffusionGemma the `░` exists only in the frame *text*, substituted at
+render time. The token record beside it keeps the real thing, so
+`{'t': ' properties', 'm': True, 'id': 5082}` is a typical "masked"
+position. The model's current best guess is therefore already saved on
+every DiffusionGemma run in the archive and simply hidden. See the
+ROADMAP entry for what that enables.
+
+**And the blocker for fixing it properly:** confidence is not recorded
+for unresolved positions at all, 0 of 3,281 on the entropy-signal run.
+`_emit` computes it and writes `c` only `if not unresolved`, the same
+discard as the token text. So the honest signal exists in memory and
+never reaches disk.
+
+The three-tier answer for whoever takes this, in preference order:
+with Entropy Signal on, mean true confidence is honest and works live;
+with it off, stability is all there is and should be labelled;
+Analytics can always fall back to agreement-with-committed, which is
+exact but retrospective. All three need the `c` change above.
+
+### Found while verifying: the step readout freezes when scrubbing
+
+**Not an audit finding.** Reported by the maintainer on 2026-08-18.
+Scrubbing a finished run leaves the status readout on whatever the run
+ended at, so a DiffusionGemma run sits on "Step 87, Canvas 4" no
+matter which frame is on screen.
+
+`statusStep` is written in exactly two places, the live frame handler
+and the session restore. `navigateToFrame` updates only
+`scrubberLabel`, the "Frame N / M" text. The data for the fix is
+already held: `runFrames.canvasIndex` is per frame, so scrubbing can
+recompute the readout. Small, and worth doing next to the convergence
+work because both are about a diffusion run's intermediate state
+being described wrongly.
 
 ### LIFE-04
 
