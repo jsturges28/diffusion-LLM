@@ -768,6 +768,43 @@ Mutation-checked the same way as the store half: putting collections
 back on the debounce, removing the flush, ignoring the status, and
 setting `keepalive` unconditionally each fail the suite.
 
+### QUALITY-01
+
+**The message loop had no tests at all**, which is worth stating
+plainly because it was not obvious: `tests/backends/` looks
+well-covered, but every file in it calls a `handle_*` method
+directly. Nothing reached `create_worker_app`'s dispatch, so the ready
+handshake, the generation lock, the busy refusals, cancel and the
+unknown-type reply were all unexercised.
+
+That is where `LIFE-01` and `PROTOCOL-01` actually live. Both clauses
+are about interleaving requests across two sockets, and both turn on
+decisions the loop makes rather than a handler: whether a second
+socket is refused as busy, and which run a stateful request may
+reach. `tests/backends/test_worker_dispatch.py` covers it with a real
+worker app and FastAPI's test client, which is the `QUALITY-01`
+obligation attaching to this seam rather than a test-only prelude.
+
+**Two things the tests found, both about the loop rather than the
+findings.**
+
+`cancel` cannot interrupt a generation. The loop awaits the handler
+inline, so while a generation runs, the loop that would read a cancel
+from that socket is reading nothing, and a cancel on a second socket
+sets a different connection's event. The frontend never sends one
+today, so nothing is broken in practice, but the message type reads
+as though it works. That is `LIFE-04`'s ("propagate disconnect and
+cancel through inference"), and the dispatch test that covers the
+branch says so where the next reader will see it.
+
+Parking a generation from a test needs `call_soon_threadsafe`. An
+`asyncio.Event` set from the test thread does not reliably wake a
+waiter in the loop's thread, and the failure is a hang rather than an
+assertion. The first version of these tests hung the suite. They now
+carry a five-second bound on every park, so a regression of that kind
+fails in seconds, which is the same lesson the `LIFE-05` tests
+recorded and the second time it has been learned here.
+
 ### PROTOCOL-01
 
 **Landed in two commits with `LIFE-01` between them**, which is not
