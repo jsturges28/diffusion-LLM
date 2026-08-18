@@ -13,10 +13,10 @@ todos:
     status: completed
   - id: drop-autosave
     content: Remove the auto-save from both editor entry points and update the Help copy that describes it
-    status: in_progress
+    status: completed
   - id: degraded-guard
     content: Refuse to save a run restored without its token detail, and say why
-    status: pending
+    status: in_progress
   - id: records
     content: Record the finding and the in-process lock caveat, add the manual items, and verify
     status: pending

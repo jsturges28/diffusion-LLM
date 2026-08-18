@@ -495,3 +495,71 @@ test("a non-array in a stored baseline is ignored", () => {
 
   assert.equal(original.tokens.length, 0);
 });
+
+// -- a run that came back without its detail --
+//
+// sessionStorage refuses the full payload for a long run, so the
+// fallback keeps the frame text and the timings and drops the
+// per-token detail. The run still reads and scrubs, which is why the
+// fallback is worth having, but nothing hovers and there is no
+// entropy to profile. Saving one would write that hollowed-out
+// version permanently, so the page asks here before it offers to.
+
+test("a live run has its detail", () => {
+  const { api, frames } = loadWith(3);
+
+  assert.equal(api.runFramesLackDetail(frames), false);
+});
+
+test("a light restore is missing it", () => {
+  const { api, frames } = loadWith(4);
+  const light = api.runFramesFromJson(
+    api.runFramesToJson(frames, api.RUN_FRAME_LIGHT_FIELDS)
+  );
+
+  assert.equal(api.runFramesLackDetail(light), true);
+});
+
+test("a full restore is not", () => {
+  const { api, frames } = loadWith(4);
+  const full = api.runFramesFromJson(api.runFramesToJson(frames));
+
+  assert.equal(api.runFramesLackDetail(full), false);
+});
+
+test("a model that reports no tokens still counts as detailed", () => {
+  // The distinction that makes this predicate worth having. A model
+  // with no per-token data appends a null per frame, so its array is
+  // as long as the rest; only a restore leaves it empty.
+  const api = load();
+  const frames = api.runFramesCreate();
+  const sparse = entry(0);
+  sparse.tokens = null;
+  api.runFramesAppend(frames, sparse);
+
+  assert.equal(api.runFramesLackDetail(frames), false);
+});
+
+test("an empty run is not missing anything", () => {
+  // Nothing to save either way, and reporting a fresh page as
+  // damaged would put an error in front of every new run.
+  const api = load();
+
+  assert.equal(
+    api.runFramesLackDetail(api.runFramesCreate()),
+    false
+  );
+});
+
+test("a truncate restores the detail flag with the arrays", () => {
+  // The repair path: once the missing arrays are squared up, the run
+  // is savable again rather than permanently refused.
+  const { api, frames } = loadWith(4);
+  const light = api.runFramesFromJson(
+    api.runFramesToJson(frames, api.RUN_FRAME_LIGHT_FIELDS)
+  );
+
+  api.runFramesTruncate(light, 2);
+
+  assert.equal(api.runFramesLackDetail(light), false);
+});

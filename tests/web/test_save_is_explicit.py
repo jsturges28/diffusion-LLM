@@ -124,3 +124,36 @@ def test_the_help_says_what_happens_instead() -> None:
 
     assert "Nothing is written unless you ask for it" in html
     assert "Saving twice cannot duplicate a run" in html
+
+
+# -- and a run that cannot be saved in full is not saved at all --
+
+
+def test_a_run_without_its_detail_is_refused() -> None:
+    """A long run comes back from its snapshot with the frame text
+    and the timings but no per-token detail. Saving it would write
+    that hollowed-out version permanently, in place of the run that
+    was on screen before the navigation."""
+    region = _region("function saveRun()", 1400)
+
+    assert "runFramesLackDetail(runFrames)" in region
+
+
+def test_the_refusal_comes_before_the_request() -> None:
+    """Checked with the other reasons not to save, not after the
+    payload has been built and posted."""
+    region = _region("function saveRun()", 6000)
+    guard = region.find("runFramesLackDetail(runFrames)")
+    post = region.find('fetch("/api/save"')
+
+    assert guard != -1
+    assert post != -1
+    assert guard < post
+
+
+def test_the_refusal_says_why() -> None:
+    """A save that silently does nothing is worse than one that
+    writes the wrong thing, because nothing tells the user either."""
+    region = _region("function saveRun()", 1400)
+
+    assert "cannot be saved in full" in region

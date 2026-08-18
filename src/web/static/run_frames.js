@@ -85,6 +85,21 @@ function runFramesAligned(frames) {
   return true;
 }
 
+// A run that came back from a snapshot too large to store whole.
+// The light payload keeps the frame text and the timings and drops
+// the per-token detail, so the run reads and scrubs but has nothing
+// to hover and no entropy to profile.
+//
+// Told apart from a model that simply reports no per-token data,
+// which is a different thing: that one still appends a `null` per
+// frame, so its array is as long as the rest. Only a restore leaves
+// the array empty beside a populated history.
+function runFramesLackDetail(frames) {
+  return (
+    frames.history.length > 0 && frames.tokens.length === 0
+  );
+}
+
 // Thrown rather than logged. A run whose arrays disagree produces a
 // saved record whose charts contradict each other, and that is worth
 // stopping at the point of corruption instead of discovering later

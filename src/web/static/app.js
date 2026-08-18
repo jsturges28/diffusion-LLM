@@ -6467,6 +6467,22 @@ function saveRun() {
   ) {
     return Promise.resolve();
   }
+  // Saving a run that came back without its per-token detail writes
+  // that hollowed-out version permanently: no token overlay, one
+  // chart family, in place of the run that was on screen before the
+  // navigation. Refusing is the honest answer until `RUNTIME-01`
+  // makes the stored payload linear and the light restore stops
+  // happening at all.
+  if (runFramesLackDetail(runFrames)) {
+    statusRowReflow(function () {
+      statusMessage.textContent =
+        "This run came back without its per-token detail and"
+          + " cannot be saved in full. Generate it again to save"
+          + " it.";
+    });
+    statusMessage.style.color = "var(--danger)";
+    return Promise.resolve();
+  }
 
   isSaving = true;
   btnSave.disabled = true;
