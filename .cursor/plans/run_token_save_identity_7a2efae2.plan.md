@@ -10,10 +10,10 @@ todos:
     status: completed
   - id: token-tests
     content: Test create, idempotent second create, absent token, and racing creates with one token
-    status: in_progress
+    status: completed
   - id: drop-autosave
     content: Remove the auto-save from both editor entry points and update the Help copy that describes it
-    status: pending
+    status: in_progress
   - id: degraded-guard
     content: Refuse to save a run restored without its token detail, and say why
     status: pending

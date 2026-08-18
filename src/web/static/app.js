@@ -384,9 +384,9 @@ var runPhase = runPhasesCreate();
 // current run (until the next Generate) so a run cannot accrue a
 // second, conflicting saved edit.
 var editedRunSaved = false;
-// True once the current run has been saved at least once (manually or
-// via the Edit Frames auto-save). Prevents entering an edit session
-// from duplicating the original run's saved entry.
+// True once the current run has been saved at least once. Read by
+// Confirm to decide whether it is replacing a run the user already
+// filed or writing this generation for the first time.
 var runSaved = false;
 // Folder id of this run's last save. An edited/bundled save reuses it
 // so the pre-edit run is replaced (one Analytics row) rather than
@@ -5253,9 +5253,8 @@ function lockScrubberNav() {
 }
 
 // Freeze scrubber navigation and every guided-edit action while a save
-// is in flight, so no save path (auto-save, Confirm, or the standalone
-// Save button during review) leaves interactive controls that could
-// race the snapshot. The subsequent updateGuidedUI() re-derives each
+// is in flight, so neither save path, Confirm or the standalone Save
+// button, leaves interactive controls that could race the snapshot. The subsequent updateGuidedUI() re-derives each
 // button's per-phase state once the save settles.
 function setSavingControls(saving) {
   var disabled = !!saving;
@@ -5302,17 +5301,15 @@ function supportsSubstitution() {
   );
 }
 
-// Arm substitution on the completed run. Mirrors Edit Frames: the
-// current run becomes the "original", auto-saved if unsaved so it
-// survives the branch that replaces it.
+// Arm substitution on the completed run. Mirrors Edit Frames,
+// including in writing nothing: the current run becomes the
+// "original" in memory, and the branch that replaces it carries the
+// original with it when it is saved.
 function enterSubstitutionMode() {
   if (btnWhatIf && btnWhatIf.classList.contains("is-locked")) {
     return;
   }
   beginSubstitutionSession();
-  if (!runSaved) {
-    saveRun();
-  }
 }
 
 // Frame index and token position are the same choice for a
@@ -5410,18 +5407,18 @@ function enterRemaskMode() {
   if (btnEditFrames.classList.contains("is-locked")) {
     return;
   }
-  // Enter edit mode first, then auto-save the original: saving last
-  // means its control-freeze (setSavingControls) is not immediately
-  // undone by the edit-session UI setup.
+  // Opening the editor writes nothing. Selecting a frame and
+  // remasking tokens are reversible and entirely local; the run is
+  // only destroyed by the resume, and Confirm is itself a save. So
+  // nothing here is worth writing to disk on the user's behalf, and
+  // this used to do exactly that: a full save fired on merely
+  // opening the panel, which on a long run is megabytes, and which
+  // raced any navigation that followed it.
   beginEditSession();
-  if (!runSaved) {
-    saveRun();
-  }
 }
 
-// Start a fresh edit session on the current run (no save). Shared by
-// Edit Frames (after its auto-save) and Retry (which reuses the
-// already-saved original), keeping the save decoupled from re-entry.
+// Start a fresh edit session on the current run. Shared by Edit
+// Frames and by Retry, which restores the pre-edit run first.
 function beginEditSession() {
   captureEditSnapshot();
   runPhasesEnter(runPhase, RUN_PHASE_SELECT);
@@ -5499,9 +5496,8 @@ function updateGuidedUI() {
   }
 
   guidedEditControls.hidden = false;
-  // The guided flow owns saving during an edit session (auto-save on
-  // entry, then Confirm/Retry). Disable the standalone Save so it can
-  // never race or double-fire with the review-step Confirm.
+  // Confirm owns saving during an edit session. Disable the
+  // standalone Save so it can never race or double-fire with it.
   btnSave.disabled = true;
 
   var count =
@@ -5597,8 +5593,8 @@ function updateGuidedUI() {
       break;
   }
 
-  // A save in flight (e.g. the Edit Frames auto-save) overrides the
-  // per-mode state: freeze navigation until it completes.
+  // A save in flight overrides the per-mode state: freeze
+  // navigation until it completes.
   if (isSaving) {
     lockScrubberNav();
     btnSelectFrame.disabled = true;
@@ -5754,10 +5750,9 @@ function confirmGuidedEdit() {
 }
 
 // Retry: discard this session's edits and restart editing from the
-// beginning. Reuses the already-saved original, so (unlike Edit
-// Frames / What If) it does not trigger another save. Autoregressive
-// runs re-enter substitution, whose session has no frame-selection
-// phase to restart into.
+// beginning. Writes nothing, like every other way of entering an
+// edit session. Autoregressive runs re-enter substitution, whose
+// session has no frame-selection phase to restart into.
 function retryGuidedEdit() {
   var wasSubstitution = supportsSubstitution();
   restoreEditSnapshot();
@@ -6179,7 +6174,7 @@ function setSaveAvailable(available) {
 
 // Clears the footer readouts only, never the stack. doSubstitute and
 // doGuidedResume both call this immediately before starting a resume,
-// which is exactly when the pre-edit run's auto-save may still be in
+// which is a moment a save the user started by hand may still be in
 // flight; clearing the chips here would put back the overwriting this
 // stack exists to fix.
 function resetStatus() {
@@ -6485,20 +6480,19 @@ function saveRun() {
     saveCheckTimer = null;
   }
   // Captured now so the async success handler locks Edit Frames only
-  // when the saved run actually carried edits, and so the messages
-  // below name which of the two runs is being written. That is worth
-  // stating: entering What If or Edit Frames triggers a save of the
-  // pre-edit run on your behalf, and an unlabelled "Saving run" gives
-  // no clue that is what you are watching.
+  // when the saved run actually carried edits, and so the message
+  // below names which of the two runs is being written. A run saved
+  // from the review step carries its pre-edit self alongside the
+  // branch, so "edited" and "original" are two shapes of record
+  // rather than two runs.
   var wasEdited = remaskEdits.length > 0;
   var runLabel = wasEdited ? "edited" : "original";
 
   btnSave.classList.remove("is-saved");
   btnSave.classList.add("is-saving");
-  // A local, so this chip survives a run starting underneath it. That
-  // is the whole point: entering What If auto-saves the pre-edit run,
-  // and picking a candidate before the POST lands used to overwrite
-  // this with the resume's message.
+  // A local, so this chip survives a run starting underneath it: a
+  // save the user starts and then a resume begun before the POST
+  // lands used to overwrite this with the resume's message.
   var saveStatus = statusPush("Saving " + runLabel + " run");
 
   var totalElapsed = runFrames.elapsed.length > 0
