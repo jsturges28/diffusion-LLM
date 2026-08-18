@@ -50,7 +50,7 @@ def _region(anchor: str, chars: int) -> str:
 
 
 def test_the_envelope_is_captured_from_the_done_frame() -> None:
-    region = _region("function handleDone(data)", 900)
+    region = _region("function handleDone(data)", 2000)
 
     assert "data.provenance" in region
     assert "lastRunProvenance = data.provenance" in region

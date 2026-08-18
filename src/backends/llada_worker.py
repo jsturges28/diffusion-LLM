@@ -7,8 +7,8 @@ generate / resume / remask semantics, now behind the shared
 
 from __future__ import annotations
 
-import asyncio
 import logging
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -275,7 +275,7 @@ class LladaBackend(Backend):
         self,
         ws: WebSocket,
         data: Dict[str, Any],
-        cancel_event: asyncio.Event,
+        cancel_event: threading.Event,
         stream: FrameStreamer,
     ) -> None:
         try:
@@ -309,7 +309,18 @@ class LladaBackend(Backend):
                 cancel_event=cancel_event,
                 tensor_history=tensor_history,
             )
-            await stream.run(generator, start)
+            done = await stream.run(generator, start)
+            # The sampler returns without a terminal frame when it
+            # was stopped between steps, so the worker ends the run
+            # itself. Without this the page waits forever on a run
+            # that has already stopped.
+            if not done:
+                await stream.send_cancelled(
+                    self._resume_final_text(tensor_history), start
+                )
+            # Committed either way: a stopped run keeps the frames
+            # the browser already saw, which is the same contract
+            # LIFE-07 settled for a cancelled resume.
             self._store_state(params, tensor_history)
         except Exception as exc:  # noqa: BLE001
             logger.exception("generation failed")
@@ -426,7 +437,7 @@ class LladaBackend(Backend):
         self,
         ws: WebSocket,
         data: Dict[str, Any],
-        cancel_event: asyncio.Event,
+        cancel_event: threading.Event,
         stream: FrameStreamer,
     ) -> None:
         try:
@@ -503,15 +514,25 @@ class LladaBackend(Backend):
                 # failed send rolls back too, matching the done
                 # path where the sampler's terminal frame has
                 # already gone out through the streamer.
-                await stream.send_done(
-                    {
-                        "type": "done",
-                        "final_text": self._resume_final_text(
-                            resume_history
-                        ),
-                    },
-                    start,
+                #
+                # The two reach here identically and must not be
+                # reported identically: a guided edit stopping at
+                # the frame the user asked for is a completed
+                # request, and only the stop signal separates it
+                # from a run the user cut short.
+                final_text = self._resume_final_text(
+                    resume_history
                 )
+                if cancel_event.is_set():
+                    await stream.send_cancelled(final_text, start)
+                else:
+                    await stream.send_done(
+                        {
+                            "type": "done",
+                            "final_text": final_text,
+                        },
+                        start,
+                    )
             _commit_resume(
                 state,
                 base_history,

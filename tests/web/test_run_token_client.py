@@ -50,7 +50,7 @@ def _region(anchor: str, chars: int) -> str:
 def test_a_terminal_frame_brings_the_token() -> None:
     """Stamped by the worker on every `done`, including the ones it
     synthesizes for a guided edit, so a resumed run stays namable."""
-    region = _region("function handleDone(data)", 1400)
+    region = _region("function handleDone(data)", 2000)
 
     assert "activeRunToken = data.run_token" in region
 
@@ -58,7 +58,7 @@ def test_a_terminal_frame_brings_the_token() -> None:
 def test_only_a_string_is_adopted() -> None:
     """An older worker sends no token, and adopting `undefined` would
     make every later request quote the word undefined."""
-    region = _region("function handleDone(data)", 1400)
+    region = _region("function handleDone(data)", 2000)
 
     assert 'typeof data.run_token === "string"' in region
 

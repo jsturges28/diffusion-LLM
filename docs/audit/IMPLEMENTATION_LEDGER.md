@@ -84,12 +84,8 @@ since been worked and moved on.
 - **XAI-01** (high, M), released by `LIFE-01`: preserve complete
   intervention checkpoints rather than only token IDs. Run ownership being
   explicit is the condition the report attaches to it.
-- **LIFE-04** (high, L), released by `LIFE-03`: propagate disconnect and
-  cancel through inference and bounded queues, carrying `RUNTIME-01`'s first
-  bounded-queue step. Take it with the observation under `QUALITY-01`:
-  `cancel` cannot interrupt a generation today, because the message loop
-  awaits its handler inline, so the message type reads as though it works
-  and does not. `TRUST-04` waits behind this one.
+`LIFE-04` was on this list and is done; see its entry below. `TRUST-04`
+is released by it.
 
 `ORG-02` was on this list and is now in the hardware queue instead. Its
 state core is written and tested; none of its callers has been run.
@@ -227,7 +223,7 @@ on real hardware.
 | DATA-04 | high | M | done | none | Persist run provenance from the run, not manager state |
 | RUNTIME-02 | medium | M | done | none | Bound the GIF and label the model that produced it |
 | ANALYTICS-02 | high | M | ready | DATA-05 (done), see decision above | |
-| ANALYTICS-03 | medium | L | ready | DATA-01, DATA-05 (both done) | |
+| ANALYTICS-03 | medium | L | ready | DATA-01, DATA-05 (both done) | Gained evidence: 211 dirs scanned per load, plus ~10s to paint one long run |
 | ANALYTICS-04 | high | M | ready | DATA-01 (done) | |
 | LIFE-02 | high | M | needs hardware | none | Two commits: the process seam, then verified termination |
 | LIFE-06 | medium | M | needs hardware | none | Validate a switch target before evicting the working model |
@@ -236,11 +232,11 @@ on real hardware.
 | LIFE-01 | high | M | done | none | Name every run and refuse a stateful request that means another |
 | PROTOCOL-01 | medium | M | done | none | Two commits: scoped error envelopes, then the client routing |
 | XAI-01 | high | M | ready | LIFE-01 (done) | |
-| LIFE-04 | high | L | ready | LIFE-03 (done) | |
+| LIFE-04 | high | L | done | LIFE-03 (done) | Carried RUNTIME-01's queue bound, as its own Direction asks |
 | LIFE-05 | high | M | partial | none | Single-instance the desktop launcher; host lease deferred, see Deviations |
 | TRUST-04 | medium | L | blocked | LIFE-04 | |
 | DATA-02 | high | L | partial | maintainer decision | Lost-update slice only; conflict semantics still forked |
-| RUNTIME-01 | medium | L | blocked | LIFE-04, then ORG-02 + DATA-05 | |
+| RUNTIME-01 | medium | L | partial | ORG-02 + DATA-05 | Queue bound landed with LIFE-04; append-only frames remain |
 | ORG-02 | medium | L | partial | none | State core verified; download client, ES modules and server-rendered boot remain |
 | RUNTIME-03 | medium | S | blocked | ORG-02, paired | |
 | ROADMAP-01 | high | M | blocked | stage 6 order | |
@@ -1093,6 +1089,91 @@ never learned the run is a different situation to report than an
 ordinary two-window race, but the test now pins that the two
 *messages differ* rather than pinning either string.
 
+### LIFE-04
+
+**Done on 2026-08-18**, carrying `RUNTIME-01`'s bounded-queue step,
+which this finding's own Direction asks for as well.
+
+Four things shipped, in the order they had to.
+
+**The stop signal became a `threading.Event`.** Its readers are model
+threads: the autoregressive decode loop and DiffusionGemma's streamer
+both check it from inside the thread running the forward pass. Only
+the event loop sets it.
+
+**Producer queues are bounded** at 32 frames, in the new
+`src/inference/frame_queue.py`, with a put that is bounded in time as
+well as depth and re-reads the stop event on every wait. Bounding
+alone would have introduced the deadlock it invites, a producer
+waiting for space while the consumer waits for the producer, so the
+consumer now drains while it waits for the thread to finish. That
+drain is what makes the bound safe, and it is tested directly.
+
+**The socket loop reads while a generation runs.** The generation is
+an `asyncio.Task`; the loop stays on `receive_json`. `gen_lock` is
+gone, replaced by a worker-scoped in-flight task reference, which is
+what makes the busy check synchronous instead of a wait. Two windows
+still contend for one model because that reference is worker-scoped,
+while each socket settles only the generation it started. Removing
+the two `async with` blocks dropped the Ruff ratchet from 128 to 126.
+
+**Every model ends a stopped run the same way**, with `done` carrying
+`cancelled: true` through `FrameStreamer`, so it keeps its elapsed,
+provenance and run token and stays savable. LLaDA previously sent no
+terminal frame at all on a cancelled generate, which left the page
+waiting on a run that had already stopped. The retained state is
+explicitly partial, matching what `LIFE-07` settled for a cancelled
+resume, and the save records `partial: true` so a truncated run
+cannot read as complete in Analytics later.
+
+**Deviation, and the reason.** The plan said to give DiffusionGemma an
+event-backed `StoppingCriteria`. Reading the installed model code
+showed that would not work: `generate` consults an externally supplied
+criterion once per canvas, in `_finalize_canvas`, so it cannot
+interrupt a single-canvas run at all. Its streamer's `put_draft` is
+called on every denoising step, so the streamer raises instead. That
+is our own code, testable without a GPU, and finer-grained than the
+mechanism the plan named. The criterion was not added, because an
+untestable second path whose return-type contract we would be guessing
+at is worse than none.
+
+**What a user will notice.** Generate becomes Stop while a run is in
+flight, and leaving the page now ends the run rather than leaving the
+model computing for a page that is gone. The frames survive either
+way. Both are in the Help copy.
+
+**Hardware still owed**: the manual items below. Nothing here proves a
+GPU actually stops, only that the signal reaches the code that would
+stop it.
+
+**Left open: a stopped run can survive unlabelled as somebody else's
+baseline.** Found by the maintainer on hardware while working item
+168, by taking the unorthodox path through it: stop a run, open Edit
+Frames or What If, and resume to the end.
+
+The run that gets saved is correctly *not* marked partial, and that is
+worth stating because it looks like a miss. A stopped run keeps its
+configured schedule rather than its achieved length (`total_steps`
+comes from `params["steps"]`, `src/backends/llada_worker.py`), so a
+resume computes `remaining = total_steps - frame_index` and genuinely
+runs the schedule out; SmolLM3's substitution likewise regenerates to
+the full `max_new_tokens`. The branch really did finish.
+
+What is not recorded is that the *pre-edit* half did not. An edited
+save bundles its original as `original_frame_tokens`, and here that
+baseline is the truncated run. So the Original/Edited crossfade
+compares a run that was cut short against one that ran to completion,
+and nothing says so: `Diverged N/total` and the timing comparison read
+as though the intervention lengthened the run, when the baseline was
+simply stopped early.
+
+Not fixed, deliberately. It needs an `original_partial` field and a
+label on the Original side of the crossfade, which is another touch of
+the save format for a case that is rare and currently harmless in
+every way except interpretation. Whoever takes `ANALYTICS-04`, the
+guarded compare boundary, is already in this code and should fold it
+in there.
+
 ### RUNTIME-01
 
 **Measured, by accident, on 2026-08-18.** The maintainer ran a
@@ -1115,7 +1196,9 @@ frame for the growing sequence" (`src/inference/ar_sampler.py`), so
 frame *n* carries all *n* records.
 
 **Then measured properly, on a 2047-token run, on 2026-08-18.** That
-is 2,096,128 token records, and the timings are the useful part
+is 2,096,128 token records, which corroborates the report's own
+projection of 2,098,176 at the 2,048 ceiling (`AUDIT_REPORT.md:1191`).
+The arithmetic was never in doubt; the timings are the useful part,
 because they cost more than the payload does:
 
 - Saving the edited run took 30 to 45 seconds, with visible animation
@@ -1142,6 +1225,21 @@ is a convincing false pass for the session-snapshot behaviour.
 Stopgapped rather than fixed: `saveRun` now refuses a run that came
 back without its detail instead of writing the hollowed-out version
 silently. The refusal goes away by itself once the payload is linear.
+
+**The first step landed with `LIFE-04` on 2026-08-18.** Producer
+queues are bounded at 32 frames with a stop-aware timed put
+(`src/inference/frame_queue.py`), which is where this finding and
+`LIFE-04`'s Direction meet: both ask for it, so it was done once. A
+slow reader can no longer turn the quadratic payload into unbounded
+worker memory, and a producer whose consumer has gone stops rather
+than parking forever.
+
+What remains is the finding proper, and the bound does not touch it:
+the append-only frame variant for monotonic AR and SSM streams, with
+client-side reconstruction and periodic checkpoints if random
+scrubbing needs bounded seek time. Diffusion keeps full snapshots,
+where prior positions genuinely change. Until then the payload is
+still quadratic; it is merely quadratic in a bounded pipe.
 
 ### Found while verifying and fixed: saving one run twice
 

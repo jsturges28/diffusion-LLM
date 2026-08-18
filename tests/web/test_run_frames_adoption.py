@@ -178,7 +178,7 @@ def test_the_baseline_is_declared_once_and_held() -> None:
 def test_the_baseline_is_frozen_through_the_module() -> None:
     """The module refuses a second capture, so the guard that used to
     sit around this at the call site is gone."""
-    region = _region("function handleDone(data)", 1600)
+    region = _region("function handleDone(data)", 2000)
 
     assert "originalRunCapture(originalRun, runFrames" in region
 

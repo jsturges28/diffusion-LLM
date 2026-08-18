@@ -23,13 +23,16 @@ payload O(n^2) in the token count. This is fine for the few-hundred
 token budgets used here (see the registry's recommended cap) and is
 revisited only if long AR runs are added. Alternatives deliberately
 do NOT ride every snapshot (see ``_build_frame``), which would
-multiply that by k.
+multiply that by k. The producer queue is bounded so that slope
+cannot become unbounded worker memory when a client reads slowly;
+see ``src/inference/frame_queue.py``.
 """
 
 from __future__ import annotations
 
 import asyncio
 import queue
+import threading
 from typing import (
     Any,
     AsyncGenerator,
@@ -42,6 +45,14 @@ from typing import (
 )
 
 import torch
+
+from src.backends.protocol import TERMINAL_CANCELLED
+from src.inference.frame_queue import (
+    frame_queue_close,
+    frame_queue_create,
+    frame_queue_drain_until_done,
+    frame_queue_put,
+)
 
 # Competing candidates captured per position when the opt-in
 # alternatives signal is on. Fixed rather than user-facing: five is
@@ -504,7 +515,7 @@ def _stream_tokens(
     top_k: int,
     alternatives: bool,
     out_queue: "queue.Queue[Any]",
-    cancel_event: Optional[asyncio.Event],
+    cancel_event: Optional[threading.Event],
     past: Any = None,
 ) -> Any:
     """Decode up to ``budget`` tokens, emitting one frame each.
@@ -557,7 +568,8 @@ def _stream_tokens(
             )
             frame_index = len(trace.ids)
             trace.append(pick)
-            out_queue.put(
+            delivered = frame_queue_put(
+                out_queue,
                 _build_frame(
                     tokenizer,
                     trace.ids,
@@ -566,8 +578,15 @@ def _stream_tokens(
                     frame_index=frame_index,
                     total_steps=total_steps,
                     newest_alternatives=pick.alternatives,
-                )
+                ),
+                stop_event=cancel_event,
             )
+            # Nobody is reading any more, so the next token would
+            # be decoded for a page that has gone. Checked here as
+            # well as at the top of the loop because a run can be
+            # cancelled during the wait this put just did.
+            if not delivered:
+                break
             if pick.token_id in stop_ids:
                 break
             step_ids = torch.tensor(
@@ -623,7 +642,7 @@ def _decode_loop(
     alternatives: bool,
     seed: int,
     out_queue: "queue.Queue[Any]",
-    cancel_event: Optional[asyncio.Event],
+    cancel_event: Optional[threading.Event],
     result: Dict[str, Any],
 ) -> None:
     """Blocking token-by-token generation; runs in a worker thread."""
@@ -672,7 +691,7 @@ def _substitute_loop(
     alternatives: bool,
     seed: int,
     out_queue: "queue.Queue[Any]",
-    cancel_event: Optional[asyncio.Event],
+    cancel_event: Optional[threading.Event],
     result: Dict[str, Any],
     cache: Optional[Dict[str, Any]] = None,
 ) -> None:
@@ -726,6 +745,7 @@ def _substitute_loop(
         position=position,
         total_steps=max_new_tokens,
         out_queue=out_queue,
+        cancel_event=cancel_event,
     )
 
     # Only the forced token is left to forward: the probe's cache
@@ -769,6 +789,7 @@ def _emit_seed_frame(
     position: int,
     total_steps: int,
     out_queue: "queue.Queue[Any]",
+    cancel_event: Optional[threading.Event],
 ) -> None:
     """The frame that splices the forced position onto the client.
 
@@ -778,8 +799,13 @@ def _emit_seed_frame(
     Its candidates come off the trace rather than from the request's
     ``forced_alts``, so the row the client shows and the row the
     saved run keeps are the same list by construction.
+
+    A dropped seed frame is not handled here, because the caller's
+    own decode loop re-reads the same stop event on its first pass
+    and ends the run there.
     """
-    out_queue.put(
+    frame_queue_put(
+        out_queue,
         _build_frame(
             tokenizer,
             trace.ids,
@@ -788,7 +814,8 @@ def _emit_seed_frame(
             frame_index=position,
             total_steps=total_steps,
             newest_alternatives=trace.alts[position],
-        )
+        ),
+        stop_event=cancel_event,
     )
 
 
@@ -1228,7 +1255,7 @@ async def streaming_generate(
     thinking: bool = False,
     alternatives: bool = False,
     seed: int = -1,
-    cancel_event: Optional[asyncio.Event] = None,
+    cancel_event: Optional[threading.Event] = None,
     state_sink: Optional[Dict[str, Any]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Yield one frame per generated token, then a ``done`` frame.
@@ -1245,7 +1272,7 @@ async def streaming_generate(
     inputs = _build_inputs(
         tokenizer, model, prompt, thinking=thinking
     )
-    out_queue: "queue.Queue[Any]" = queue.Queue()
+    out_queue: "queue.Queue[Any]" = frame_queue_create()
     result: Dict[str, Any] = {}
 
     def run() -> None:
@@ -1267,13 +1294,14 @@ async def streaming_generate(
         except Exception as exc:  # noqa: BLE001
             result["err"] = exc
         finally:
-            out_queue.put(None)
+            frame_queue_close(out_queue)
 
     async for frame in _drain_frames(
         runner=run,
         out_queue=out_queue,
         result=result,
         state_sink=state_sink,
+        cancel_event=cancel_event,
     ):
         yield frame
 
@@ -1299,7 +1327,7 @@ async def streaming_substitute(
     thinking: bool = False,
     alternatives: bool = False,
     seed: int = -1,
-    cancel_event: Optional[asyncio.Event] = None,
+    cancel_event: Optional[threading.Event] = None,
     state_sink: Optional[Dict[str, Any]] = None,
     cache: Optional[Dict[str, Any]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
@@ -1331,7 +1359,7 @@ async def streaming_substitute(
     inputs = _build_inputs(
         tokenizer, model, prompt, thinking=thinking
     )
-    out_queue: "queue.Queue[Any]" = queue.Queue()
+    out_queue: "queue.Queue[Any]" = frame_queue_create()
     result: Dict[str, Any] = {}
 
     def run() -> None:
@@ -1363,13 +1391,14 @@ async def streaming_substitute(
         except Exception as exc:  # noqa: BLE001
             result["err"] = exc
         finally:
-            out_queue.put(None)
+            frame_queue_close(out_queue)
 
     async for frame in _drain_frames(
         runner=run,
         out_queue=out_queue,
         result=result,
         state_sink=state_sink,
+        cancel_event=cancel_event,
     ):
         yield frame
 
@@ -1380,6 +1409,7 @@ async def _drain_frames(
     out_queue: "queue.Queue[Any]",
     result: Dict[str, Any],
     state_sink: Optional[Dict[str, Any]],
+    cancel_event: Optional[threading.Event] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Run a blocking decode loop in a thread and forward its frames.
 
@@ -1387,6 +1417,11 @@ async def _drain_frames(
     whatever the loop failed with. The per-position trace goes to
     ``state_sink`` rather than onto the wire: the browser does not
     need it, but the worker does to serve a substitution.
+
+    The cleanup drains rather than only awaiting, because the queue
+    is bounded: a consumer that stops forwarding (a cancel, or a
+    send that failed) would otherwise leave the decode thread
+    parked on a full queue, and waiting for it here would deadlock.
     """
     task = asyncio.create_task(asyncio.to_thread(runner))
     try:
@@ -1396,7 +1431,7 @@ async def _drain_frames(
                 break
             yield item
     finally:
-        await task
+        await frame_queue_drain_until_done(out_queue, task)
 
     if "err" in result:
         raise result["err"]
@@ -1426,4 +1461,9 @@ async def _drain_frames(
     prompt_len = result.get("prompt_len")
     if isinstance(prompt_len, int):
         done["prompt_len"] = prompt_len
+    # A stopped run still ends with a terminal frame, carrying the
+    # tokens it did produce; the flag is what stops the client
+    # presenting a truncated run as a finished one.
+    if cancel_event is not None and cancel_event.is_set():
+        done[TERMINAL_CANCELLED] = True
     yield done

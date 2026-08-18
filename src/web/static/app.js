@@ -384,6 +384,12 @@ var runPhase = runPhasesCreate();
 // current run (until the next Generate) so a run cannot accrue a
 // second, conflicting saved edit.
 var editedRunSaved = false;
+// True when the run on screen was stopped rather than finished:
+// Stop was pressed, or the socket dropped mid-run. It stays
+// scrubbable, editable and savable, and the flag travels with the
+// save so the stored record says so too. Without it a truncated run
+// reads exactly like a complete one, on screen and in Analytics.
+var runInterrupted = false;
 // True once the current run has been saved at least once. Read by
 // Confirm to decide whether it is replacing a run the user already
 // filed or writing this generation for the first time.
@@ -1484,6 +1490,16 @@ function connect() {
   ws.onclose = function () {
     setBadge("disconnected");
     modelReady = false;
+    // A run in flight when the socket drops has stopped: the worker
+    // treats the disconnect as a cancel, so there is no terminal
+    // frame coming and nothing left computing. Leaving the
+    // generating state here is not the same as merely clearing the
+    // flag, which the report rejected: the run reaches the labelled
+    // stopped state, keeping its frames while refusing to present
+    // them as complete.
+    if (isGenerating) {
+      enterInterruptedState();
+    }
     updateGenerateButton();
     if (!suppressReconnect) {
       scheduleReconnect();
@@ -1797,14 +1813,44 @@ function toggleTpsMode() {
   renderTpsFooter(currentTokensPerSecond());
 }
 
+// The run on screen stopped without a terminal frame to say so,
+// which happens when the connection drops mid-run rather than when
+// Stop was pressed. Reached from ws.onclose only: every other stop
+// arrives as a cancelled ``done`` and goes through handleDone,
+// which has the run's own text and token to record as well.
+function enterInterruptedState() {
+  setGenerating(false);
+  isResuming = false;
+  endRunStatus();
+  runInterrupted = true;
+  statusRowReflow(function () {
+    statusMessage.textContent =
+      "Stopped: lost the connection mid-run.";
+  });
+  // The frames already on screen are real and worth keeping, so
+  // the scrubber and Save stay available. What the run cannot do
+  // is claim it finished.
+  if (runFramesLength(runFrames) > 0) {
+    setSaveAvailable(true);
+    activateScrubber();
+  }
+}
+
 function handleDone(data) {
   setGenerating(false);
   isResuming = false;
   endRunStatus();
+  // A stopped run is still a run: it keeps its frames, its scrubber
+  // and its edit tools. What it must not do is claim it finished,
+  // because the text simply ends either way and nothing else on
+  // screen says which. The flag also rides along to the save, so
+  // the record cannot outlive the distinction.
+  runInterrupted = data.cancelled === true;
+  var terminalMessage = runInterrupted ? "Stopped." : "Done.";
   // The chip is still fading as the line fills in beneath it, so
   // ease the row's new shape instead of snapping the chip sideways.
   statusRowReflow(function () {
-    statusMessage.textContent = "Done.";
+    statusMessage.textContent = terminalMessage;
   });
   if (data.final_text) {
     lastFinalText = data.final_text;
@@ -4774,23 +4820,35 @@ function setButtonUnlocked(button, title) {
   button.title = title;
 }
 
-// Once a run is finalized (an edited run has been saved), the primary
-// button becomes "New Run" (clears the canvas for a fresh prompt);
-// otherwise it is "Generate". Keeps the same slot/size.
+// The primary button has three jobs, in priority order. While a run
+// is in flight it is "Stop", because that is the only thing worth
+// doing then and the slot was otherwise greyed out for the whole
+// run. Once an edited run has been saved it is "New Run". Otherwise
+// it is "Generate". Same slot and size throughout.
 function currentGenerateLabel() {
+  if (isGenerating) {
+    return "Stop";
+  }
   return editedRunSaved ? "New Run" : "Generate";
 }
 
 function updateGenerateButton() {
-  if (editedRunSaved) {
+  if (isGenerating) {
+    btnGenerate.classList.remove("is-new-run");
+    btnGenerate.classList.add("is-stop");
+    // Live precisely when the old code greyed it out: a run in
+    // flight is the one moment Stop means anything.
+    btnGenerate.disabled = false;
+  } else if (editedRunSaved) {
+    btnGenerate.classList.remove("is-stop");
     btnGenerate.classList.add("is-new-run");
     // New Run is client-side; only a completing save should hold it.
     btnGenerate.disabled = isSaving;
   } else {
     btnGenerate.classList.remove("is-new-run");
+    btnGenerate.classList.remove("is-stop");
     btnGenerate.disabled =
-      isGenerating
-      || isSaving
+      isSaving
       || !(modelReady && paramsValid);
   }
   // The label text is owned by the idle-effect controller (it either
@@ -6219,6 +6277,7 @@ function resetRunState() {
   hideAltsPopover();
   remaskEdits = [];
   editedRunSaved = false;
+  runInterrupted = false;
   runSaved = false;
   lastSavedRunId = null;
   lastSavedRevision = null;
@@ -6248,6 +6307,26 @@ function startNewRun() {
   showOutputPlaceholder();
   promptTextChanged();
   promptInput.focus();
+}
+
+// Ask the worker to stop the run it is on.
+//
+// The reply is the run's ordinary terminal frame carrying
+// "cancelled", not a separate acknowledgement, so there is exactly
+// one way a run ends however it ended. Nothing is torn down here:
+// the worker still owns the frames in flight, and tidying up before
+// it has answered would discard tokens that are still arriving.
+function requestCancel() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  if (!isGenerating) {
+    return;
+  }
+  statusRowReflow(function () {
+    statusMessage.textContent = "Stopping...";
+  });
+  ws.send(JSON.stringify({ type: "cancel" }));
 }
 
 function startGeneration() {
@@ -6534,6 +6613,14 @@ function saveRun() {
     payload.prompt_len = lastRunPromptLen;
   }
 
+  // Sent only when true, so a run saved by an older page still
+  // reads as finished rather than as unknown. This is the one fact
+  // the page cannot recover later: the text ends where it ends
+  // whether the model chose that or the user did.
+  if (runInterrupted) {
+    payload.partial = true;
+  }
+
   // The worker's own account of what produced this run. Omitted when
   // the run predates it, which makes the server fall back to
   // describing whatever is resident, the way every save used to.
@@ -6686,8 +6773,11 @@ function saveRun() {
 btnGenerate.addEventListener(
   "click",
   function () {
-    // The primary button is "New Run" once a run is finalized.
-    if (editedRunSaved) {
+    // Same order as currentGenerateLabel, so what the button says
+    // and what it does cannot drift apart.
+    if (isGenerating) {
+      requestCancel();
+    } else if (editedRunSaved) {
       startNewRun();
     } else {
       startGeneration();
@@ -7502,6 +7592,7 @@ function saveSessionState() {
         : "",
     remaskEdits: remaskEdits,
     editedRunSaved: editedRunSaved,
+    runInterrupted: runInterrupted,
     runSaved: runSaved,
     lastSavedRunId: lastSavedRunId,
     lastSavedRevision: lastSavedRevision,
@@ -7599,6 +7690,9 @@ function restoreSessionState() {
   originalRunRestore(originalRun, s, runFrames.history.length);
   positionAlts = s.positionAlts || [];
   editedRunSaved = !!s.editedRunSaved;
+  // Restored with the rest, or a stopped run would come back from
+  // Analytics looking complete and save itself that way.
+  runInterrupted = !!s.runInterrupted;
   runSaved = !!s.runSaved;
   lastSavedRunId = s.lastSavedRunId || null;
   lastSavedRevision =

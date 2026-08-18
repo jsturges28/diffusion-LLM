@@ -1035,6 +1035,42 @@ line drawn deliberately, or a trap a future change will otherwise walk into.
 They moved here from `docs/HANDOFF.md` when `META-01` reduced it to a cold-start
 page.
 
+**What a flat entropy profile actually means: domain first, repetition
+second.** Settled by the project's first real experiment, on 2026-08-18,
+after a 2048-token SmolLM3 code run came back with a profile near zero for
+most of its length. Two prompts under identical settings and seed, both
+keeping the "occupies 2048 tokens" demand so the length pressure stayed a
+constant rather than becoming a second variable:
+
+- **A**, a Python cookbook required to use a different standard-library
+  module per recipe and never reuse a structure.
+- **B**, unrelated prose paragraphs with no shared theme.
+
+A produced genuinely varied content, 41-plus distinct modules with no
+repeated function, and flatlined anyway. B, under the same length pressure,
+stayed dense and high throughout. What that settles:
+
+- **Domain sets the floor.** Code is intrinsically low-entropy even when the
+  content is varied. Mean confidence was roughly 90 percent for A against 65
+  to 70 for B.
+- **Repetition is a slope on that floor, not the floor.** A's profile
+  *declines* rather than sitting flat, because the recipe scaffolding stayed
+  constant while the payload changed. The model learns the frame and copies
+  it even while the filling varies.
+- **The original run was both effects stacked**, code domain plus verbatim
+  body repetition, which is how it reached near zero.
+- **The spikes land on real decision points**, which module to reach for and
+  what problem to pose, with the troughs on forced syntax. This is the
+  closest thing to a validation the entropy feature has: it is measuring
+  uncertainty rather than tracking token frequency.
+- **Models pad code far more readily than prose.** B stalled near 670 tokens
+  across several seeds and only filled the budget once the prompt explicitly
+  licensed it to keep inventing subjects. Boilerplate is cheap to emit.
+
+The Help copy in `src/web/static/index.html` led with repetition before this
+and was corrected to lead with domain. If that paragraph is ever rewritten
+again, this is the evidence it has to agree with.
+
 **Collections ship without storage eviction.** The original framing paired
 favorites with storage-pressure relief; the measurement killed that half. 175
 runs occupied 440 MB against 189 GB free, so the pressure eviction would
@@ -1147,6 +1183,29 @@ directions to scope together before building. None are committed. For any that
 capture heavy signals (logits, entropy), prefer the established pattern:
 cheap-by-default with an opt-in for the expensive path (as with the Entropy
 signal toggle).
+
+**Per-run notes, explicitly post-audit.** Raised on 2026-08-18, straight after
+the entropy ablation above, and by the same route: the findings that made that
+experiment worth keeping were written into this file by hand, because the runs
+themselves had nowhere to hold them. A note attached to a run, with some way to
+reference or collate a group of runs, would let a session's reasoning live
+beside the evidence it came from.
+
+Two things to settle before building it, both of which are why this is not
+scoped yet:
+
+- **It overlaps Analytics collections**, which already group runs. The overlap
+  is soft: a collection answers "which runs belong together", a note answers
+  "what did I conclude". They may still want to be one feature rather than two,
+  and deciding that after building both would be the expensive order.
+- **It probably does not stay a list.** Notes that reference other notes and
+  groups of runs are a graph, and the shape it grows into depends on how far
+  the project goes. Building the flat version first is defensible, but only if
+  the storage does not assume flatness.
+
+The framing to aim at is a researcher's working notebook over the run history
+rather than a comment field: sectioned, cross-referenced, and traversable in
+the order the questions actually arrived rather than the order the runs did.
 
 Shipped from this backlog (see `README.md`):
 - Token commit-order coloring: tokens are tinted by the step at which they

@@ -852,6 +852,20 @@ button {
   transform: translateY(-1px);
 }
 
+/* One width for all three labels, reserved on the label rather than
+   the button so it does not have to know the button's padding.
+   Generate is the longest at 8 characters; the font stack is
+   monospace, so 8ch is exactly that. The 0.24em is the letter-spacing
+   those 8 characters carry (8 x 0.03em), which ch does not count.
+   Without this the button visibly narrows on the swap to Stop, which
+   is jarring precisely when a run has just started. It also holds the
+   box still for the diffusion reveal animating inside it. */
+#btn-generate-label {
+  display: inline-block;
+  min-width: calc(8ch + 0.24em);
+  text-align: center;
+}
+
 /* Finalized-run state: same slot as Generate, but a distinct calm blue
    to signal it starts a fresh run rather than generating. */
 #btn-generate.is-new-run {
@@ -865,6 +879,24 @@ button {
   background: rgba(0, 170, 255, 0.26);
   border-color: rgba(40, 190, 255, 0.7);
   box-shadow: 0 0 20px rgba(0, 170, 255, 0.4);
+  transform: translateY(-1px);
+}
+
+/* Running state: the same slot again, in the shared danger red. It is
+   the only one of the three that interrupts rather than starts, and
+   red is the colour this app already uses for the controls that end
+   something (delete, cancel), so it reads without being learned. */
+#btn-generate.is-stop {
+  background: rgba(255, 68, 68, 0.16);
+  color: var(--danger);
+  border-color: rgba(255, 68, 68, 0.4);
+  box-shadow: 0 0 10px rgba(255, 68, 68, 0.3);
+}
+
+#btn-generate.is-stop:hover:not(:disabled) {
+  background: rgba(255, 68, 68, 0.26);
+  border-color: rgba(255, 110, 110, 0.7);
+  box-shadow: 0 0 20px rgba(255, 68, 68, 0.4);
   transform: translateY(-1px);
 }
 

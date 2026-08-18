@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -239,7 +240,7 @@ class Smollm3Backend(Backend):
         self,
         ws: WebSocket,
         data: Dict[str, Any],
-        cancel_event: asyncio.Event,
+        cancel_event: threading.Event,
         stream: FrameStreamer,
     ) -> None:
         try:
@@ -383,7 +384,7 @@ class Smollm3Backend(Backend):
         self,
         ws: WebSocket,
         data: Dict[str, Any],
-        cancel_event: asyncio.Event,
+        cancel_event: threading.Event,
         stream: FrameStreamer,
     ) -> None:
         try:

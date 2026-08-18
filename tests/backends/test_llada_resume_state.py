@@ -22,6 +22,7 @@ terminal (a completed run, a guided stop, a cancel) still commit.
 from __future__ import annotations
 
 import asyncio
+import threading
 from typing import (
     Any,
     AsyncGenerator,
@@ -140,6 +141,25 @@ class _StubStreamer:
         del start_time  # Elapsed timings are not under test.
         await self._ws.send_json(frame)
 
+    async def send_cancelled(
+        self, final_text: str, start_time: float
+    ) -> None:
+        """The terminal frame for a run the user stopped.
+
+        A separate method on the real streamer, and separate here,
+        because the resume path has to choose between the two: a
+        guided edit stopping at its frame budget looks identical
+        from the sampler's side and is not a cancellation.
+        """
+        del start_time  # Elapsed timings are not under test.
+        await self._ws.send_json(
+            {
+                "type": "done",
+                "final_text": final_text,
+                "cancelled": True,
+            }
+        )
+
 
 def _install_resume_stub(
     monkeypatch: pytest.MonkeyPatch,
@@ -221,6 +241,7 @@ def _resume(
     *,
     frame_index: int = 2,
     max_frames: Optional[int] = None,
+    cancelled: bool = False,
 ) -> None:
     payload: Dict[str, Any] = {
         "frame_index": frame_index,
@@ -229,11 +250,14 @@ def _resume(
     }
     if max_frames is not None:
         payload["max_frames"] = max_frames
+    stop = threading.Event()
+    if cancelled:
+        stop.set()
     asyncio.run(
         backend.handle_resume(
             ws,  # type: ignore[arg-type]
             payload,
-            asyncio.Event(),
+            stop,
             _StubStreamer(ws),  # type: ignore[arg-type]
         )
     )
@@ -435,13 +459,36 @@ def test_a_cancelled_resume_keeps_the_frames_the_client_saw(
     backend = _backend()
     ws = _StubWebSocket()
 
-    _resume(backend, ws, frame_index=2)
+    _resume(backend, ws, frame_index=2, cancelled=True)
 
     state = backend.last_run_state
     assert state is not None
     assert len(state["tensor_history"]) == 4
     assert state["total_steps"] == ORIGINAL_TOTAL_STEPS
     assert ws.sent[-1]["type"] == "done"
+    assert ws.sent[-1]["cancelled"] is True
+
+
+def test_a_guided_edit_at_its_budget_is_not_a_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The distinction that shares this code path.
+
+    A guided "run to here" stops at the frame the user asked for
+    and returns without a terminal frame, exactly as a cancelled
+    resume does. Only the stop signal separates them, and marking
+    this one stopped would tell the page a completed request had
+    been cut short.
+    """
+    _install_resume_stub(monkeypatch, frames=6)
+    backend = _backend()
+    ws = _StubWebSocket()
+
+    _resume(backend, ws, frame_index=2, max_frames=2)
+
+    terminal = ws.sent[-1]
+    assert terminal["type"] == "done"
+    assert "cancelled" not in terminal
 
 
 # -- a rejected request never reaches the staging at all --

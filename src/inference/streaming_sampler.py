@@ -9,6 +9,7 @@ file stays untouched.
 from __future__ import annotations
 
 import asyncio
+import threading
 from typing import (
     Any,
     AsyncGenerator,
@@ -274,7 +275,7 @@ async def streaming_generate(
     temperature: float = 0.0,
     cfg_scale: float = 0.0,
     remasking: str = "low_confidence",
-    cancel_event: asyncio.Event | None = None,
+    cancel_event: threading.Event | None = None,
     tensor_history: List[torch.Tensor] | None = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Async generator that yields one dict per diffusion step.
@@ -457,7 +458,7 @@ async def streaming_resume(
     temperature: float = 0.0,
     cfg_scale: float = 0.0,
     remasking: str = "low_confidence",
-    cancel_event: asyncio.Event | None = None,
+    cancel_event: threading.Event | None = None,
     tensor_history: List[torch.Tensor] | None = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Resume diffusion from a saved frame with user remasks.

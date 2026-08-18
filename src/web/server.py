@@ -1714,6 +1714,11 @@ class SaveRunRequest(BaseModel):
     # saved figure is the one the run really built. None for a run
     # whose sampler predates the field.
     prompt_len: Optional[int] = Field(default=None, ge=0)
+    # True when the run was stopped rather than finished, taken from
+    # the ``cancelled`` flag on its terminal frame (`LIFE-04`).
+    # Defaulted rather than optional because absent and false mean
+    # the same thing here: only a run that says it was stopped was.
+    partial: bool = False
 
 
 def _display_run_path(run_dir: Path) -> str:
@@ -1915,6 +1920,13 @@ def _build_metadata(body: SaveRunRequest) -> Dict[str, Any]:
         metadata["remask_edits"] = [
             edit.model_dump() for edit in body.remask_edits
         ]
+    # Recorded only when true, so an older run stays distinguishable
+    # from one measured as complete. This is what stops a run the
+    # user stopped partway from reading, months later in Analytics,
+    # exactly like a run that finished: the text ends where it ends
+    # either way, and nothing else in the record says which.
+    if body.partial:
+        metadata["partial"] = True
     # The run token is deliberately not set here. The store stamps it
     # beside the revision, so the identity a run is published under
     # and the identity recorded in its metadata cannot disagree.

@@ -117,6 +117,17 @@ MSG_GENERATE = "generate"
 MSG_RESUME = "resume"
 MSG_SUBSTITUTE = "substitute"
 MSG_CANCEL = "cancel"
+# Set on a terminal ``done`` frame that ended because the run was
+# stopped rather than because it finished.
+#
+# A flag on ``done`` rather than a fourth terminal type, because a
+# stopped run is still a run: it keeps the frames it produced, the
+# provenance describing the worker that made them, and the token
+# naming it, so it stays scrubbable, editable and savable. What it
+# must not do is read as complete, which is the one thing the flag
+# changes. Present only when true, matching the rest of this
+# protocol, where a field absent means "no" rather than "unknown".
+TERMINAL_CANCELLED = "cancelled"
 # Resolve a typed string against the loaded vocabulary, for the
 # What If typed-token preview. A read-only lookup, not a generation
 # request, so it is answered without the generation lock.

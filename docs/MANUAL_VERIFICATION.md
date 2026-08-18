@@ -1395,3 +1395,40 @@ does nothing at all.
     run with no output and one chart family.
     This is a stopgap over the storage shape, not a fix; `RUNTIME-01` is
     where the refusal stops being necessary.
+167. **Stop actually stops the model.** The half of `LIFE-04` no sandbox
+    can prove. Do this once per model, because all three reach the stop
+    by a different route: LLaDA and SmolLM3 check between steps, and
+    DiffusionGemma is unwound from inside its streamer.
+    Start a long run, at least a few hundred tokens so there is time to
+    act. **Generate** should have become **Stop**. Watch `nvidia-smi` (or
+    the Settings VRAM readout) alongside it, press Stop partway, and
+    confirm three things: the frames halt within about a step rather than
+    running on to the token budget, GPU utilisation drops back to idle,
+    and the status line reads **Stopped.** rather than **Done.**
+    The run should still be there: scrub it, hover tokens, and confirm
+    the save icon is offered. Then generate again immediately without
+    reloading, which is the part that catches a worker left thinking it
+    is still busy.
+168. **A stopped run says so in Analytics.** Follows on from 167. Save the
+    stopped run, open Analytics, and check its duration column reads
+    something like `12.3s (stopped)`. Open it and confirm the detail panel
+    carries **Completion: Stopped before the model finished**.
+    Then check the negative half on any completed run: no `(stopped)` on
+    the duration and no Completion row at all. A run saved before today
+    should look the same as a completed one, not like an unknown.
+169. **Leaving the page stops the run too.** The behaviour change most
+    likely to surprise. Start a long run and, while it is going, click
+    through to **Analytics**. Confirm with `nvidia-smi` that the GPU goes
+    idle rather than continuing to churn for a page that is no longer
+    watching. Come back to Generation: the frames it had produced are
+    still there, and the run reads as stopped rather than as finished.
+    Worth doing once by closing the tab outright as well, since that is
+    the same path and the one a user hits by accident.
+170. **A guided edit is not mistaken for a stopped run.** The distinction
+    that shares a code path with the one above, on a diffusion model.
+    Run a generation, open **Edit Frames**, pick a frame partway through
+    and resume **to a chosen frame** rather than to the end. It stops at
+    the frame you asked for, exactly as a cancelled run stops early, and
+    it must still read **Done.** rather than **Stopped.**: it is a
+    completed request. Saving it should produce a run with no Completion
+    row and no `(stopped)` marker.

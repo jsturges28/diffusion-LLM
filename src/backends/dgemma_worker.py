@@ -9,8 +9,8 @@ in phase 1.
 
 from __future__ import annotations
 
-import asyncio
 import logging
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -163,7 +163,7 @@ class DgemmaBackend(Backend):
         self,
         ws: WebSocket,
         data: Dict[str, Any],
-        cancel_event: asyncio.Event,
+        cancel_event: threading.Event,
         stream: FrameStreamer,
     ) -> None:
         try:
@@ -295,7 +295,7 @@ class DgemmaBackend(Backend):
         self,
         ws: WebSocket,
         data: Dict[str, Any],
-        cancel_event: asyncio.Event,
+        cancel_event: threading.Event,
         stream: FrameStreamer,
     ) -> None:
         # Ordinary frames are forwarded directly (see

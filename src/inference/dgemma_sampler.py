@@ -16,11 +16,20 @@ from __future__ import annotations
 
 import asyncio
 import queue
+import threading
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import torch
 from transformers.generation.streamers import BaseStreamer
 
+from src.backends.protocol import TERMINAL_CANCELLED
+from src.inference.frame_queue import (
+    FrameQueueCancelled,
+    frame_queue_close,
+    frame_queue_create,
+    frame_queue_drain_until_done,
+    frame_queue_put,
+)
 from src.inference.reveal import newly_revealed
 
 MASK_CHAR = "\u2591"
@@ -74,13 +83,29 @@ class FrameQueueStreamer(BaseStreamer):
     ``put`` receives the prompt first (skipped) and then each
     committed canvas; ``put_draft`` receives every intermediate
     denoising canvas.
+
+    It is also where a cancelled run is stopped. ``generate``
+    consults an externally supplied stopping criterion only once
+    per canvas, so a criterion cannot interrupt a single-canvas
+    run at all, while ``put_draft`` lands on every denoising step.
+    Raising from here is therefore the only hook with the
+    granularity a user expects from pressing Stop.
     """
 
     def __init__(
-        self, tokenizer: Any, out_queue: "queue.Queue[Any]"
+        self,
+        tokenizer: Any,
+        out_queue: "queue.Queue[Any]",
+        stop_event: Optional[threading.Event] = None,
     ) -> None:
         self.tokenizer = tokenizer
         self._queue = out_queue
+        self._stop_event = stop_event
+        # The most recent canvas as text, kept so a cancelled run
+        # can still report what it produced: ``generate`` returns
+        # nothing when it is unwound, and the alternative is a
+        # terminal frame claiming the run produced no text at all.
+        self.last_text = ""
         self._prev: Optional[List[int]] = None
         self._stable: Optional[List[int]] = None
         # Positions already reported as born on this canvas. Unlike
@@ -170,7 +195,10 @@ class FrameQueueStreamer(BaseStreamer):
         born = newly_revealed(resolved, self._seen_revealed)
         self._seen_revealed.update(born)
         self._prev = ids
-        self._queue.put(
+        text = "".join(text_parts)
+        self.last_text = text
+        delivered = frame_queue_put(
+            self._queue,
             {
                 "type": "frame",
                 "index": self._index,
@@ -179,11 +207,16 @@ class FrameQueueStreamer(BaseStreamer):
                 "mean_conf": (
                     round(conf_sum / count, 4) if count else 0.0
                 ),
-                "text": "".join(text_parts),
+                "text": text,
                 "tokens": tokens,
                 "revealed": born,
-            }
+            },
+            stop_event=self._stop_event,
         )
+        if not delivered:
+            raise FrameQueueCancelled(
+                "denoising stopped: nobody is reading"
+            )
         self._index += 1
 
     def put(self, value: torch.Tensor) -> None:
@@ -215,7 +248,7 @@ class FrameQueueStreamer(BaseStreamer):
             )
 
     def end(self) -> None:
-        self._queue.put(None)
+        frame_queue_close(self._queue)
 
 
 def _seed(seed: int) -> None:
@@ -251,7 +284,7 @@ async def _run_streamed(
     out_queue: "queue.Queue[Any]",
     generate_kwargs: Dict[str, Any],
     seed: int,
-    cancel_event: Optional[asyncio.Event],
+    cancel_event: Optional[threading.Event],
     frame_history: Optional[List[Dict[str, Any]]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Drive ``model.generate`` in a thread, yielding protocol frames.
@@ -269,10 +302,16 @@ async def _run_streamed(
             result["out"] = model.generate(
                 **inputs, streamer=streamer, **generate_kwargs
             )
+        except FrameQueueCancelled:
+            # An outcome, not a failure: the streamer unwound
+            # generate because the run was cancelled. Recorded so
+            # the terminal frame can say so rather than reporting
+            # an error the user did not cause.
+            result["cancelled"] = True
         except Exception as exc:  # noqa: BLE001
             result["err"] = exc
         finally:
-            out_queue.put(None)
+            frame_queue_close(out_queue)
 
     task = asyncio.create_task(asyncio.to_thread(run))
     try:
@@ -302,22 +341,45 @@ async def _run_streamed(
                 )
             yield item
     finally:
-        await task
+        await frame_queue_drain_until_done(out_queue, task)
 
     if "err" in result:
         raise result["err"]
 
+    yield _terminal_frame(
+        tokenizer=tokenizer,
+        prompt_len=prompt_len,
+        streamer=streamer,
+        result=result,
+        cancel_event=cancel_event,
+    )
+
+
+def _terminal_frame(
+    *,
+    tokenizer: Any,
+    prompt_len: int,
+    streamer: "FrameQueueStreamer",
+    result: Dict[str, Any],
+    cancel_event: Optional[threading.Event],
+) -> Dict[str, Any]:
+    """The one ``done`` a run ends with, finished or stopped."""
     output = result.get("out")
     final_text = ""
     thinking_text = ""
-    if output is not None:
+    if output is None:
+        # A stopped run never returns sequences, so the text comes
+        # off the last canvas the streamer built rather than being
+        # reported as nothing produced.
+        final_text = streamer.last_text
+    else:
         sequences = getattr(output, "sequences", output)
         raw = tokenizer.decode(
             sequences[0][prompt_len:],
             skip_special_tokens=False,
         )
         thinking_text, final_text = _split_thinking(raw)
-    yield {
+    done: Dict[str, Any] = {
         "type": "done",
         "final_text": final_text,
         "thinking": thinking_text,
@@ -325,6 +387,14 @@ async def _run_streamed(
         # run records a measurement rather than the client's estimate.
         "prompt_len": prompt_len,
     }
+    # Either the streamer unwound generate, or the consumer stopped
+    # forwarding first; both mean the user stopped this run.
+    stopped = result.get("cancelled", False) or (
+        cancel_event is not None and cancel_event.is_set()
+    )
+    if stopped:
+        done[TERMINAL_CANCELLED] = True
+    return done
 
 
 async def streaming_generate(
@@ -339,7 +409,7 @@ async def streaming_generate(
     thinking: bool = False,
     entropy_signal: bool = False,
     seed: int = -1,
-    cancel_event: Optional[asyncio.Event] = None,
+    cancel_event: Optional[threading.Event] = None,
     frame_history: Optional[List[Dict[str, Any]]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Yield one dict per denoising step, then a ``done`` frame.
@@ -353,8 +423,10 @@ async def streaming_generate(
     )
     prompt_len = int(inputs["input_ids"].shape[1])
 
-    out_queue: "queue.Queue[Any]" = queue.Queue()
-    streamer = FrameQueueStreamer(tokenizer, out_queue)
+    out_queue: "queue.Queue[Any]" = frame_queue_create()
+    streamer = FrameQueueStreamer(
+        tokenizer, out_queue, stop_event=cancel_event
+    )
     streamer._takes_logits = entropy_signal
 
     generate_kwargs: Dict[str, Any] = {
@@ -391,7 +463,7 @@ async def streaming_resume(
     thinking: bool = False,
     entropy_signal: bool = False,
     seed: int = -1,
-    cancel_event: Optional[asyncio.Event] = None,
+    cancel_event: Optional[threading.Event] = None,
     frame_history: Optional[List[Dict[str, Any]]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Resume denoising from a chosen frame's canvas (single canvas).
@@ -432,8 +504,10 @@ async def streaming_resume(
             torch.randint(0, vocab_size, (1,)).item()
         )
 
-    out_queue: "queue.Queue[Any]" = queue.Queue()
-    streamer = FrameQueueStreamer(tokenizer, out_queue)
+    out_queue: "queue.Queue[Any]" = frame_queue_create()
+    streamer = FrameQueueStreamer(
+        tokenizer, out_queue, stop_event=cancel_event
+    )
     streamer._takes_logits = entropy_signal
 
     generate_kwargs: Dict[str, Any] = {

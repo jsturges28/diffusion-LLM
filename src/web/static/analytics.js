@@ -697,6 +697,15 @@ function displayVal(run, key) {
     return s;
   }
   if (key === "elapsed_seconds") {
+    // A stopped run says so on the duration rather than in a
+    // column of its own, because duration is the field it would
+    // otherwise mislead about: forty seconds of a run the user
+    // cut short reads exactly like forty seconds of a finished
+    // one, and the text ending early looks like the model's
+    // choice.
+    if (run.partial) {
+      return Number(v).toFixed(1) + "s (stopped)";
+    }
     return Number(v).toFixed(1) + "s";
   }
   if (key === "created_at") {
@@ -1891,6 +1900,15 @@ function showDetail(runId) {
       + '<span class="meta-value">'
       + escHtml(String(modelName))
       + '</span></div>';
+  }
+
+  // Stated only for a run that was stopped, so its absence keeps
+  // meaning "finished" for every run saved before this existed.
+  if (run.partial) {
+    html += metaRowHtml(
+      "Completion",
+      "Stopped before the model finished"
+    );
   }
 
   // Render whatever params this run recorded (model-agnostic).

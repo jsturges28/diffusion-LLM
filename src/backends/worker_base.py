@@ -12,12 +12,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
+import threading
 import time
 from abc import ABC, abstractmethod
 from typing import (
     Any,
     AsyncGenerator,
     Callable,
+    Coroutine,
     Dict,
     List,
     Optional,
@@ -43,6 +45,7 @@ from src.backends.protocol import (
     MSG_SUBSTITUTE,
     MSG_TOKENIZE,
     MSG_TOKENIZE_RESULT,
+    TERMINAL_CANCELLED,
     ModelInfo,
     request_error,
     request_id_of,
@@ -79,6 +82,136 @@ class StaleRunError(ValueError):
     because it is an operating error rather than a broken invariant:
     two windows is a thing users do, not a bug to crash on.
     """
+
+
+# How long a closing socket waits for its own generation to
+# notice the stop before saying so. Every sampler checks between
+# steps, and the slowest step this project runs is far under a
+# second, so reaching this means a backend is ignoring the signal
+# rather than that it is merely busy.
+SETTLE_WARN_SECONDS = 30.0
+
+assert SETTLE_WARN_SECONDS > 0.0, "a warning must have a delay"
+
+
+def _log_generation_outcome(
+    task: "asyncio.Task[None]",
+) -> None:
+    """Report a spawned generation's failure.
+
+    Needed because the socket loop no longer awaits its handler.
+    An exception in a task whose result nobody retrieves is
+    discarded silently, so a generation that died would be
+    indistinguishable from one still running.
+    """
+    if task.cancelled():
+        return
+    error = task.exception()
+    if error is not None:
+        logger.error("generation failed", exc_info=error)
+
+
+class _Generation:
+    """The one generation a worker may have in flight.
+
+    This replaces the lock the socket loop used to hold, and the
+    difference is the whole point of the change. A lock made the
+    loop *wait* for the generation, which is exactly what stopped
+    it reading, so a Cancel sat unread until the run it was meant
+    to stop had already finished. A task reference lets the loop
+    ask whether the worker is busy without ever blocking on it.
+
+    One at a time is still enforced, just by asking rather than by
+    queueing: a second request is refused as busy instead of
+    silently waiting its turn behind a run the user cannot see.
+
+    Held for the whole worker rather than per connection, because
+    the thing being serialized is a device with one model on it.
+    Two browser windows share it, and the second is told the
+    worker is busy exactly as it was before.
+    """
+
+    def __init__(self) -> None:
+        self._task: Optional["asyncio.Task[None]"] = None
+
+    def busy(self) -> bool:
+        """Is a generation running right now?"""
+        if self._task is None:
+            return False
+        return not self._task.done()
+
+    def start(
+        self, work: "Coroutine[Any, Any, None]"
+    ) -> "asyncio.Task[None]":
+        """Run *work* alongside the loop that spawned it.
+
+        Returns the task so the caller can wait for its own
+        generation later without waiting for somebody else's.
+        """
+        assert not self.busy(), "one generation at a time"
+        task = asyncio.create_task(work)
+        task.add_done_callback(_log_generation_outcome)
+        self._task = task
+        return task
+
+
+async def _settle_generation(
+    task: Optional["asyncio.Task[None]"],
+) -> None:
+    """Wait for one socket's own generation to actually end.
+
+    Called as a socket goes away. Returning before the work stops
+    is what LIFE-04 calls hidden work: the page is gone, the
+    supervisor believes the worker is idle, and a model still
+    holds the device.
+
+    The wait is unbounded on purpose. Abandoning the task would
+    restore exactly the invisibility being fixed, so a backend
+    that ignores cancellation must show up as a slow close rather
+    than as a worker that lies about being idle. The bounded log
+    below is how it shows up.
+    """
+    if task is None:
+        return
+    if task.done():
+        return
+    try:
+        await asyncio.wait_for(
+            asyncio.shield(task),
+            timeout=SETTLE_WARN_SECONDS,
+        )
+        return
+    except TimeoutError:
+        logger.error(
+            "generation still running %.0fs after cancel;"
+            " the backend is not honouring the stop signal",
+            SETTLE_WARN_SECONDS,
+        )
+    except Exception:  # noqa: BLE001
+        # Already reported by the done callback; swallowed here
+        # because the peer is, by construction, gone.
+        logger.debug("generation ended with an error")
+        return
+    try:
+        await task
+    except Exception:  # noqa: BLE001
+        logger.debug("generation ended with an error")
+
+
+def _budget_reached(
+    frame_count: int, max_frames: Optional[int]
+) -> bool:
+    """Has a frame-budgeted stream forwarded all it was allowed?
+
+    A free function so the streaming loop below stays flat: the
+    test used to be a nested ``if`` inside the branch that counts
+    frames, which is one level deeper than a loop body should go.
+    """
+    assert frame_count >= 0, "frames counted cannot be negative"
+    if max_frames is None:
+        return False
+    assert max_frames > 0, "a budget of zero forwards nothing"
+    return frame_count >= max_frames
 
 
 class FrameStreamer:
@@ -118,24 +251,33 @@ class FrameStreamer:
 
         Stops early (returning False) when *max_frames* frame
         messages have been forwarded.
+
+        The generator is always closed, including when a send
+        fails partway through. Left to the garbage collector
+        instead, its cleanup would run at some unpredictable later
+        point, and for the backends that bridge a model thread
+        that cleanup is what lets the thread finish. Closing here
+        makes "the browser went away" and "the worker stopped
+        working" the same moment.
         """
         frame_count = 0
         done_sent = False
-        async for frame in generator:
-            elapsed = time.monotonic() - start_time
-            frame["elapsed"] = round(elapsed, 2)
-            if frame.get("type") == "done":
-                self._stamp_terminal(frame)
-            await self._ws.send_json(frame)
-            if frame.get("type") == "done":
-                done_sent = True
-            elif frame.get("type") == "frame":
-                frame_count += 1
-                if (
-                    max_frames is not None
-                    and frame_count >= max_frames
-                ):
+        try:
+            async for frame in generator:
+                kind = frame.get("type")
+                elapsed = time.monotonic() - start_time
+                frame["elapsed"] = round(elapsed, 2)
+                if kind == "done":
+                    self._stamp_terminal(frame)
+                await self._ws.send_json(frame)
+                if kind == "done":
+                    done_sent = True
+                if kind == "frame":
+                    frame_count += 1
+                if _budget_reached(frame_count, max_frames):
                     break
+        finally:
+            await generator.aclose()
         return done_sent
 
     async def send_done(
@@ -157,6 +299,30 @@ class FrameStreamer:
         )
         self._stamp_terminal(frame)
         await self._ws.send_json(frame)
+
+    async def send_cancelled(
+        self, final_text: str, start_time: float
+    ) -> None:
+        """End a stopped run, once, the same way for every model.
+
+        Before this the three backends disagreed: LLaDA sent no
+        terminal frame at all on a cancelled generate, leaving the
+        page waiting forever on a run that had stopped, while the
+        other two sent an ordinary ``done`` a client could not tell
+        from a completed one.
+
+        Routed through ``send_done`` so a stopped run still carries
+        elapsed, provenance and its run token, which is what keeps
+        it savable and editable rather than merely displayed.
+        """
+        await self.send_done(
+            {
+                "type": "done",
+                "final_text": final_text,
+                TERMINAL_CANCELLED: True,
+            },
+            start_time,
+        )
 
     def _stamp_terminal(self, frame: Dict[str, Any]) -> None:
         """What the worker attests, and which run it attests it of.
@@ -340,7 +506,7 @@ class Backend(ABC):
         self,
         ws: WebSocket,
         data: Dict[str, Any],
-        cancel_event: asyncio.Event,
+        cancel_event: threading.Event,
         stream: FrameStreamer,
     ) -> None:
         """Validate, run, and stream a generation request."""
@@ -349,7 +515,7 @@ class Backend(ABC):
         self,
         ws: WebSocket,
         data: Dict[str, Any],
-        cancel_event: asyncio.Event,
+        cancel_event: threading.Event,
         stream: FrameStreamer,
     ) -> None:
         """Resume from a saved frame (override if supported)."""
@@ -359,7 +525,7 @@ class Backend(ABC):
         self,
         ws: WebSocket,
         data: Dict[str, Any],
-        cancel_event: asyncio.Event,
+        cancel_event: threading.Event,
         stream: FrameStreamer,
     ) -> None:
         """Force one position to an alternative, then regenerate.
@@ -793,7 +959,9 @@ def create_worker_app(
     model_ready = asyncio.Event()
     load_failed = asyncio.Event()
     load_error: Dict[str, str] = {}
-    gen_lock = asyncio.Lock()
+    # Worker-scoped, like the lock it replaces: one model on one
+    # device, so two connected windows contend for the same slot.
+    generation = _Generation()
 
     @app.on_event("startup")
     async def _startup() -> None:
@@ -871,26 +1039,40 @@ def create_worker_app(
     @app.websocket("/ws")
     async def _ws(ws: WebSocket) -> None:
         await ws.accept()
-        cancel_event = asyncio.Event()
+        # A threading.Event rather than an asyncio one because the
+        # readers are model threads: the autoregressive decode loop
+        # and DiffusionGemma's streamer both check it from inside
+        # the thread running the forward pass, and only the event
+        # loop ever sets it.
+        cancel_event = threading.Event()
         stream = FrameStreamer(
             ws,
             provenance=lambda: provenance_envelope(backend),
             run_token=lambda: backend.run_token,
         )
+        # This socket's own in-flight generation, which is not
+        # necessarily the worker's: another window may hold that
+        # one, and closing this page must not wait for theirs.
+        mine: Optional["asyncio.Task[None]"] = None
         # The three that stream frames. Identical but for the method
         # they reach, so they share one branch below rather than three
-        # copies of the same busy check and lock acquisition.
+        # copies of the same busy check and spawn.
         streaming = {
             MSG_GENERATE: backend.handle_generate,
             MSG_RESUME: backend.handle_resume,
             MSG_SUBSTITUTE: backend.handle_substitute,
         }
-        # Answered without gen_lock: both are tokenizer reads costing
-        # microseconds, and the lock exists to serialize generation,
-        # not to guard the tokenizer. Taking it would stall a preview
-        # or a prompt count behind a running model, which is exactly
-        # when the user is still typing.
-        lockless = {
+        # Answered even while a generation runs: both are tokenizer
+        # reads costing microseconds, and refusing them would stall a
+        # preview or a prompt count behind a running model, which is
+        # exactly when the user is still typing.
+        #
+        # They are the only thing that can now write to this socket
+        # alongside a streaming generation. That is safe because each
+        # reply is a single complete WebSocket text frame and the
+        # transport writes frames in order, so a reply lands between
+        # two frames rather than inside one.
+        concurrent = {
             MSG_TOKENIZE: backend.handle_tokenize,
             MSG_COUNT_PROMPT: backend.handle_count_prompt,
         }
@@ -916,34 +1098,40 @@ def create_worker_app(
                 mtype = data.get("type")
 
                 if mtype == MSG_CANCEL:
+                    # Reachable during a run, which is the whole
+                    # point: this loop is parked on receive_json
+                    # rather than inside the handler it would stop.
                     cancel_event.set()
                     continue
 
                 if mtype in streaming:
-                    if gen_lock.locked():
+                    if generation.busy():
                         await _send_busy(ws, mtype, data)
                         continue
-                    async with gen_lock:
-                        cancel_event.clear()
-                        await streaming[mtype](
+                    cancel_event.clear()
+                    mine = generation.start(
+                        streaming[mtype](
                             ws, data, cancel_event, stream
                         )
+                    )
                     continue
 
-                if mtype in lockless:
-                    await lockless[mtype](ws, data)
+                if mtype in concurrent:
+                    await concurrent[mtype](ws, data)
                     continue
 
-                # Inside gen_lock, unlike the two above it: this one
-                # runs a forward pass, so letting it in alongside a
-                # generation would have two passes contending for the
-                # same device and its memory.
+                # Refused during a run, unlike the two above it:
+                # this one runs a forward pass, so letting it in
+                # alongside a generation would have two passes
+                # contending for the same device and its memory.
+                # Awaited inline once accepted, which holds the
+                # loop for a single pass and cannot deadlock,
+                # because nothing else can be running by then.
                 if mtype == MSG_PROBE:
-                    if gen_lock.locked():
+                    if generation.busy():
                         await _send_busy(ws, MSG_PROBE, data)
                         continue
-                    async with gen_lock:
-                        await backend.handle_probe(ws, data)
+                    await backend.handle_probe(ws, data)
                     continue
 
                 # A client bug rather than a worker one, and scoped
@@ -960,7 +1148,15 @@ def create_worker_app(
                     )
                 )
         except WebSocketDisconnect:
-            cancel_event.set()
             logger.info("worker client disconnected")
+        finally:
+            # The socket is going away for some reason, and every
+            # reason means nothing will read this run's frames
+            # again. Stopping and then waiting is what makes the
+            # disconnect bounded rather than hidden: without the
+            # wait, the supervisor believes this worker is idle
+            # while a model still holds the device.
+            cancel_event.set()
+            await _settle_generation(mine)
 
     return app

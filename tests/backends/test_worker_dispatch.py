@@ -65,30 +65,42 @@ def _model_info() -> ModelInfo:
     )
 
 
-# No test may park a generation for longer than this. The lock tests
+# No test may park a generation for longer than this. The busy tests
 # below deliberately hold one open, and a bug that stopped the release
 # arriving would otherwise hang the whole suite rather than fail. An
 # earlier round of lifecycle tests in this repo did exactly that.
 HOLD_TIMEOUT_SECONDS = 5.0
 
+# How often a parked generation looks up to see whether it has been
+# cancelled. A real sampler checks between decode steps; this is the
+# same idea at a granularity a test can wait on.
+HOLD_POLL_SECONDS = 0.01
+
+assert HOLD_POLL_SECONDS < HOLD_TIMEOUT_SECONDS, (
+    "a park must be able to poll before it times out"
+)
+
 
 class _StubBackend(Backend):
     """A backend that runs no model but keeps the same bookkeeping.
 
-    ``parks`` makes a generation wait inside the generation lock, so a
-    second socket meets a genuinely busy worker rather than a
-    simulated one.
+    ``parks`` makes a generation wait, so a second socket meets a
+    genuinely busy worker rather than a simulated one.
 
-    Releasing it takes more care than it looks. The obvious lever,
-    sending ``cancel``, does not work: the message loop awaits the
-    handler inline, so while a generation runs, the loop that would
-    read a cancel from that same socket is not reading anything, and
-    the next socket's cancel sets a different connection's event. And
-    an ``asyncio.Event`` set straight from the test thread does not
-    reliably wake a waiter in the loop's thread, which hangs rather
-    than fails. So the gate is created in the loop and released
-    through ``call_soon_threadsafe``, with a ``threading.Event`` in
-    the other direction to tell the test when the park is real.
+    A parked generation watches ``cancel_event`` while it waits, the
+    same way every real sampler checks it between decode steps. That
+    makes it a fair stand-in for the thing under test here: the loop
+    keeps reading while a generation runs, so a cancel is a real
+    lever rather than a message that arrives after the run it was
+    meant to stop has already finished.
+
+    The explicit release remains for the tests that only want a busy
+    worker. It takes more care than it looks: an ``asyncio.Event``
+    set straight from the test thread does not reliably wake a waiter
+    in the loop's thread, and hangs rather than fails. So the gate is
+    created in the loop and released through ``call_soon_threadsafe``,
+    with ``threading.Event``s in the other direction to tell the test
+    when the park is real and when it noticed a cancel.
     """
 
     def __init__(self) -> None:
@@ -98,8 +110,11 @@ class _StubBackend(Backend):
         self.parks = False
         # Set from the loop, waited on by the test: safe that way
         # round, and it removes the race where the second window asks
-        # before the first has taken the lock.
+        # before the first is genuinely running.
         self.parked = threading.Event()
+        # Set when a parked generation saw its stop signal, which is
+        # what the cancel tests below are really asserting.
+        self.cancelled = threading.Event()
         self.probes: List[Dict[str, Any]] = []
         self.resumes: List[Dict[str, Any]] = []
         self._gate: Optional[asyncio.Event] = None
@@ -115,21 +130,42 @@ class _StubBackend(Backend):
         gate = self._gate
         self._loop.call_soon_threadsafe(gate.set)
 
+    async def _hold(self, cancel_event: threading.Event) -> bool:
+        """Wait to be released. True if cancelled instead.
+
+        Polls rather than waiting outright, because there are two
+        ways out of here and only one of them is an asyncio object.
+        """
+        self._loop = asyncio.get_running_loop()
+        self._gate = asyncio.Event()
+        gate = self._gate
+        self.parked.set()
+        waited = 0.0
+        while waited < HOLD_TIMEOUT_SECONDS:
+            if cancel_event.is_set():
+                self.cancelled.set()
+                return True
+            if gate.is_set():
+                return False
+            await asyncio.sleep(HOLD_POLL_SECONDS)
+            waited += HOLD_POLL_SECONDS
+        raise AssertionError("a park was never released")
+
     async def handle_generate(
         self,
         ws: Any,
         data: Dict[str, Any],
-        cancel_event: asyncio.Event,
+        cancel_event: threading.Event,
         stream: FrameStreamer,
     ) -> None:
         self.begin_run()
         if self.parks:
-            self._loop = asyncio.get_running_loop()
-            self._gate = asyncio.Event()
-            self.parked.set()
-            await asyncio.wait_for(
-                self._gate.wait(), timeout=HOLD_TIMEOUT_SECONDS
-            )
+            stopped = await self._hold(cancel_event)
+            if stopped:
+                await stream.send_done(
+                    {"type": "done", "final_text": ""}, 0.0
+                )
+                return
         self.last_run_state = {"prompt": data.get("prompt", "")}
         await stream.send_done(
             {"type": "done", "final_text": data.get("prompt", "")},
@@ -140,7 +176,7 @@ class _StubBackend(Backend):
         self,
         ws: Any,
         data: Dict[str, Any],
-        cancel_event: asyncio.Event,
+        cancel_event: threading.Event,
         stream: FrameStreamer,
     ) -> None:
         try:
@@ -300,17 +336,117 @@ def test_cancel_is_swallowed_rather_than_answered(
     missing, cancel would fall through to the unknown-type reply and
     the generation below would read that error instead of its own
     terminal frame.
-
-    Worth knowing while reading this: cancel cannot actually
-    interrupt a generation in flight. The message loop awaits the
-    handler inline, so a cancel arriving on that socket is not read
-    until the generation it was meant to stop has finished. That is
-    `LIFE-04`'s to fix, and is recorded in the ledger.
     """
     with _window(client) as socket:
         socket.send_json({"type": "cancel"})
 
         token = _generate(socket, "after the cancel")
+
+    assert token != ""
+
+
+# -- cancel and disconnect reach a running generation (LIFE-04) --
+
+
+def test_a_cancel_reaches_a_generation_already_running(
+    backend: _StubBackend, client: TestClient
+) -> None:
+    """The finding, in one test.
+
+    Before this, the loop awaited its handler inline, so a cancel
+    sat unread in the socket buffer until the run it was meant to
+    stop had already finished. Now the loop is parked on receive
+    while the generation runs elsewhere, so the cancel lands while
+    there is still something to stop.
+    """
+    with _window(client) as socket:
+        _park(backend, socket)
+
+        socket.send_json({"type": "cancel"})
+
+        assert backend.cancelled.wait(
+            timeout=HOLD_TIMEOUT_SECONDS
+        ), "the running generation never saw the cancel"
+        done = socket.receive_json()
+
+    assert done["type"] == "done"
+
+
+def test_the_loop_keeps_reading_while_a_generation_runs(
+    backend: _StubBackend, client: TestClient
+) -> None:
+    """Cancel is not a special case; the loop is simply reading.
+
+    A tokenize proves it without involving cancellation at all: it
+    is answered mid-run, which the old inline-await loop could not
+    have done.
+    """
+    with _window(client) as socket:
+        _park(backend, socket)
+
+        socket.send_json({"type": "tokenize", "text": "hello"})
+        reply = socket.receive_json()
+
+        _release(backend, socket)
+
+    # The stub holds no tokenizer, so the refusal is the answer.
+    # What matters is that an answer arrived during the run.
+    assert reply["type"] == "error"
+    assert reply["code"] == ERROR_NO_TOKENIZER
+
+
+def test_a_cancel_from_another_window_leaves_a_run_alone(
+    backend: _StubBackend, client: TestClient
+) -> None:
+    """Stop belongs to the page that pressed it.
+
+    The stop signal is per connection, so one window cannot end
+    another's run by pressing its own button. Reaching across
+    would be worse than the gap being fixed.
+    """
+    with _two_windows(client) as (first, second):
+        _park(backend, first)
+
+        second.send_json({"type": "cancel"})
+        # Long enough that a leak across sockets would have landed.
+        assert not backend.cancelled.wait(timeout=0.2)
+
+        _release(backend, first)
+
+    assert not backend.cancelled.is_set()
+
+
+def test_a_disconnect_stops_a_running_generation(
+    backend: _StubBackend, client: TestClient
+) -> None:
+    """Closing the page is a cancel the user did not have to press.
+
+    This is the case the report calls hidden work: the browser is
+    gone, and without this the worker keeps computing for it while
+    the supervisor believes it is idle.
+    """
+    with _window(client) as socket:
+        _park(backend, socket)
+
+    assert backend.cancelled.wait(timeout=HOLD_TIMEOUT_SECONDS), (
+        "closing the socket did not stop the generation"
+    )
+
+
+def test_the_worker_takes_work_again_after_a_cancel(
+    backend: _StubBackend, client: TestClient
+) -> None:
+    """A stopped run must not leave the worker permanently busy."""
+    with _window(client) as socket:
+        _park(backend, socket)
+        socket.send_json({"type": "cancel"})
+        assert backend.cancelled.wait(
+            timeout=HOLD_TIMEOUT_SECONDS
+        )
+        assert socket.receive_json()["type"] == "done"
+
+        backend.parks = False
+        token = _generate(socket, "a fresh run")
 
     assert token != ""
 

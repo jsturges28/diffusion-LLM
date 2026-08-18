@@ -108,9 +108,13 @@ cannot navigate or cancel for each other, with the socket opening on a
 gave every run a token that a stateful follow-up must name, so one window
 cannot resume or probe another's run (`LIFE-01`), and gave every error a
 scope, so a probe refused as busy no longer tears down What If
-(`PROTOCOL-01`). What remains of the stage is `XAI-01`, `LIFE-04` and
-`TRUST-04`. The ledger is the authority and is updated in the same commit as
-each change.
+(`PROTOCOL-01`). Pass four made a run stoppable (`LIFE-04`): the worker's
+socket loop keeps reading while a generation runs as a task, so Cancel and
+disconnect land while there is still something to stop, producer queues are
+bounded (`RUNTIME-01`'s first step), and every model ends a stopped run with
+one `done` carrying `cancelled`. Generate becomes Stop in the browser. What
+remains of the stage is `XAI-01` and `TRUST-04`. The ledger is the authority
+and is updated in the same commit as each change.
 
 **Stage 5, frontend state, has started.** The generator's run state used to
 be loose variables in a 7,900-line script: six arrays indexed by frame that
