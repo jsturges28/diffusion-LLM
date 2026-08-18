@@ -585,10 +585,37 @@ where it now is. A future session should not repeat the removal
 without doing the server-render first; the comment in `index.html`
 next to the overlay says so too.
 
-**One thing was kept from the detour.** `#scrubber-section` now holds
-its height when idle instead of leaving the layout, which removes a
-source of movement rather than covering it. That is the shape the
-rest of the fix should take.
+**Four things were kept from the detour**, all the same shape:
+removing a source of movement rather than covering it, which is what
+the server-render should eventually do wholesale.
+
+- `#scrubber-section` holds its height when idle, so a finished run
+  no longer resizes the canvas above it.
+- `#prompt-context` holds its line before the first token count
+  arrives. Only a ready worker can produce that count, so the whole
+  column below the prompt box used to drop a step on every load.
+- `.analytics-new-dot` keeps a two-digit slot on both pages that
+  carry it. It sits inside a header link with more links to its
+  right, so a badge appearing from nothing slid all of them across.
+
+The fourth is the interesting one, because it says where this
+technique stops. `#entropy-profile-row` is reserved **only when the
+resident model reports entropy**, which today means the
+autoregressive one. Holding it unconditionally would put a permanent
+empty strip under every diffusion run: a cost paid on every frame to
+avoid a shift paid once. So the rule is not "reserve everything that
+can appear" but "reserve what will appear for this model", and the
+markup starts the row absent because before `/api/models` answers
+there is no model to ask. `setEntropyProfileVisible` owns all three
+states and `boot()` settles it once the model is known.
+
+That distinction outlives the curtain. When boot state is rendered
+into the HTML at serve time, the server will know which model is
+resident, so the conditional part becomes a question the template
+can answer directly rather than one the client re-answers after a
+fetch. `ROADMAP-03` would bring entropy to the diffusion models and
+make the predicate itself wrong; it is a one-line change in
+`setEntropyProfileVisible`, flagged in the comment there.
 
 ### LIFE-05
 

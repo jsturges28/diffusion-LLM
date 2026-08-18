@@ -266,12 +266,20 @@ body {
   position: relative;
 }
 
-/* Count badge on the Analytics link: how many saved runs are unviewed. */
+/* Count badge on the Analytics link: how many saved runs are unviewed.
+   Sized for two digits and held even when there is nothing to show,
+   because it lives inside the link and the header links sit in a row:
+   letting it collapse means every link to its right slides across the
+   moment the count arrives, which it does after a fetch on every page
+   load. Same reasoning as the scrubber's reserved row, and the same
+   trick analytics.js already uses for its per-row "new" dot. Three
+   digits still widen it, which is a hundred unopened runs and rare
+   enough to accept. */
 .analytics-new-dot {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 15px;
+  min-width: 20px;
   height: 15px;
   padding: 0 4px;
   margin-left: 5px;
@@ -284,6 +292,14 @@ body {
   vertical-align: middle;
   box-shadow: 0 0 6px var(--accent-glow);
   animation: analytics-dot-pulse 1.6s ease-in-out infinite;
+}
+
+/* Nothing to count. Keeps its width so the header does not move, and
+   drops the pulse, which would otherwise animate an invisible pill
+   for the life of the page. */
+.analytics-new-dot.is-empty {
+  visibility: hidden;
+  animation: none;
 }
 
 @keyframes analytics-dot-pulse {
@@ -522,8 +538,12 @@ body {
   min-height: 13px;
 }
 
-.prompt-context[hidden] {
-  display: none;
+/* No count yet, because only a ready worker can produce one. Holds
+   its line so everything below the prompt box stays put; `display:
+   none` here meant the whole column dropped a step on every load,
+   the moment the first count came back. */
+.prompt-context.is-empty {
+  visibility: hidden;
 }
 
 .prompt-context-note {
@@ -3058,8 +3078,17 @@ input[type="checkbox"].app-checkbox:checked::after {
   color: var(--text-secondary);
 }
 
+/* Absent: this model reports no entropy, so the row is gone rather
+   than held. See `setEntropyProfileVisible` in app.js for why this
+   one is conditional where the scrubber's reservation is not. */
 #entropy-profile-row[hidden] {
   display: none;
+}
+
+/* Reserved: entropy is coming, just not yet. Holds the row so a
+   finished run does not shrink the canvas above it. */
+#entropy-profile-row.is-empty {
+  visibility: hidden;
 }
 
 .entropy-profile-label {

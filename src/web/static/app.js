@@ -3308,10 +3308,10 @@ function drawEntropyProfile() {
   }
   var values = entropyProfileValues();
   if (values.length === 0) {
-    entropyProfileRow.hidden = true;
+    setEntropyProfileVisible(false);
     return;
   }
-  entropyProfileRow.hidden = false;
+  setEntropyProfileVisible(true);
 
   // Match the backing store to the CSS box so columns stay crisp on
   // HiDPI displays and after a window resize.
@@ -3541,7 +3541,7 @@ function setEntropyHoverPosition(pos) {
   // Hover state only exists while the profile is on screen, so a
   // token hovered mid-generation cannot leave a stale column lit when
   // the scrubber later appears.
-  var visible = entropyProfileRow && !entropyProfileRow.hidden;
+  var visible = entropyProfileShowing();
   var next = visible ? pos : null;
   if (entropyHoverPos === next) {
     return;
@@ -3822,6 +3822,37 @@ function entropyProfilePosition(event) {
   return index;
 }
 
+// The entropy row has three states, not the scrubber's two, which is
+// why it does not simply reuse that pattern.
+//
+//   absent    this model reports no entropy at all, so there is
+//             nothing to reserve. Holding a gap here would put a
+//             permanent empty strip under every diffusion run, which
+//             is a worse trade than the shift it would prevent.
+//   reserved  this model does report entropy, but no run has yet
+//             produced any. Held, so finishing a run does not shrink
+//             the canvas above it.
+//   shown
+//
+// Autoregressive is the proxy for "reports entropy" because that is
+// what is true today; `ROADMAP-03` would bring it to the diffusion
+// models, at which point this predicate is the thing to revisit.
+function setEntropyProfileVisible(visible) {
+  if (!entropyProfileRow) {
+    return;
+  }
+  entropyProfileRow.hidden = !visible && !isAutoregressive();
+  entropyProfileRow.classList.toggle("is-empty", !visible);
+}
+
+function entropyProfileShowing() {
+  return !!(
+    entropyProfileRow
+    && !entropyProfileRow.hidden
+    && !entropyProfileRow.classList.contains("is-empty")
+  );
+}
+
 // Show the profile only when the run carries entropy and the
 // scrubber is driving a token view.
 function updateEntropyProfileVisibility() {
@@ -3829,7 +3860,7 @@ function updateEntropyProfileVisibility() {
     return;
   }
   if (!scrubberActive || !entropyAvailable()) {
-    entropyProfileRow.hidden = true;
+    setEntropyProfileVisible(false);
     return;
   }
   drawEntropyProfile();
@@ -4328,7 +4359,11 @@ function renderPromptContext() {
     return;
   }
   if (promptCountLatest === null) {
-    promptContextRow.hidden = true;
+    // Emptied, not removed. This row sits directly under the prompt
+    // box and only a ready worker can produce the count, so taking
+    // it out of the layout means everything below the box drops a
+    // step the moment the first count lands, on every page load.
+    promptContextRow.classList.add("is-empty");
     return;
   }
   var count = promptCountLatest.count;
@@ -4342,7 +4377,7 @@ function renderPromptContext() {
   }
   text += count === 1 ? " token" : " tokens";
   promptContextCount.textContent = text;
-  promptContextRow.hidden = false;
+  promptContextRow.classList.remove("is-empty");
   applyPromptContextWarning(count);
 }
 
@@ -4903,9 +4938,7 @@ function deactivateScrubber() {
   if (overlaySelectGroup) {
     overlaySelectGroup.hidden = true;
   }
-  if (entropyProfileRow) {
-    entropyProfileRow.hidden = true;
-  }
+  setEntropyProfileVisible(false);
   entropyHoverPos = null;
   clearTokenHighlight();
   clearTokenMetrics();
@@ -6378,13 +6411,11 @@ function refreshAnalyticsCue() {
     return;
   }
   var count = overlaysNewRunCount();
-  if (count > 0) {
-    analyticsNewDot.textContent = String(count);
-    analyticsNewDot.hidden = false;
-  } else {
-    analyticsNewDot.textContent = "";
-    analyticsNewDot.hidden = true;
-  }
+  // Emptied rather than removed: the badge keeps its width so the
+  // header links beside it do not slide when the count arrives,
+  // which it does after a fetch on every page load.
+  analyticsNewDot.textContent = count > 0 ? String(count) : "";
+  analyticsNewDot.classList.toggle("is-empty", count === 0);
 }
 
 // One-shot "+1" that rises and fades above the Analytics link.
@@ -7865,6 +7896,10 @@ function boot() {
       // model could not be identified at all.
       applyTokenBirthGlow();
       setMaskChar();
+      // Same reason: whether the entropy row is reserved or absent
+      // depends on the model, and the markup starts it absent, which
+      // is the safe reading before we know which model is resident.
+      setEntropyProfileVisible(false);
       var restored = false;
       try {
         restored = restoreSessionState();

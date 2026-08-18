@@ -46,6 +46,8 @@ kept when these were written:
 - **155**: **not yet validated**, and it is a judgement call rather than a
   pass or fail. The change it covers is meant to be reverted if you do not
   like it.
+- **156**: **not yet validated.** Three more reservations in the spirit of
+  152, plus the one place the technique is deliberately not applied.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -1198,3 +1200,22 @@ does nothing at all.
     which is why the two entry points may feel different. And the fade is
     generic, with nothing morphing between pages, because naming elements is
     the follow-on work rather than part of the experiment.
+156. **Three more things hold their places, and one deliberately does not.**
+    Same idea as 152, applied to the shifts you spotted once the cross-fade
+    stopped hiding them. Judge each on a fresh launch, since first paint is
+    where they show.
+    **Below the prompt box.** The token count under the prompt box needs a
+    ready worker, so it is empty for a moment on every load. Nothing below
+    the prompt box should move when it fills in.
+    **The header links.** The Analytics link carries a count of unopened
+    runs, which also arrives after a fetch. The links around it should not
+    slide when it appears, and should not move again when the count crosses
+    from nine to ten. Three digits will still nudge them, which is a hundred
+    unopened runs and accepted.
+    **The entropy row, only on SmolLM3.** Run SmolLM3 and the entropy strip
+    below the canvas should occupy its space before the run produces it, so
+    the canvas does not shrink when the run ends. Then load a diffusion
+    model and confirm the opposite: no empty strip and no gap at all, because
+    a row held for a model that never fills it is worse than the shift it
+    would prevent. This is the case where reserving is the wrong answer, so
+    a stray gap under a LLaDA or DiffusionGemma run is the failure to report.

@@ -21,13 +21,21 @@ page visibly reassemble and asked for it back. That is recorded under
 curtain unnecessary rather than merely opaque: rendering boot state
 into the HTML at serve time, which is `ORG-02`'s to do.
 
-The scrubber reservation stays from that attempt, because it is worth
-having either way. It removes one source of movement rather than
-hiding it, which is what the whole page needs eventually.
+The reservations stay from that attempt, because they are worth
+having either way. They remove sources of movement rather than hiding
+them, which is what the whole page needs eventually, and the curtain
+does not cover all of them: it lifts before the first run ends and
+before a count of unopened runs arrives.
+
+Reserving is not always right, though, and the entropy row is where
+that shows. A row held for a model that will never fill it is a
+permanent empty strip, which is worse than the shift it prevents, so
+that one is reserved only when the resident model reports entropy.
 
 What passing proves, then, is narrow: the curtain is up when the page
 cannot yet be trusted to look right, it comes down when it can, and
-one element that used to shove the canvas around no longer does.
+the elements that used to shove their neighbours around hold their
+places, each for as long as it is theirs to hold.
 """
 
 from __future__ import annotations
@@ -165,3 +173,134 @@ def test_one_helper_owns_the_scrubber_s_visibility() -> None:
 
     assert "function setScrubberVisible(visible)" in source
     assert "scrubberSection.hidden" not in source
+
+
+# -- nor beside it, nor above it --
+
+
+def _is_hidden(tag: str) -> bool:
+    """The bare `hidden` attribute, not `aria-hidden`, which several
+    of these tags also carry and which reserves nothing either way."""
+    return re.search(r"\shidden(?=[\s>=])", tag) is not None
+
+
+def _rule(selector: str, chars: int = 200) -> str:
+    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    start = css.find(selector)
+    assert start != -1, (
+        f"rule {selector!r} is gone from style.css; update this test"
+        " rather than deleting it"
+    )
+    return css[start : start + chars]
+
+
+def test_the_prompt_context_row_holds_its_line() -> None:
+    """Only a ready worker can count a prompt's tokens, so this row
+    is empty at first paint on every load. Removing it dropped the
+    whole column below the prompt box a step when the count landed."""
+    html = INDEX_HTML.read_text(encoding="utf-8")
+
+    match = re.search(r'<div id="prompt-context"[^>]*>', html)
+    assert match is not None
+    assert "is-empty" in match.group(0)
+    assert not _is_hidden(match.group(0))
+
+
+def test_an_empty_context_row_is_invisible_not_absent() -> None:
+    rule = _rule(".prompt-context.is-empty")
+
+    assert "visibility: hidden" in rule
+    assert "display: none" not in rule
+
+
+def test_the_analytics_badge_holds_a_slot_on_both_pages() -> None:
+    """It lives inside a header link with more links to its right, so
+    a badge that appears from nothing slides all of them across. The
+    count comes from a fetch, so that is every page load."""
+    for name in ("index.html", "menu.html"):
+        markup = (STATIC / name).read_text(encoding="utf-8")
+
+        match = re.search(
+            r'<span id="[a-z-]*analytics-new[a-z-]*"[^>]*>', markup
+        )
+        assert match is not None, name
+        assert "is-empty" in match.group(0), name
+        assert not _is_hidden(match.group(0)), name
+
+
+def test_the_badge_s_slot_fits_two_digits() -> None:
+    """A slot sized for one digit still jumps at ten unopened runs,
+    which is a count the maintainer passes routinely."""
+    rule = _rule(".analytics-new-dot {")
+
+    match = re.search(r"min-width:\s*(\d+)px", rule)
+    assert match is not None
+    assert int(match.group(1)) >= 20
+
+
+def test_neither_badge_is_toggled_by_the_hidden_attribute() -> None:
+    """`hidden` implies `display: none`, which un-reserves the slot
+    the rule above reserves."""
+    for name in ("app.js", "menu.js"):
+        source = (STATIC / name).read_text(encoding="utf-8")
+
+        assert ".hidden = true" not in _badge_body(source), name
+        assert 'classList.toggle("is-empty"' in source, name
+
+
+def _badge_body(source: str) -> str:
+    for anchor in (
+        "function refreshAnalyticsCue()",
+        "function refreshAnalyticsNewBadge()",
+    ):
+        start = source.find(anchor)
+        if start != -1:
+            return source[start : start + 500]
+    raise AssertionError(
+        "neither badge refresher is in this file; update this test"
+        " rather than deleting it"
+    )
+
+
+# -- except where holding a place would be the worse bargain --
+
+
+def test_the_entropy_row_is_reserved_only_when_it_can_fill() -> None:
+    """The conditional case. Diffusion models report no entropy
+    today, and a row held for them is a permanent empty strip under
+    every run rather than a shift avoided once."""
+    region = _region(
+        "function setEntropyProfileVisible(visible)", 400
+    )
+
+    assert (
+        "entropyProfileRow.hidden = !visible && !isAutoregressive()"
+        in region
+    )
+    assert 'classList.toggle("is-empty", !visible)' in region
+
+
+def test_the_entropy_row_starts_absent_in_the_markup() -> None:
+    """Before `/api/models` answers there is no resident model to ask,
+    and absent is the reading that cannot leave a stray strip."""
+    html = INDEX_HTML.read_text(encoding="utf-8")
+
+    match = re.search(r'<div id="entropy-profile-row"[^>]*>', html)
+    assert match is not None
+    assert _is_hidden(match.group(0))
+
+
+def test_boot_settles_the_entropy_row_once_a_model_is_known() -> None:
+    """Otherwise an autoregressive page keeps the markup's absent
+    reading until its first run, which is the shift this prevents."""
+    region = _region("      applyTokenBirthGlow();", 400)
+
+    assert "setEntropyProfileVisible(false)" in region
+
+
+def test_one_helper_owns_the_entropy_row_too() -> None:
+    """Four call sites set `.hidden` directly before this, none of
+    which knew about the conditional part."""
+    source = APP_JS.read_text(encoding="utf-8")
+
+    assert source.count("entropyProfileRow.hidden =") == 1

@@ -1435,13 +1435,10 @@
       return;
     }
     var count = overlaysNewRunCount();
-    if (count > 0) {
-      badge.textContent = String(count);
-      badge.hidden = false;
-    } else {
-      badge.textContent = "";
-      badge.hidden = true;
-    }
+    // Emptied rather than removed; see the generator's copy of this
+    // and the `is-empty` rule for why the width has to stay.
+    badge.textContent = count > 0 ? String(count) : "";
+    badge.classList.toggle("is-empty", count === 0);
   }
 
   // ---- Boot ----
