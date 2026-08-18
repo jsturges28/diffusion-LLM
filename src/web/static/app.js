@@ -1866,25 +1866,33 @@ function handleDone(data) {
 }
 
 function handleError(data) {
-  setGenerating(false);
-  isResuming = false;
-  endRunStatus();
-  if (remaskMode !== null) {
-    // A resume or substitution truncates the run before the worker
-    // answers, so a rejected request would otherwise strand the user
-    // with a half-run. Roll back to the pre-session snapshot.
-    restoreEditSnapshot();
-    resetGuidedMode();
+  // How far this reaches is the worker's to say (see wire_errors.js).
+  // Everything below used to run for every error, which meant a probe
+  // refused because a generation was busy closed What If and threw
+  // away the edit being composed.
+  var routed = wireErrorsRoute(data);
+  if (routed.unwindsRun) {
+    setGenerating(false);
+    isResuming = false;
+    endRunStatus();
+    if (remaskMode !== null) {
+      // A resume or substitution truncates the run before the worker
+      // answers, so a rejected request would otherwise strand the
+      // user with a half-run. Roll back to the pre-session snapshot.
+      restoreEditSnapshot();
+      resetGuidedMode();
+    }
   }
   statusRowReflow(function () {
-    statusMessage.textContent =
-      "Error: " + (data.message || "unknown");
+    statusMessage.textContent = "Error: " + routed.message;
   });
   statusMessage.style.color = "var(--danger)";
   setTimeout(function () {
     statusMessage.style.color = "";
   }, 5000);
-  if (frameHistory.length > 1) {
+  // Said either way: an auxiliary failure is still worth reading, and
+  // the change here is what gets undone, not what gets shown.
+  if (routed.unwindsRun && frameHistory.length > 1) {
     activateScrubber();
   }
 }

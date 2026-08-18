@@ -192,7 +192,7 @@ neighbours and the two-window model switch. Four entries are open:
 | ORG-04 | medium | S | done | none | Two commits: the shared activation client, then the menu |
 | LIFE-03 | critical | L | needs hardware | none | Two commits: operation identity, then the resident mismatch |
 | LIFE-01 | high | M | needs hardware | none | Name every run and refuse a stateful request that means another |
-| PROTOCOL-01 | medium | M | ready | LIFE-03 (done) | |
+| PROTOCOL-01 | medium | M | needs hardware | none | Two commits: scoped error envelopes, then the client routing |
 | XAI-01 | high | M | blocked | LIFE-01 | |
 | LIFE-04 | high | L | blocked | LIFE-03 | |
 | LIFE-05 | high | M | partial | none | Single-instance the desktop launcher; host lease deferred, see Deviations |
@@ -767,6 +767,60 @@ that window rather than guessing at a cause.
 Mutation-checked the same way as the store half: putting collections
 back on the debounce, removing the flush, ignoring the status, and
 setting `keepalive` unconditionally each fail the suite.
+
+### PROTOCOL-01
+
+**Landed in two commits with `LIFE-01` between them**, which is not
+the order the report implies but is the one that made both smaller.
+The envelopes went in first, worker-side only, so behaviour was
+unchanged and the taxonomy was provable before anything depended on
+it. `LIFE-01`'s refusal then had a builder to use instead of a
+twenty-second hand-built error dict. The frontend came last.
+
+**Scope is a property of the operation, not of the site.** Twenty-one
+sites built errors by hand, and the one that made this concrete is
+`_send_busy`: it serves generation and probe both, and the same
+refusal must end a run in the first case and change nothing in the
+second. It now takes the request it is refusing. That is the whole
+finding in one function.
+
+**Three scopes, not two.** Fatal, run, and request. The report's
+Direction says "route auxiliary failures to their local control;
+reserve connection/model-fatal errors for the session reducer", which
+reads as two, but a failed *generation* is neither: the socket is
+fine, so it is not fatal, and it is not auxiliary either, because the
+client truncates the run optimistically before the worker answers and
+something has to roll that back.
+
+**Plain dicts, not pydantic models.** The Direction says "typed
+shared envelopes", and the report separately rejects validating hot
+frames. These are cold, but they live beside the frame path, and
+`protocol.py` is imported by three venvs holding deliberately
+incompatible dependencies. Keeping it importable was worth more than
+types the callers already have.
+
+**The classifier is its own file so it could be tested.**
+`wire_errors.js`, following the `activation_client.js` precedent from
+`ORG-04`: a classic global script touching no DOM, driven directly in
+a `vm`. It decides what a frame means and `app.js` decides what to do,
+which is the split that lets the meaning be checked without a browser.
+A source-inspection test covers the part a unit test cannot, that the
+page actually consults it, and the mutants confirm the pair is needed:
+breaking the classifier fails only the Node tests, ignoring it in
+`app.js` fails only the Python one.
+
+**An unrecognised scope is read as fatal**, which is the behaviour
+every error had before this existed. A newer worker inventing a fourth
+scope therefore makes an older page over-react rather than go silent.
+That is the failure worth having: too much cleanup is recoverable, and
+a half-applied edit left on screen because a frame was not understood
+is not.
+
+**Not done here.** The report also asks for typed envelopes on the
+`frame` and `done` paths. Those already leave through one place,
+`FrameStreamer`, and rebuilding them would have been churn on the hot
+path in a commit about errors. The unscoped-`error` problem was the
+part with a user-visible failure attached.
 
 ### LIFE-01
 
