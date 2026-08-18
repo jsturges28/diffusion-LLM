@@ -96,24 +96,29 @@ Stages 1 to 3 are complete. Saved runs publish whole or not at all
 what they captured (`DATA-05`), carry the worker's own account of what produced
 them (`DATA-04`), and render a bounded GIF (`RUNTIME-02`).
 
-**Stage 4, explicit process and socket ownership, is in progress.** Two passes
-have landed. Worker spawning moved to `src/web/worker_process.py` behind a seam
+**Stage 4, explicit process and socket ownership, has landed its three
+passes.** Worker spawning moved to `src/web/worker_process.py` behind a seam
 the manager can be tested through, stopping a worker is a verified transition
 rather than a signal and a hope (`LIFE-02`), and a switch to a model that
 cannot run is refused before the working model is evicted (`LIFE-06`).
 Activation then moved behind one shared client, `src/web/static/activation_client.js`
-(`ORG-04`), and every activation now carries an operation id so two windows
+(`ORG-04`), and every activation carries an operation id so two windows
 cannot navigate or cancel for each other, with the socket opening on a
-`resident` frame naming the model that answered it (`LIFE-03`). Pass three is
-run tokens on stateful follow-ups (`LIFE-01`) and operation-scoped error
-envelopes (`PROTOCOL-01`). The ledger is the authority and is updated in the
-same commit as each change.
+`resident` frame naming the model that answered it (`LIFE-03`). Pass three
+gave every run a token that a stateful follow-up must name, so one window
+cannot resume or probe another's run (`LIFE-01`), and gave every error a
+scope, so a probe refused as busy no longer tears down What If
+(`PROTOCOL-01`). What remains of the stage is `XAI-01`, `LIFE-04` and
+`TRUST-04`. The ledger is the authority and is updated in the same commit as
+each change.
 
-**Hardware debt.** The campaign's queue at the top of
-`docs/audit/IMPLEMENTATION_LEDGER.md` holds `LIFE-02`, `LIFE-06`, `LIFE-03` and
-the `TRUST-03` offline slice, covered by items 142 to 150 of
-`docs/MANUAL_VERIFICATION.md`. Separately, items 102 to 126 of that file
-predate the campaign and have never been validated.
+**Hardware debt, which is now the bottleneck.** The queue at the top of
+`docs/audit/IMPLEMENTATION_LEDGER.md` holds `LIFE-02`, `LIFE-06`, `LIFE-03`,
+`LIFE-01`, `PROTOCOL-01`, the `DATA-02` lost-update slice and the `TRUST-03`
+offline slice, covered by items 142 to 161 of `docs/MANUAL_VERIFICATION.md`.
+Three findings are blocked on nothing else, so clearing that queue is what
+releases the next stage. Separately, items 102 to 126 of that file predate
+the campaign and have never been validated.
 
 ## Conventions
 

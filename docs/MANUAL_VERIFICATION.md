@@ -50,6 +50,11 @@ kept when these were written:
 - **156**: confirmed on 2026-08-17. The three reservations hold and the
   entropy row stays absent on a diffusion model, which is the half that
   would have been easy to get backwards.
+- **157 to 161**: **not yet validated**, and they are stage 4 pass three's
+  whole hardware queue. Take 157 first: it confirms the ordinary
+  single-window path still works, and if it fails the rest are moot. 159
+  and 160 are the two findings' own scenarios and need two windows; 161 is
+  the persistence slice and needs only one.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -1221,3 +1226,48 @@ does nothing at all.
     a row held for a model that never fills it is worse than the shift it
     would prevent. This is the case where reserving is the wrong answer, so
     a stray gap under a LLaDA or DiffusionGemma run is the failure to report.
+157. **The ordinary single-window path is untouched.** Everything in stage 4
+    pass three fences requests that should not be answered, so the first
+    thing to confirm is that it fences nothing it should not. In one window,
+    on any model: generate, then Edit Frames and resume from a frame, then
+    Retry. On SmolLM3 also open What If, type a token to get a measurement,
+    and confirm the substitution. None of it should mention a stale run, and
+    nothing should behave differently from before. If this item fails,
+    everything below it is moot.
+158. **A reload does not make the run uneditable.** The page carries the run
+    it is holding across a reload, and without that the restored output
+    would look editable and refuse. Generate, reload the page with the run
+    still on screen, then Edit Frames and resume. It should work exactly as
+    if you had not reloaded. The same applies to going to Analytics and
+    coming back.
+159. **The second window's run locks the first out, and says so.** Two
+    windows, same model. Generate in window one and leave its output on
+    screen. Generate in window two. Now go back to window one and try Edit
+    Frames plus a resume: it should refuse with a message about the run
+    having been replaced, and roll back to the output it had rather than
+    stranding a half-truncated run.
+    This is the finding's own scenario. Worth doing a second time with the
+    *same prompt in both windows*, because equal shapes are what used to let
+    the request through and produce a plausible wrong answer instead of an
+    error.
+    Then confirm window two still works: its own Edit Frames and resume
+    should succeed. Refusing both windows would look like a fix and is not.
+160. **A refused probe no longer closes What If.** SmolLM3 only, and this is
+    the one that needs a little staging. In one window, open What If on a
+    finished run and type a token so the measurement row is showing. In a
+    second window, start a long generation. Back in the first window, type
+    another token to trigger a fresh measurement while that generation is
+    running.
+    What should happen: an error message about a generation already running,
+    and What If stays open with your edit intact. What used to happen, and
+    what to report if you see it: the What If panel closes and the edit is
+    discarded, because a refused measurement was treated as though the run
+    itself had died.
+161. **Collections survive a fast navigation.** In Analytics, file a run into
+    a collection and immediately click through to another page, faster than
+    a quarter second if you can. Come back. The run should still be in the
+    collection. Before this it could silently revert, one window, no race.
+    Also worth one destructive check if you are willing: stop the server,
+    then file a run into a collection in a still-open Analytics tab. A toast
+    should say the collection could not be saved and that the change is
+    local to that window. Previously it looked saved and then was not.
