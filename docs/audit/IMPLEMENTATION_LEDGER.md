@@ -44,7 +44,7 @@ client. One item, 148, was reclassified as unreachable on this hardware
 rather than left pending, because its scenario needs two models resident at
 once on a card that cannot hold both.
 
-Baselines: 760 tests passing (from 265 at the campaign's start), 139
+Baselines: 793 tests passing (from 265 at the campaign's start), 145
 browser tests under `node --test`, and Ruff at 128 in `src tests`, gated per
 file and per rule by `scripts/lint_ratchet.py` rather than remembered.
 
@@ -197,6 +197,14 @@ none of its callers has been run.
   also where the finding's browser-smoke clause lands, since satisfying it
   in the sandbox would mean taking jsdom as the project's first JavaScript
   dependency.
+- **The save work, items 164 to 166.** Not a finding; it came out of the
+  pass above and is recorded under Deviations. Item 165 is the one to read
+  before running, because it removes a save that used to happen on the
+  user's behalf: opening an editor now writes nothing, and abandoning an
+  edit on an unsaved run leaves it unsaved. The endpoint half is tested
+  against a real client in `tests/web/test_save_idempotence.py`; what needs
+  hardware is that a real save, interrupted by a real navigation, leaves
+  one row rather than two.
 - **TRUST-03 (offline slice)**: the automated half asserts that both Hub
   workers pin every `from_pretrained` call to local files, and that being
   offline with nothing cached now reports what happened instead of a urllib3
@@ -1089,6 +1097,103 @@ check catches `None` anyway. The branch stayed, since a client that
 never learned the run is a different situation to report than an
 ordinary two-window race, but the test now pins that the two
 *messages differ* rather than pinning either string.
+
+### RUNTIME-01
+
+**Measured, by accident, on 2026-08-18.** The maintainer ran a
+1234-token SmolLM3 generation to exercise the light session snapshot
+and found the restored run had no hover, no candidates and no entropy
+profile, and that saving it wrote a run with no token overlay.
+
+The cause is sharper than "long run". `frame_tokens` stores the whole
+token array for *every* frame, and for an autoregressive model the
+frame count is the token count, so the record count is quadratic:
+1234 tokens is 761,995 records, roughly 34 MB of JSON against a
+sessionStorage budget nearer 5. For SmolLM3 the light fallback is not
+an unlucky corner past a few hundred tokens; it is guaranteed.
+Diffusion escapes it only because its frames are a fixed `gen_length`
+wide.
+
+That is this finding's own subject, compact append-only streams,
+arriving as a user-visible failure rather than a projection. The
+number is worth keeping: it says the fix has to change the stored
+shape, not merely the transport, because the same array is what goes
+to `/api/save` and onto disk.
+
+Stopgapped rather than fixed: `saveRun` now refuses a run that came
+back without its detail instead of writing the hollowed-out version
+silently. The refusal goes away by itself once the payload is linear.
+
+### Found while verifying and fixed: saving one run twice
+
+**Not an audit finding.** The maintainer found it during `ORG-02`'s
+hardware pass on 2026-08-18, and it predates this campaign.
+
+Save a run, navigate before the reply arrives, come back, press Edit
+Frames: two rows in Analytics for one generation. The server
+published the run, and the client's success handler belonged to a
+document that was gone, so `runSaved` stayed false and the session
+snapshot never learned otherwise. Edit Frames' `if (!runSaved)` guard
+then saved it again.
+
+**The same shape as the `DATA-02` slice from two sessions earlier**, a
+request in flight during a navigation where the server does the work
+and the client loses its record of it, and I did not think to look for
+siblings after fixing that one. The flush that worked there does not
+work here: a collections PUT is the whole operation, but a save needs
+the *response*, because that is where the run id comes from. No amount
+of delivery guarantees a reply to a page that no longer exists.
+
+**So the fix is identity.** Only the create path was unguarded;
+replace has had compare-and-swap since `DATA-01`. `LIFE-01`'s run
+token already names the generation, and because `begin_run` advances
+only on generate, one token maps to at most one created run: an edit
+of that run is a replace. The store resolves the token first and the
+client's memory becomes the fallback, so a save for a generation
+already published lands on the run it already made.
+
+Two details the tests found rather than the design. The store stamps
+the token itself, beside the revision, rather than accepting it inside
+a bundle a caller composed, because otherwise resolution and
+persistence are two callers' business and can disagree. And a
+replacement carrying no token keeps whatever identity the run already
+has, or it becomes findable only by an id, which is the thing the next
+lost reply forgets.
+
+**In-process only, like the revision check it sits beside.**
+`_PUBLISH_LOCK` makes resolution and publication one step within one
+supervisor. A second supervisor breaks the token guarantee exactly as
+it breaks the revision one; that is `LIFE-05`'s deferred half, and
+`ui_state.py` now carries the interprocess pattern to copy.
+
+### Found while verifying and fixed: saving on a panel opening
+
+The setting for the bug above, and worth removing on its own terms.
+Entering Edit Frames or What If wrote a full save. The archaeology
+says it was deliberate rather than a relic: it arrived in the same
+commit as the bundled pre-edit copy (`3729bb2`, 2026-07-19), as
+insurance for a run about to be branched.
+
+It bought less than it cost. The edited save already carries the
+original with it, so the data never needed the pre-save; the session
+snapshot already survives a navigation, so the protection was only
+against closing the tab; and the write fired on *opening a panel*,
+before anything destructive, which on a long autoregressive run means
+posting tens of megabytes to look at candidates.
+
+Three things start a save now, each either a button the user pressed
+or a run about to be lost: Save, Confirm, and the model-mismatch
+rescue. This had to follow the token, not precede it: without it, a
+Confirm with no remembered run id would create a second row rather
+than replace, which is what the entry save existed to prevent.
+
+The maintainer's reasoning for removing rather than deferring it is
+worth keeping. A multi-turn interface makes the unit of work a
+conversation and makes editing a fork, at which point create-then-
+replace stops fitting at all. The token survives that redesign,
+because every turn still has a generation underneath it;
+`lastSavedRunId` and `expected_revision` as a way of saying *which
+run* do not.
 
 ### Found while verifying, not yet fixed
 

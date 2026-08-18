@@ -57,6 +57,11 @@ kept when these were written:
 - **156**: confirmed on 2026-08-17. The three reservations hold and the
   entropy row stays absent on a diffusion model, which is the half that
   would have been easy to get backwards.
+- **164 to 166**: **not yet validated.** The save work that came out of
+  162 and 163: one run cannot be saved twice, opening an editor writes
+  nothing, and a run restored without its per-token detail refuses rather
+  than saving a hollowed-out copy. 165 is the behaviour change to read
+  before running, since it removes a save that used to happen for you.
 - **162 and 163**: **not yet validated**, and they are `ORG-02`'s whole
   hardware queue. The guided edit flow needs a GPU, so the modules the
   first half of that finding extracted were written without any of their
@@ -1350,3 +1355,39 @@ does nothing at all.
     only three of the six arrays, and the run should come back readable with
     the character renderer rather than not at all. Editing it afterwards
     should still work.
+164. **A save cannot become two runs.** The one you found. Generate on any
+    model, click the save icon, and immediately click through to Analytics,
+    faster than the save can answer. Come back to Generation, then open
+    **Edit Frames** (or **What If?** on SmolLM3) and confirm an edit.
+    Analytics should hold **one** row for that generation, carrying the
+    edit. Before this it held two.
+    Worth a second pass without the interruption, since that is the common
+    path: generate, save, edit, confirm. Still one row, and the edit is in
+    it. The bottom-right message naming where the run landed is still brief
+    and still disappears on navigation; that part is unchanged and is not
+    what this item is about.
+165. **Opening an editor writes nothing.** The behaviour change to notice.
+    Generate a run and do **not** save it. Open **Edit Frames**, look
+    around, select a frame, mark some tokens, then leave the session
+    without confirming. Nothing should have been written: Analytics has no
+    new row, and the run is back on screen with the save icon still
+    offered. Same again with **What If?** on SmolLM3.
+    Then confirm one for real, and check that the single row it produces
+    carries both the original and the branch: **Diff vs Original** should be
+    available on it, and the Original/Edited crossfade should work.
+    Two things that follow from this and are worth confirming rather than
+    assuming. Opening What If on a long run should now be instant, because
+    it no longer posts the whole run first. And if you abandon an edit and
+    then close the tab, that run is gone, which is the protection this
+    deliberately gave up: saving is explicit now.
+166. **A run that came back thin says so instead of saving thin.** Needs the
+    long-run setup from 163: SmolLM3, Experimental on, a prompt long enough
+    to exceed the session storage quota, around a thousand tokens. Generate
+    it, go to Analytics, come back. The run reads and scrubs but has no
+    hover, no candidates and no entropy profile, which is expected.
+    Now press the save icon. It should refuse with a line saying the run
+    came back without its per-token detail and cannot be saved in full.
+    Before this it saved the hollowed-out version silently, which is the run
+    with no output and one chart family in your screenshot.
+    This is a stopgap over the storage shape, not a fix; `RUNTIME-01` is
+    where the refusal stops being necessary.

@@ -16,10 +16,10 @@ todos:
     status: completed
   - id: degraded-guard
     content: Refuse to save a run restored without its token detail, and say why
-    status: in_progress
+    status: completed
   - id: records
     content: Record the finding and the in-process lock caveat, add the manual items, and verify
-    status: pending
+    status: in_progress
 isProject: false
 ---
 
