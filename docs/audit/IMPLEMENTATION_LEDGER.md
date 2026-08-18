@@ -18,17 +18,23 @@ documents now live under `docs/` and this campaign's four files under
 root. Every move was a `git mv`, and `AUDIT_REPORT.md` moved byte for byte, so
 its line citations still resolve and its immutability holds.
 
-**Stage 3 is in progress.** Pass one landed `ORG-01` and `DATA-01`: the run
+**Stage 3 is complete.** Pass one landed `ORG-01` and `DATA-01`: the run
 store is its own dependency-light module and a saved run now publishes whole
 or not at all. The parameter-key XSS was pulled forward from `DATA-05` as a
-standalone commit. Pass two is `DATA-05`, `DATA-04`, and `RUNTIME-02`, whose
-decisions were settled with the maintainer before pass one began: no
+standalone commit. Pass two landed `DATA-05`, `DATA-04`, and `RUNTIME-02`,
+whose decisions were settled with the maintainer before pass one began: no
 migration of the existing corpus, `history.txt` demoted to a human artifact
 with `frames.jsonl` as the machine format, and `DATA-04`'s provenance
-envelope without the validation token that `LIFE-03` will own.
+envelope without the validation token that `LIFE-03` now owns. The three
+analytics findings it unlocked are unstarted and belong to no stage of their
+own; see Ready now.
 
-Baselines: 422 tests passing (from 265 at the campaign's start), 12 browser
-tests under `node --test`, and Ruff at 137 in `src tests`, gated per file and
+**Stage 4 has landed passes one and two**, leaving `LIFE-01` and
+`PROTOCOL-01` as pass three. Both are ready, and both were held back on
+purpose rather than missed; the reasoning is in the stage map.
+
+Baselines: 656 tests passing (from 265 at the campaign's start), 31 browser
+tests under `node --test`, and Ruff at 128 in `src tests`, gated per file and
 per rule by `scripts/lint_ratchet.py` rather than remembered.
 
 ## How to read this
@@ -52,12 +58,35 @@ commit, **M** a short multi-commit change, **L** a staged boundary migration.
 
 ## Ready now
 
-One finding has no unmet blockers, and it is stage 3's first step, which
-`DATA-03` unblocked.
+Five findings have no unmet blockers. They fall into two groups that do not
+touch each other, which is the useful thing about the current position.
 
-- **ORG-01** (medium, M): extract behavior-preserving storage operations out
-  of `server.py`. Became ready when `DATA-03` made the root explicit, and it
-  is the first step of the run-store stage rather than of stage 1.
+**Stage 4 pass three, the worker protocol.** These two finish the stage and
+unblock the most.
+
+- **LIFE-01** (high, M): a worker-issued run generation token on `done`,
+  required on every stateful follow-up, so a second window's generation
+  cannot silently answer the first window's resume, substitution, or probe.
+  Unblocks `XAI-01` and `LIFE-04`.
+- **PROTOCOL-01** (medium, M): typed wire envelopes carrying operation,
+  request ID, run token, stable error code, and terminal scope, so a probe
+  rejected as busy stops tearing down What If. Unblocks `ORG-02`, which is
+  the finding that would end the two-phase render the loading overlay
+  currently hides.
+
+They pair: `PROTOCOL-01`'s envelope is the thing that carries `LIFE-01`'s
+token, so doing them apart means defining the envelope twice.
+
+**The analytics trio, unlocked by stage 3 and unstarted.** None of them
+touch the worker protocol, so they are the alternative if a session wants
+work that cannot collide with pass three.
+
+- **ANALYTICS-02** (high, M): exact token summaries. See the decision note
+  below; its position in the order is the open question, not its readiness.
+- **ANALYTICS-03** (medium, L): lightweight pagination.
+- **ANALYTICS-04** (high, M): the guarded compare boundary. This sat at
+  `blocked` on `DATA-01` after `DATA-01` was done, which was a bookkeeping
+  lag rather than a real edge.
 
 `QUALITY-01` is not on this list because it is not a standalone task. The
 report asks for its lifecycle and browser-contract fixtures to land with each
@@ -124,9 +153,11 @@ neighbours and the two-window model switch. Four entries are open:
 - **LIFE-05 (single-instance slice)**: the probe and the launch decision are
   tested against real HTTP servers on ephemeral ports, and mutation-checked
   (removing the guard fails three cases in under three seconds rather than
-  hanging, which the first version of those tests did). Outstanding is the
-  launcher itself: `docs/MANUAL_VERIFICATION.md` items 153 and 154. Item 153
-  is the one that matters, since it is the accident that produced the OOM.
+  hanging, which the first version of those tests did). Item 153, the one
+  that matters because it is the accident that produced the OOM, was
+  confirmed on 2026-08-15: a second launch from the icon opens no second
+  window. Item 154, the fallback when an unrelated process holds 8760, is
+  still open and is the lesser half.
 - **TRUST-03 (offline slice)**: the automated half asserts that both Hub
   workers pin every `from_pretrained` call to local files, and that being
   offline with nothing cached now reports what happened instead of a urllib3
@@ -155,7 +186,7 @@ neighbours and the two-window model switch. Four entries are open:
 | RUNTIME-02 | medium | M | done | none | Bound the GIF and label the model that produced it |
 | ANALYTICS-02 | high | M | ready | DATA-05 (done), see decision above | |
 | ANALYTICS-03 | medium | L | ready | DATA-01, DATA-05 (both done) | |
-| ANALYTICS-04 | high | M | blocked | DATA-01 | |
+| ANALYTICS-04 | high | M | ready | DATA-01 (done) | |
 | LIFE-02 | high | M | needs hardware | none | Two commits: the process seam, then verified termination |
 | LIFE-06 | medium | M | needs hardware | none | Validate a switch target before evicting the working model |
 | ORG-04 | medium | S | done | none | Two commits: the shared activation client, then the menu |

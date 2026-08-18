@@ -37,17 +37,19 @@ kept when these were written:
   setup is refused outright unless both models can genuinely load, and 149
   does nothing at all if the two windows pick the same model on the same
   device. Neither attempt showed the behaviour failing.
-- **151 and 152**: **not yet validated.** 151 asks you to confirm the overlay
-  is back to its pre-change feel after being removed and restored; 152 covers
-  the one improvement kept from that detour.
+- **151 and 152**: confirmed on 2026-08-15. The restored overlay reads as it
+  did before the detour, and the reserved scrubber was the better of the two
+  changes.
 - **153**: confirmed on 2026-08-15. A second launch from the desktop icon
   opens no second window.
 - **154**: **not yet validated.**
-- **155**: **not yet validated**, and it is a judgement call rather than a
-  pass or fail. The change it covers is meant to be reverted if you do not
-  like it.
-- **156**: **not yet validated.** Three more reservations in the spirit of
-  152, plus the one place the technique is deliberately not applied.
+- **155**: **kept**, judged on 2026-08-15. The cross-fade itself was worth
+  having. What it exposed was that several elements still moved just after
+  the fade settled, which is 156 and is now fixed, so the experiment stays
+  rather than being reverted.
+- **156**: confirmed on 2026-08-17. The three reservations hold and the
+  entropy row stays absent on a diffusion model, which is the half that
+  would have been easy to get backwards.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
