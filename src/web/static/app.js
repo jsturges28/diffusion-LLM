@@ -363,7 +363,6 @@ var typedProbeRequest = 0;
 var entropyHoverPos = null;
 // True while "What If" substitution is armed: the popover's
 // candidates become clickable instead of read-only.
-var substitutionMode = false;
 
 // Scrubber and remasking state.
 var scrubberActive = false;
@@ -375,8 +374,12 @@ var remaskEdits = [];
 // Guided multi-frame edit mode state.
 // null | "select" | "edit" | "choice"
 //      | "select_target" | "generating" | "review"
-var remaskMode = null;
-var remaskModeEdits = [];
+// Which editing phase the run is in, plus the values describing
+// an edit in progress. Held as one thing so a move between
+// phases can be checked against the ones that are reachable
+// from where it started; see run_phases.js, which owns the
+// table. Never reassigned.
+var runPhase = runPhasesCreate();
 // True once an edited run has been saved. Locks Edit Frames for the
 // current run (until the next Generate) so a run cannot accrue a
 // second, conflicting saved edit.
@@ -409,8 +412,6 @@ var promptHistoryActive = false;
 // incomplete run.
 var preEditSnapshot = null;
 var scrubberMinFrame = 0;
-var guidedResumeAction = null;
-var guidedTargetFrame = null;
 
 // Resume state: when resuming, incoming frames are
 // appended starting at resumeFrameOffset. The worker restarts its
@@ -1841,7 +1842,7 @@ function handleDone(data) {
 
   setSaveAvailable(true);
 
-  if (remaskMode === "generating") {
+  if (runPhase.mode === "generating") {
     handleGuidedDone();
   } else {
     activateScrubber();
@@ -1849,7 +1850,7 @@ function handleDone(data) {
 
   // Persist the completed run so it survives navigating to
   // Analytics and back (skip while mid guided-edit).
-  if (remaskMode === null) {
+  if (runPhase.mode === null) {
     saveSessionState();
   }
 }
@@ -1864,7 +1865,7 @@ function handleError(data) {
     setGenerating(false);
     isResuming = false;
     endRunStatus();
-    if (remaskMode !== null) {
+    if (runPhasesEditing(runPhase)) {
       // A resume or substitution truncates the run before the worker
       // answers, so a rejected request would otherwise strand the
       // user with a half-run. Roll back to the pre-session snapshot.
@@ -2293,7 +2294,7 @@ function updateDiffOverlayControls() {
     return;
   }
   diffOverlayControls.hidden = !(
-    overlayMode === "diff" && diffAvailable() && remaskMode === null
+    overlayMode === "diff" && diffAvailable() && runPhase.mode === null
   );
 }
 
@@ -2598,7 +2599,7 @@ function renderAltsPopover(pos, span) {
   altsPopover.appendChild(buildAltsRows(alts, chosen));
   // Substitution only ever applies to the live run, so the Original
   // page is read-only even while What If is armed.
-  var pickable = substitutionMode && !original;
+  var pickable = runPhase.substituting && !original;
   if (pickable) {
     altsPopover.appendChild(buildTypedEntry(pos));
     var hint = document.createElement("div");
@@ -3744,7 +3745,7 @@ function buildTokenMetricsReading() {
   if (metricsHoverPos === null) {
     return null;
   }
-  if (scrubberActive && remaskMode === "select_target") {
+  if (scrubberActive && runPhase.mode === "select_target") {
     return null;
   }
   var tokens = metricsFrameTokens();
@@ -4488,10 +4489,10 @@ function tokenClassFn(index, tok, masked) {
   if (editedPositionMarks()[index] === true) {
     classes.push("token-edited");
   }
-  if (remaskMode === "edit") {
+  if (runPhase.mode === "edit") {
     classes.push("token-clickable");
   }
-  if (substitutionMode && positionAlts[index]) {
+  if (runPhase.substituting && positionAlts[index]) {
     classes.push("token-substitutable");
   }
   return classes.join(" ");
@@ -4533,7 +4534,7 @@ function tokenLayerOptions(isOriginal) {
 // branch exists to compare against, and never mid-edit, where the
 // tokens are a target for clicks rather than something to read.
 function runBlendActive() {
-  return diffAvailable() && remaskMode === null;
+  return diffAvailable() && runPhase.mode === null;
 }
 
 // Draw a scrubbed frame and re-read the metrics strip. The strip
@@ -4625,10 +4626,10 @@ function renderTargetPlaceholder(frameIndex) {
 
   var editedFrames = [];
   for (
-    var ei = 0; ei < remaskModeEdits.length; ei++
+    var ei = 0; ei < runPhase.lockedEdits.length; ei++
   ) {
     editedFrames.push(
-      remaskModeEdits[ei].frame_index
+      runPhase.lockedEdits[ei].frame_index
     );
   }
   if (editedFrames.length === 0) {
@@ -4963,7 +4964,7 @@ function deactivateScrubber() {
 
 function updateScrubberLabel() {
   var maxLabel = (
-    remaskMode === "select_target"
+    runPhase.mode === "select_target"
     && originalRun.totalFrames > 0
   ) ? originalRun.totalFrames - 1
     : runFrames.history.length - 1;
@@ -4976,11 +4977,11 @@ function navigateToFrame(index) {
   saveFrameSelections(currentScrubFrame);
 
   var minFrame = (
-    remaskMode === "select"
-    || remaskMode === "select_target"
+    runPhase.mode === "select"
+    || runPhase.mode === "select_target"
   ) ? scrubberMinFrame : 0;
   var maxFrame = (
-    remaskMode === "select_target"
+    runPhase.mode === "select_target"
     && originalRun.totalFrames > 0
   ) ? originalRun.totalFrames - 1
     : runFrames.history.length - 1;
@@ -4994,7 +4995,7 @@ function navigateToFrame(index) {
 
   restoreFrameSelections(index);
 
-  if (remaskMode === "select_target") {
+  if (runPhase.mode === "select_target") {
     renderTargetPlaceholder(index);
   } else if (index < runFrames.history.length) {
     renderFrameWithTokens(index);
@@ -5172,12 +5173,8 @@ function playShuffleDiffusion() {
 // ---- Guided multi-frame edit mode ----
 
 function resetGuidedMode() {
-  remaskMode = null;
-  substitutionMode = false;
+  runPhasesReset(runPhase);
   hideAltsPopover();
-  guidedResumeAction = null;
-  guidedTargetFrame = null;
-  remaskModeEdits = [];
   preEditSnapshot = null;
   randomizeInitFrame = null;
   guidedEditControls.hidden = true;
@@ -5325,11 +5322,11 @@ function enterSubstitutionMode() {
 // opens at its final frame and every captured position is clickable.
 function beginSubstitutionSession() {
   captureEditSnapshot();
-  remaskMode = "substitute";
-  substitutionMode = true;
+  runPhasesEnter(runPhase, RUN_PHASE_SUBSTITUTE);
+  runPhase.substituting = true;
   scrubberMinFrame = 0;
-  remaskModeEdits = [];
-  guidedResumeAction = null;
+  runPhase.lockedEdits = [];
+  runPhase.guidedAction = null;
   clearRemaskedPositions();
 
   scrubberSlider.min = "0";
@@ -5356,14 +5353,14 @@ function beginSubstitutionSession() {
 // two differently on purpose, so the distinction has to survive the
 // trip rather than being inferred from the id.
 function doSubstitute(position, tokenId, typedText) {
-  if (!substitutionMode || remaskMode !== "substitute") {
+  if (!runPhase.substituting || runPhase.mode !== "substitute") {
     return;
   }
   if (position < 0 || position >= runFrames.history.length) {
     return;
   }
   hideAltsPopover();
-  substitutionMode = false;
+  runPhase.substituting = false;
 
   // Recorded as an ordinary remask edit so the analytics Edited
   // column, the durable diff, and the saved metadata all work with
@@ -5384,7 +5381,7 @@ function doSubstitute(position, tokenId, typedText) {
   invalidateRunMemos();
   isResuming = true;
 
-  remaskMode = "generating";
+  runPhasesEnter(runPhase, RUN_PHASE_GENERATING);
   updateGuidedUI();
 
   setSaveAvailable(false);
@@ -5429,14 +5426,14 @@ function enterRemaskMode() {
 // already-saved original), keeping the save decoupled from re-entry.
 function beginEditSession() {
   captureEditSnapshot();
-  remaskMode = "select";
+  runPhasesEnter(runPhase, RUN_PHASE_SELECT);
   // Start at frame 1: frame 0 is the fully-masked canvas with nothing
   // to remask, so it is never a useful selection. (Guarded for the
   // degenerate single-frame case.)
   var startFrame = runFrames.history.length > 1 ? 1 : 0;
   scrubberMinFrame = startFrame;
-  remaskModeEdits = [];
-  guidedResumeAction = null;
+  runPhase.lockedEdits = [];
+  runPhase.guidedAction = null;
   clearRemaskedPositions();
 
   scrubberSlider.min = String(startFrame);
@@ -5475,13 +5472,13 @@ function renoiseNote() {
 function updateGuidedUI() {
   // The two blend rows share the scrubber area with the guided
   // controls, so keep them hidden whenever a run is being edited
-  // (remaskMode !== null); both updates restore the right one on exit
-  // once remaskMode is null again.
+  // (runPhase.mode !== null); both updates restore the right one on exit
+  // once runPhase.mode is null again.
   updateDiffOverlayControls();
   updateRunBlendControls();
 
   // Reset every phase button first so no stale state can survive a
-  // transition (including the exit back to remaskMode === null). Only
+  // transition (including the exit back to runPhase.mode === null). Only
   // the buttons relevant to the current phase are then revealed; the
   // status text sits on the left (flex:1) and the action cluster is
   // right-anchored, so the text never shifts as buttons change.
@@ -5498,7 +5495,7 @@ function updateGuidedUI() {
     remaskRandomizeRow.hidden = true;
   }
 
-  if (remaskMode === null) {
+  if (runPhase.mode === null) {
     guidedEditControls.hidden = true;
     return;
   }
@@ -5513,7 +5510,7 @@ function updateGuidedUI() {
     Object.keys(remaskedPositions).length;
   var plural = count !== 1 ? "s" : "";
 
-  switch (remaskMode) {
+  switch (runPhase.mode) {
     case "select":
       guidedEditStatus.textContent =
         "Navigate to a frame, then select it"
@@ -5611,7 +5608,7 @@ function updateGuidedUI() {
 }
 
 function selectCurrentFrame() {
-  remaskMode = "edit";
+  runPhasesEnter(runPhase, RUN_PHASE_EDIT);
   renderFrameWithTokens(currentScrubFrame);
   updateGuidedUI();
 }
@@ -5622,24 +5619,24 @@ function lockInEdits() {
   if (positions.length === 0) {
     return;
   }
-  remaskModeEdits.push({
+  runPhase.lockedEdits.push({
     frame_index: currentScrubFrame,
     token_positions: positions.slice(),
   });
-  remaskMode = "choice";
+  runPhasesEnter(runPhase, RUN_PHASE_CHOICE);
   updateGuidedUI();
 }
 
 function doGuidedResume(action) {
   // Guard against a stale click with no locked edits (should be
   // unreachable now that the buttons hide correctly).
-  if (remaskModeEdits.length === 0) {
+  if (runPhase.lockedEdits.length === 0) {
     return;
   }
-  guidedResumeAction = action;
+  runPhase.guidedAction = action;
 
   var lastEdit =
-    remaskModeEdits[remaskModeEdits.length - 1];
+    runPhase.lockedEdits[runPhase.lockedEdits.length - 1];
   var positions = lastEdit.token_positions;
   var frameIndex = lastEdit.frame_index;
 
@@ -5655,7 +5652,7 @@ function doGuidedResume(action) {
   invalidateRunMemos();
   isResuming = true;
 
-  remaskMode = "generating";
+  runPhasesEnter(runPhase, RUN_PHASE_GENERATING);
   updateGuidedUI();
 
   // One source for where the branch stops, so the message on screen
@@ -5663,8 +5660,8 @@ function doGuidedResume(action) {
   // the end, which is both the "resume to end" action and the
   // fallback when no target frame was captured.
   var resumeTarget = (
-    action === "another" && guidedTargetFrame !== null
-  ) ? guidedTargetFrame : null;
+    action === "another" && runPhase.targetFrame !== null
+  ) ? runPhase.targetFrame : null;
 
   setSaveAvailable(false);
   resetStatus();
@@ -5686,9 +5683,9 @@ function doGuidedResume(action) {
 }
 
 function handleGuidedDone() {
-  if (guidedResumeAction === "another") {
+  if (runPhase.guidedAction === "another") {
     var target = Math.min(
-      guidedTargetFrame,
+      runPhase.targetFrame,
       runFrames.history.length - 1
     );
 
@@ -5706,9 +5703,9 @@ function handleGuidedDone() {
     scrubberSlider.value = String(target);
 
     currentScrubFrame = target;
-    remaskMode = "edit";
-    guidedResumeAction = null;
-    guidedTargetFrame = null;
+    runPhase.guidedAction = null;
+    runPhase.targetFrame = null;
+    runPhasesEnter(runPhase, RUN_PHASE_EDIT);
     remaskedPositions = {};
     perFrameRemasked = {};
 
@@ -5726,11 +5723,11 @@ function handleGuidedDone() {
 // stays enabled so the result can be inspected; only the final frame
 // exposes the Confirm/Retry actions.
 function enterReviewMode() {
-  guidedResumeAction = null;
-  guidedTargetFrame = null;
+  runPhase.guidedAction = null;
+  runPhase.targetFrame = null;
   remaskedPositions = {};
   perFrameRemasked = {};
-  remaskMode = "review";
+  runPhasesEnter(runPhase, RUN_PHASE_REVIEW);
   scrubberActive = true;
   setScrubberVisible(true);
   guidedEditControls.hidden = false;
@@ -6874,7 +6871,7 @@ btnScrubEnd.addEventListener(
   "click",
   function () {
     var endFrame = (
-      remaskMode === "select_target"
+      runPhase.mode === "select_target"
       && originalRun.totalFrames > 0
     ) ? originalRun.totalFrames - 1
       : runFrames.history.length - 1;
@@ -7023,15 +7020,15 @@ if (btnRemaskShuffle) {
 btnEditAnother.addEventListener(
   "click",
   function () {
-    if (remaskModeEdits.length === 0) {
+    if (runPhase.lockedEdits.length === 0) {
       return;
     }
-    var lastEdit = remaskModeEdits[
-      remaskModeEdits.length - 1
+    var lastEdit = runPhase.lockedEdits[
+      runPhase.lockedEdits.length - 1
     ];
     scrubberMinFrame =
       lastEdit.frame_index + 1;
-    remaskMode = "select_target";
+    runPhasesEnter(runPhase, RUN_PHASE_SELECT_TARGET);
     var maxFrame = (originalRun.totalFrames > 0)
       ? originalRun.totalFrames - 1
       : runFrames.history.length - 1;
@@ -7048,7 +7045,7 @@ btnEditAnother.addEventListener(
 btnRunToHere.addEventListener(
   "click",
   function () {
-    guidedTargetFrame = currentScrubFrame;
+    runPhase.targetFrame = currentScrubFrame;
     doGuidedResume("another");
   }
 );
@@ -7093,7 +7090,7 @@ outputArea.addEventListener(
     if (!scrubberActive) {
       return;
     }
-    if (remaskMode !== "edit") {
+    if (runPhase.mode !== "edit") {
       return;
     }
     var target = e.target;
@@ -7135,7 +7132,7 @@ outputArea.addEventListener(
     if (!scrubberActive || !altsPopover) {
       return;
     }
-    if (remaskMode !== null && !substitutionMode) {
+    if (runPhasesEditing(runPhase) && !runPhase.substituting) {
       return;
     }
     if (pos === altsPopoverPos) {
@@ -7219,7 +7216,7 @@ if (altsPopover) {
   // Picking a candidate commits the substitution. Only armed in What
   // If mode; the popover is read-only otherwise.
   altsPopover.addEventListener("click", function (e) {
-    if (!substitutionMode || altsPopoverPos === null) {
+    if (!runPhase.substituting || altsPopoverPos === null) {
       return;
     }
     // The Original page shows the pre-edit run's candidates. There is
@@ -7308,10 +7305,10 @@ document.addEventListener(
       return;
     }
     if (
-      remaskMode === "edit"
-      || remaskMode === "choice"
-      || remaskMode === "generating"
-      || remaskMode === "substitute"
+      runPhase.mode === "edit"
+      || runPhase.mode === "choice"
+      || runPhase.mode === "generating"
+      || runPhase.mode === "substitute"
     ) {
       return;
     }
@@ -7336,7 +7333,7 @@ document.addEventListener(
     } else if (e.key === "End") {
       e.preventDefault();
       var endFrame = (
-        remaskMode === "select_target"
+        runPhase.mode === "select_target"
         && originalRun.totalFrames > 0
       ) ? originalRun.totalFrames - 1
         : runFrames.history.length - 1;

@@ -898,6 +898,45 @@ append that skips one array, and a truncate that skips
 `perFrameElapsed`, which is the one that knocked the Timing chart's x
 axis out of step with every other chart.
 
+**The baseline is its own family, deliberately.** The run as it was
+before the first edit keeps four of the six arrays plus the candidate
+sets, and not canvas index or reveal counts, because nothing compares
+those and the session snapshot is already large enough to be refused
+by the storage quota. Folding it into the live family would either
+copy two arrays nobody reads or hide which ones are actually there.
+Two rules the call sites used to carry moved with it: capturing is a
+no-op once a baseline exists, so a branch cannot overwrite the run it
+branched from, and a snapshot predating the frame count falls back to
+the live run's length rather than reading as no baseline at all.
+
+**The phase table is described, not reimplemented, and that was the
+whole design decision.** Eight editing phases lived in a string that
+ten call sites assigned directly, with nothing saying which were
+reachable from where; the workflow existed only as the union of
+whichever buttons happened to be enabled. `run_phases.js` owns the
+transition table and refuses anything not in it.
+
+What it deliberately does **not** own is the clearing. Each site
+still resets its own companions exactly as it did, and the module
+checks on arrival that it did. The tidier design would have moved
+that too, and it would have been the wrong change here: the guided
+edit flow needs a GPU, so none of this can be exercised in the
+sandbox, and describing existing behaviour while refusing anything
+that does not match it is the version whose failure mode is a loud
+throw rather than a quietly different workflow.
+
+One ordering did have to change. The site that lands back in `edit`
+after a partial resume used to set the phase and then clear the
+resume it had just finished; since consistency is checked on arrival,
+the clear now comes first. Both are plain assignments with nothing
+between them.
+
+**The table was read off the call sites**, not imagined, and the four
+workflows in `tests/web/static/run_phases.test.js` are transcriptions
+of them: a diffusion edit to review, an edit-another loop, What If,
+and Retry. Six mutants on the table, all caught, including making
+Confirm reachable from a locked edit that was never generated.
+
 ### PROTOCOL-01
 
 **Landed in two commits with `LIFE-01` between them**, which is not
