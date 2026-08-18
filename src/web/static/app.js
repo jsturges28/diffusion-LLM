@@ -190,7 +190,7 @@ var runBlendInput =
 // selected (see effectiveColorMode).
 var overlayMode = "none";
 // Memoized per-run commit steps (position index -> settle step),
-// null until first needed and invalidated whenever frameTokens
+// null until first needed and invalidated whenever runFrames.tokens
 // is replaced (new run, resume, or session restore).
 var commitSteps = null;
 // The same for the retained pre-edit run, needed because the ghost
@@ -257,16 +257,20 @@ var paramsValid = true;
 var reconnectDelay = RECONNECT_DELAY_MS;
 var reconnectTimer = null;
 
-// Accumulated data for the most recent completed run.
-var frameHistory = [];
-var frameTokens = [];
-var perFrameElapsed = [];
-// How many positions each frame produced, from the sampler's reveal
-// signal. Kept per frame rather than as a running total so the
-// footer can report the last step as well as the run average.
-var frameRevealed = [];
-var frameCanvasIndex = [];
-var frameMeanConf = [];
+// Accumulated data for the most recent completed run: six arrays
+// indexed by frame, held as one thing so that appending, truncating,
+// snapshotting and serialising cannot reach some of them and miss
+// the rest. See run_frames.js, which owns every operation on them
+// and the invariant that ties their lengths together.
+//
+// `revealed` is how many positions each frame produced, from the
+// sampler's reveal signal. Kept per frame rather than as a running
+// total so the footer can report the last step as well as the run
+// average.
+//
+// Never reassigned: the family is mutated in place so that a
+// reference taken anywhere stays valid.
+var runFrames = runFramesCreate();
 var lastRunParams = null;
 var lastFinalText = null;
 // Tokens the last run's templated prompt occupied, as the sampler
@@ -1648,7 +1652,7 @@ var RESCUE_SAVE_TIMEOUT_MS = 8000;
 // already does with an unsaved run. An unwanted run can be deleted
 // from Analytics; a lost one cannot be recovered.
 function rescueRunThenReload() {
-  if (runSaved || frameHistory.length === 0 || !lastFinalText) {
+  if (runSaved || runFrames.history.length === 0 || !lastFinalText) {
     location.reload();
     return;
   }
@@ -1667,40 +1671,37 @@ function rescueRunThenReload() {
 }
 
 function handleFrame(data) {
-  frameHistory.push(data.text);
-  if (data.tokens) {
-    frameTokens.push(data.tokens);
-  } else {
-    frameTokens.push(null);
-  }
-
   // Candidate sets ride only the frame that introduces their
   // position (the frame's last token), so accumulate by position.
   if (data.alts && data.tokens && data.tokens.length > 0) {
     positionAlts[data.tokens.length - 1] = data.alts;
   }
 
-  if (typeof data.elapsed === "number") {
+  runFramesAppend(runFrames, {
+    history: data.text,
+    tokens: data.tokens || null,
+    canvasIndex:
+      typeof data.canvas_index === "number"
+        ? data.canvas_index
+        : 0,
+    meanConf:
+      typeof data.mean_conf === "number" ? data.mean_conf : null,
     // Shifted by the pre-resume total and re-rounded to the worker's
     // two decimals, so the series stays cumulative across segments
     // instead of dropping back to zero at each branch.
-    perFrameElapsed.push(
-      +(data.elapsed + resumeElapsedOffset).toFixed(2)
-    );
-  }
-  frameRevealed.push(
-    data.revealed ? data.revealed.length : 0
-  );
-  frameCanvasIndex.push(
-    typeof data.canvas_index === "number"
-      ? data.canvas_index
-      : 0
-  );
-  frameMeanConf.push(
-    typeof data.mean_conf === "number"
-      ? data.mean_conf
-      : null
-  );
+    //
+    // A frame with no elapsed used to append nothing here while its
+    // five siblings grew, which is the misalignment the family now
+    // refuses. It cannot happen from a real worker, since the frame
+    // streamer stamps elapsed on everything it forwards, so carrying
+    // the previous total is the reading that keeps the series
+    // monotonic in the case that does not arise.
+    elapsed:
+      typeof data.elapsed === "number"
+        ? +(data.elapsed + resumeElapsedOffset).toFixed(2)
+        : lastElapsedOr(resumeElapsedOffset),
+    revealed: data.revealed ? data.revealed.length : 0,
+  });
 
   // The token view needs per-position metadata; a model that does not
   // send it still gets the character renderer.
@@ -1731,18 +1732,18 @@ function handleFrame(data) {
 
 // ---- Elapsed and tokens per second ----
 
-// Both readouts come off perFrameElapsed rather than off the frame in
+// Both readouts come off runFrames.elapsed rather than off the frame in
 // hand. data.elapsed is segment-local: after an edit the worker times
 // the branch from zero, so reading it directly made the footer's
-// Elapsed jump backwards mid-run. perFrameElapsed is already carrying
+// Elapsed jump backwards mid-run. runFrames.elapsed is already carrying
 // the pre-edit total (see handleFrame), so its tail is the real
 // wall-clock time of everything generated so far.
 function updateRunRateFooter() {
-  var frames = perFrameElapsed.length;
+  var frames = runFrames.elapsed.length;
   if (frames === 0) {
     return;
   }
-  var seconds = perFrameElapsed[frames - 1];
+  var seconds = runFrames.elapsed[frames - 1];
   statusElapsed.textContent =
     "Elapsed: " + seconds.toFixed(1) + "s";
   renderTpsFooter(currentTokensPerSecond());
@@ -1753,26 +1754,26 @@ function updateRunRateFooter() {
 // first frame after an edit is the second case, since it lands at the
 // pre-edit total and so shares a timestamp with the frame before it.
 function currentTokensPerSecond() {
-  var frames = perFrameElapsed.length;
+  var frames = runFrames.elapsed.length;
   if (frames === 0) {
     return null;
   }
   if (appSettings.tpsMode === "last") {
     var stepSeconds = frames > 1
-      ? perFrameElapsed[frames - 1] - perFrameElapsed[frames - 2]
-      : perFrameElapsed[0];
+      ? runFrames.elapsed[frames - 1] - runFrames.elapsed[frames - 2]
+      : runFrames.elapsed[0];
     if (!(stepSeconds > 0)) {
       return null;
     }
-    return (frameRevealed[frames - 1] || 0) / stepSeconds;
+    return (runFrames.revealed[frames - 1] || 0) / stepSeconds;
   }
-  var total = perFrameElapsed[frames - 1];
+  var total = runFrames.elapsed[frames - 1];
   if (!(total > 0)) {
     return null;
   }
   var produced = 0;
   for (var i = 0; i < frames; i++) {
-    produced += frameRevealed[i] || 0;
+    produced += runFrames.revealed[i] || 0;
   }
   return produced / total;
 }
@@ -1842,11 +1843,11 @@ function handleDone(data) {
   }
   lastRunParams = getParamValues();
   if (originalTotalFrames === 0) {
-    originalTotalFrames = frameHistory.length;
-    originalFrameHistory = frameHistory.slice();
-    originalFrameTokens = frameTokens.slice();
-    originalPerFrameElapsed = perFrameElapsed.slice();
-    originalMeanConf = frameMeanConf.slice();
+    originalTotalFrames = runFrames.history.length;
+    originalFrameHistory = runFrames.history.slice();
+    originalFrameTokens = runFrames.tokens.slice();
+    originalPerFrameElapsed = runFrames.elapsed.slice();
+    originalMeanConf = runFrames.meanConf.slice();
     originalPositionAlts = positionAlts.slice();
   }
 
@@ -1892,7 +1893,7 @@ function handleError(data) {
   }, 5000);
   // Said either way: an auxiliary failure is still worth reading, and
   // the change here is what gets undone, not what gets shown.
-  if (routed.unwindsRun && frameHistory.length > 1) {
+  if (routed.unwindsRun && runFrames.history.length > 1) {
     activateScrubber();
   }
 }
@@ -2098,13 +2099,13 @@ function renderFinalText(text) {
 
 // Per-position commit step for the current run: the step after
 // which a position last changed to its final value. Derived
-// purely from frameTokens (the final frame is ground truth), so
+// purely from runFrames.tokens (the final frame is ground truth), so
 // it is exact for LLaDA (resolved tokens are frozen) and a
 // "settle" proxy for DiffusionGemma. Positions still unresolved
 // at the last frame get -1 (left uncolored). Result is memoized
-// in commitSteps and invalidated whenever frameTokens changes.
+// in commitSteps and invalidated whenever runFrames.tokens changes.
 function computeCommitSteps() {
-  return overlaysComputeCommitSteps(frameTokens);
+  return overlaysComputeCommitSteps(runFrames.tokens);
 }
 
 // Drop every memo derived from the frame arrays. Called wherever
@@ -2124,8 +2125,8 @@ function invalidateRunMemos() {
 // metrics strip), the remask-origin positions, and a divergence
 // summary.
 function computeDiff() {
-  var cur = frameTokens.length
-    ? frameTokens[frameTokens.length - 1]
+  var cur = runFrames.tokens.length
+    ? runFrames.tokens[runFrames.tokens.length - 1]
     : null;
   var orig = originalFrameTokens.length
     ? originalFrameTokens[originalFrameTokens.length - 1]
@@ -2143,7 +2144,7 @@ function computeDiff() {
 // resolves the per-frame tokens and owns the output container.
 function renderDiffOverlay(frameIndex) {
   var diff = currentDiffData();
-  var editedTokens = frameTokens[frameIndex] || [];
+  var editedTokens = runFrames.tokens[frameIndex] || [];
   var oIdx = Math.min(
     frameIndex, originalFrameTokens.length - 1
   );
@@ -2240,7 +2241,7 @@ function tokenColorAt(index, tok, isOriginal) {
     if (step === null) {
       return null;
     }
-    var frames = isOriginal ? originalFrameTokens : frameTokens;
+    var frames = isOriginal ? originalFrameTokens : runFrames.tokens;
     return commitColor(step, frames.length - 1);
   }
   if (mode === "diff") {
@@ -2418,7 +2419,7 @@ function diffAvailable() {
 // rather than on model_type, so the overlay appears for any model
 // that starts emitting `e` (autoregressive runs are just the first).
 function entropyAvailable() {
-  var tokens = frameTokens[frameTokens.length - 1];
+  var tokens = runFrames.tokens[runFrames.tokens.length - 1];
   if (!tokens) {
     return false;
   }
@@ -2594,7 +2595,7 @@ function renderAltsPopover(pos, span) {
   // does not mark the branch's substitution as chosen.
   var tokens = original
     ? originalFrameTokens[originalFrameTokens.length - 1]
-    : frameTokens[currentScrubFrame];
+    : runFrames.tokens[currentScrubFrame];
   var chosen = tokens && tokens[pos] ? tokens[pos].id : null;
 
   // Discarding the rows discards their pending mouseleave: a removed
@@ -2678,7 +2679,7 @@ function buildTypedEntry(pos) {
 // exact where a "looks mid-sentence" rule would only be usually
 // right, and a single backspace overrides it.
 function typedEntrySeedText(pos) {
-  var tokens = frameTokens[currentScrubFrame];
+  var tokens = runFrames.tokens[currentScrubFrame];
   var token = tokens && tokens[pos] ? tokens[pos] : null;
   var text = token && typeof token.t === "string" ? token.t : "";
   return text.charAt(0) === " " ? " " : "";
@@ -3248,7 +3249,7 @@ function entropyValuesFrom(tokens) {
 // (each position is sampled once, so its entropy never changes).
 function entropyProfileValues() {
   return entropyValuesFrom(
-    frameTokens[frameTokens.length - 1]
+    runFrames.tokens[runFrames.tokens.length - 1]
   );
 }
 
@@ -3357,7 +3358,7 @@ function drawEntropyProfile() {
 
   // Frame index maps straight onto position: the autoregressive
   // worker emits no leading empty canvas (ar_sampler._build_frame
-  // runs after the pick is appended), so frameHistory[k] holds k+1
+  // runs after the pick is appended), so runFrames.history[k] holds k+1
   // tokens and the frame at k is the one that introduced position k.
   // The profile only renders for runs carrying per-token entropy,
   // which is autoregressive-only, so the diffusion all-mask frame 0
@@ -3735,12 +3736,12 @@ function metricsLayered() {
 // layer buildCrossfadedLayers draws past its end.
 function metricsFrameTokens() {
   if (!scrubberActive) {
-    return frameTokens.length
-      ? frameTokens[frameTokens.length - 1]
+    return runFrames.tokens.length
+      ? runFrames.tokens[runFrames.tokens.length - 1]
       : null;
   }
   if (!metricsHoverOriginal) {
-    return frameTokens[currentScrubFrame] || null;
+    return runFrames.tokens[currentScrubFrame] || null;
   }
   var index = Math.min(
     currentScrubFrame, originalFrameTokens.length - 1
@@ -4560,9 +4561,9 @@ function renderFrameWithTokensDraw(frameIndex) {
   // Leaving the live view: the mask glow this class restores is for
   // streaming only, and every branch below owns the container now.
   outputArea.classList.remove("live-tokens");
-  var tokens = frameTokens[frameIndex];
+  var tokens = runFrames.tokens[frameIndex];
   if (!tokens) {
-    renderFrame(frameHistory[frameIndex]);
+    renderFrame(runFrames.history[frameIndex]);
     return;
   }
 
@@ -4719,8 +4720,8 @@ function renderTargetPlaceholder(frameIndex) {
 // multi-canvas runs cannot be resumed in this version; the editing
 // UI stays hidden for them.
 function runIsMultiCanvas() {
-  for (var i = 0; i < frameCanvasIndex.length; i++) {
-    if (frameCanvasIndex[i] > 0) {
+  for (var i = 0; i < runFrames.canvasIndex.length; i++) {
+    if (runFrames.canvasIndex[i] > 0) {
       return true;
     }
   }
@@ -4900,15 +4901,15 @@ function updateGenerateIdleEffect() {
 }
 
 function activateScrubber() {
-  if (frameHistory.length < 2) {
+  if (runFrames.history.length < 2) {
     return;
   }
   scrubberActive = true;
-  currentScrubFrame = frameHistory.length - 1;
+  currentScrubFrame = runFrames.history.length - 1;
 
   scrubberSlider.min = "0";
   scrubberSlider.max =
-    String(frameHistory.length - 1);
+    String(runFrames.history.length - 1);
   scrubberSlider.value =
     String(currentScrubFrame);
   scrubberSlider.disabled = false;
@@ -4977,7 +4978,7 @@ function updateScrubberLabel() {
     remaskMode === "select_target"
     && originalTotalFrames > 0
   ) ? originalTotalFrames - 1
-    : frameHistory.length - 1;
+    : runFrames.history.length - 1;
   scrubberLabel.textContent =
     "Frame " + currentScrubFrame
     + " / " + maxLabel;
@@ -4994,7 +4995,7 @@ function navigateToFrame(index) {
     remaskMode === "select_target"
     && originalTotalFrames > 0
   ) ? originalTotalFrames - 1
-    : frameHistory.length - 1;
+    : runFrames.history.length - 1;
   index = Math.max(
     minFrame,
     Math.min(index, maxFrame)
@@ -5007,7 +5008,7 @@ function navigateToFrame(index) {
 
   if (remaskMode === "select_target") {
     renderTargetPlaceholder(index);
-  } else if (index < frameHistory.length) {
+  } else if (index < runFrames.history.length) {
     renderFrameWithTokens(index);
   } else {
     renderTargetPlaceholder(index);
@@ -5088,7 +5089,7 @@ function clampInt(value, low, high) {
 // Frame-array indices of resolved (non-mask) tokens: the candidates
 // that can be remasked. Masked positions are never remaskable.
 function resolvedPositions(frameIndex) {
-  var tokens = frameTokens[frameIndex];
+  var tokens = runFrames.tokens[frameIndex];
   var out = [];
   if (!tokens) {
     return out;
@@ -5200,12 +5201,7 @@ function resetGuidedMode() {
 // Snapshot the current complete run before an edit session begins.
 function captureEditSnapshot() {
   preEditSnapshot = {
-    frameHistory: frameHistory.slice(),
-    frameTokens: frameTokens.slice(),
-    frameCanvasIndex: frameCanvasIndex.slice(),
-    frameMeanConf: frameMeanConf.slice(),
-    perFrameElapsed: perFrameElapsed.slice(),
-    frameRevealed: frameRevealed.slice(),
+    frames: runFramesSnapshot(runFrames),
     resumeElapsedOffset: resumeElapsedOffset,
     positionAlts: positionAlts.slice(),
     finalText: lastFinalText,
@@ -5219,12 +5215,7 @@ function restoreEditSnapshot() {
   if (!preEditSnapshot) {
     return;
   }
-  frameHistory = preEditSnapshot.frameHistory.slice();
-  frameTokens = preEditSnapshot.frameTokens.slice();
-  frameCanvasIndex = preEditSnapshot.frameCanvasIndex.slice();
-  frameMeanConf = preEditSnapshot.frameMeanConf.slice();
-  perFrameElapsed = preEditSnapshot.perFrameElapsed.slice();
-  frameRevealed = preEditSnapshot.frameRevealed.slice();
+  runFramesRestore(runFrames, preEditSnapshot.frames);
   resumeElapsedOffset = preEditSnapshot.resumeElapsedOffset;
   positionAlts = preEditSnapshot.positionAlts.slice();
   lastFinalText = preEditSnapshot.finalText;
@@ -5236,24 +5227,31 @@ function restoreEditSnapshot() {
   preEditSnapshot = null;
 }
 
-// Cut every per-frame array back to `offset` so the branch about to
-// be generated appends cleanly at that index. perFrameElapsed is cut
-// with the rest: leaving it whole made the saved timing array longer
-// than the frame arrays, which knocked the Timing chart's x axis out
-// of step with every other chart. The elapsed value at the last kept
-// frame carries forward, because the worker restarts its clock for
-// the new segment.
+// Cut the run back to `offset` frames so the branch about to be
+// generated appends cleanly at that index. The elapsed value at the
+// last kept frame carries forward, because the worker restarts its
+// clock for the new segment.
+//
+// Which arrays get cut is no longer a decision made here. It used to
+// be, and leaving one out made the saved timing array longer than the
+// frame arrays, which knocked the Timing chart's x axis out of step
+// with every other chart.
 function truncateRunArraysAt(offset) {
   resumeFrameOffset = offset;
   resumeElapsedOffset = offset > 0
-    ? (perFrameElapsed[offset - 1] || 0)
+    ? (runFrames.elapsed[offset - 1] || 0)
     : 0;
-  frameHistory.length = offset;
-  frameTokens.length = offset;
-  frameCanvasIndex.length = offset;
-  frameMeanConf.length = offset;
-  perFrameElapsed.length = offset;
-  frameRevealed.length = offset;
+  runFramesTruncate(runFrames, offset);
+}
+
+// The last cumulative elapsed reading, or `fallback` when the run has
+// none yet.
+function lastElapsedOr(fallback) {
+  var series = runFrames.elapsed;
+  if (series.length === 0) {
+    return fallback;
+  }
+  return series[series.length - 1];
 }
 
 function unlockScrubberNav() {
@@ -5347,7 +5345,7 @@ function beginSubstitutionSession() {
   clearRemaskedPositions();
 
   scrubberSlider.min = "0";
-  scrubberSlider.max = String(frameHistory.length - 1);
+  scrubberSlider.max = String(runFrames.history.length - 1);
   btnEditFrames.hidden = true;
   if (btnWhatIf) {
     btnWhatIf.hidden = true;
@@ -5357,7 +5355,7 @@ function beginSubstitutionSession() {
     overlaySelectGroup.hidden = true;
   }
 
-  navigateToFrame(frameHistory.length - 1);
+  navigateToFrame(runFrames.history.length - 1);
   updateGuidedUI();
 }
 
@@ -5373,7 +5371,7 @@ function doSubstitute(position, tokenId, typedText) {
   if (!substitutionMode || remaskMode !== "substitute") {
     return;
   }
-  if (position < 0 || position >= frameHistory.length) {
+  if (position < 0 || position >= runFrames.history.length) {
     return;
   }
   hideAltsPopover();
@@ -5447,14 +5445,14 @@ function beginEditSession() {
   // Start at frame 1: frame 0 is the fully-masked canvas with nothing
   // to remask, so it is never a useful selection. (Guarded for the
   // degenerate single-frame case.)
-  var startFrame = frameHistory.length > 1 ? 1 : 0;
+  var startFrame = runFrames.history.length > 1 ? 1 : 0;
   scrubberMinFrame = startFrame;
   remaskModeEdits = [];
   guidedResumeAction = null;
   clearRemaskedPositions();
 
   scrubberSlider.min = String(startFrame);
-  scrubberSlider.max = String(frameHistory.length - 1);
+  scrubberSlider.max = String(runFrames.history.length - 1);
   btnEditFrames.hidden = true;
   guidedEditControls.hidden = false;
   if (overlaySelectGroup) {
@@ -5576,7 +5574,7 @@ function updateGuidedUI() {
       scrubberSlider.max = String(
         (originalTotalFrames > 0)
           ? originalTotalFrames - 1
-          : frameHistory.length - 1
+          : runFrames.history.length - 1
       );
       unlockScrubberNav();
       break;
@@ -5600,9 +5598,9 @@ function updateGuidedUI() {
       scrubberSlider.disabled = false;
       scrubberSlider.min = "0";
       scrubberSlider.max =
-        String(frameHistory.length - 1);
+        String(runFrames.history.length - 1);
       unlockScrubberNav();
-      if (currentScrubFrame === frameHistory.length - 1) {
+      if (currentScrubFrame === runFrames.history.length - 1) {
         guidedEditStatus.textContent =
           "Edit complete. Confirm to save, or"
           + " retry from the start.";
@@ -5703,7 +5701,7 @@ function handleGuidedDone() {
   if (guidedResumeAction === "another") {
     var target = Math.min(
       guidedTargetFrame,
-      frameHistory.length - 1
+      runFrames.history.length - 1
     );
 
     scrubberActive = true;
@@ -5716,7 +5714,7 @@ function handleGuidedDone() {
 
     scrubberSlider.min = String(target);
     scrubberSlider.max =
-      String(frameHistory.length - 1);
+      String(runFrames.history.length - 1);
     scrubberSlider.value = String(target);
 
     currentScrubFrame = target;
@@ -5752,9 +5750,9 @@ function enterReviewMode() {
   if (overlaySelectGroup) {
     overlaySelectGroup.hidden = true;
   }
-  currentScrubFrame = frameHistory.length - 1;
+  currentScrubFrame = runFrames.history.length - 1;
   scrubberSlider.min = "0";
-  scrubberSlider.max = String(frameHistory.length - 1);
+  scrubberSlider.max = String(runFrames.history.length - 1);
   scrubberSlider.value = String(currentScrubFrame);
   scrubberSlider.disabled = false;
   unlockScrubberNav();
@@ -6193,7 +6191,7 @@ function statusChipDismiss(chip) {
 
 function setSaveAvailable(available) {
   // Always visible; greyed out when there is nothing to save.
-  btnSave.disabled = !(available && frameHistory.length > 0);
+  btnSave.disabled = !(available && runFrames.history.length > 0);
 }
 
 // Clears the footer readouts only, never the stack. doSubstitute and
@@ -6220,12 +6218,7 @@ function resetRunState() {
   resetGuidedMode();
   remaskedPositions = {};
   perFrameRemasked = {};
-  frameHistory = [];
-  frameTokens = [];
-  perFrameElapsed = [];
-  frameRevealed = [];
-  frameCanvasIndex = [];
-  frameMeanConf = [];
+  runFramesClear(runFrames);
   invalidateRunMemos();
   overlayMode = "none";
   if (overlaySelectGroup) {
@@ -6496,7 +6489,7 @@ function saveRun() {
     return Promise.resolve();
   }
   if (
-    frameHistory.length === 0
+    runFrames.history.length === 0
     || !lastFinalText
   ) {
     return Promise.resolve();
@@ -6530,20 +6523,20 @@ function saveRun() {
   // this with the resume's message.
   var saveStatus = statusPush("Saving " + runLabel + " run");
 
-  var totalElapsed = perFrameElapsed.length > 0
-    ? perFrameElapsed[perFrameElapsed.length - 1]
+  var totalElapsed = runFrames.elapsed.length > 0
+    ? runFrames.elapsed[runFrames.elapsed.length - 1]
     : null;
 
   var payload = {
     model: activeModelId,
     prompt: promptInput.value.trim(),
     params: lastRunParams || getParamValues(),
-    frames: frameHistory,
+    frames: runFrames.history,
     final_text: lastFinalText,
     elapsed_seconds: totalElapsed,
-    per_frame_elapsed: perFrameElapsed.slice(),
-    frame_tokens: tokenRecordsFrom(frameTokens),
-    mean_conf: frameMeanConf.slice(),
+    per_frame_elapsed: runFrames.elapsed.slice(),
+    frame_tokens: tokenRecordsFrom(runFrames.tokens),
+    mean_conf: runFrames.meanConf.slice(),
   };
 
   // The sampler's own figure, not the readout's. Omitted rather than
@@ -6565,7 +6558,7 @@ function saveRun() {
   // indices were not restored), omit it rather than send nulls that
   // would fail server validation and break the whole save.
   var canvasIndexClean = cleanCanvasIndex(
-    frameCanvasIndex, frameHistory.length
+    runFrames.canvasIndex, runFrames.history.length
   );
   if (canvasIndexClean !== null) {
     payload.canvas_index = canvasIndexClean;
@@ -6901,7 +6894,7 @@ btnScrubEnd.addEventListener(
       remaskMode === "select_target"
       && originalTotalFrames > 0
     ) ? originalTotalFrames - 1
-      : frameHistory.length - 1;
+      : runFrames.history.length - 1;
     navigateToFrame(endFrame);
   }
 );
@@ -7058,7 +7051,7 @@ btnEditAnother.addEventListener(
     remaskMode = "select_target";
     var maxFrame = (originalTotalFrames > 0)
       ? originalTotalFrames - 1
-      : frameHistory.length - 1;
+      : runFrames.history.length - 1;
     scrubberSlider.min =
       String(scrubberMinFrame);
     scrubberSlider.max = String(maxFrame);
@@ -7363,7 +7356,7 @@ document.addEventListener(
         remaskMode === "select_target"
         && originalTotalFrames > 0
       ) ? originalTotalFrames - 1
-        : frameHistory.length - 1;
+        : runFrames.history.length - 1;
       navigateToFrame(endFrame);
     }
   }
@@ -7473,7 +7466,7 @@ var SESSION_KEY = OVERLAYS_LAST_RUN_KEY;
 function saveSessionState() {
   if (
     !activeModelId
-    || frameHistory.length < 2
+    || runFrames.history.length < 2
     || !lastFinalText
   ) {
     return;
@@ -7487,12 +7480,6 @@ function saveSessionState() {
     // switch apart from a page navigation.
     device: activeDevice,
     prompt: promptInput.value,
-    frameHistory: frameHistory,
-    perFrameElapsed: perFrameElapsed,
-    // Carried so the footer can still answer a mode switch after a
-    // round trip. Restoring only the rendered text would leave the
-    // first click with nothing to recompute from.
-    frameRevealed: frameRevealed,
     finalText: lastFinalText,
     params: lastRunParams,
     promptLen: lastRunPromptLen,
@@ -7524,10 +7511,13 @@ function saveSessionState() {
     statusElapsed: statusElapsed.textContent,
     statusMessage: statusMessage.textContent,
   };
-  var full = Object.assign({}, base, {
-    frameTokens: frameTokens,
-    frameCanvasIndex: frameCanvasIndex,
-    frameMeanConf: frameMeanConf,
+  // The three that survive a storage-quota refusal: enough to redraw
+  // the run and report its timings. The other three are per-token
+  // detail and ride the full payload below.
+  Object.assign(
+    base, runFramesToJson(runFrames, RUN_FRAME_LIGHT_FIELDS)
+  );
+  var full = Object.assign({}, base, runFramesToJson(runFrames), {
     originalFrameHistory: originalFrameHistory,
     originalFrameTokens: originalFrameTokens,
     originalPerFrameElapsed: originalPerFrameElapsed,
@@ -7584,26 +7574,21 @@ function restoreSessionState() {
   // and the clear-on-switch covers the case it cannot.
   var sameDevice =
     s.device === undefined || s.device === activeDevice;
+  // A snapshot that hit the storage quota carries only three of the
+  // six, so the run comes back renderable but without its per-token
+  // detail. That is allowed, and the first Edit-Frames truncate
+  // squares the missing three up to the same length as the rest.
+  var restored = runFramesFromJson(s);
   if (
     s.model !== activeModelId
     || !sameDevice
-    || !s.frameHistory
-    || s.frameHistory.length < 2
+    || runFramesLength(restored) < 2
   ) {
     return false;
   }
 
-  frameHistory = s.frameHistory;
-  frameTokens = s.frameTokens || [];
-  // Canvas index + mean confidence must be restored too: a later
-  // Edit-Frames resume truncates them to the resume offset, and if they
-  // were left empty they would extend to sparse (null) arrays that fail
-  // the save's canvas_index validation.
-  frameCanvasIndex = s.frameCanvasIndex || [];
-  frameMeanConf = s.frameMeanConf || [];
+  runFramesRestore(runFrames, restored);
   invalidateRunMemos();
-  perFrameElapsed = s.perFrameElapsed || [];
-  frameRevealed = s.frameRevealed || [];
   lastFinalText = s.finalText || "";
   lastRunParams = s.params || null;
   lastRunPromptLen =
@@ -7619,7 +7604,7 @@ function restoreSessionState() {
       : null;
   remaskEdits = s.remaskEdits || [];
   originalTotalFrames =
-    s.originalTotalFrames || frameHistory.length;
+    s.originalTotalFrames || runFrames.history.length;
   originalFrameHistory = s.originalFrameHistory || [];
   originalFrameTokens = s.originalFrameTokens || [];
   originalPerFrameElapsed = s.originalPerFrameElapsed || [];

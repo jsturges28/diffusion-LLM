@@ -228,7 +228,7 @@ this campaign and three findings it had already earned.
 | TRUST-04 | medium | L | blocked | LIFE-04 | |
 | DATA-02 | high | L | partial | maintainer decision | Lost-update slice only; conflict semantics still forked |
 | RUNTIME-01 | medium | L | blocked | LIFE-04, then ORG-02 + DATA-05 | |
-| ORG-02 | medium | L | ready | PROTOCOL-01 (done) | |
+| ORG-02 | medium | L | in progress | PROTOCOL-01 (done) | The aligned frame family behind run_frames.js |
 | RUNTIME-03 | medium | S | blocked | ORG-02, paired | |
 | ROADMAP-01 | high | M | blocked | stage 6 order | |
 | ROADMAP-05 | high | M | blocked | stage 6 order | |
@@ -833,6 +833,70 @@ assertion. The first version of these tests hung the suite. They now
 carry a five-second bound on every park, so a regression of that kind
 fails in seconds, which is the same lesson the `LIFE-05` tests
 recorded and the second time it has been learned here.
+
+### ORG-02
+
+**Two forks were settled before any code moved**, both against the
+report's literal wording, both with the maintainer.
+
+The Direction asks for native ES modules, and `ORG-04` says its
+activation client "can begin as one explicitly namespaced classic
+script and become a native module with `ORG-02`". The conversion is
+deferred anyway. The pattern it would replace is not a stopgap: three
+extracted modules carry 91 passing browser tests through a `vm`
+harness that `AGENTS.md` documents, and converting means changing
+load semantics on four pages plus the harness itself. The tested
+state the finding is actually about is separable from the dependency
+hygiene modules would buy, so it is being done first.
+
+The Verification clause ends "a small browser smoke layer must prove
+the module wiring and modal request cancellation against real DOM
+events". That cannot run here: no display, and the repo has **zero
+JavaScript dependencies**, no `package.json` and no `node_modules`.
+Satisfying it means jsdom, which would be the project's first JS
+dependency, or a browser binary. It is handed to the maintainer as
+manual items instead, the same way every GPU and display clause in
+this campaign has been.
+
+**The first module is the frame family.** Six arrays indexed by frame
+were declared separately and enumerated by hand at nine sites:
+appended, frozen into the original-run copy, snapshotted, restored,
+truncated, cleared, projected into the save payload, serialised, and
+read back. `run_frames.js` owns all nine, and a source-inspection
+test asserts that no bare `frameHistory` and friends survive, because
+a family one call site can still take apart is not a family.
+
+**The invariant is not "all six are equal", which is what makes it
+worth writing down.** A session snapshot deliberately drops three of
+them when localStorage refuses the full payload, so what holds is
+that each array is either empty or exactly as long as `history`. A
+degraded restore is then repaired by the first truncate, which sets
+every array to the same length whether or not it had one. That
+behaviour was load-bearing and documented only in a comment on the
+restore path; it is now a test.
+
+**Checked on the way in, not just on the way out.** Every operation
+writes all six, so a postcondition can only catch a bug inside the
+module. The precondition catches a caller that reached past it and
+changed one array alone, which is what every call site used to do,
+and without it the next truncate would paper over the damage by
+squaring all six up to one length. The run would then carry frames
+whose token detail belonged to different frames.
+
+**One behaviour change, in a commit that is otherwise a move.** The
+append site pushed to `perFrameElapsed` only when the worker sent an
+`elapsed`, while its five siblings grew unconditionally, so a frame
+without one desynchronised the family. It cannot arrive from a real
+worker, because `FrameStreamer` stamps `elapsed` on everything it
+forwards, so the fix carries the previous cumulative value and is
+inert in practice. Recorded because "extract and test current
+semantics" is the report's own instruction, and this is the one place
+the extraction did not.
+
+**Seven mutants, all caught**, including both historical bugs: an
+append that skips one array, and a truncate that skips
+`perFrameElapsed`, which is the one that knocked the Timing chart's x
+axis out of step with every other chart.
 
 ### PROTOCOL-01
 

@@ -4,10 +4,10 @@ overview: "Extract the generator's run state into tested, dependency-light modul
 todos:
   - id: token-reset
     content: Clear activeRunToken in resetRunState alongside its siblings, with a test
-    status: in_progress
+    status: completed
   - id: run-frames
     content: Extract run_frames.js owning the six aligned arrays, adopt it in app.js, and test the invariant and the historical bug
-    status: pending
+    status: in_progress
   - id: original-frames
     content: Move the frozen original-run family into the same core
     status: pending
