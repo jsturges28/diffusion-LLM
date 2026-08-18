@@ -63,7 +63,13 @@ from src.analytics.metrics import (
     read_frame_texts,
     total_elapsed_seconds,
 )
-from src.backends.protocol import ModelInfo
+from src.backends.protocol import (
+    ERROR_NO_MODEL_ACTIVE,
+    ERROR_SCOPE_FATAL,
+    ERROR_WORKER_UNREACHABLE,
+    ModelInfo,
+    wire_error,
+)
 from src.backends.registry import DEFAULT_MODEL, REGISTRY
 from src.inference.render_gif import history_to_gif
 from src.web import run_store
@@ -1500,13 +1506,14 @@ async def websocket_proxy(browser: WebSocket) -> None:
         # Model selection happens on the Main Menu; the generator
         # never auto-boots a worker. Tell the client to go back.
         await browser.send_json(
-            {
-                "type": "error",
-                "message": (
+            wire_error(
+                message=(
                     "No model is active. Return to the menu"
                     " to select one."
                 ),
-            }
+                code=ERROR_NO_MODEL_ACTIVE,
+                scope=ERROR_SCOPE_FATAL,
+            )
         )
         await browser.close()
         return
@@ -1542,7 +1549,11 @@ async def websocket_proxy(browser: WebSocket) -> None:
         # above, so nothing is lost if this cannot be delivered.
         with contextlib.suppress(Exception):
             await browser.send_json(
-                {"type": "error", "message": str(exc)}
+                wire_error(
+                    message=str(exc),
+                    code=ERROR_WORKER_UNREACHABLE,
+                    scope=ERROR_SCOPE_FATAL,
+                )
             )
 
 

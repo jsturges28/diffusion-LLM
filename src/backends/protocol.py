@@ -135,3 +135,136 @@ MSG_PROBE_RESULT = "probe_result"
 # be tens of thousands of objects to deliver a single integer.
 MSG_COUNT_PROMPT = "count_prompt"
 MSG_COUNT_PROMPT_RESULT = "count_prompt_result"
+
+
+# -- Error envelopes --
+#
+# Every failure used to leave a worker as ``{"type": "error",
+# "message": <a sentence>}``, which says what went wrong and nothing
+# about who it happened to. The browser had one handler for all of
+# them, so a probe rejected because a generation was running tore
+# down the whole What If session: a non-terminal auxiliary failure
+# treated as if the run had died.
+#
+# Two fields fix that. ``scope`` says how far the failure reaches, and
+# ``code`` names the failure stably, so the client can branch without
+# matching on prose that is written for a human to read.
+#
+# Plain dicts and plain functions, not pydantic models. These are
+# built on the error path, which is cold, but they live beside the
+# frame path, which is not, and the report rejects validating hot
+# frames. Keeping the whole module importable by three venvs with
+# deliberately incompatible dependencies is worth more here than
+# types the callers already have.
+
+# The connection or the model is gone. Nothing else can be attempted,
+# so the session ends: the reducer's business, not a control's.
+ERROR_SCOPE_FATAL = "fatal"
+# One generation-class operation failed (generate, resume,
+# substitute). The socket is fine. An edit session open at the time
+# must roll back, because the client truncates the run optimistically
+# before the worker answers.
+ERROR_SCOPE_RUN = "run"
+# One auxiliary request failed (tokenize, count, probe). Concerns
+# only whatever asked, and must disturb nothing else.
+ERROR_SCOPE_REQUEST = "request"
+
+ERROR_SCOPES: Tuple[str, ...] = (
+    ERROR_SCOPE_FATAL,
+    ERROR_SCOPE_RUN,
+    ERROR_SCOPE_REQUEST,
+)
+
+# Stable codes. Add rather than rename: the client branches on these.
+ERROR_MODEL_LOAD_FAILED = "model_load_failed"
+ERROR_NO_MODEL_ACTIVE = "no_model_active"
+ERROR_WORKER_UNREACHABLE = "worker_unreachable"
+ERROR_NO_TOKENIZER = "no_tokenizer"
+ERROR_BUSY = "busy"
+ERROR_INVALID_REQUEST = "invalid_request"
+ERROR_GENERATION_FAILED = "generation_failed"
+ERROR_UNKNOWN_MESSAGE = "unknown_message"
+# The run a stateful request names is not the run the worker holds.
+ERROR_STALE_RUN = "stale_run"
+
+# Which scope each request type's failures carry. Generation-class
+# requests own the run; the rest own only themselves.
+REQUEST_SCOPES: Dict[str, str] = {
+    MSG_GENERATE: ERROR_SCOPE_RUN,
+    MSG_RESUME: ERROR_SCOPE_RUN,
+    MSG_SUBSTITUTE: ERROR_SCOPE_RUN,
+    MSG_TOKENIZE: ERROR_SCOPE_REQUEST,
+    MSG_COUNT_PROMPT: ERROR_SCOPE_REQUEST,
+    MSG_PROBE: ERROR_SCOPE_REQUEST,
+}
+
+
+def wire_error(
+    *,
+    message: str,
+    code: str,
+    scope: str,
+    request_type: Optional[str] = None,
+    request_id: Optional[int] = None,
+) -> Dict[str, object]:
+    """Build one error frame.
+
+    ``request_type`` and ``request_id`` are omitted rather than sent
+    as null when the failure answers no particular request, so the
+    client's "is this mine" test stays a plain presence check and
+    cannot mistake a null for an id of zero.
+    """
+    assert message, "an error frame must say something"
+    assert code, "an error frame must carry a code"
+    assert scope in ERROR_SCOPES, f"unknown error scope: {scope}"
+    frame: Dict[str, object] = {
+        "type": MSG_ERROR,
+        "message": message,
+        "code": code,
+        "scope": scope,
+    }
+    if request_type is not None:
+        frame["request_type"] = request_type
+    if request_id is not None:
+        frame["request_id"] = request_id
+    return frame
+
+
+def request_id_of(data: Dict[str, object]) -> Optional[int]:
+    """The client's id for a request, if it sent one.
+
+    ``None`` rather than zero when absent, so an error frame can omit
+    the field and the client's ownership test stays a presence check.
+    Only the auxiliary requests carry an id today; the generation
+    ones are identified by the run they belong to instead.
+    """
+    raw = data.get("request_id")
+    if isinstance(raw, int):
+        return raw
+    return None
+
+
+def request_error(
+    *,
+    message: str,
+    code: str,
+    request_type: str,
+    request_id: Optional[int] = None,
+) -> Dict[str, object]:
+    """Build an error frame scoped by which request it answers.
+
+    The scope of a failure is a property of the operation, not of the
+    site that noticed it, so callers name the request and this decides
+    how far the damage reaches. An unrecognised request type is
+    treated as run-scoped, which is the cautious reading: doing too
+    much cleanup is recoverable, and leaving a half-applied edit on
+    screen is not.
+    """
+    assert request_type, "name the request this answers"
+    return wire_error(
+        message=message,
+        code=code,
+        scope=REQUEST_SCOPES.get(request_type, ERROR_SCOPE_RUN),
+        request_type=request_type,
+        request_id=request_id,
+    )

@@ -18,6 +18,14 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import WebSocket
 from transformers import AutoTokenizer  # type: ignore[attr-defined]
 
+from src.backends.protocol import (
+    ERROR_GENERATION_FAILED,
+    ERROR_INVALID_REQUEST,
+    MSG_GENERATE,
+    MSG_RESUME,
+    request_error,
+    request_id_of,
+)
 from src.backends.registry import DGEMMA
 from src.backends.worker_base import Backend, FrameStreamer
 from src.inference.dgemma_nf4 import load_quantized
@@ -157,7 +165,12 @@ class DgemmaBackend(Backend):
             params = self._validate_generate(data)
         except (ValueError, TypeError) as exc:
             await ws.send_json(
-                {"type": "error", "message": str(exc)}
+                request_error(
+                    message=str(exc),
+                    code=ERROR_INVALID_REQUEST,
+                    request_type=MSG_GENERATE,
+                    request_id=request_id_of(data),
+                )
             )
             return
 
@@ -185,7 +198,12 @@ class DgemmaBackend(Backend):
         except Exception as exc:  # noqa: BLE001
             logger.exception("generation failed")
             await ws.send_json(
-                {"type": "error", "message": str(exc)}
+                request_error(
+                    message=str(exc),
+                    code=ERROR_GENERATION_FAILED,
+                    request_type=MSG_GENERATE,
+                    request_id=request_id_of(data),
+                )
             )
 
     def _store_state(
@@ -282,7 +300,12 @@ class DgemmaBackend(Backend):
             resume_params = self._validate_resume(data)
         except (ValueError, TypeError) as exc:
             await ws.send_json(
-                {"type": "error", "message": str(exc)}
+                request_error(
+                    message=str(exc),
+                    code=ERROR_INVALID_REQUEST,
+                    request_type=MSG_RESUME,
+                    request_id=request_id_of(data),
+                )
             )
             return
 
@@ -331,7 +354,12 @@ class DgemmaBackend(Backend):
         except Exception as exc:  # noqa: BLE001
             logger.exception("resume failed")
             await ws.send_json(
-                {"type": "error", "message": str(exc)}
+                request_error(
+                    message=str(exc),
+                    code=ERROR_GENERATION_FAILED,
+                    request_type=MSG_RESUME,
+                    request_id=request_id_of(data),
+                )
             )
 
     async def _forward_resume(

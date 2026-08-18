@@ -31,7 +31,16 @@ from transformers import (  # type: ignore[attr-defined]
     AutoTokenizer,
 )
 
-from src.backends.protocol import MSG_PROBE_RESULT
+from src.backends.protocol import (
+    ERROR_GENERATION_FAILED,
+    ERROR_INVALID_REQUEST,
+    MSG_GENERATE,
+    MSG_PROBE,
+    MSG_PROBE_RESULT,
+    MSG_SUBSTITUTE,
+    request_error,
+    request_id_of,
+)
 from src.backends.registry import SMOLLM3
 from src.backends.worker_base import (
     Backend,
@@ -235,7 +244,12 @@ class Smollm3Backend(Backend):
             params = self._validate_generate(data)
         except (ValueError, TypeError) as exc:
             await ws.send_json(
-                {"type": "error", "message": str(exc)}
+                request_error(
+                    message=str(exc),
+                    code=ERROR_INVALID_REQUEST,
+                    request_type=MSG_GENERATE,
+                    request_id=request_id_of(data),
+                )
             )
             return
 
@@ -267,7 +281,12 @@ class Smollm3Backend(Backend):
         except Exception as exc:  # noqa: BLE001
             logger.exception("generation failed")
             await ws.send_json(
-                {"type": "error", "message": str(exc)}
+                request_error(
+                    message=str(exc),
+                    code=ERROR_GENERATION_FAILED,
+                    request_type=MSG_GENERATE,
+                    request_id=request_id_of(data),
+                )
             )
             return
         if state.get("ids"):
@@ -369,7 +388,12 @@ class Smollm3Backend(Backend):
             request = self._validate_substitute(data)
         except (ValueError, TypeError, KeyError) as exc:
             await ws.send_json(
-                {"type": "error", "message": str(exc)}
+                request_error(
+                    message=str(exc),
+                    code=ERROR_INVALID_REQUEST,
+                    request_type=MSG_SUBSTITUTE,
+                    request_id=request_id_of(data),
+                )
             )
             return
 
@@ -430,7 +454,12 @@ class Smollm3Backend(Backend):
         except Exception as exc:  # noqa: BLE001
             logger.exception("substitution failed")
             await ws.send_json(
-                {"type": "error", "message": str(exc)}
+                request_error(
+                    message=str(exc),
+                    code=ERROR_GENERATION_FAILED,
+                    request_type=MSG_SUBSTITUTE,
+                    request_id=request_id_of(data),
+                )
             )
             return
 
@@ -454,7 +483,12 @@ class Smollm3Backend(Backend):
             token_id = _probe_token_id(data)
         except (ValueError, TypeError, KeyError) as exc:
             await ws.send_json(
-                {"type": "error", "message": str(exc)}
+                request_error(
+                    message=str(exc),
+                    code=ERROR_INVALID_REQUEST,
+                    request_type=MSG_PROBE,
+                    request_id=request_id_of(data),
+                )
             )
             return
 
@@ -480,7 +514,12 @@ class Smollm3Backend(Backend):
         except Exception as exc:  # noqa: BLE001
             logger.exception("probe failed")
             await ws.send_json(
-                {"type": "error", "message": str(exc)}
+                request_error(
+                    message=str(exc),
+                    code=ERROR_GENERATION_FAILED,
+                    request_type=MSG_PROBE,
+                    request_id=request_id_of(data),
+                )
             )
             return
 

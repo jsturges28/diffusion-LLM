@@ -26,10 +26,15 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 from src.backends.protocol import (
+    ERROR_BUSY,
+    ERROR_MODEL_LOAD_FAILED,
+    ERROR_NO_TOKENIZER,
+    ERROR_SCOPE_FATAL,
+    ERROR_SCOPE_REQUEST,
+    ERROR_UNKNOWN_MESSAGE,
     MSG_CANCEL,
     MSG_COUNT_PROMPT,
     MSG_COUNT_PROMPT_RESULT,
-    MSG_ERROR,
     MSG_GENERATE,
     MSG_MODEL_STATUS,
     MSG_PROBE,
@@ -38,6 +43,9 @@ from src.backends.protocol import (
     MSG_TOKENIZE,
     MSG_TOKENIZE_RESULT,
     ModelInfo,
+    request_error,
+    request_id_of,
+    wire_error,
 )
 
 logger = logging.getLogger("diffusion_worker")
@@ -273,10 +281,12 @@ class Backend(ABC):
         tokenizer = getattr(self, "tokenizer", None)
         if tokenizer is None:
             await ws.send_json(
-                {
-                    "type": MSG_ERROR,
-                    "message": "No tokenizer is loaded.",
-                }
+                request_error(
+                    message="No tokenizer is loaded.",
+                    code=ERROR_NO_TOKENIZER,
+                    request_type=MSG_TOKENIZE,
+                    request_id=request_id_of(data),
+                )
             )
             return
         raw = data.get("text", "")
@@ -309,10 +319,12 @@ class Backend(ABC):
         tokenizer = getattr(self, "tokenizer", None)
         if tokenizer is None:
             await ws.send_json(
-                {
-                    "type": MSG_ERROR,
-                    "message": "No tokenizer is loaded.",
-                }
+                request_error(
+                    message="No tokenizer is loaded.",
+                    code=ERROR_NO_TOKENIZER,
+                    request_type=MSG_COUNT_PROMPT,
+                    request_id=request_id_of(data),
+                )
             )
             return
         raw = data.get("text", "")
@@ -579,15 +591,26 @@ def resolve_load_status(
     return "downloading"
 
 
-async def _send_busy(ws: WebSocket) -> None:
+async def _send_busy(
+    ws: WebSocket, request_type: str, data: Dict[str, Any]
+) -> None:
+    """Refuse a request because the generation lock is held.
+
+    Takes the request it is refusing because that decides how far the
+    refusal reaches. Turning away a second generation ends a run;
+    turning away a probe should leave What If exactly as it was, and
+    for a long time it did not, because both arrived as the same
+    unscoped error.
+    """
     await ws.send_json(
-        {
-            "type": "error",
-            "message": (
-                "A generation is already running."
-                " Please wait."
+        request_error(
+            message=(
+                "A generation is already running. Please wait."
             ),
-        }
+            code=ERROR_BUSY,
+            request_type=request_type,
+            request_id=request_id_of(data),
+        )
     )
 
 
@@ -642,13 +665,15 @@ async def _await_model_ready(
 async def _send_load_error(
     ws: WebSocket, load_error: Dict[str, str]
 ) -> None:
+    """Fatal: there is no model, so no request can be attempted."""
     await ws.send_json(
-        {
-            "type": MSG_ERROR,
-            "message": load_error.get(
+        wire_error(
+            message=load_error.get(
                 "message", "Model failed to load."
             ),
-        }
+            code=ERROR_MODEL_LOAD_FAILED,
+            scope=ERROR_SCOPE_FATAL,
+        )
     )
 
 
@@ -790,7 +815,7 @@ def create_worker_app(
 
                 if mtype in streaming:
                     if gen_lock.locked():
-                        await _send_busy(ws)
+                        await _send_busy(ws, mtype, data)
                         continue
                     async with gen_lock:
                         cancel_event.clear()
@@ -809,19 +834,24 @@ def create_worker_app(
                 # same device and its memory.
                 if mtype == MSG_PROBE:
                     if gen_lock.locked():
-                        await _send_busy(ws)
+                        await _send_busy(ws, MSG_PROBE, data)
                         continue
                     async with gen_lock:
                         await backend.handle_probe(ws, data)
                     continue
 
+                # A client bug rather than a worker one, and scoped
+                # to the request so it disturbs nothing: there is no
+                # owner to route it to, and a page that has just sent
+                # something unrecognisable is not helped by also
+                # losing whatever it was doing.
                 await ws.send_json(
-                    {
-                        "type": MSG_ERROR,
-                        "message": (
-                            f"Unknown message type: {mtype}"
-                        ),
-                    }
+                    wire_error(
+                        message=f"Unknown message type: {mtype}",
+                        code=ERROR_UNKNOWN_MESSAGE,
+                        scope=ERROR_SCOPE_REQUEST,
+                        request_id=request_id_of(data),
+                    )
                 )
         except WebSocketDisconnect:
             cancel_event.set()
