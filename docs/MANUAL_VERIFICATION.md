@@ -79,6 +79,20 @@ kept when these were written:
   ever being sent, so nothing could be refused and the item looked like it
   had failed when it had simply not been exercised.
 
+- **167 to 170**: confirmed on 2026-08-18, `LIFE-04`'s whole queue. Stop
+  halts each model within about a step, the GPU returns to idle, the run
+  stays scrubbable and savable, and the worker takes fresh work straight
+  after. Leaving the page stops a run the same way, and a guided edit
+  finishing at its budget still reads as completed rather than stopped.
+
+  Going past 168's script turned up one gap, which is recorded under
+  `LIFE-04` in the ledger rather than here because nothing about it fails.
+  Stop a run, then edit it and resume to the end: the saved run is
+  correctly *not* marked stopped, because the branch really did run the
+  schedule out. What is unrecorded is that the pre-edit baseline bundled
+  inside it was the truncated one, so the Original/Edited comparison reads
+  as though the intervention lengthened the run.
+
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
 matches the app is worse than no scenario, because it costs a session to
