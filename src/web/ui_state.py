@@ -21,6 +21,25 @@ into which collection, which is intent they expressed and cannot be
 recomputed from anything on disk. The mechanism is deliberately the
 same anyway, since it is already atomic and origin-independent, but
 that key is the reason this file is worth not corrupting.
+
+Atomicity is not the same as not losing writes, and this module used
+to provide only the first. Two things were missing, both from
+``DATA-02``:
+
+- The lock was a ``threading.Lock``, which is process-local. The
+  browser supervisor and the desktop supervisor are separate
+  processes writing one file, so each could read, modify, and write
+  over the other. An ``flock`` on a sidecar file now covers that.
+- A caller that read the file, computed a new value, and then called
+  ``set_ui_state_key`` was doing a read-modify-write with the lock
+  held for only the write half, so a value computed from an older
+  snapshot could land on top of a newer one. ``mutate_ui_state_key``
+  exists so that whole sequence happens under one hold.
+
+What is deliberately *not* here is conflict semantics: two clients
+each replacing the whole value still means the later one wins, and
+deciding between server-authoritative collection operations and a
+revision scheme is the open half of ``DATA-02``.
 """
 
 from __future__ import annotations
@@ -31,7 +50,12 @@ import os
 import tempfile
 import threading
 from pathlib import Path
-from typing import Dict
+from typing import Callable, Dict, Iterator, Optional
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - POSIX only; app is Linux
+    fcntl = None  # type: ignore[assignment]
 
 # Allowed keys mapped to the maximum accepted value length (characters).
 # Bounding the size stops a runaway client from growing the file without
@@ -56,13 +80,49 @@ UI_STATE_KEYS: Dict[str, int] = {
     "diffusion_collections": 262_144,
 }
 
-# Serialize read-modify-write so concurrent PUTs cannot clobber each
-# other or observe a half-written file.
+# Serialize read-modify-write within this process. Kept alongside the
+# file lock below rather than replaced by it, because it is the cheap
+# path and because it is the only protection left on a host where
+# flock is unavailable.
 _LOCK = threading.Lock()
 
 
 def _state_path(results_dir: Path) -> Path:
     return results_dir / "ui_state.json"
+
+
+def _lock_path(results_dir: Path) -> Path:
+    """The sidecar the file lock is taken on.
+
+    Deliberately not ``ui_state.json`` itself. Writes go through
+    ``os.replace``, which swaps a new inode into place, so a lock held
+    on the file being replaced stops excluding anyone the moment the
+    first writer finishes. This file is only ever opened, never
+    replaced, so every process contends on the same inode.
+    """
+    return results_dir / "ui_state.lock"
+
+
+@contextlib.contextmanager
+def _exclusive(results_dir: Path) -> Iterator[None]:
+    """Hold the state file against every other writer, in any process.
+
+    Both locks, in that order: the thread lock first so siblings in
+    this process queue cheaply, then ``flock`` for the supervisor in
+    the other process. Closing the handle would release the lock on
+    its own; unlocking explicitly says so.
+    """
+    results_dir.mkdir(parents=True, exist_ok=True)
+    with _LOCK:
+        if fcntl is None:
+            yield
+            return
+        with _lock_path(results_dir).open("a+") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def load_ui_state(results_dir: Path) -> Dict[str, str]:
@@ -99,6 +159,54 @@ def set_ui_state_key(
     (operating errors) that the caller surfaces as 4xx responses.
     """
     assert isinstance(results_dir, Path), "results_dir must be a Path"
+    _validate_key_value(key, value)
+    with _exclusive(results_dir):
+        state = load_ui_state(results_dir)
+        state[key] = value
+        _write_atomic(results_dir, state)
+    return state
+
+
+def mutate_ui_state_key(
+    results_dir: Path,
+    key: str,
+    mutate: Callable[[Optional[str]], Optional[str]],
+) -> Dict[str, str]:
+    """Read a key, transform it, and write it back under one lock.
+
+    For a caller that derives a new value from the current one. Doing
+    that as a read followed by ``set_ui_state_key`` leaves a gap where
+    another writer's value lands and is then overwritten by one
+    computed before it existed, which is how a GET-time reconcile
+    could undo a concurrent PUT.
+
+    *mutate* receives the stored raw value, or ``None`` when the key
+    is absent, and returns the replacement, or ``None`` to leave the
+    file untouched. It runs with the lock held, so it must not block
+    on anything slow and must not call back into this module.
+
+    Returns the mapping as it stands afterwards, written or not.
+    """
+    assert isinstance(results_dir, Path), "results_dir must be a Path"
+    if key not in UI_STATE_KEYS:
+        raise KeyError(f"unknown ui-state key: {key}")
+    with _exclusive(results_dir):
+        state = load_ui_state(results_dir)
+        value = mutate(state.get(key))
+        if value is None:
+            return state
+        _validate_key_value(key, value)
+        state[key] = value
+        _write_atomic(results_dir, state)
+    return state
+
+
+def _validate_key_value(key: str, value: str) -> None:
+    """Reject what the client contract does not allow.
+
+    Bounding the size stops a runaway client growing the file without
+    limit; the key check stops it inventing storage.
+    """
     if key not in UI_STATE_KEYS:
         raise KeyError(f"unknown ui-state key: {key}")
     if not isinstance(value, str):
@@ -108,11 +216,6 @@ def set_ui_state_key(
         raise ValueError(
             f"ui-state value for {key} exceeds {limit} characters"
         )
-    with _LOCK:
-        state = load_ui_state(results_dir)
-        state[key] = value
-        _write_atomic(results_dir, state)
-    return state
 
 
 def _write_atomic(results_dir: Path, state: Dict[str, str]) -> None:

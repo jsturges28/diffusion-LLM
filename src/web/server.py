@@ -71,7 +71,11 @@ from src.web.data_root import (
     RESULTS_DIR_ENV,
     resolve_results_dir,
 )
-from src.web.ui_state import load_ui_state, set_ui_state_key
+from src.web.ui_state import (
+    load_ui_state,
+    mutate_ui_state_key,
+    set_ui_state_key,
+)
 from src.web.worker_process import (
     WorkerHandle,
     spawn_worker,
@@ -2306,32 +2310,47 @@ def _reconcile_new_runs(state: Dict[str, str]) -> Dict[str, str]:
     as an orphan and inflate the generator/menu count forever, since it
     no longer appears in Analytics to open or delete. Reconciling here,
     on the endpoint every page hydrates from, makes the count self-heal
-    everywhere. A freshly saved run is never pruned: its folder exists
-    before its ID is added to the cue.
+    everywhere. A freshly saved run is never pruned: its folder
+    exists before its ID is added to the cue.
+
+    Read and write happen under one lock, because this derives a new
+    value from the stored one: pruning a snapshot taken before a
+    concurrent PUT and then writing the result would undo that PUT.
+    The run scan is done first so the lock is not held across it.
     """
-    raw = state.get("diffusion_new_runs")
-    if not raw:
+    if not state.get("diffusion_new_runs"):
         return state
-    try:
-        ids = json.loads(raw)
-    except ValueError:
-        return state  # Corrupt value: leave it for load_ui_state to drop.
-    if not isinstance(ids, list):
-        return state
-
     existing = _existing_run_ids()
-    pruned = [run_id for run_id in ids if run_id in existing]
-    if len(pruned) == len(ids):
-        return state
 
-    new_raw = json.dumps(pruned)
+    def prune(raw: Optional[str]) -> Optional[str]:
+        ids = _decode_id_list(raw)
+        if ids is None:
+            return None  # Corrupt: leave it for load_ui_state to drop.
+        kept = [run_id for run_id in ids if run_id in existing]
+        if len(kept) == len(ids):
+            return None
+        return json.dumps(kept)
+
     try:
-        set_ui_state_key(RESULTS_DIR, "diffusion_new_runs", new_raw)
+        return mutate_ui_state_key(
+            RESULTS_DIR, "diffusion_new_runs", prune
+        )
     except (KeyError, ValueError, OSError):
         logger.exception("failed to reconcile new-run cue")
         return state
-    state["diffusion_new_runs"] = new_raw
-    return state
+
+
+def _decode_id_list(raw: Optional[str]) -> Optional[List[Any]]:
+    """Parse a stored JSON list, or ``None`` if it is not one."""
+    if not raw:
+        return None
+    try:
+        ids = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(ids, list):
+        return None
+    return ids
 
 
 def _existing_run_ids() -> Set[str]:
@@ -2358,32 +2377,33 @@ def _reconcile_collections(state: Dict[str, str]) -> Dict[str, str]:
 
     Empty collections survive: the user made them, and one whose runs
     have been deleted is still a place they intend to file more.
+
+    Under one lock for the same reason as the cue above, and it
+    matters more here: this key holds filing the user did by hand,
+    which nothing on disk can reconstruct.
     """
-    raw = state.get("diffusion_collections")
-    if not raw:
+    if not state.get("diffusion_collections"):
         return state
-    try:
-        collections = json.loads(raw)
-    except ValueError:
-        return state  # Corrupt value: load_ui_state will drop it.
-    if not isinstance(collections, list):
-        return state
-
     existing = _existing_run_ids()
-    pruned, dropped = _prune_collection_runs(collections, existing)
-    if dropped == 0:
-        return state
 
-    new_raw = json.dumps(pruned)
+    def prune(raw: Optional[str]) -> Optional[str]:
+        collections = _decode_id_list(raw)
+        if collections is None:
+            return None  # Corrupt: load_ui_state will drop it.
+        kept, dropped = _prune_collection_runs(
+            collections, existing
+        )
+        if dropped == 0:
+            return None
+        return json.dumps(kept)
+
     try:
-        set_ui_state_key(
-            RESULTS_DIR, "diffusion_collections", new_raw
+        return mutate_ui_state_key(
+            RESULTS_DIR, "diffusion_collections", prune
         )
     except (KeyError, ValueError, OSError):
         logger.exception("failed to reconcile collections")
         return state
-    state["diffusion_collections"] = new_raw
-    return state
 
 
 def _prune_collection_runs(

@@ -197,7 +197,7 @@ neighbours and the two-window model switch. Four entries are open:
 | LIFE-04 | high | L | blocked | LIFE-03 | |
 | LIFE-05 | high | M | partial | none | Single-instance the desktop launcher; host lease deferred, see Deviations |
 | TRUST-04 | medium | L | blocked | LIFE-04 | |
-| DATA-02 | high | L | blocked | maintainer decision | |
+| DATA-02 | high | L | partial | maintainer decision | Lost-update slice only; conflict semantics still forked |
 | RUNTIME-01 | medium | L | blocked | LIFE-04, then ORG-02 + DATA-05 | |
 | ORG-02 | medium | L | blocked | PROTOCOL-01 | |
 | RUNTIME-03 | medium | S | blocked | ORG-02, paired | |
@@ -695,6 +695,48 @@ Activating another process's window is the window manager's to allow
 and generally refused under Wayland, so `focus_running_window` tries
 `wmctrl` then `xdotool` and shrugs. The guarantee is that no second
 supervisor starts; the printed message is the part that always works.
+
+### DATA-02
+
+**The half that needed no decision was taken first.** The finding's
+Direction is a fork, server-authoritative collection operations or a
+revision and ETag scheme, and the sequencing says it should not start
+until one is chosen. But three of the things it describes are lost
+updates that neither branch would settle differently, so they were
+pulled forward the way the parameter-key XSS was pulled out of
+`DATA-05`. The fork itself is untouched and still the maintainer's.
+
+**Two supervisors could overwrite each other, and now cannot.** The
+lock in `ui_state.py` was a `threading.Lock`, which is process-local
+while the browser entry point and the desktop app are two processes
+pointed at one results directory. It is now paired with an `flock`.
+
+The lock is taken on a sidecar, `ui_state.lock`, not on the state
+file, and that detail is the whole thing: writes go through
+`os.replace`, which swaps in a new inode, so a lock held on the file
+being replaced stops excluding anyone the moment the first writer
+finishes. The sidecar is only ever opened.
+
+**A read-modify-write was holding the lock for half of itself.**
+`GET /api/ui-state` loaded a snapshot, then both reconcilers computed
+a pruned value from it and called `set_ui_state_key`, which takes the
+lock only for the write. A PUT landing in that gap was overwritten by
+a value computed before it existed. `mutate_ui_state_key` now runs
+the read, the transform and the write under one hold, and both
+reconcilers use it.
+
+**Tested by racing, not by inspection.** A lock taken over the wrong
+span looks identical from the outside, so the tests run sixteen
+threads and eight forked processes appending to one key and assert
+nothing is lost. Both mutants confirm it: reverting the helper to
+read-then-set fails three cases, and removing the `flock` fails
+exactly the process one and nothing else.
+
+**Adjacent, noted, not fixed.** `run_store.py:353-356` has the
+identical process-local lock with a comment deferring the same
+problem. It was left alone; one supervisor still owns the run
+directory in practice, and widening this commit into the run store
+would have mixed two boundaries.
 
 ### Found while verifying, not yet fixed
 
