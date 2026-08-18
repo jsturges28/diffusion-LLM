@@ -122,19 +122,33 @@ button can make, and `model_client.js` gives four pages one reading of
 `/api/models`. All three are classic scripts driven from a `vm` in
 `tests/web/static/`, like `activation_client.js` before them; the native ES
 module conversion the finding also asks for is deliberately a later step
-(`ORG-02`).
+(`ORG-02`), along with the download client and the server-rendered boot
+state that would retire the loading overlay.
 
-**Hardware debt.** The queue at the top of
-`docs/audit/IMPLEMENTATION_LEDGER.md` emptied on 2026-08-17 apart from the
-`TRUST-03` offline retest and two staged-failure items belonging to
-`LIFE-02`, which is what released `XAI-01`, `LIFE-04` and `ORG-02`. It has
-since gained `ORG-02`'s own pair, items 162 and 163, and those matter more
-than most: the guided edit flow needs a GPU, so the modules above were
-written without one of their callers being run. One item, 148, is recorded
-as unreachable on this hardware rather than pending, because it needs two
-models resident at once on a card that cannot hold both. Separately, items
-102 to 126 of `docs/MANUAL_VERIFICATION.md` predate the campaign and have
-never been validated.
+**Saving is explicit now**, which is a behaviour change worth knowing
+before reading the generator. Opening Edit Frames or What If used to write
+a full save; it writes nothing. Three things save: the Save button,
+Confirm, and the rescue when another window takes the model away. Each
+save is published under the run token from `LIFE-01`, so a save whose
+reply is lost to a navigation cannot become a second Analytics row.
+
+**Hardware debt, down to two entries.** The queue at the top of
+`docs/audit/IMPLEMENTATION_LEDGER.md` holds only the `TRUST-03` offline
+retest and `LIFE-02`'s two staged-failure items, 143 and 144, neither of
+which blocks anything. One item, 148, is recorded as unreachable on this
+hardware rather than pending, because it needs two models resident at once
+on a card that cannot hold both. Separately, items 102 to 126 of
+`docs/MANUAL_VERIFICATION.md` predate the campaign and have never been
+validated.
+
+**One measured limit worth carrying forward.** Autoregressive frames are
+full snapshots, so a run's per-token records grow with the square of its
+length: a 2047-token SmolLM3 run is about two million of them. It saves
+and reads back correctly, taking 30 to 45 seconds to save and around ten
+to paint in Analytics, but it exceeds the sessionStorage quota, so
+navigating away and back leaves it without its per-token detail and the
+save refuses rather than writing a hollowed-out copy. That is
+`RUNTIME-01`, and the ceiling is storage rather than the format.
 
 ## Conventions
 

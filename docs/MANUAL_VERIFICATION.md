@@ -57,17 +57,13 @@ kept when these were written:
 - **156**: confirmed on 2026-08-17. The three reservations hold and the
   entropy row stays absent on a diffusion model, which is the half that
   would have been easy to get backwards.
-- **164 to 166**: **not yet validated.** The save work that came out of
-  162 and 163: one run cannot be saved twice, opening an editor writes
-  nothing, and a run restored without its per-token detail refuses rather
-  than saving a hollowed-out copy. 165 is the behaviour change to read
-  before running, since it removes a save that used to happen for you.
-- **162 and 163**: **not yet validated**, and they are `ORG-02`'s whole
-  hardware queue. The guided edit flow needs a GPU, so the modules the
-  first half of that finding extracted were written without any of their
-  callers being run once. Both items are meant to be boring; 162 in
-  particular now fails loudly rather than subtly, because an illegal move
-  between editing phases throws.
+- **162 to 166**: confirmed on 2026-08-18. The `ORG-02` state core and the
+  save work that came out of testing it. The maintainer went past the
+  scripts looking for a way to break the phase table and did not find one.
+  166 took two attempts, and the first one is written into the item now: a
+  saved run opened in Analytics is read from disk, which has no quota, so
+  it looks perfect at any length and reads as a pass. Only returning to the
+  Generation page exercises the session snapshot this item is about.
 - **157 to 161**: confirmed on 2026-08-17, stage 4 pass three's whole queue.
   Two of them took three attempts each, and not because anything was broken.
   Both failures were the items' own fault and both are now fixed in place, so
@@ -1382,12 +1378,20 @@ does nothing at all.
     deliberately gave up: saving is explicit now.
 166. **A run that came back thin says so instead of saving thin.** Needs the
     long-run setup from 163: SmolLM3, Experimental on, a prompt long enough
-    to exceed the session storage quota, around a thousand tokens. Generate
-    it, go to Analytics, come back. The run reads and scrubs but has no
-    hover, no candidates and no entropy profile, which is expected.
+    to exceed the session storage quota, around a thousand tokens.
+    **Read this before running it, because there is a false pass that is
+    very convincing.** Saving the run and then opening it in Analytics is
+    *not* this test, and it will look perfect however long the run is: a
+    saved run is read from disk, which has no quota, so hover, candidates,
+    the entropy profile and the crossfade all work at any length. This
+    item is only about the session snapshot, and the only step that
+    exercises it is coming **back to the Generation page**.
+    So: generate, go to Analytics, come back to Generation. The run reads
+    and scrubs but has no hover, no candidates and no entropy profile,
+    which is expected and is the condition under test.
     Now press the save icon. It should refuse with a line saying the run
     came back without its per-token detail and cannot be saved in full.
-    Before this it saved the hollowed-out version silently, which is the run
-    with no output and one chart family in your screenshot.
+    Before this it saved the hollowed-out version silently, which is the
+    run with no output and one chart family.
     This is a stopgap over the storage shape, not a fix; `RUNTIME-01` is
     where the refusal stops being necessary.

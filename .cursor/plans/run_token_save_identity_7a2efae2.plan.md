@@ -19,7 +19,7 @@ todos:
     status: completed
   - id: records
     content: Record the finding and the in-process lock caveat, add the manual items, and verify
-    status: in_progress
+    status: completed
 isProject: false
 ---
 

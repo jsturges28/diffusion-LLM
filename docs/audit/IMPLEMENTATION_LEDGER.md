@@ -37,12 +37,18 @@ the `QUALITY-01` gap those two findings sat on: the worker's message loop had
 no tests at all. What remains of stage 4 is `XAI-01` and `LIFE-04`, both now
 ready, plus `TRUST-04` behind `LIFE-04`.
 
-**Stage 5 has started.** Clearing the hardware queue on 2026-08-17
-released `ORG-02`, whose state core then landed in four commits: the aligned
-frame family, the pre-edit baseline, the phase table, and the model API
-client. One item, 148, was reclassified as unreachable on this hardware
-rather than left pending, because its scenario needs two models resident at
-once on a card that cannot hold both.
+**Stage 5 has started, and its first half is verified.** Clearing the
+hardware queue on 2026-08-17 released `ORG-02`, whose state core landed in
+four commits, the aligned frame family, the pre-edit baseline, the phase
+table and the model API client, and cleared hardware on 2026-08-18. Three
+pieces of that finding remain: the download API client, the native ES
+module conversion its Direction asks for, and the server-rendered boot
+state that would retire the loading overlay.
+
+Testing it turned up a save bug the audit had missed, fixed in three
+commits and recorded under Deviations. One item, 148, was reclassified as
+unreachable on this hardware rather than left pending, because its scenario
+needs two models resident at once on a card that cannot hold both.
 
 Baselines: 793 tests passing (from 265 at the campaign's start), 145
 browser tests under `node --test`, and Ruff at 128 in `src tests`, gated per
@@ -137,12 +143,17 @@ were cleared on 2026-08-11 in the same sitting: the maintainer confirmed items
 could say least about, the amber invalid row's alignment against its
 neighbours and the two-window model switch.
 
-**As of 2026-08-17 the stage 4 entries have cleared.** `LIFE-03`,
-`LIFE-05`, `LIFE-01`, `PROTOCOL-01` and the `DATA-02` slice all went
-through, which is what released `XAI-01`, `LIFE-04` and `ORG-02`. What is
-open now is `TRUST-03`'s offline retest, `LIFE-02`'s two staged-failure
-items, and `ORG-02`'s own pair, which is the largest of the three because
-none of its callers has been run.
+**As of 2026-08-18 two entries remain**, and neither blocks anything.
+The stage 4 findings cleared on 2026-08-17, which released `XAI-01`,
+`LIFE-04` and `ORG-02`; `ORG-02`'s own state core and the save work that
+came out of testing it cleared on 2026-08-18, items 162 to 166. What is
+left is `TRUST-03`'s offline retest and `LIFE-02`'s two staged-failure
+items, 143 and 144, which are awkward to arrange rather than pending.
+
+`ORG-02`'s browser-smoke clause is recorded as unmet rather than queued:
+satisfying it in the sandbox would mean taking jsdom as the project's
+first JavaScript dependency, and items 162 and 163 cover the same ground
+on real hardware.
 
 - **LIFE-02 and LIFE-06**: partly cleared on 2026-08-14. The maintainer
   confirmed items 142 and 145 of `docs/MANUAL_VERIFICATION.md`, which between
@@ -189,22 +200,6 @@ none of its callers has been run.
   counter-intuitive, and a typed token that matches a captured candidate is
   answered from the run's own record without a probe ever being sent, so the
   refusal under test never happens.
-- **ORG-02 (the state core)**: three modules and their tests run here, but
-  not one of their callers does. The guided edit flow needs a GPU, so the
-  frame family, the phase table and the model client were all written
-  without the workflow they serve being exercised once.
-  `docs/MANUAL_VERIFICATION.md` items 162 and 163 are that exercise. This is
-  also where the finding's browser-smoke clause lands, since satisfying it
-  in the sandbox would mean taking jsdom as the project's first JavaScript
-  dependency.
-- **The save work, items 164 to 166.** Not a finding; it came out of the
-  pass above and is recorded under Deviations. Item 165 is the one to read
-  before running, because it removes a save that used to happen on the
-  user's behalf: opening an editor now writes nothing, and abandoning an
-  edit on an unsaved run leaves it unsaved. The endpoint half is tested
-  against a real client in `tests/web/test_save_idempotence.py`; what needs
-  hardware is that a real save, interrupted by a real navigation, leaves
-  one row rather than two.
 - **TRUST-03 (offline slice)**: the automated half asserts that both Hub
   workers pin every `from_pretrained` call to local files, and that being
   offline with nothing cached now reports what happened instead of a urllib3
@@ -246,7 +241,7 @@ none of its callers has been run.
 | TRUST-04 | medium | L | blocked | LIFE-04 | |
 | DATA-02 | high | L | partial | maintainer decision | Lost-update slice only; conflict semantics still forked |
 | RUNTIME-01 | medium | L | blocked | LIFE-04, then ORG-02 + DATA-05 | |
-| ORG-02 | medium | L | needs hardware | none | Four commits: frame family, baseline, phase table, model client |
+| ORG-02 | medium | L | partial | none | State core verified; download client, ES modules and server-rendered boot remain |
 | RUNTIME-03 | medium | S | blocked | ORG-02, paired | |
 | ROADMAP-01 | high | M | blocked | stage 6 order | |
 | ROADMAP-05 | high | M | blocked | stage 6 order | |
@@ -1114,11 +1109,35 @@ an unlucky corner past a few hundred tokens; it is guaranteed.
 Diffusion escapes it only because its frames are a fixed `gen_length`
 wide.
 
-That is this finding's own subject, compact append-only streams,
-arriving as a user-visible failure rather than a projection. The
-number is worth keeping: it says the fix has to change the stored
-shape, not merely the transport, because the same array is what goes
-to `/api/save` and onto disk.
+The shape is confirmed in the sampler rather than inferred:
+`_build_frame` is documented as building "one full-snapshot protocol
+frame for the growing sequence" (`src/inference/ar_sampler.py`), so
+frame *n* carries all *n* records.
+
+**Then measured properly, on a 2047-token run, on 2026-08-18.** That
+is 2,096,128 token records, and the timings are the useful part
+because they cost more than the payload does:
+
+- Saving the edited run took 30 to 45 seconds, with visible animation
+  stutter throughout.
+- Opening it in Analytics took around 10 seconds before the canvas
+  painted.
+- Scrubbing it afterwards was, in the maintainer's words, like moving
+  through molasses.
+
+**The correctness half held, which narrows the finding usefully.**
+That same 2047-token run round-trips through save and Analytics with
+everything intact: hover, candidates, the entropy profile, and the
+Original/Edited crossfade carrying both elapsed series. So the wall is
+specifically the sessionStorage quota, not the on-disk format and not
+the Analytics reader, both of which handle two million token records
+correctly if slowly. Whoever takes this finding is fixing cost and one
+storage ceiling, not a broken format.
+
+That distinction cost an hour of confusion first, and it is written
+into manual item 166 as well: a saved run opened in Analytics reads
+from disk, which has no quota, so it looks perfect at any length and
+is a convincing false pass for the session-snapshot behaviour.
 
 Stopgapped rather than fixed: `saveRun` now refuses a run that came
 back without its detail instead of writing the hollowed-out version
