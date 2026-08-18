@@ -207,6 +207,11 @@ def _backend() -> LladaBackend:
         "cfg_scale": 0.0,
         "remasking": "low_confidence",
     }
+    # Since LIFE-01 a retained run is state plus an identity, and a
+    # resume that does not name it is refused before the state is
+    # read. A hand-built run has to mint one the way a completed
+    # generation would.
+    backend.run_counter += 1
     return backend
 
 
@@ -220,6 +225,7 @@ def _resume(
     payload: Dict[str, Any] = {
         "frame_index": frame_index,
         "remask_positions": [0, 1],
+        "run_token": backend.run_token,
     }
     if max_frames is not None:
         payload["max_frames"] = max_frames

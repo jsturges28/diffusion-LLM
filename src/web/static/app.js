@@ -274,6 +274,15 @@ var lastFinalText = null;
 // with the run so the record is a measurement rather than the
 // readout's count of whatever is in the box at save time.
 var lastRunPromptLen = null;
+// Which run the worker is holding state for, as it named that run on
+// the terminal frame. One worker serves every window and keeps
+// exactly one run, so a second window generating replaces the state
+// behind this page's still-visible output. Sent back on resume,
+// substitution and probe, where being answered from the wrong run is
+// worse than being refused: the shapes can agree by accident and the
+// result then looks like a valid answer to the wrong question. Empty
+// until a run finishes here.
+var activeRunToken = "";
 // What the worker attested about itself on the done frame: which
 // model and checkpoint, the device it actually loaded onto, its
 // library versions, and its tokenizer. Held here and submitted with
@@ -1814,6 +1823,14 @@ function handleDone(data) {
   if (data.provenance && typeof data.provenance === "object") {
     lastRunProvenance = data.provenance;
   }
+  // Stamped by the same hand and read for the same reason: which run
+  // the worker is now holding state for. Sent back on resume,
+  // substitution and probe, so a second window finishing a
+  // generation makes this page's follow-ups refused rather than
+  // answered from the run that replaced the one on screen.
+  if (typeof data.run_token === "string") {
+    activeRunToken = data.run_token;
+  }
   if (thinkingPanel && thinkingContent) {
     if (data.thinking) {
       thinkingContent.textContent = data.thinking;
@@ -3076,6 +3093,7 @@ function requestTypedProbe() {
     position: typedEntryPos,
     token_id: typedEntryToken.id,
     request_id: typedProbeRequest,
+    run_token: activeRunToken,
   }));
 }
 
@@ -5385,6 +5403,7 @@ function doSubstitute(position, tokenId, typedText) {
     type: "substitute",
     position: position,
     token_id: tokenId,
+    run_token: activeRunToken,
   };
   if (typedText) {
     request.typed = true;
@@ -5662,6 +5681,7 @@ function doGuidedResume(action) {
     type: "resume",
     frame_index: frameIndex,
     remask_positions: positions,
+    run_token: activeRunToken,
   };
 
   if (resumeTarget !== null) {
@@ -7469,6 +7489,14 @@ function saveSessionState() {
     // resident model, which is the failure this whole field exists
     // to close.
     provenance: lastRunProvenance,
+    // Carried for the same reason as the provenance beside it, and
+    // with a sharper consequence: without it, reloading the page and
+    // then editing the restored run is refused as stale, even though
+    // the worker is still holding exactly that run. If the worker
+    // was replaced in the meantime its nonce differs and the refusal
+    // is correct, which is the whole point of carrying the token
+    // rather than a bare counter.
+    runToken: activeRunToken,
     thinking:
       thinkingPanel && !thinkingPanel.hidden
         ? thinkingContent.textContent
@@ -7567,6 +7595,11 @@ function restoreSessionState() {
   lastRunParams = s.params || null;
   lastRunPromptLen =
     typeof s.promptLen === "number" ? s.promptLen : null;
+  // Absent in snapshots written before runs had identities, which
+  // reads as "no token" and costs one refused edit on the upgrade
+  // rather than an edit answered from the wrong run.
+  activeRunToken =
+    typeof s.runToken === "string" ? s.runToken : "";
   lastRunProvenance =
     s.provenance && typeof s.provenance === "object"
       ? s.provenance

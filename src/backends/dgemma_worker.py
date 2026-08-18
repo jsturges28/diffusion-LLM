@@ -21,13 +21,18 @@ from transformers import AutoTokenizer  # type: ignore[attr-defined]
 from src.backends.protocol import (
     ERROR_GENERATION_FAILED,
     ERROR_INVALID_REQUEST,
+    ERROR_STALE_RUN,
     MSG_GENERATE,
     MSG_RESUME,
     request_error,
     request_id_of,
 )
 from src.backends.registry import DGEMMA
-from src.backends.worker_base import Backend, FrameStreamer
+from src.backends.worker_base import (
+    Backend,
+    FrameStreamer,
+    StaleRunError,
+)
 from src.inference.dgemma_nf4 import load_quantized
 from src.inference.load_progress import (
     HOST_STAGE_CEILING_PICKLED,
@@ -174,6 +179,7 @@ class DgemmaBackend(Backend):
             )
             return
 
+        self.begin_run()
         start = time.monotonic()
         frame_history: List[Dict[str, Any]] = []
         try:
@@ -297,7 +303,20 @@ class DgemmaBackend(Backend):
         # terminal frame still goes through the streamer, because
         # that is what stamps the run's provenance.
         try:
+            self.check_run_token(data)
             resume_params = self._validate_resume(data)
+        except StaleRunError as exc:
+            # Before StaleRunError's base, ValueError, or the stale
+            # case would be reported as a malformed request.
+            await ws.send_json(
+                request_error(
+                    message=str(exc),
+                    code=ERROR_STALE_RUN,
+                    request_type=MSG_RESUME,
+                    request_id=request_id_of(data),
+                )
+            )
+            return
         except (ValueError, TypeError) as exc:
             await ws.send_json(
                 request_error(

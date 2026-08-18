@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 import time
 from abc import ABC, abstractmethod
 from typing import (
@@ -71,6 +72,14 @@ assert COUNT_PROMPT_MAX_CHARS > TOKENIZE_TEXT_MAX_CHARS, (
     "counting a prompt must allow more than previewing a token"
 )
 
+class StaleRunError(ValueError):
+    """A stateful request named a run this worker no longer holds.
+
+    Its own type because it is answered with its own code, and
+    because it is an operating error rather than a broken invariant:
+    two windows is a thing users do, not a bug to crash on.
+    """
+
 
 class FrameStreamer:
     """Forwards frames from an async generator to a WebSocket.
@@ -85,6 +94,7 @@ class FrameStreamer:
         self,
         ws: WebSocket,
         provenance: Optional[Callable[[], Dict[str, Any]]] = None,
+        run_token: Optional[Callable[[], str]] = None,
     ) -> None:
         self._ws = ws
         # A callable rather than a dict because a worker's tokenizer
@@ -92,6 +102,10 @@ class FrameStreamer:
         # is accepted before that. Called once per terminal frame,
         # which is once per run.
         self._provenance = provenance
+        # Also a callable, and for a sharper reason: the token names
+        # the run being finished, so it can only be read at the
+        # moment the terminal frame leaves.
+        self._run_token = run_token
 
     async def run(
         self,
@@ -111,7 +125,7 @@ class FrameStreamer:
             elapsed = time.monotonic() - start_time
             frame["elapsed"] = round(elapsed, 2)
             if frame.get("type") == "done":
-                self._stamp_provenance(frame)
+                self._stamp_terminal(frame)
             await self._ws.send_json(frame)
             if frame.get("type") == "done":
                 done_sent = True
@@ -141,13 +155,22 @@ class FrameStreamer:
         frame["elapsed"] = round(
             time.monotonic() - start_time, 2
         )
-        self._stamp_provenance(frame)
+        self._stamp_terminal(frame)
         await self._ws.send_json(frame)
 
-    def _stamp_provenance(self, frame: Dict[str, Any]) -> None:
-        if self._provenance is None:
-            return
-        frame["provenance"] = self._provenance()
+    def _stamp_terminal(self, frame: Dict[str, Any]) -> None:
+        """What the worker attests, and which run it attests it of.
+
+        One place, because every terminal frame passes through here.
+        The token in particular has to be stamped rather than built
+        by each caller: it is what a later resume or probe is checked
+        against, and a path that forgot it would hand the browser a
+        run it could never act on.
+        """
+        if self._provenance is not None:
+            frame["provenance"] = self._provenance()
+        if self._run_token is not None:
+            frame["run_token"] = self._run_token()
 
 
 def provenance_envelope(backend: Backend) -> Dict[str, Any]:
@@ -221,6 +244,87 @@ class Backend(ABC):
     # its timings should be read against. None means ``load`` has not
     # finished, or a backend has not been taught to say.
     effective_device: Optional[str] = None
+    # The one run this worker can still answer questions about.
+    # Declared here rather than only on each backend because the two
+    # members below are what make it safe to read, and the three of
+    # them have to move together.
+    last_run_state: Optional[Dict[str, Any]] = None
+    # Runs completed by this backend, and with the nonce below the
+    # identity of the state above. Zero means there is none.
+    run_counter: int = 0
+    # Distinguishes this backend's runs from any other backend's.
+    # Minted on the first run rather than at import, so the guarantee
+    # is per backend and not merely per process: one worker process
+    # hosts one backend today, and a token scheme that quietly
+    # depended on that would be a trap for whoever changes it.
+    # Assigned lazily because ``Backend`` has no ``__init__`` for the
+    # three subclasses to call.
+    _run_nonce: str = ""
+
+    @property
+    def run_token(self) -> str:
+        """Names the run whose state is retained, or "" if none.
+
+        The nonce half is what makes this safe across a restart. A
+        bare counter would restart at one in a fresh worker, and a
+        page whose worker was replaced by another window is not
+        always reloaded: `handleResident` only forces that on a model
+        or device change, so reloading the same model leaves a
+        browser holding a token that a bare counter would re-issue.
+
+        Short, because it only has to differ from the last few.
+        Nothing is authorised by it.
+        """
+        if self.run_counter == 0:
+            return ""
+        return f"{self._run_nonce}:{self.run_counter}"
+
+    def begin_run(self) -> None:
+        """Retire the previous run and its token, together.
+
+        Called by every ``handle_generate`` after validation and
+        before sampling. The two halves are one act: a token that
+        outlived its state would name a run this worker can no longer
+        answer for, and state that outlived its token would be
+        reachable by a request naming the run it replaced.
+
+        Only generation advances this. A resume continues the run it
+        branched from and keeps its token, which is deliberate: the
+        counter advancing mid-edit would refuse the very window that
+        asked, and a resume that fails leaves the state untouched, so
+        there would be nothing for the new token to name.
+        """
+        if not self._run_nonce:
+            self._run_nonce = secrets.token_hex(4)
+        self.last_run_state = None
+        self.run_counter += 1
+
+    def check_run_token(self, data: Dict[str, Any]) -> None:
+        """Refuse a stateful request that names a different run.
+
+        Checked before the retained state is read, which is the whole
+        point: one worker serves every window, and it keeps exactly
+        one run. A second window finishing a generation replaces the
+        state behind the first window's still-visible run, and the
+        first window's resume, substitution or probe would then be
+        answered from the wrong one. Matching shapes are what make
+        that dangerous rather than merely wrong, since the result
+        looks like an answer.
+        """
+        if self.run_counter == 0:
+            raise StaleRunError(
+                "This worker has no completed run to work from."
+            )
+        claimed = data.get("run_token")
+        if claimed is None:
+            raise StaleRunError(
+                "This request did not say which run it belongs to."
+            )
+        if claimed != self.run_token:
+            raise StaleRunError(
+                "That run has been replaced by a newer one."
+                " Generate again to continue from this output."
+            )
 
     @abstractmethod
     def load(self, *, device: str = "cuda") -> None:
@@ -769,7 +873,9 @@ def create_worker_app(
         await ws.accept()
         cancel_event = asyncio.Event()
         stream = FrameStreamer(
-            ws, provenance=lambda: provenance_envelope(backend)
+            ws,
+            provenance=lambda: provenance_envelope(backend),
+            run_token=lambda: backend.run_token,
         )
         # The three that stream frames. Identical but for the method
         # they reach, so they share one branch below rather than three

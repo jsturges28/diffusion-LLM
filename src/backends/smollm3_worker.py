@@ -34,6 +34,7 @@ from transformers import (  # type: ignore[attr-defined]
 from src.backends.protocol import (
     ERROR_GENERATION_FAILED,
     ERROR_INVALID_REQUEST,
+    ERROR_STALE_RUN,
     MSG_GENERATE,
     MSG_PROBE,
     MSG_PROBE_RESULT,
@@ -45,6 +46,7 @@ from src.backends.registry import SMOLLM3
 from src.backends.worker_base import (
     Backend,
     FrameStreamer,
+    StaleRunError,
     tokenize_pieces,
 )
 from src.inference.ar_sampler import (
@@ -254,13 +256,13 @@ class Smollm3Backend(Backend):
             return
 
         start = time.monotonic()
-        # Discard any prior run's trace up front, so a failure here
-        # cannot leave a stale state that a substitution would then
-        # re-enter against the wrong prompt. This is also what frees
-        # the previous run's KV cache, and it happens before the new
-        # one allocates so the two never sit in device memory at
-        # once.
-        self.last_run_state = None
+        # Discards the prior run's trace and retires its token
+        # together, so a failure here cannot leave a stale state that
+        # a substitution would re-enter against the wrong prompt.
+        # This is also what frees the previous run's KV cache, and it
+        # happens before the new one allocates so the two never sit
+        # in device memory at once.
+        self.begin_run()
         state: Dict[str, Any] = {}
         try:
             generator = streaming_generate(
@@ -385,7 +387,20 @@ class Smollm3Backend(Backend):
         stream: FrameStreamer,
     ) -> None:
         try:
+            self.check_run_token(data)
             request = self._validate_substitute(data)
+        except StaleRunError as exc:
+            # Before StaleRunError's base, ValueError, or the stale
+            # case would be reported as a malformed request.
+            await ws.send_json(
+                request_error(
+                    message=str(exc),
+                    code=ERROR_STALE_RUN,
+                    request_type=MSG_SUBSTITUTE,
+                    request_id=request_id_of(data),
+                )
+            )
+            return
         except (ValueError, TypeError, KeyError) as exc:
             await ws.send_json(
                 request_error(
@@ -478,9 +493,22 @@ class Smollm3Backend(Backend):
         loop still has a socket to serve while it happens.
         """
         try:
+            self.check_run_token(data)
             state = self._probe_state()
             position = _substitute_position(state, data)
             token_id = _probe_token_id(data)
+        except StaleRunError as exc:
+            # Before StaleRunError's base, ValueError, or the stale
+            # case would be reported as a malformed request.
+            await ws.send_json(
+                request_error(
+                    message=str(exc),
+                    code=ERROR_STALE_RUN,
+                    request_type=MSG_PROBE,
+                    request_id=request_id_of(data),
+                )
+            )
+            return
         except (ValueError, TypeError, KeyError) as exc:
             await ws.send_json(
                 request_error(

@@ -24,6 +24,7 @@ from transformers.models.auto.tokenization_auto import (
 from src.backends.protocol import (
     ERROR_GENERATION_FAILED,
     ERROR_INVALID_REQUEST,
+    ERROR_STALE_RUN,
     MSG_GENERATE,
     MSG_RESUME,
     request_error,
@@ -33,6 +34,7 @@ from src.backends.registry import LLADA
 from src.backends.worker_base import (
     Backend,
     FrameStreamer,
+    StaleRunError,
 )
 from src.inference.hf_download import download_with_progress
 from src.inference.load_progress import (
@@ -289,6 +291,7 @@ class LladaBackend(Backend):
             )
             return
 
+        self.begin_run()
         _apply_seed(params["seed"])
         start = time.monotonic()
         tensor_history: List[torch.Tensor] = []
@@ -427,7 +430,20 @@ class LladaBackend(Backend):
         stream: FrameStreamer,
     ) -> None:
         try:
+            self.check_run_token(data)
             resume_params = self._validate_resume(data)
+        except StaleRunError as exc:
+            # Before StaleRunError's base, ValueError, or the stale
+            # case would be reported as a malformed request.
+            await ws.send_json(
+                request_error(
+                    message=str(exc),
+                    code=ERROR_STALE_RUN,
+                    request_type=MSG_RESUME,
+                    request_id=request_id_of(data),
+                )
+            )
+            return
         except (ValueError, TypeError) as exc:
             await ws.send_json(
                 request_error(

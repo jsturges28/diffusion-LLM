@@ -27,6 +27,10 @@ from typing import (
 import pytest
 
 from src.backends import smollm3_worker
+from src.backends.protocol import (
+    ERROR_SCOPE_REQUEST,
+    ERROR_STALE_RUN,
+)
 from src.backends.smollm3_worker import Smollm3Backend
 
 # A tiny vocabulary for the typed-token path. Words in it resolve to
@@ -173,6 +177,20 @@ def _install_branch_stub(
     )
 
 
+def _seed_run(
+    backend: Smollm3Backend, state: Dict[str, Any]
+) -> None:
+    """Retain a run the way a finished generation would.
+
+    State alone is no longer enough: `check_run_token` refuses a
+    request that does not name the retained run, and it runs before
+    anything reads the state, so a test seeding one has to mint the
+    identity too.
+    """
+    backend.last_run_state = state
+    backend.run_counter += 1
+
+
 def _substitute(
     backend: Smollm3Backend,
     position: int,
@@ -183,6 +201,10 @@ def _substitute(
     payload: Dict[str, Any] = {
         "position": position,
         "token_id": token_id,
+        # Since LIFE-01 a stateful request names the run it belongs
+        # to. `extra` can override it, which is how the stale cases
+        # below send a token this backend does not hold.
+        "run_token": backend.run_token,
     }
     payload.update(extra)
     asyncio.run(
@@ -201,7 +223,7 @@ def test_branch_does_not_replace_the_run_state(
 ) -> None:
     _install_branch_stub(monkeypatch)
     backend = Smollm3Backend()
-    backend.last_run_state = _run_state()
+    _seed_run(backend, _run_state())
 
     ws = _substitute(backend, position=0, token_id=7)
 
@@ -224,7 +246,7 @@ def test_retry_can_pick_a_position_after_the_edit(
     """
     _install_branch_stub(monkeypatch)
     backend = Smollm3Backend()
-    backend.last_run_state = _run_state()
+    _seed_run(backend, _run_state())
 
     _substitute(backend, position=0, token_id=7)
     ws = _substitute(backend, position=1, token_id=13)
@@ -243,7 +265,7 @@ def test_a_branch_only_candidate_is_still_rejected(
     """
     _install_branch_stub(monkeypatch)
     backend = Smollm3Backend()
-    backend.last_run_state = _run_state()
+    _seed_run(backend, _run_state())
 
     _substitute(backend, position=0, token_id=7)
     ws = _substitute(backend, position=1, token_id=99)
@@ -269,7 +291,7 @@ def test_substitution_is_handed_the_runs_own_cache(
     calls: List[Dict[str, Any]] = []
     _install_branch_stub(monkeypatch, calls)
     backend = Smollm3Backend()
-    backend.last_run_state = _run_state()
+    _seed_run(backend, _run_state())
 
     _substitute(backend, position=0, token_id=7)
 
@@ -289,7 +311,7 @@ def test_a_run_without_a_cache_still_substitutes(
     backend = Smollm3Backend()
     state = _run_state()
     del state["cache"]
-    backend.last_run_state = state
+    _seed_run(backend, state)
 
     ws = _substitute(backend, position=0, token_id=7)
 
@@ -300,17 +322,21 @@ def test_a_run_without_a_cache_still_substitutes(
 
 
 def test_substitute_without_a_run_reports_an_error() -> None:
+    """Asserts the code, not the sentence. Holding no run is the
+    degenerate case of holding a different one, so it now answers
+    with the stale code, and pinning prose would make this test fail
+    on a reworded message rather than on a behaviour change."""
     backend = Smollm3Backend()
 
     ws = _substitute(backend, position=0, token_id=5)
 
     assert ws.sent[0]["type"] == "error"
-    assert "No previous generation" in ws.sent[0]["message"]
+    assert ws.sent[0]["code"] == ERROR_STALE_RUN
 
 
 def test_out_of_range_position_reports_an_error() -> None:
     backend = Smollm3Backend()
-    backend.last_run_state = _run_state()
+    _seed_run(backend, _run_state())
 
     ws = _substitute(backend, position=2, token_id=5)
 
@@ -329,7 +355,7 @@ def test_out_of_range_position_reports_an_error() -> None:
 
 def _typed_backend() -> Smollm3Backend:
     backend = Smollm3Backend()
-    backend.last_run_state = _run_state()
+    _seed_run(backend, _run_state())
     backend.tokenizer = _StubTokenizer()
     return backend
 
@@ -509,10 +535,12 @@ def _probe(
     backend: Smollm3Backend, **payload: Any
 ) -> _StubWebSocket:
     ws = _StubWebSocket()
+    request: Dict[str, Any] = {"run_token": backend.run_token}
+    request.update(payload)
     asyncio.run(
         backend.handle_probe(
             ws,  # type: ignore[arg-type]
-            dict(payload),
+            request,
         )
     )
     return ws
@@ -636,7 +664,9 @@ def test_probe_rejects_a_negative_token_id(
 def test_probe_without_a_run_says_so(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An operating error, not a crash: nothing has run yet."""
+    """An operating error, not a crash: nothing has run yet. Scoped
+    to the request, so a page in the middle of What If is told the
+    measurement failed and nothing else is disturbed."""
     _install_probe_stub(monkeypatch)
     backend = Smollm3Backend()
     backend.model = object()
@@ -646,4 +676,5 @@ def test_probe_without_a_run_says_so(
     )
 
     assert ws.sent[0]["type"] == "error"
-    assert "No previous generation" in ws.sent[0]["message"]
+    assert ws.sent[0]["code"] == ERROR_STALE_RUN
+    assert ws.sent[0]["scope"] == ERROR_SCOPE_REQUEST

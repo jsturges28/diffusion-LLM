@@ -191,7 +191,7 @@ neighbours and the two-window model switch. Four entries are open:
 | LIFE-06 | medium | M | needs hardware | none | Validate a switch target before evicting the working model |
 | ORG-04 | medium | S | done | none | Two commits: the shared activation client, then the menu |
 | LIFE-03 | critical | L | needs hardware | none | Two commits: operation identity, then the resident mismatch |
-| LIFE-01 | high | M | ready | LIFE-03 (done) | |
+| LIFE-01 | high | M | needs hardware | none | Name every run and refuse a stateful request that means another |
 | PROTOCOL-01 | medium | M | ready | LIFE-03 (done) | |
 | XAI-01 | high | M | blocked | LIFE-01 | |
 | LIFE-04 | high | L | blocked | LIFE-03 | |
@@ -767,6 +767,66 @@ that window rather than guessing at a cause.
 Mutation-checked the same way as the store half: putting collections
 back on the debounce, removing the flush, ignoring the status, and
 setting `keepalive` unconditionally each fail the suite.
+
+### LIFE-01
+
+**The Direction held, and the token needed one thing it did not
+mention.** The report asks for a worker-issued run generation token on
+`done`, required on every stateful follow-up. A monotonic counter
+would have been the obvious shape and would have been wrong: a fresh
+worker restarts it at one, and a page is not always reloaded when its
+worker is replaced. `handleResident` forces a reload only on a model
+or device change (`app.js`), so activating the *same* model again
+leaves a browser holding a token the new worker would hand out again,
+and the check would pass on a run that never existed. The token is
+therefore a per-backend nonce plus the counter.
+
+Per-backend rather than per-process, which is stronger than the
+deployment needs: one worker process hosts one backend today, and the
+first version keyed the nonce to the process. A test constructing two
+backends caught it. A scheme that quietly depended on that arrangement
+would be a trap for whoever changes it.
+
+**Stamped in one place.** The report's evidence lists five sites that
+build a terminal frame, but `FrameStreamer` is already the single
+*exit* for all of them, which its docstring has said since `DATA-04`.
+So the token is stamped beside the provenance envelope, and a backend
+cannot finish a run without naming it.
+
+**Only generation advances the token, and that is deliberate.** A
+resume continues the run it branched from and keeps its identity. The
+alternative was considered and rejected twice over: advancing at the
+start of a resume refuses the very window that asked if the resume
+then fails, and advancing at the commit is too late, because
+`LIFE-07` moved the commit after the terminal frame has already gone
+out. The residual case, two windows editing one run they both watched
+complete, is not the finding's scenario; each generation makes a new
+run, so two windows cannot both hold the same one without one of them
+having watched the other's.
+
+**The state clearing came with it, at the maintainer's call.**
+SmolLM3 already discarded its trace at the top of a generation; the
+two diffusion workers did not, so a failed generate left the previous
+run resumable behind a token the browser still believed in. `begin_run`
+does both halves, because a token outliving its state names a run the
+worker cannot answer for, and state outliving its token is reachable
+by a request naming the run it replaced.
+
+**The client had to change in the same commit**, or the tree would
+not have worked between them: the page adopts the token from every
+terminal frame and returns it on resume, substitution and probe. It
+also rides in the session snapshot, without which reloading the page
+and then editing the restored run would be refused as stale even
+though the worker still holds exactly that run. If the worker was
+replaced in the meantime the nonce differs and the refusal is
+correct, which is the point of carrying a token rather than a flag.
+
+**Six mutants, one of which was informative.** Removing the
+"no token sent" branch changed nothing, because the general mismatch
+check catches `None` anyway. The branch stayed, since a client that
+never learned the run is a different situation to report than an
+ordinary two-window race, but the test now pins that the two
+*messages differ* rather than pinning either string.
 
 ### Found while verifying, not yet fixed
 
