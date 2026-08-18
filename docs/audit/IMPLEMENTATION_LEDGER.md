@@ -37,15 +37,16 @@ the `QUALITY-01` gap those two findings sat on: the worker's message loop had
 no tests at all. What remains of stage 4 is `XAI-01` and `LIFE-04`, both now
 ready, plus `TRUST-04` behind `LIFE-04`.
 
-**The hardware queue is nearly empty**, which changed the shape of the board
-on 2026-08-17. Six findings are ready where three were, and `ORG-02` opens
-stage 5. One item, 148, was reclassified as unreachable on this hardware
-rather than left pending, because the scenario needs two models resident at
+**Stage 5 has started.** Clearing the hardware queue on 2026-08-17
+released `ORG-02`, whose state core then landed in four commits: the aligned
+frame family, the pre-edit baseline, the phase table, and the model API
+client. One item, 148, was reclassified as unreachable on this hardware
+rather than left pending, because its scenario needs two models resident at
 once on a card that cannot hold both.
 
-Baselines: 728 tests passing (from 265 at the campaign's start), 66 browser
-tests under `node --test`, and Ruff at 128 in `src tests`, gated per file and
-per rule by `scripts/lint_ratchet.py` rather than remembered.
+Baselines: 760 tests passing (from 265 at the campaign's start), 139
+browser tests under `node --test`, and Ruff at 128 in `src tests`, gated per
+file and per rule by `scripts/lint_ratchet.py` rather than remembered.
 
 ## How to read this
 
@@ -68,8 +69,9 @@ commit, **M** a short multi-commit change, **L** a staged boundary migration.
 
 ## Ready now
 
-Six findings have no unmet blockers, which is the widest this list has been.
-The hardware queue clearing on 2026-08-17 released three of them at once.
+Five findings have no unmet blockers. The hardware queue clearing on
+2026-08-17 released three of them at once, and one of those, `ORG-02`, has
+since been worked and moved on.
 
 **The rest of stage 4**, all three unblocked by pass three.
 
@@ -82,10 +84,9 @@ The hardware queue clearing on 2026-08-17 released three of them at once.
   `cancel` cannot interrupt a generation today, because the message loop
   awaits its handler inline, so the message type reads as though it works
   and does not. `TRUST-04` waits behind this one.
-- **ORG-02** (medium, L), released by `PROTOCOL-01`: the frontend state
-  core, and the start of stage 5. Also the finding that ends the two-phase
-  render the loading overlay hides, so it retires a placeholder two sessions
-  have now touched without fixing.
+
+`ORG-02` was on this list and is now in the hardware queue instead. Its
+state core is written and tested; none of its callers has been run.
 
 **The analytics trio**, unlocked by stage 3 and still unstarted. None of it
 touches the worker protocol, so it is the group that cannot collide with
@@ -136,11 +137,12 @@ were cleared on 2026-08-11 in the same sitting: the maintainer confirmed items
 could say least about, the amber invalid row's alignment against its
 neighbours and the two-window model switch.
 
-**As of 2026-08-17 one entry is genuinely open.** `LIFE-03`, `LIFE-05`,
-`LIFE-01`, `PROTOCOL-01` and the `DATA-02` slice all cleared, leaving
-`TRUST-03`'s offline retest and `LIFE-02`'s two staged-failure items. That
-matters beyond bookkeeping: the queue was the only thing standing between
-this campaign and three findings it had already earned.
+**As of 2026-08-17 the stage 4 entries have cleared.** `LIFE-03`,
+`LIFE-05`, `LIFE-01`, `PROTOCOL-01` and the `DATA-02` slice all went
+through, which is what released `XAI-01`, `LIFE-04` and `ORG-02`. What is
+open now is `TRUST-03`'s offline retest, `LIFE-02`'s two staged-failure
+items, and `ORG-02`'s own pair, which is the largest of the three because
+none of its callers has been run.
 
 - **LIFE-02 and LIFE-06**: partly cleared on 2026-08-14. The maintainer
   confirmed items 142 and 145 of `docs/MANUAL_VERIFICATION.md`, which between
@@ -187,6 +189,14 @@ this campaign and three findings it had already earned.
   counter-intuitive, and a typed token that matches a captured candidate is
   answered from the run's own record without a probe ever being sent, so the
   refusal under test never happens.
+- **ORG-02 (the state core)**: three modules and their tests run here, but
+  not one of their callers does. The guided edit flow needs a GPU, so the
+  frame family, the phase table and the model client were all written
+  without the workflow they serve being exercised once.
+  `docs/MANUAL_VERIFICATION.md` items 162 and 163 are that exercise. This is
+  also where the finding's browser-smoke clause lands, since satisfying it
+  in the sandbox would mean taking jsdom as the project's first JavaScript
+  dependency.
 - **TRUST-03 (offline slice)**: the automated half asserts that both Hub
   workers pin every `from_pretrained` call to local files, and that being
   offline with nothing cached now reports what happened instead of a urllib3
@@ -228,7 +238,7 @@ this campaign and three findings it had already earned.
 | TRUST-04 | medium | L | blocked | LIFE-04 | |
 | DATA-02 | high | L | partial | maintainer decision | Lost-update slice only; conflict semantics still forked |
 | RUNTIME-01 | medium | L | blocked | LIFE-04, then ORG-02 + DATA-05 | |
-| ORG-02 | medium | L | in progress | PROTOCOL-01 (done) | The aligned frame family behind run_frames.js |
+| ORG-02 | medium | L | needs hardware | none | Four commits: frame family, baseline, phase table, model client |
 | RUNTIME-03 | medium | S | blocked | ORG-02, paired | |
 | ROADMAP-01 | high | M | blocked | stage 6 order | |
 | ROADMAP-05 | high | M | blocked | stage 6 order | |
@@ -294,12 +304,16 @@ lifecycle is trustworthy, and move downloads into the same owned-operation
 model (`TRUST-04`). `DATA-02` can run in parallel once its fork is settled,
 and must not reuse model-operation state.
 
-**Stage 5, frontend state around the settled protocol.** Move aligned frame
-operations and legal workflow phases into a tested native-module core
-(`ORG-02`), then the model and download API clients. Fix the select lifecycle
-(`RUNTIME-03`) as shared controls gain module ownership. Compact append-only
-streams (`RUNTIME-01`) only once the reducer can reconstruct them and the
-run-store version can distinguish them.
+**Stage 5, frontend state around the settled protocol. Started.** The
+aligned frame operations, the pre-edit baseline, the legal workflow phases
+and the model API client are extracted and tested (`ORG-02`, four commits),
+awaiting hardware. Three pieces of that finding remain: the download API
+client, the native ES module conversion the Direction asks for, and the
+server-rendered boot state that would retire the loading overlay. Then fix
+the select lifecycle (`RUNTIME-03`) as shared controls gain module
+ownership, and compact append-only streams (`RUNTIME-01`) only once the
+reducer can reconstruct them and the run-store version can distinguish
+them.
 
 **Stage 6, prepare the existing models before adding Mamba.** Split family,
 stream shape, device support, and resource requirements (`ROADMAP-01`),

@@ -57,6 +57,12 @@ kept when these were written:
 - **156**: confirmed on 2026-08-17. The three reservations hold and the
   entropy row stays absent on a diffusion model, which is the half that
   would have been easy to get backwards.
+- **162 and 163**: **not yet validated**, and they are `ORG-02`'s whole
+  hardware queue. The guided edit flow needs a GPU, so the modules the
+  first half of that finding extracted were written without any of their
+  callers being run once. Both items are meant to be boring; 162 in
+  particular now fails loudly rather than subtly, because an illegal move
+  between editing phases throws.
 - **157 to 161**: confirmed on 2026-08-17, stage 4 pass three's whole queue.
   Two of them took three attempts each, and not because anything was broken.
   Both failures were the items' own fault and both are now fixed in place, so
@@ -1311,3 +1317,36 @@ does nothing at all.
     then file a run into a collection in a still-open Analytics tab. A toast
     should say the collection could not be saved and that the change is
     local to that window. Previously it looked saved and then was not.
+162. **The whole edit workflow still behaves.** `ORG-02` moved the run's
+    frame arrays and its editing phases behind modules, and the guided edit
+    flow needs a GPU, so none of it could be exercised where it was written.
+    This item is the exercise. It should be entirely boring; report anything
+    that is not.
+    On a diffusion model: generate, Edit Frames, pick a frame, remask some
+    tokens, lock them in, then **Edit another** and pick a target frame, run
+    to it, remask again, and finally run to the end. Confirm at the review
+    step. Then generate again, enter Edit Frames, and this time **Retry**
+    from the review step rather than confirming. Then do one more where you
+    simply leave the edit session partway through, which should put the
+    original run back rather than leaving a truncated one.
+    On SmolLM3: What If, substitute a captured candidate, and Confirm; then
+    another where you Retry instead.
+    **What a failure looks like now is different, and louder.** An illegal
+    move between phases throws rather than proceeding, so a wrong table
+    shows up as the workflow stopping dead, not as a subtly wrong screen. If
+    that happens, the browser console will name the move it refused, for
+    instance `illegal run phase move: choice -> review`, and that line is
+    the whole bug report.
+163. **A restored run is still complete.** The frame arrays are serialised
+    and read back through one place now, and the keys did not change, so a
+    snapshot written before this still loads. Generate, go to Analytics and
+    come back, and confirm the scrubber, the token view, the overlays and
+    the timing footer all still work on the restored run. Then save it and
+    check in Analytics that the timing chart's x axis lines up with the
+    other charts, which is the specific thing that broke the last time one
+    of these arrays went missing.
+    Long runs are worth one pass of their own. A run long enough to exceed
+    the session storage quota falls back to a lighter snapshot that carries
+    only three of the six arrays, and the run should come back readable with
+    the character renderer rather than not at all. Editing it afterwards
+    should still work.

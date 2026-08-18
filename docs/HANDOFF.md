@@ -112,15 +112,29 @@ scope, so a probe refused as busy no longer tears down What If
 `TRUST-04`. The ledger is the authority and is updated in the same commit as
 each change.
 
-**Hardware debt, mostly paid.** The queue at the top of
-`docs/audit/IMPLEMENTATION_LEDGER.md` emptied on 2026-08-17 except for the
+**Stage 5, frontend state, has started.** The generator's run state used to
+be loose variables in a 7,900-line script: six arrays indexed by frame that
+nine separate sites enumerated by hand, a frozen pre-edit copy of four more,
+and an eight-value editing phase that ten sites assigned directly.
+`src/web/static/run_frames.js` and `run_phases.js` own those now, refusing a
+frame family that has fallen out of step and a move between phases that no
+button can make, and `model_client.js` gives four pages one reading of
+`/api/models`. All three are classic scripts driven from a `vm` in
+`tests/web/static/`, like `activation_client.js` before them; the native ES
+module conversion the finding also asks for is deliberately a later step
+(`ORG-02`).
+
+**Hardware debt.** The queue at the top of
+`docs/audit/IMPLEMENTATION_LEDGER.md` emptied on 2026-08-17 apart from the
 `TRUST-03` offline retest and two staged-failure items belonging to
-`LIFE-02`. That is what released `XAI-01`, `LIFE-04` and `ORG-02`, so six
-findings are ready rather than three. One item, 148, is recorded as
-unreachable on this hardware rather than pending: it needs two models
-resident at once on a card that cannot hold both. Separately, items 102 to
-126 of `docs/MANUAL_VERIFICATION.md` predate the campaign and have never been
-validated.
+`LIFE-02`, which is what released `XAI-01`, `LIFE-04` and `ORG-02`. It has
+since gained `ORG-02`'s own pair, items 162 and 163, and those matter more
+than most: the guided edit flow needs a GPU, so the modules above were
+written without one of their callers being run. One item, 148, is recorded
+as unreachable on this hardware rather than pending, because it needs two
+models resident at once on a card that cannot hold both. Separately, items
+102 to 126 of `docs/MANUAL_VERIFICATION.md` predate the campaign and have
+never been validated.
 
 ## Conventions
 
