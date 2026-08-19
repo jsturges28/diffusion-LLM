@@ -1227,11 +1227,32 @@ for unresolved positions at all, 0 of 3,281 on the entropy-signal run.
 discard as the token text. So the honest signal exists in memory and
 never reaches disk.
 
-The three-tier answer for whoever takes this, in preference order:
-with Entropy Signal on, mean true confidence is honest and works live;
-with it off, stability is all there is and should be labelled;
-Analytics can always fall back to agreement-with-committed, which is
-exact but retrospective. All three need the `c` change above.
+**Fixed on 2026-08-18, and not the way the three-tier answer above
+proposed.** That answer wanted mean true confidence, which would have
+needed the `c` change, touched the worker, and worked only on runs
+saved afterwards. Agreement with the committed canvas turned out to
+be exact, retroactive across the whole archive, and free, so the
+capture change stayed out of it and remains owed to the ROADMAP items
+that genuinely need it.
+
+The measure is chosen per run, by asking the run's own data rather
+than a registry: if every masked position shares one vocabulary id
+the mask is a real token and its flag is ground truth, and if they do
+not the flag was inferred and settlement replaces it. On the archive
+here that separates cleanly, 1 id against 526.
+
+**Keep the counter-example.** A single unifying measure looks
+obviously right and is wrong. Settlement on an edited LLaDA run opens
+at 18.1% rather than 0%, because the positions still masked at the
+end agree with the end from frame zero, so the curve lifts off the
+floor before anything resolves. It is pinned in
+`tests/analytics/test_settlement_basis.py` precisely so a later
+session does not simplify the two paths into one and reintroduce it.
+
+The throughput numerator deliberately did not move with the chart. It
+keeps counting what the sampler resolved, because the generator's
+live footer counts the sampler's own reveals and cannot know
+settlement, and manual item 174 exists to catch those two disagreeing.
 
 ### Found while verifying: the step readout freezes when scrubbing
 
@@ -1247,6 +1268,19 @@ already held: `runFrames.canvasIndex` is per frame, so scrubbing can
 recompute the readout. Small, and worth doing next to the convergence
 work because both are about a diffusion run's intermediate state
 being described wrongly.
+
+**Fixed on 2026-08-18.** One formatter, `stepReadout`, is now shared
+by the live path and the scrubber, so the two shapes cannot drift
+apart. The callers pass different step numbers on purpose: during a
+resume the live view counts the branch's own steps, while the
+scrubber counts the whole run, which is the number the label beside
+it already shows.
+
+The step total was the one thing missing. It was read off every frame
+and discarded, so it is now kept on `lastRunTotalSteps`, reset with
+the other per-run facts, and carried in the session snapshot, because
+scrubbing after a trip to Analytics has to rebuild the reading and
+cannot without it.
 
 ### LIFE-04
 

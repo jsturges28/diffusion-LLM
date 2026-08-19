@@ -1228,6 +1228,14 @@ Entropy Signal on and then discarded for exactly the positions that would be
 faded, because `_emit` writes `c` only `if not unresolved`. Writing it
 unconditionally is the whole capture change.
 
+**Still owed as of 2026-08-18.** The convergence fix that shipped that
+day deliberately did not make it. Agreement with the committed canvas
+turned out to be exact and retroactive, so the chart needed nothing
+from the worker, and adding a sampler change that only helps runs
+saved afterwards would have widened a session that had no use for it.
+Both layers below, and the stopping readout after them, still want it,
+and it remains one line plus a hardware pass.
+
 An earlier worry, recorded because it was wrong and the correction is the
 useful part: the streamed logits are temperature-scaled, and the schedule
 anneals `t` from `t_max` to `t_min` across a canvas, so the concern was that

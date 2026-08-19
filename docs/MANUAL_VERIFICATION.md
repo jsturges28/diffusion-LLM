@@ -1512,3 +1512,44 @@ does nothing at all.
     quietly working. And open a comparison, close it immediately, and
     open a different one: the second must not be overwritten by the
     first arriving late.
+176. **The DiffusionGemma convergence curve stops lying.** Open the
+    multi-canvas run from item 174 in Analytics, or generate a fresh
+    one. The curve should now start near zero in each canvas and climb,
+    where it used to leap to about 90% within one frame and then
+    sawtooth. Beside the **Convergence** heading there should be a
+    small **?** icon; hovering it explains that this model has no mask
+    token and that the curve counts positions holding what their canvas
+    committed. A LLaDA run's heading carries no icon at all.
+    If you have a run old enough to predate token records, its icon
+    should be tinted amber and say the reading is approximate. That
+    tint is the point: it means a reader who never hovers can still
+    see that the curve is the weak one.
+    The interesting part is comparing it against what you remember. The
+    old curve said the canvas was nearly done almost immediately; the
+    new one says it takes most of the canvas's steps to settle, which
+    is what the text on screen was doing all along.
+177. **The LLaDA curve is untouched.** The half that would be easy to
+    break. Open any LLaDA run and confirm its convergence chart looks
+    exactly as it did, climbing smoothly from zero, with **no** caption
+    above it. A caption there, or a curve that now starts partway up,
+    means the settlement measure has been applied where the mask flag
+    was already ground truth.
+    A run edited and resumed is the sharpest case, since that is where
+    the wrong measure would open near 18% instead of 0%.
+178. **Throughput still agrees with the generator.** Convergence moved
+    and throughput deliberately did not, so this is the check that they
+    were separated properly. Generate a multi-canvas DiffusionGemma run,
+    note the **T/s** figure in the generator footer when it finishes,
+    then open the run in Analytics and page the timing chart across to
+    **Tokens per Second**. The two should still land close together, as
+    they did in item 174.
+179. **The step readout follows the scrubber.** Once per model, since
+    the two report differently. Finish a run, then drag the scrubber
+    from end to start and watch the left of the status bar. On LLaDA
+    and SmolLM3 it should count down as `Step N/M`; on DiffusionGemma
+    it should read `Step N, Canvas C` with the canvas number changing
+    as you cross a boundary. Before this it sat frozen on whatever the
+    run ended at.
+    Then go to Analytics and come back, and scrub again. The readout
+    has to keep working, which is the part that needs the step total to
+    have survived the trip.
