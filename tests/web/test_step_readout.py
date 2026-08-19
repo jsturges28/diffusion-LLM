@@ -1,0 +1,139 @@
+"""The step reading follows the scrubber instead of freezing.
+
+Strategy: source inspection of `app.js`, the approach this repo uses
+for its classic-script pages. The formatting itself is trivial; what
+needs guarding is that two callers share it and that the value it
+needs survives a trip to Analytics.
+
+The bug: `statusStep` was written in exactly two places, the live
+frame handler and the session restore. `navigateToFrame` updated only
+the "Frame N / M" label beside it, so scrubbing a finished
+DiffusionGemma run left "Step 87, Canvas 4" on screen at every frame,
+describing the run's end rather than the frame being looked at.
+
+Two callers means two chances to drift, which is why they share one
+formatter rather than each building the string. They do supply
+different step numbers on purpose: during a resume the live view
+counts the branch's own steps, while the scrubber counts the whole
+run, which is the number the label beside it already shows.
+
+Passing proves the formatter exists and both paths use it, that the
+scrubber calls it, that the step total is captured rather than
+discarded, and that it survives the session snapshot so scrubbing
+still works after coming back from Analytics.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+STATIC = (
+    Path(__file__).resolve().parents[2] / "src" / "web" / "static"
+)
+APP_JS = STATIC / "app.js"
+
+
+def _app() -> str:
+    return APP_JS.read_text(encoding="utf-8")
+
+
+def _region(anchor: str, chars: int) -> str:
+    source = _app()
+    start = source.find(anchor)
+    assert start != -1, (
+        f"anchor {anchor!r} is gone from app.js; update this test"
+        " rather than deleting it"
+    )
+    return source[start : start + chars]
+
+
+# -- one formatter, two callers --
+
+
+def test_the_formatter_exists() -> None:
+    source = _app()
+
+    assert (
+        "function stepReadout(step, canvasIndex, totalSteps, prefix)"
+        in source
+    )
+
+
+def test_both_shapes_live_in_the_formatter() -> None:
+    """A fixed schedule reports out of a total; an adaptive-stopping
+    model has no total and names its canvas instead."""
+    body = _region("function stepReadout(", 700)
+
+    assert '"/"' in body
+    assert '", Canvas "' in body
+    assert "canvas + 1" in body
+
+
+def test_the_live_path_uses_it() -> None:
+    body = _region("function handleFrame(data)", 3000)
+
+    assert "statusStep.textContent = stepReadout(" in body
+    assert '"Resuming "' in body
+
+
+def test_the_scrubber_uses_it() -> None:
+    body = _region("function renderScrubStepReadout(index)", 700)
+
+    assert "statusStep.textContent = stepReadout(" in body
+    assert "runFrames.canvasIndex[index]" in body
+
+
+def test_navigating_repaints_the_readout() -> None:
+    """The whole bug: this call did not exist."""
+    body = _region("function navigateToFrame(index)", 900)
+
+    assert "renderScrubStepReadout(index)" in body
+
+
+def test_nothing_else_formats_the_reading() -> None:
+    # Two writers of the finished string, the formatter's callers.
+    # A third would be the drift this consolidation prevents. The
+    # session restore and the idle reset assign literals, which is
+    # not the same thing.
+    source = _app()
+    built = re.findall(
+        r"statusStep\.textContent = stepReadout\(", source
+    )
+
+    assert len(built) == 2
+
+
+# -- the value the scrubber needs survives --
+
+
+def test_the_step_total_is_captured() -> None:
+    """It was read off every frame and thrown away, which is why the
+    scrubber could not rebuild the reading."""
+    source = _app()
+
+    assert "var lastRunTotalSteps = null;" in source
+    assert "lastRunTotalSteps =" in _region(
+        "function handleFrame(data)", 3000
+    )
+
+
+def test_a_fresh_run_clears_it() -> None:
+    body = _region("function resetRunState()", 1500)
+
+    assert "lastRunTotalSteps = null;" in body
+
+
+def test_it_survives_a_trip_to_analytics() -> None:
+    source = _app()
+
+    assert "lastRunTotalSteps: lastRunTotalSteps," in source
+    assert "typeof s.lastRunTotalSteps === \"number\"" in source
+
+
+def test_an_adaptive_model_restores_as_having_no_total() -> None:
+    # null, not zero: a zero total would render "Step 5/0" rather
+    # than falling through to the canvas form.
+    body = _region('typeof s.lastRunTotalSteps === "number"', 200)
+
+    assert ": null" in body

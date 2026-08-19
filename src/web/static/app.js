@@ -419,6 +419,12 @@ var promptHistoryActive = false;
 var preEditSnapshot = null;
 var scrubberMinFrame = 0;
 
+// The step total this run reports, or null for an adaptive-stopping
+// model that has none. Read off every frame and previously discarded,
+// which is why the scrubber could not rebuild the step readout and
+// left it frozen on the run's last step.
+var lastRunTotalSteps = null;
+
 // Resume state: when resuming, incoming frames are
 // appended starting at resumeFrameOffset. The worker restarts its
 // clock for each generate/resume/substitute segment, so elapsed
@@ -1680,6 +1686,27 @@ function rescueRunThenReload() {
   );
 }
 
+// The status bar's step reading, in one place.
+//
+// Two shapes, because two kinds of model. A fixed schedule reports
+// its position out of a known total; an adaptive-stopping model has
+// no total to report against, so it names the canvas instead.
+//
+// Shared by the live path and the scrubber, which is the point:
+// scrubbing used to leave this frozen on whatever the run ended at,
+// so a finished DiffusionGemma run read "Step 87, Canvas 4" at every
+// frame. Each caller supplies its own step number, because during a
+// resume the live view counts the branch's steps while the scrubber
+// counts the whole run.
+function stepReadout(step, canvasIndex, totalSteps, prefix) {
+  if (typeof totalSteps === "number") {
+    return prefix + step + "/" + totalSteps;
+  }
+  var canvas = typeof canvasIndex === "number" ? canvasIndex : 0;
+  // canvas_index is 0-based internally; display it 1-based.
+  return prefix + step + ", Canvas " + (canvas + 1);
+}
+
 function handleFrame(data) {
   // Candidate sets ride only the frame that introduces their
   // position (the frame's last token), so accumulate by position.
@@ -1721,23 +1748,36 @@ function handleFrame(data) {
     renderFrame(data.text);
   }
 
-  var prefix = isResuming ? "Resuming " : "Step ";
-  var displayStep;
-  if (typeof data.total_steps === "number") {
-    displayStep = prefix + data.index
-      + "/" + data.total_steps;
-  } else {
-    // Adaptive-stopping models (DiffusionGemma) have no fixed
-    // step total; report the step and its canvas instead.
-    // canvas_index is 0-based internally; display it 1-based.
-    var canvas = typeof data.canvas_index === "number"
-      ? data.canvas_index
-      : 0;
-    displayStep = prefix + data.index
-      + ", Canvas " + (canvas + 1);
-  }
-  statusStep.textContent = displayStep;
+  // Kept so the scrubber can rebuild this readout after the run
+  // ends. It is a property of the run, not of a frame, and it was
+  // read off each frame and thrown away.
+  lastRunTotalSteps =
+    typeof data.total_steps === "number"
+      ? data.total_steps
+      : null;
+  statusStep.textContent = stepReadout(
+    data.index,
+    data.canvas_index,
+    lastRunTotalSteps,
+    isResuming ? "Resuming " : "Step "
+  );
   updateRunRateFooter();
+}
+
+// Rebuild the step reading for a frame the user scrubbed to. The
+// scrubber counts the whole run, so the array index is the step,
+// which is the same number the "Frame N / M" label beside it shows.
+function renderScrubStepReadout(index) {
+  if (lastRunTotalSteps === null
+    && runFrames.canvasIndex.length === 0) {
+    return;
+  }
+  statusStep.textContent = stepReadout(
+    index,
+    runFrames.canvasIndex[index],
+    lastRunTotalSteps,
+    "Step "
+  );
 }
 
 // ---- Elapsed and tokens per second ----
@@ -5048,6 +5088,7 @@ function navigateToFrame(index) {
   currentScrubFrame = index;
   scrubberSlider.value = String(index);
   updateScrubberLabel();
+  renderScrubStepReadout(index);
 
   restoreFrameSelections(index);
 
@@ -6263,6 +6304,7 @@ function resetRunState() {
   lastRunParams = null;
   lastFinalText = null;
   lastRunPromptLen = null;
+  lastRunTotalSteps = null;
   lastRunProvenance = null;
   // Retired with the rest of what the last run left behind. The
   // worker has already discarded its side by the time a new run is
@@ -7597,6 +7639,9 @@ function saveSessionState() {
     lastSavedRunId: lastSavedRunId,
     lastSavedRevision: lastSavedRevision,
     statusStep: statusStep.textContent,
+    // Carried alongside the rendered text because scrubbing after a
+    // restore has to rebuild that text, and cannot without this.
+    lastRunTotalSteps: lastRunTotalSteps,
     statusElapsed: statusElapsed.textContent,
     statusMessage: statusMessage.textContent,
   };
@@ -7720,6 +7765,10 @@ function restoreSessionState() {
 
   // Restore the footer readouts (Step / Elapsed / message) so the
   // status bar reflects the completed run rather than resetting.
+  lastRunTotalSteps =
+    typeof s.lastRunTotalSteps === "number"
+      ? s.lastRunTotalSteps
+      : null;
   if (s.statusStep) {
     statusStep.textContent = s.statusStep;
   }

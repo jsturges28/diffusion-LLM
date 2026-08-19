@@ -4012,28 +4012,56 @@ function wireOverlayScrubber() {
   );
 }
 
-// The curve counts resolved positions when the run saved per-token
-// records, and mask glyphs against characters when it did not. Both
-// are drawn, but only one is the thing the axis is labelled with, so
-// the weaker one says so instead of passing for the other.
-function renderConvergenceBasis(data) {
-  var note = document.getElementById(
-    "convergence-basis-note"
-  );
-  if (!note) { return; }
-  var isCharacters =
-    data.convergence_basis === "characters";
-  note.hidden = !isCharacters;
-  if (isCharacters) {
-    note.textContent =
-      "Approximate: this run saved no per-token records, so"
-      + " the curve counts mask characters rather than token"
-      + " positions. A position resolving into a long token"
-      + " moves it further than one resolving into a short"
-      + " token.";
-  } else {
-    note.textContent = "";
+// Three measures can produce this curve, and which one a run got is
+// a property of the run. Two are exact and one is not, so the icon
+// beside the heading says which rather than letting a reader assume
+// the best of them.
+//
+// Only where there is something to say. A run whose mask is a real
+// token is measured the way the axis has always described, so it
+// gets no icon and the heading stays clean.
+function convergenceBasisNote(basis, modelLabel) {
+  if (basis === "settlement") {
+    // Exact, but measuring a different thing, and worth explaining
+    // because the same chart on a LLaDA run does not mean this.
+    return modelLabel
+      + " has no mask token, so the curve counts positions already"
+      + " holding what their canvas committed. Reading it as"
+      + " \u201chow much is decided\u201d is right; the model's own"
+      + " sense of certainty is a separate question.";
   }
+  if (basis === "characters") {
+    // Not exact, and the one a reader must not mistake for the
+    // others, which is why its icon is tinted as well.
+    return "Approximate: this run saved no per-token records, so"
+      + " the curve counts mask characters rather than token"
+      + " positions. A position resolving into a long token moves"
+      + " it further than one resolving into a short token.";
+  }
+  // Includes an unknown basis, which means a newer server talking
+  // to an older page. Silence beats guessing which it meant.
+  return "";
+}
+
+function renderConvergenceBasis(data) {
+  var icon = document.getElementById(
+    "convergence-basis-info"
+  );
+  var tip = document.getElementById("convergence-basis-tip");
+  if (!icon || !tip) { return; }
+
+  var basis = data.convergence_basis;
+  var text = convergenceBasisNote(
+    basis, data.model_label || "This model"
+  );
+  tip.textContent = text;
+  icon.hidden = !text;
+  icon.classList.toggle(
+    "is-approximate", basis === "characters"
+  );
+  icon.setAttribute(
+    "aria-label", "How this convergence curve was measured"
+  );
 }
 
 function renderConvergenceChart(data, remaskSet) {

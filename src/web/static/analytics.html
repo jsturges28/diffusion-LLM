@@ -235,15 +235,18 @@
               <p id="charts-error" class="charts-error" hidden></p>
 
               <div class="chart-section" id="convergence-section">
-                <!-- Shown only for a run with no usable per-token
-                     records, where the curve counts mask glyphs
-                     against characters instead of positions. The
-                     shape is close but not the same, and a reader
-                     comparing two runs deserves to know which one
-                     they are looking at. -->
-                <div id="convergence-basis-note" class="chart-basis-note" hidden></div>
                 <div class="chart-header-row">
-                  <h3>Convergence</h3>
+                  <!-- The curve is not measured the same way for
+                       every model, and this carries the difference.
+                       Absent where the mask is a real token and the
+                       reading needs no explaining; present where it
+                       does, and tinted when the run could only offer
+                       the approximate character count, so a caveat
+                       is visible without hovering for it. -->
+                  <h3>Convergence<span id="convergence-basis-info"
+                    class="info-icon info-icon-sm tooltip-below"
+                    hidden>?<span id="convergence-basis-tip"
+                    class="tooltip"></span></span></h3>
                   <div class="zoom-controls">
                     <button class="zoom-btn tooltip-toggle-btn" data-chart="convergence"
                       title="Toggle tooltip box" aria-label="Toggle tooltip box">

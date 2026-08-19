@@ -55,14 +55,17 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.analytics.metrics import (
     CONVERGENCE_BASIS_CHARACTERS,
+    CONVERGENCE_BASIS_SETTLEMENT,
     CONVERGENCE_BASIS_TOKENS,
     UnsupportedRunVersionError,
     canvas_boundaries,
     compute_convergence,
     convergence_from_records,
+    convergence_from_settlement,
     list_runs,
     load_run_frames,
     load_run_metadata,
+    masks_are_real,
     read_frame_texts,
     records_match_frames,
     run_schema_version,
@@ -2178,7 +2181,9 @@ def _compute_run_metrics(run_id: str) -> Dict[str, Any]:
     # Which file holds the frames is the schema version's business,
     # so the check for its absence belongs to the reader too.
     frames = read_frame_texts(run_dir, meta)
-    convergence, basis = _run_convergence(run_dir, frames)
+    convergence, basis, produced_from = _run_convergence(
+        run_dir, frames, meta.get("canvas_index")
+    )
 
     result: Dict[str, Any] = {
         "run_id": run_id,
@@ -2194,6 +2199,12 @@ def _compute_run_metrics(run_id: str) -> Dict[str, Any]:
         "model_type": str(
             meta.get("model_type", "diffusion")
         ),
+        # What to call this run's model in prose. The convergence
+        # caption names it, and only the server can turn a registry
+        # id into something worth reading. Falls back to the id, so
+        # a run from a model this build no longer knows still reads
+        # as itself rather than as nothing.
+        "model_label": _model_label(meta),
     }
     for key in (
         "per_frame_elapsed",
@@ -2222,22 +2233,49 @@ def _compute_run_metrics(run_id: str) -> Dict[str, Any]:
     # canvas each frame belongs to, and getting it wrong is invisible:
     # the old client-side version read plausibly and undercounted a
     # whole committed canvas.
+    #
+    # Fed the sampler's own resolution counts, which is not always the
+    # series above. The two charts answer different questions: how
+    # settled the canvas is, and how fast the model produced. Only the
+    # second has a live counterpart, and the generator's footer counts
+    # what the sampler emitted, so feeding this the settlement series
+    # would make the same run read as two speeds again.
     result["tokens_produced"] = tokens_produced_series(
-        convergence, canvas_index
+        produced_from, canvas_index
     )
     return result
 
 
-def _run_convergence(
-    run_dir: Path, frames: List[str]
-) -> Tuple[List[Dict[str, Any]], str]:
-    """A run's convergence series and how it was measured.
+def _model_label(meta: Dict[str, Any]) -> str:
+    """The display name for the model that produced a run."""
+    backend = str(meta.get("backend", ""))
+    entry = REGISTRY.get(backend)
+    if entry is None:
+        return backend
+    return entry.display_name
 
-    Prefers the per-token records, which count positions and are what
-    the chart claims to show. Falls back to counting mask glyphs
-    against characters for a run that saved no usable records, which
-    is roughly a tenth of the archive here: the older runs, and the
-    few that stored token ids without the mask flag.
+
+def _run_convergence(
+    run_dir: Path,
+    frames: List[str],
+    canvas_index: Any = None,
+) -> Tuple[List[Dict[str, Any]], str, List[Dict[str, Any]]]:
+    """A run's convergence series, how it was measured, and the
+    series the throughput chart should count from.
+
+    Three measures, and which one a run gets is a property of the run
+    rather than a preference. Where the mask is a real token the flag
+    is ground truth and is used. Where the sampler inferred it from a
+    position holding still, the flag overstates badly, so agreement
+    with what the canvas committed is used instead. A run that saved
+    no usable records falls back to counting mask glyphs against
+    characters, which is roughly a tenth of the archive here.
+
+    The third return value exists because the throughput chart must
+    keep counting what the sampler resolved even when the convergence
+    chart stops. Only throughput has a live counterpart, and the
+    generator's footer counts the sampler's own reveals, so the two
+    would disagree again if this handed back the settlement series.
 
     A malformed token stream falls back rather than raising. The
     weaker curve is worth more than no page, and the basis says which
@@ -2255,14 +2293,20 @@ def _run_convergence(
     if loaded is not None and loaded.get("records_available"):
         token_frames = loaded.get("frames")
         if records_match_frames(token_frames, len(frames)):
+            by_mask = convergence_from_records(token_frames)
+            if masks_are_real(token_frames):
+                return (
+                    by_mask, CONVERGENCE_BASIS_TOKENS, by_mask
+                )
             return (
-                convergence_from_records(token_frames),
-                CONVERGENCE_BASIS_TOKENS,
+                convergence_from_settlement(
+                    token_frames, canvas_index
+                ),
+                CONVERGENCE_BASIS_SETTLEMENT,
+                by_mask,
             )
-    return (
-        compute_convergence(frames),
-        CONVERGENCE_BASIS_CHARACTERS,
-    )
+    by_chars = compute_convergence(frames)
+    return (by_chars, CONVERGENCE_BASIS_CHARACTERS, by_chars)
 
 
 def _unsupported_version_response(

@@ -222,25 +222,163 @@ def parse_history(
 
 
 # How a convergence series was arrived at. A run says which, because
-# the two are not equally trustworthy and the chart has to be able to
-# say so rather than let the reader assume the better one.
+# the three are not equally trustworthy and the chart has to be able
+# to say so rather than let the reader assume the best one.
 #
-# ``tokens`` counts positions, from the per-token records the run
-# saved. It is what the chart has always claimed to show.
+# ``tokens`` counts masked positions, from records whose mask is a
+# real token the model emitted. Exact, and what the chart has always
+# claimed to show.
+#
+# ``settlement`` counts positions already holding what their canvas
+# committed. Also exact, and used where the mask is not a real token
+# but an inference the sampler made, which is a weaker thing (see
+# ``masks_are_real``).
 #
 # ``characters`` counts mask glyphs against decoded characters, which
 # is all a run without token records can offer. It answers a slightly
 # different question, because resolving one position into a long token
 # moves it further than resolving one into a short token.
 CONVERGENCE_BASIS_TOKENS = "tokens"
+CONVERGENCE_BASIS_SETTLEMENT = "settlement"
 CONVERGENCE_BASIS_CHARACTERS = "characters"
 
 CONVERGENCE_BASES = (
     CONVERGENCE_BASIS_TOKENS,
+    CONVERGENCE_BASIS_SETTLEMENT,
     CONVERGENCE_BASIS_CHARACTERS,
 )
 
 assert len(set(CONVERGENCE_BASES)) == len(CONVERGENCE_BASES)
+
+
+def masks_are_real(token_frames: List[Any]) -> bool:
+    """Is a run's mask a token the model emitted, or an inference?
+
+    The two diffusion models differ here in a way nothing else
+    records. LLaDA masks a position with an actual vocabulary entry,
+    so every masked record in a run carries the same id and the mask
+    flag is ground truth. DiffusionGemma has no mask token: it
+    renoises unsettled positions to fresh *real* tokens, so the
+    sampler marks a position unresolved when its id changed since the
+    previous step. That is stability, and stability is not
+    settlement: a canvas can read 90 percent resolved while holding
+    the model's highest-frequency filler at 16 percent confidence.
+
+    Asked of the run's own data rather than a registry, because the
+    distinction is a property of what was saved and stays true for
+    the two hundred runs saved before anyone thought to record it.
+    One shared id across every masked position means a real mask;
+    many ids mean the flag was inferred.
+
+    Runs with no masked positions at all report True, which costs
+    nothing: with nothing marked, both measures agree anyway.
+    """
+    seen: set = set()
+    for frame in token_frames:
+        if not isinstance(frame, list):
+            continue
+        for record in frame:
+            if not isinstance(record, dict):
+                continue
+            if not record.get("m"):
+                continue
+            seen.add(record.get("id"))
+            if len(seen) > 1:
+                return False
+    return True
+
+
+def convergence_from_settlement(
+    token_frames: List[Any],
+    canvas_index: Any = None,
+) -> List[Dict[str, Any]]:
+    """Convergence as agreement with what the canvas committed.
+
+    For a model whose mask flag is inferred, this is the honest
+    measure: a position counts as resolved once it holds the value
+    its own canvas ended on. Retrospective by nature, which is why
+    the live view cannot show it and Analytics can.
+
+    Per canvas, not per run. DiffusionGemma commits a canvas and
+    starts the next from fresh noise, so measuring canvas 1 against
+    the run's final frame would compare it to text it never contained.
+
+    Deliberately not used where the mask is real. On an edited LLaDA
+    run this reads 18.1 percent at frame zero, because the positions
+    still masked at the end trivially agree with the end from the
+    start, and a curve that begins near a fifth resolved is wrong in
+    the opposite direction from the one being fixed.
+
+    Returns the same keys as the other two paths so nothing
+    downstream branches on which measure produced the series.
+    """
+    assert len(token_frames) > 0, "a run has at least one frame"
+
+    finals = _canvas_final_ids(token_frames, canvas_index)
+    groups = _canvas_of_frame(len(token_frames), canvas_index)
+
+    results: List[Dict[str, Any]] = []
+    for i, frame in enumerate(token_frames):
+        records = frame if isinstance(frame, list) else []
+        final = finals.get(groups[i], [])
+        total = len(records)
+        settled = 0
+        for position, record in enumerate(records):
+            if position >= len(final):
+                break
+            if not isinstance(record, dict):
+                continue
+            if record.get("id") == final[position]:
+                settled += 1
+        # An empty canvas reads fully resolved, matching the other
+        # two paths: there is nothing left in it to settle.
+        ratio = 1.0
+        if total > 0:
+            ratio = round(settled / total, 6)
+        results.append({
+            "frame": i,
+            # Named for the other paths' key rather than for what it
+            # holds, so the throughput series and the chart can read
+            # one shape. It is the count still unsettled either way.
+            "mask_count": total - settled,
+            "total_tokens": total,
+            "resolved_ratio": ratio,
+        })
+    return results
+
+
+def _canvas_of_frame(
+    frame_count: int, canvas_index: Any
+) -> List[int]:
+    """Which canvas each frame belongs to, defaulting to one."""
+    if not isinstance(canvas_index, list):
+        return [0] * frame_count
+    groups: List[int] = []
+    for i in range(frame_count):
+        value = canvas_index[i] if i < len(canvas_index) else 0
+        groups.append(value if isinstance(value, int) else 0)
+    return groups
+
+
+def _canvas_final_ids(
+    token_frames: List[Any], canvas_index: Any
+) -> Dict[int, List[Any]]:
+    """The ids each canvas ended on, keyed by canvas.
+
+    The last frame of a canvas that has any records. A canvas whose
+    final frames were empty falls back to the last one that was not,
+    so an empty tail cannot make every earlier frame look unsettled.
+    """
+    groups = _canvas_of_frame(len(token_frames), canvas_index)
+    finals: Dict[int, List[Any]] = {}
+    for i, frame in enumerate(token_frames):
+        if not isinstance(frame, list) or len(frame) == 0:
+            continue
+        finals[groups[i]] = [
+            record.get("id") if isinstance(record, dict) else None
+            for record in frame
+        ]
+    return finals
 
 
 def convergence_from_records(

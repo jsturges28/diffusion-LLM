@@ -96,11 +96,19 @@ def test_a_new_run_clears_the_previous_envelope() -> None:
 
 
 def test_the_envelope_is_cleared_beside_the_prompt_length() -> None:
-    """Both are per-run facts from the same frame, so they are reset
-    together; separating them is how one of them gets forgotten."""
+    """These are per-run facts read off the same frames, so they are
+    reset together; separating them is how one gets forgotten.
+
+    The set grows. ``lastRunTotalSteps`` joined it when the scrubber
+    needed the step total to rebuild its readout, and it has exactly
+    the same failure mode: a value from the previous run surviving
+    into the next one, describing a run that is no longer on screen.
+    """
     source = _source()
     together = (
-        "lastRunPromptLen = null;\n  lastRunProvenance = null;"
+        "lastRunPromptLen = null;\n"
+        "  lastRunTotalSteps = null;\n"
+        "  lastRunProvenance = null;"
     )
 
     assert together in source

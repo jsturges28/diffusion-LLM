@@ -1142,17 +1142,42 @@ html, body {
   display: none;
 }
 
-/* Caption for a chart drawn from a weaker measure than the one it is
-   labelled with. Same dim italic as the overlay note above, because
-   it says the same kind of thing: what this run could not give us. */
-.chart-basis-note {
-  padding: 0 2px 6px;
-  font-size: 11px;
-  color: var(--text-dim);
-  font-style: italic;
+/* Beside the icon is the wrong place for a tooltip in this column.
+   The column scrolls, so it clips anything positioned outside it,
+   and it is narrower than the 280px the shared tooltip wants; a
+   tooltip opening either way ends up a sliver against the edge.
+   So this one drops below its heading and spans the row, which is
+   the one placement that cannot overflow whatever the width.
+
+   Positioning it against the row rather than the icon takes the
+   icon out of the flow as a containing block, which is what the
+   static override is for. */
+.chart-header-row {
+  position: relative;
 }
 
-.chart-basis-note[hidden] {
+.info-icon.tooltip-below {
+  position: static;
+}
+
+.info-icon.tooltip-below .tooltip {
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  width: auto;
+  transform: none;
+  white-space: normal;
+}
+
+/* A caveat rather than an explanation: the curve this run got is
+   approximate. Tinted so that is visible without hovering, since a
+   reader who never hovers should still know to discount it. */
+.info-icon.is-approximate {
+  color: #ffb454;
+  border-color: rgba(255, 159, 28, 0.55);
+}
+
+.info-icon[hidden] {
   display: none;
 }
 
