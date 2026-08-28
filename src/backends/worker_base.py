@@ -23,6 +23,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Tuple,
 )
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -34,6 +35,7 @@ from src.backends.protocol import (
     ERROR_NO_TOKENIZER,
     ERROR_SCOPE_FATAL,
     ERROR_SCOPE_REQUEST,
+    ERROR_STALE_RUN,
     ERROR_UNKNOWN_MESSAGE,
     MSG_CANCEL,
     MSG_COUNT_PROMPT,
@@ -42,6 +44,7 @@ from src.backends.protocol import (
     MSG_MODEL_STATUS,
     MSG_PROBE,
     MSG_RESUME,
+    MSG_REWIND,
     MSG_SUBSTITUTE,
     MSG_TOKENIZE,
     MSG_TOKENIZE_RESULT,
@@ -74,6 +77,40 @@ COUNT_PROMPT_MAX_CHARS = 200_000
 assert COUNT_PROMPT_MAX_CHARS > TOKENIZE_TEXT_MAX_CHARS, (
     "counting a prompt must allow more than previewing a token"
 )
+
+def rewind_retained_history(
+    state: Optional[Dict[str, Any]],
+    *,
+    working: str,
+    baseline: str,
+) -> None:
+    """Restore one retained history from its generated baseline.
+
+    Both diffusion backends keep two names for one set of frame
+    checkpoints: the working history, which a resume replaces with
+    the branch it produced, and the baseline, which records what
+    generation left behind. This copies the second over the first.
+
+    A new list rather than an alias. Sharing one list between the
+    two names would let the next resume edit the very thing a later
+    rewind restores to, which is this bug in miniature.
+
+    Shared rather than written twice because the two backends
+    differ only in what they call their history, and because
+    ``dgemma_worker`` cannot be imported under the test
+    environment: it reaches ``bitsandbytes`` through its quantized
+    loader, which lives only in ``.venv-dgemma``. Keeping the logic
+    here is what lets it be tested at all.
+    """
+    if state is None:
+        return
+    assert baseline in state, "a run records what it generated"
+    restored = list(state[baseline])
+    assert restored is not state[baseline], (
+        "the baseline survives the restore"
+    )
+    state[working] = restored
+
 
 class StaleRunError(ValueError):
     """A stateful request named a run this worker no longer holds.
@@ -415,6 +452,12 @@ class Backend(ABC):
     # members below are what make it safe to read, and the three of
     # them have to move together.
     last_run_state: Optional[Dict[str, Any]] = None
+    # Which retained histories a rewind restores, as (working,
+    # baseline) key pairs. Empty for a backend whose intervention
+    # never rewrites the retained run: SmolLM3's What If branch is
+    # deliberately not adopted, so no later edit session can inherit
+    # it by mistake and there is nothing to undo.
+    REWIND_KEYS: Tuple[Tuple[str, str], ...] = ()
     # Runs completed by this backend, and with the nonce below the
     # identity of the state above. Zero means there is none.
     run_counter: int = 0
@@ -537,6 +580,46 @@ class Backend(ABC):
         raise NotImplementedError(
             "substitution not supported"
         )
+
+    async def handle_rewind(
+        self, ws: WebSocket, data: Dict[str, Any]
+    ) -> None:
+        """Answer a rewind request, if this window still owns the run.
+
+        The protocol half lives here so all three backends refuse a
+        stale window identically; what a rewind actually restores is
+        ``rewind_run`` below.
+        """
+        try:
+            self.check_run_token(data)
+        except StaleRunError as exc:
+            # Another window owns this run now. Refusing matters:
+            # rewinding on its behalf would throw away a branch it
+            # is still working on.
+            await ws.send_json(
+                request_error(
+                    message=str(exc),
+                    code=ERROR_STALE_RUN,
+                    request_type=MSG_REWIND,
+                    request_id=request_id_of(data),
+                )
+            )
+            return
+        self.rewind_run()
+
+    def rewind_run(self) -> None:
+        """Put the retained run back the way generation left it.
+
+        Driven by ``REWIND_KEYS``, so a backend declares what it
+        rewinds rather than reimplementing how. LLaDA extends this
+        for the one field that is not a history.
+        """
+        for working, baseline in self.REWIND_KEYS:
+            rewind_retained_history(
+                self.last_run_state,
+                working=working,
+                baseline=baseline,
+            )
 
     async def handle_tokenize(
         self, ws: WebSocket, data: Dict[str, Any]
@@ -1076,6 +1159,20 @@ def create_worker_app(
             MSG_TOKENIZE: backend.handle_tokenize,
             MSG_COUNT_PROMPT: backend.handle_count_prompt,
         }
+        # Refused while a generation runs, unlike the two above, and
+        # for a different reason each. The probe runs a forward
+        # pass, so admitting it alongside a generation would put two
+        # passes on one device and its memory. The rewind rewrites
+        # the retained history, which is the very thing a running
+        # resume is in the middle of deciding.
+        #
+        # Awaited inline once accepted, which holds the loop for one
+        # pass and cannot deadlock, because nothing else can be
+        # running by then.
+        exclusive = {
+            MSG_PROBE: backend.handle_probe,
+            MSG_REWIND: backend.handle_rewind,
+        }
         try:
             ready = await _await_model_ready(
                 ws,
@@ -1120,18 +1217,11 @@ def create_worker_app(
                     await concurrent[mtype](ws, data)
                     continue
 
-                # Refused during a run, unlike the two above it:
-                # this one runs a forward pass, so letting it in
-                # alongside a generation would have two passes
-                # contending for the same device and its memory.
-                # Awaited inline once accepted, which holds the
-                # loop for a single pass and cannot deadlock,
-                # because nothing else can be running by then.
-                if mtype == MSG_PROBE:
+                if mtype in exclusive:
                     if generation.busy():
-                        await _send_busy(ws, MSG_PROBE, data)
+                        await _send_busy(ws, mtype, data)
                         continue
-                    await backend.handle_probe(ws, data)
+                    await exclusive[mtype](ws, data)
                     continue
 
                 # A client bug rather than a worker one, and scoped

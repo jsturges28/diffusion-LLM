@@ -535,6 +535,69 @@ def test_one_refusal_two_scopes(
     assert for_probe["request_type"] == "probe"
 
 
+def test_a_busy_worker_refuses_a_rewind(
+    backend: _StubBackend, client: TestClient
+) -> None:
+    """Refused for a different reason than the probe above: a
+    rewind rewrites the retained history, and a resume is in the
+    middle of deciding what that history becomes. Not reachable
+    from the UI, which cannot open an edit session mid-run, but
+    the overlap is exactly the corruption this message prevents."""
+    with _two_windows(client) as (first, second):
+        _park(backend, first)
+
+        second.send_json({"type": "rewind", "run_token": "x"})
+        refusal = second.receive_json()
+        _release(backend, first)
+
+    assert refusal["code"] == ERROR_BUSY
+    assert refusal["scope"] == ERROR_SCOPE_REQUEST
+    assert refusal["request_type"] == "rewind"
+
+
+def test_a_rewind_is_a_known_message(
+    client: TestClient,
+) -> None:
+    """An idle worker answers a rewind for the run it holds with
+    silence rather than with `unknown_message`, which is what a
+    client would get if the dispatch branch went missing."""
+    with _window(client) as socket:
+        token = _generate(socket, "hello")
+        socket.send_json(
+            {"type": "rewind", "run_token": token}
+        )
+        # A second request behind it, as the canary: if the rewind
+        # answered at all, that answer arrives here instead.
+        socket.send_json(
+            {
+                "type": "probe",
+                "position": 0,
+                "run_token": token,
+            }
+        )
+        answer = socket.receive_json()
+
+    assert answer["type"] == "probe_result"
+
+
+def test_a_stale_rewind_is_refused_by_request(
+    client: TestClient,
+) -> None:
+    """Another window may be mid-edit on this run, so rewinding on
+    its behalf would discard live work. Request-scoped, because the
+    window that asked has no run of its own to tear down."""
+    with _window(client) as socket:
+        _generate(socket, "hello")
+        socket.send_json(
+            {"type": "rewind", "run_token": "not-this-run"}
+        )
+        refusal = socket.receive_json()
+
+    assert refusal["code"] == ERROR_STALE_RUN
+    assert refusal["scope"] == ERROR_SCOPE_REQUEST
+    assert refusal["request_type"] == "rewind"
+
+
 def test_the_lock_is_released_after_a_run(
     backend: _StubBackend, client: TestClient
 ) -> None:

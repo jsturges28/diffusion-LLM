@@ -1748,17 +1748,26 @@ function handleFrame(data) {
     renderFrame(data.text);
   }
 
-  // Kept so the scrubber can rebuild this readout after the run
-  // ends. It is a property of the run, not of a frame, and it was
-  // read off each frame and thrown away.
-  lastRunTotalSteps =
+  // Two numbers wearing one name until they were told apart. A
+  // frame carries its own segment's budget, which is what makes
+  // "Resuming 12/64" mean something while a branch runs. The
+  // scrubber wants the whole run's total, so only a generation
+  // writes that one down: a resume reports the steps it has left,
+  // and letting that through left a finished run measured against
+  // its last branch. An edit at frame 64 of 128 then scrubbed to
+  // "Step 128/64", and a branch abandoned with Retry left the
+  // denominator of a run that no longer existed on screen.
+  var frameSteps =
     typeof data.total_steps === "number"
       ? data.total_steps
       : null;
+  if (!isResuming) {
+    lastRunTotalSteps = frameSteps;
+  }
   statusStep.textContent = stepReadout(
     data.index,
     data.canvas_index,
-    lastRunTotalSteps,
+    frameSteps,
     isResuming ? "Resuming " : "Step "
   );
   updateRunRateFooter();
@@ -1981,12 +1990,24 @@ function handleError(data) {
 // constant ~160 and touches only the ones that actually changed.
 var liveTokenSpans = [];
 
-// No hooks, on purpose. The streaming view draws plain masked and
-// resolved tokens with no overlay tint and no confidence grading,
-// matching the character renderer exactly. Either would be a visual
-// change smuggled in with a refactor. The metrics strip still reads
-// these tokens: it works off data-pos, which every span carries.
-var LIVE_TOKEN_OPTIONS = {};
+// One hook, and deliberately only one. Mask opacity is not an
+// overlay: it is how a mask reports the model's confidence in the
+// token it is about to become, so it belongs to the streaming view
+// as much as to the scrubbed one. When the span renderer replaced
+// the character renderer this was left off to keep that refactor
+// visually neutral, which meant the grading existed only when
+// scrubbing back and the canvas stayed flat while it was actually
+// being written, exactly when the reading is most interesting.
+//
+// The other three hooks stay off, and not by oversight. colorFor
+// would have nothing to do, because the overlay drawer is hidden
+// until the scrubber activates, so Heatmap and Entropy cannot be
+// chosen mid-run. maskedFor and classFor serve remask selection,
+// which is unreachable while a run is in flight.
+//
+// The metrics strip still reads these tokens: it works off
+// data-pos, which every span carries.
+var LIVE_TOKEN_OPTIONS = { opacityFor: tokenOpacityFn };
 
 function renderLiveFrame(tokens, revealed) {
   outputArea.classList.remove("token-layers");
@@ -5289,6 +5310,34 @@ function captureEditSnapshot() {
     finalText: lastFinalText,
     remaskEditsLen: remaskEdits.length,
   };
+  rewindWorkerRun();
+}
+
+// Tell the worker to discard any branch a previous session left it
+// holding, so it re-enters this session from the run on screen.
+//
+// Sent when a session opens rather than when one is abandoned,
+// because abandoning has too many doors. Retry and Exit both restore
+// the snapshot above and send nothing; so does a run-scoped error;
+// and a reload or a closed tab cannot send anything at all, since
+// preEditSnapshot lives only in memory and the session snapshot is
+// deliberately not written while an edit is in progress. Opening a
+// session is the one moment the browser is known to be showing the
+// un-edited run, so one message here covers every one of those.
+//
+// Harmless when there is nothing to undo: rewinding a run that has
+// committed no branch restores what the worker already holds.
+function rewindWorkerRun() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  if (!activeRunToken) {
+    return;
+  }
+  ws.send(JSON.stringify({
+    type: "rewind",
+    run_token: activeRunToken,
+  }));
 }
 
 // Restore the pre-edit run, discarding any partial/uncommitted

@@ -23,6 +23,14 @@ import torch
 from transformers.generation.streamers import BaseStreamer
 
 from src.backends.protocol import TERMINAL_CANCELLED
+from src.inference.checkpoint import (
+    CheckpointBudget,
+    DgemmaFrame,
+    FrameCheckpoint,
+    RngState,
+    rng_capture,
+    rng_restore,
+)
 from src.inference.frame_queue import (
     FrameQueueCancelled,
     frame_queue_close,
@@ -97,10 +105,16 @@ class FrameQueueStreamer(BaseStreamer):
         tokenizer: Any,
         out_queue: "queue.Queue[Any]",
         stop_event: Optional[threading.Event] = None,
+        budget: Optional[CheckpointBudget] = None,
     ) -> None:
         self.tokenizer = tokenizer
         self._queue = out_queue
         self._stop_event = stop_event
+        # Present only when a caller intends to collect checkpoints.
+        # Without it nothing is recorded, so a run whose frames are
+        # never claimed cannot accumulate them.
+        self._budget = budget
+        self._checkpoints: Dict[int, FrameCheckpoint] = {}
         # The most recent canvas as text, kept so a cancelled run
         # can still report what it produced: ``generate`` returns
         # nothing when it is unwound, and the alternative is a
@@ -185,7 +199,17 @@ class FrameQueueStreamer(BaseStreamer):
                 "m": unresolved,
                 "id": int(token_id),
             }
-            if not unresolved:
+            # Settled tokens always carry confidence. Unsettled ones
+            # carry it only when it is real: with the Entropy Signal
+            # off, an unsettled position is by definition one that
+            # just changed, so its stability count was reset to zero
+            # a few lines up and the number could only ever be 0.0.
+            # The client's mask opacity treats zero and absent alike,
+            # so writing it would cost payload on every frame for an
+            # identical canvas. With the signal on it is the model's
+            # own probability, which is what fades each mask by how
+            # sure the model is of the guess underneath it.
+            if not unresolved or conf_override is not None:
                 token["c"] = round(conf, 4)
             tokens.append(token)
             resolved.append(not unresolved)
@@ -197,6 +221,13 @@ class FrameQueueStreamer(BaseStreamer):
         self._prev = ids
         text = "".join(text_parts)
         self.last_text = text
+        # Recorded before the hand-off, never after. The consumer
+        # runs on the event loop and can dequeue a frame the instant
+        # it lands, so recording afterwards is a race the producer
+        # loses roughly one run in a hundred: the frame arrives, the
+        # consumer claims its checkpoint, and the thread has not
+        # written it yet.
+        self._record_checkpoint(ids)
         delivered = frame_queue_put(
             self._queue,
             {
@@ -214,10 +245,69 @@ class FrameQueueStreamer(BaseStreamer):
             stop_event=self._stop_event,
         )
         if not delivered:
+            # Undelivered, so unclaimable. Dropping it here is what
+            # keeps the recorded history to the frames the client
+            # actually saw, which is the invariant a later resume
+            # depends on when it names a frame by index.
+            self._checkpoints.pop(self._index, None)
             raise FrameQueueCancelled(
                 "denoising stopped: nobody is reading"
             )
         self._index += 1
+
+    def _record_checkpoint(self, ids: List[int]) -> None:
+        """Stash what a resume would need to re-enter this frame.
+
+        Keyed by the frame index because the producer runs ahead of
+        the consumer by up to the queue's depth, and the consumer is
+        the one that decides which frames the run may remember.
+        """
+        if self._budget is None:
+            return
+        assert self._stable is not None, "a frame set stability"
+        self._checkpoints[self._index] = FrameCheckpoint(
+            ids=torch.tensor(ids, dtype=torch.long),
+            canvas_index=self._canvas_index,
+            rng=self._budget.capture_rng(),
+            extra=DgemmaFrame(
+                stable=tuple(self._stable),
+                seen_revealed=frozenset(self._seen_revealed),
+            ),
+        )
+
+    def take_checkpoint(self, index: int) -> FrameCheckpoint:
+        """Hand over one frame's checkpoint and forget it here.
+
+        Popped rather than read so the streamer holds at most the
+        frames still in flight, and so a second claim on the same
+        index fails loudly instead of returning a stale record.
+        """
+        checkpoint = self._checkpoints.pop(index, None)
+        assert checkpoint is not None, (
+            f"frame {index} was delivered without a checkpoint"
+        )
+        return checkpoint
+
+    def restore(self, checkpoint: FrameCheckpoint) -> None:
+        """Re-enter a frame with the state that produced it.
+
+        Without this a resumed run builds a fresh streamer, whose
+        empty ``_prev`` makes every position read as changed: the
+        first resumed frame renders as an entirely masked canvas,
+        confidence restarts from zero for tokens that had been
+        stable for many steps, and the inherited prefix is reported
+        born a second time.
+        """
+        extra = checkpoint.extra
+        assert isinstance(extra, DgemmaFrame), (
+            "a DiffusionGemma checkpoint carries stability"
+        )
+        self._prev = checkpoint.ids.tolist()
+        self._stable = list(extra.stable)
+        self._seen_revealed = set(extra.seen_revealed)
+        assert len(self._stable) == len(self._prev), (
+            "stability covers the canvas it was taken from"
+        )
 
     def put(self, value: torch.Tensor) -> None:
         if not self._prompt_seen:
@@ -259,6 +349,34 @@ def _seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def _enter_rng(seed: int, rng: Optional[RngState]) -> None:
+    """Put the generator where this run should start drawing.
+
+    A resume enters from the frame's own captured state, because
+    re-seeding would reproduce the run's *first* step rather than
+    the step the user chose to branch from. The seed remains the
+    entry point for a fresh generation, and for a resume whose
+    frame outran the checkpoint budget.
+    """
+    if rng is not None:
+        rng_restore(rng)
+        return
+    _seed(seed)
+
+
+def _budget_for(
+    frame_history: Optional[List[FrameCheckpoint]],
+) -> Optional[CheckpointBudget]:
+    """A budget only when someone will collect the checkpoints.
+
+    Both the recording and the collecting hang off the same
+    condition, so a run cannot record frames nobody claims.
+    """
+    if frame_history is None:
+        return None
+    return CheckpointBudget()
+
+
 def _build_inputs(
     tokenizer: Any, model: Any, prompt: str, *, thinking: bool
 ) -> Any:
@@ -285,20 +403,24 @@ async def _run_streamed(
     generate_kwargs: Dict[str, Any],
     seed: int,
     cancel_event: Optional[threading.Event],
-    frame_history: Optional[List[Dict[str, Any]]] = None,
+    frame_history: Optional[List[FrameCheckpoint]] = None,
+    rng: Optional[RngState] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Drive ``model.generate`` in a thread, yielding protocol frames.
 
     Shared by ``streaming_generate`` and ``streaming_resume``. When
-    ``frame_history`` is provided, each streamed frame's canvas token
-    ids and canvas index are recorded so a worker can later re-enter a
-    chosen frame (resume-from-frame).
+    ``frame_history`` is provided, each streamed frame's checkpoint is
+    recorded so a worker can later re-enter a chosen frame
+    (resume-from-frame).
+
+    ``rng`` re-enters a captured generator state instead of seeding,
+    which is what a resume passes.
     """
     result: Dict[str, Any] = {}
 
     def run() -> None:
         try:
-            _seed(seed)
+            _enter_rng(seed, rng)
             result["out"] = model.generate(
                 **inputs, streamer=streamer, **generate_kwargs
             )
@@ -329,15 +451,7 @@ async def _run_streamed(
                 and item.get("type") == "frame"
             ):
                 frame_history.append(
-                    {
-                        "canvas_index": item.get(
-                            "canvas_index", 0
-                        ),
-                        "ids": [
-                            tok["id"]
-                            for tok in item["tokens"]
-                        ],
-                    }
+                    streamer.take_checkpoint(item["index"])
                 )
             yield item
     finally:
@@ -410,13 +524,12 @@ async def streaming_generate(
     entropy_signal: bool = False,
     seed: int = -1,
     cancel_event: Optional[threading.Event] = None,
-    frame_history: Optional[List[Dict[str, Any]]] = None,
+    frame_history: Optional[List[FrameCheckpoint]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Yield one dict per denoising step, then a ``done`` frame.
 
-    When ``frame_history`` is provided, per-frame canvas ids and
-    canvas indices are appended to it so the worker can support
-    resume-from-frame.
+    When ``frame_history`` is provided, each frame's checkpoint is
+    appended to it so the worker can support resume-from-frame.
     """
     inputs = _build_inputs(
         tokenizer, model, prompt, thinking=thinking
@@ -425,7 +538,10 @@ async def streaming_generate(
 
     out_queue: "queue.Queue[Any]" = frame_queue_create()
     streamer = FrameQueueStreamer(
-        tokenizer, out_queue, stop_event=cancel_event
+        tokenizer,
+        out_queue,
+        stop_event=cancel_event,
+        budget=_budget_for(frame_history),
     )
     streamer._takes_logits = entropy_signal
 
@@ -455,7 +571,7 @@ async def streaming_resume(
     tokenizer: Any,
     *,
     prompt: str,
-    seed_canvas_ids: List[int],
+    base: FrameCheckpoint,
     remask_positions: List[int],
     remaining_steps: int,
     t_max: float = 0.8,
@@ -464,7 +580,7 @@ async def streaming_resume(
     entropy_signal: bool = False,
     seed: int = -1,
     cancel_event: Optional[threading.Event] = None,
-    frame_history: Optional[List[Dict[str, Any]]] = None,
+    frame_history: Optional[List[FrameCheckpoint]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Resume denoising from a chosen frame's canvas (single canvas).
 
@@ -475,9 +591,15 @@ async def streaming_resume(
     them; unlike LLaDA, non-remasked positions are biased by the seed
     but not frozen. ``max_new_tokens`` is pinned to a single canvas so
     the resume never chains additional canvases.
+
+    ``base`` is the chosen frame's checkpoint. Its canvas is the seed,
+    its stability state is handed to the new streamer so the resumed
+    frames continue the confidence the user was looking at, and its
+    random state is what the renoise and the denoiser draw from.
     """
     assert remaining_steps > 0, "remaining_steps must be positive"
     canvas_length = int(model.config.canvas_length)
+    seed_canvas_ids: List[int] = base.ids.tolist()
     if len(seed_canvas_ids) != canvas_length:
         raise ValueError(
             f"seed canvas has {len(seed_canvas_ids)} ids,"
@@ -489,7 +611,10 @@ async def streaming_resume(
     )
     prompt_len = int(inputs["input_ids"].shape[1])
 
-    _seed(seed)
+    # The renoise below draws from the frame's own state, so the same
+    # edit repeated on the same frame renoises to the same tokens and
+    # the denoiser then continues from a matching offset.
+    _enter_rng(seed, base.rng)
     vocab_size = int(model.config.text_config.vocab_size)
     seed_canvas = torch.tensor(
         seed_canvas_ids, dtype=torch.long, device=model.device
@@ -504,11 +629,20 @@ async def streaming_resume(
             torch.randint(0, vocab_size, (1,)).item()
         )
 
+    # Pinned after the renoise rather than left implicit, so the
+    # denoiser enters from a known point even if something else draws
+    # from the generator before the worker thread starts.
+    entry_rng = rng_capture()
+
     out_queue: "queue.Queue[Any]" = frame_queue_create()
     streamer = FrameQueueStreamer(
-        tokenizer, out_queue, stop_event=cancel_event
+        tokenizer,
+        out_queue,
+        stop_event=cancel_event,
+        budget=_budget_for(frame_history),
     )
     streamer._takes_logits = entropy_signal
+    streamer.restore(base)
 
     generate_kwargs: Dict[str, Any] = {
         "max_new_tokens": canvas_length,
@@ -528,5 +662,6 @@ async def streaming_resume(
         seed=seed,
         cancel_event=cancel_event,
         frame_history=frame_history,
+        rng=entry_rng,
     ):
         yield item

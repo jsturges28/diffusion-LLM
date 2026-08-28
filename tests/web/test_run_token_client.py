@@ -9,7 +9,7 @@ which had no test at all and is where the token can quietly go wrong.
 
 What passing proves is that one variable stays in step with the run it
 names, across the four things that can move it: a terminal frame
-brings a new one, three stateful requests must quote it, a reload must
+brings a new one, four stateful requests must quote it, a reload must
 carry it, and a fresh run must retire it. Miss the last and a token
 outlives the state it describes, which is the exact shape of the bug
 `ORG-02` exists to prevent and which this file was written after
@@ -67,19 +67,29 @@ def test_only_a_string_is_adopted() -> None:
 
 
 def test_every_stateful_request_quotes_it() -> None:
-    """Resume, substitution and probe are the three the worker checks
-    before it reads retained state. A fourth arriving without this is
-    the regression to catch."""
+    """Resume, substitution, probe and rewind are the four the worker
+    checks before it reads or writes retained state. A fifth arriving
+    without this is the regression to catch.
+
+    Rewind joined them when abandoning an edit session turned out to
+    leave the worker holding the branch the browser had discarded.
+    """
     source = _source()
 
-    assert source.count("run_token: activeRunToken") == 3
+    assert source.count("run_token: activeRunToken") == 4
 
 
-def test_the_three_are_the_ones_we_think() -> None:
+def test_the_four_are_the_ones_we_think() -> None:
     """Counting alone would pass if one moved to the wrong request."""
     source = _source()
 
-    for request in ('"probe"', '"substitute"', '"resume"'):
+    requests = (
+        '"probe"',
+        '"substitute"',
+        '"resume"',
+        '"rewind"',
+    )
+    for request in requests:
         start = source.find("type: " + request)
         assert start != -1, request
         sent = source[start : start + 400]

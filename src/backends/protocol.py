@@ -146,6 +146,19 @@ MSG_PROBE_RESULT = "probe_result"
 # be tens of thousands of objects to deliver a single integer.
 MSG_COUNT_PROMPT = "count_prompt"
 MSG_COUNT_PROMPT_RESULT = "count_prompt_result"
+# Put the retained run back the way generation left it, discarding
+# any branch a resume committed.
+#
+# Sent when an edit session *begins* rather than when one is
+# abandoned, which reads backwards until you count the ways a
+# session can end. Retry and Exit both roll the browser back and
+# tell the worker nothing; so does a run-scoped error; and a reload
+# or a closed tab cannot send anything at all, because the client's
+# rollback snapshot is memory-only and is not persisted while an
+# edit is in progress. Session start is the single point where the
+# browser is known to be showing the un-edited run, so rewinding
+# there covers every one of those without a message per exit.
+MSG_REWIND = "rewind"
 
 
 # -- Error envelopes --
@@ -207,6 +220,13 @@ REQUEST_SCOPES: Dict[str, str] = {
     MSG_TOKENIZE: ERROR_SCOPE_REQUEST,
     MSG_COUNT_PROMPT: ERROR_SCOPE_REQUEST,
     MSG_PROBE: ERROR_SCOPE_REQUEST,
+    # Request-scoped despite writing run state, because of when it is
+    # sent: an edit session opens with one, so a run-scoped refusal
+    # would tear down the session in the middle of setting it up. A
+    # window that cannot rewind cannot resume either, and that
+    # refusal does own the run, so nothing is lost by being quiet
+    # here.
+    MSG_REWIND: ERROR_SCOPE_REQUEST,
 }
 
 

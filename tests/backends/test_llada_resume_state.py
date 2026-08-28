@@ -8,7 +8,7 @@ forwarding the sampler's terminal frame, and while sending the
 worker's own terminal frame after a guided run stopped at its
 budget.
 
-A resume used to shorten ``tensor_history`` before doing any work,
+A resume used to shorten ``frame_checkpoints`` before any work,
 so any of those failures left the worker holding a truncated run
 while the browser rolled back to its full pre-edit snapshot. The
 two then disagreed about which frames exist, and the next retry
@@ -40,6 +40,10 @@ from src.backends.llada_worker import (
     LladaBackend,
     _commit_resume,
 )
+from src.inference.checkpoint import (
+    FrameCheckpoint,
+    LladaFrame,
+)
 
 # The recorded run every test resumes from: five frames, so the
 # last resumable one is frame 3 (frame 4 is the final frame and is
@@ -56,6 +60,24 @@ assert ORIGINAL_TOTAL_STEPS > 1, (
 def _tensor(value: int) -> torch.Tensor:
     """One recognizable generation-region frame."""
     return torch.full((1, GEN_LENGTH), value, dtype=torch.long)
+
+
+def _checkpoint(value: int) -> FrameCheckpoint:
+    """One recognizable frame, packaged as a checkpoint.
+
+    The confidence is derived from the same value so a test can tell
+    which frame a resumed run branched from by either field.
+    """
+    return FrameCheckpoint(
+        ids=_tensor(value),
+        canvas_index=0,
+        rng=None,
+        extra=LladaFrame(
+            reveal_conf=torch.full(
+                (GEN_LENGTH,), float(value), dtype=torch.float
+            )
+        ),
+    )
 
 
 class _StubTokenizer:
@@ -167,14 +189,15 @@ def _install_resume_stub(
     frames: int,
     fail_after: Optional[int] = None,
     yield_done: bool = True,
+    entries: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """Replace the sampler with a scripted frame sequence.
 
     Mirrors the real generator's contract, which is what makes the
     assertions below mean in a test what they would mean in
-    production: each frame's tensor is appended to the caller's
-    ``tensor_history`` *before* that frame is yielded, so the sink
-    is always one step ahead of what the client has seen.
+    production: each frame's checkpoint is appended to the caller's
+    ``frame_checkpoints`` *before* that frame is yielded, so the
+    sink is always one step ahead of what the client has seen.
 
     ``fail_after`` raises once that many frames have been yielded,
     standing in for an inference or streaming failure at a chosen
@@ -182,19 +205,25 @@ def _install_resume_stub(
     models a cancelled run, which returns without a terminal frame
     exactly as ``streaming_resume`` does when its cancel event is
     set.
+
+    ``entries`` collects the keyword arguments of each call, so a
+    test can ask which checkpoint a resume actually branched from
+    rather than inferring it from the frames that came back.
     """
 
     async def fake_resume(
         *_args: Any, **kwargs: Any
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        sink: Optional[List[torch.Tensor]] = kwargs.get(
-            "tensor_history"
+        if entries is not None:
+            entries.append(kwargs)
+        sink: Optional[List[FrameCheckpoint]] = kwargs.get(
+            "frame_checkpoints"
         )
         if fail_after == 0:
             raise RuntimeError("inference failed")
         for index in range(frames):
             if sink is not None:
-                sink.append(_tensor(100 + index))
+                sink.append(_checkpoint(100 + index))
             yield {"type": "frame", "index": index}
             if (
                 fail_after is not None
@@ -213,10 +242,16 @@ def _backend() -> LladaBackend:
     """A backend holding the recorded run, ready to resume."""
     backend = LladaBackend()
     backend.tokenizer = _StubTokenizer()
+    generated = [
+        _checkpoint(index) for index in range(ORIGINAL_FRAMES)
+    ]
     backend.last_run_state = {
-        "tensor_history": [
-            _tensor(index) for index in range(ORIGINAL_FRAMES)
-        ],
+        "frame_checkpoints": list(generated),
+        # What a rewind restores to, written by _store_state after a
+        # real generation. Two lists over one set of checkpoints, so
+        # a resume replacing the first leaves this one alone.
+        "generated_checkpoints": generated,
+        "generated_total_steps": ORIGINAL_TOTAL_STEPS,
         "prompt_ids": torch.zeros((1, 2), dtype=torch.long),
         "attention_mask": torch.ones(
             (1, 2 + GEN_LENGTH), dtype=torch.long
@@ -226,6 +261,7 @@ def _backend() -> LladaBackend:
         "temperature": 0.0,
         "cfg_scale": 0.0,
         "remasking": "low_confidence",
+        "seed": 0,
     }
     # Since LIFE-01 a retained run is state plus an identity, and a
     # resume that does not name it is refused before the state is
@@ -263,14 +299,14 @@ def _resume(
     )
 
 
-def _snapshot(backend: LladaBackend) -> List[torch.Tensor]:
+def _snapshot(backend: LladaBackend) -> List[FrameCheckpoint]:
     state = backend.last_run_state
     assert state is not None
-    return list(state["tensor_history"])
+    return list(state["frame_checkpoints"])
 
 
 def _assert_run_untouched(
-    backend: LladaBackend, original: List[torch.Tensor]
+    backend: LladaBackend, original: List[FrameCheckpoint]
 ) -> None:
     """The history and its step count are byte for byte the same.
 
@@ -281,7 +317,7 @@ def _assert_run_untouched(
     """
     state = backend.last_run_state
     assert state is not None
-    history = state["tensor_history"]
+    history = state["frame_checkpoints"]
     assert len(history) == len(original), (
         "a failed resume changed the frame count"
     )
@@ -395,7 +431,7 @@ def test_a_second_resume_succeeds_after_a_failure(
     ), "the retry was rejected"
     state = backend.last_run_state
     assert state is not None
-    assert len(state["tensor_history"]) == frame_index + 3
+    assert len(state["frame_checkpoints"]) == frame_index + 3
 
 
 # -- the outcomes that do commit --
@@ -413,7 +449,7 @@ def test_a_completed_resume_replaces_the_run(
 
     state = backend.last_run_state
     assert state is not None
-    history = state["tensor_history"]
+    history = state["frame_checkpoints"]
     assert len(history) == 5
     assert state["total_steps"] == 4
     assert not any(
@@ -440,7 +476,7 @@ def test_a_guided_resume_commits_without_moving_total_steps(
     assert state is not None
     # Two frames reached the client, and the sink holds exactly
     # those, so worker and browser agree on the new length.
-    assert len(state["tensor_history"]) == 4
+    assert len(state["frame_checkpoints"]) == 4
     assert state["total_steps"] == ORIGINAL_TOTAL_STEPS
 
 
@@ -463,7 +499,7 @@ def test_a_cancelled_resume_keeps_the_frames_the_client_saw(
 
     state = backend.last_run_state
     assert state is not None
-    assert len(state["tensor_history"]) == 4
+    assert len(state["frame_checkpoints"]) == 4
     assert state["total_steps"] == ORIGINAL_TOTAL_STEPS
     assert ws.sent[-1]["type"] == "done"
     assert ws.sent[-1]["cancelled"] is True
@@ -525,12 +561,209 @@ def test_commit_refuses_an_empty_candidate() -> None:
     is a broken caller. Committing it would cut the run back to
     the surviving prefix, which is the loss being prevented."""
     state: Dict[str, Any] = {
-        "tensor_history": [_tensor(0), _tensor(1)],
+        "frame_checkpoints": [
+            _checkpoint(0),
+            _checkpoint(1),
+        ],
         "total_steps": 1,
     }
-    kept = list(state["tensor_history"])
+    kept = list(state["frame_checkpoints"])
 
-    _commit_resume(state, [_tensor(0)], [], done=True)
+    _commit_resume(state, [_checkpoint(0)], [], done=True)
 
-    assert state["tensor_history"] == kept
+    assert state["frame_checkpoints"] == kept
     assert state["total_steps"] == 1
+
+
+# -- the rewind --
+#
+# A resume that succeeds is supposed to replace the retained run.
+# What was missing is the way back: every route out of an edit
+# session restored the browser and told the worker nothing, so the
+# two disagreed about which frames exist and the next edit at the
+# same or a later frame branched from the discarded canvas while
+# the user clicked tokens on the original one.
+
+
+def _same_objects(
+    left: List[FrameCheckpoint],
+    right: List[FrameCheckpoint],
+) -> bool:
+    """Identity, element for element.
+
+    A checkpoint holds tensors, so ``==`` on two of them raises
+    rather than answering. Identity is the stronger claim anyway:
+    an equal frame rebuilt from the branch would still mean the
+    worker had thrown the original away.
+    """
+    if len(left) != len(right):
+        return False
+    return all(
+        a is b for a, b in zip(left, right, strict=True)
+    )
+
+
+def _rewind(
+    backend: LladaBackend,
+    ws: _StubWebSocket,
+    *,
+    run_token: Optional[str] = None,
+) -> None:
+    token = (
+        backend.run_token if run_token is None else run_token
+    )
+    asyncio.run(
+        backend.handle_rewind(
+            ws,  # type: ignore[arg-type]
+            {"run_token": token},
+        )
+    )
+
+
+def test_a_rewind_restores_the_generated_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_resume_stub(monkeypatch, frames=3)
+    backend = _backend()
+    original = _snapshot(backend)
+    ws = _StubWebSocket()
+    _resume(backend, ws, frame_index=2)
+    assert not _same_objects(_snapshot(backend), original), (
+        "the resume must commit, or the rewind proves nothing"
+    )
+
+    _rewind(backend, ws)
+
+    _assert_run_untouched(backend, original)
+
+
+def test_a_rewind_undoes_a_whole_chain_of_edits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A guided session commits one resume per Run to Here. The
+    browser rolls all of them back from a single snapshot taken
+    when the session opened, so the worker has to as well."""
+    _install_resume_stub(monkeypatch, frames=3)
+    backend = _backend()
+    original = _snapshot(backend)
+    ws = _StubWebSocket()
+    _resume(backend, ws, frame_index=1, max_frames=2)
+    _resume(backend, ws, frame_index=2)
+
+    _rewind(backend, ws)
+
+    _assert_run_untouched(backend, original)
+
+
+def test_one_edit_branches_from_one_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The property the whole change exists for, and the one a
+    hardware pass could not confirm before it.
+
+    Repeating an edit across a rewind must re-enter the identical
+    checkpoint, because that object carries the random state
+    `XAI-01` retains. Identity rather than equality: an equal
+    tensor rebuilt from the branch would still be the wrong canvas.
+    """
+    entries: List[Dict[str, Any]] = []
+    _install_resume_stub(monkeypatch, frames=3, entries=entries)
+    backend = _backend()
+    ws = _StubWebSocket()
+
+    _resume(backend, ws, frame_index=2)
+    _rewind(backend, ws)
+    _resume(backend, ws, frame_index=2)
+
+    assert len(entries) == 2
+    assert entries[0]["base_tokens"] is entries[1]["base_tokens"]
+    assert entries[0]["base_conf"] is entries[1]["base_conf"]
+    assert entries[0]["base_rng"] is entries[1]["base_rng"]
+
+
+def test_without_a_rewind_the_second_edit_moves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Negative space, and a description of the bug. Two edits at
+    one frame with nothing between them branch from different
+    canvases, which is what made a repeated edit irreproducible."""
+    entries: List[Dict[str, Any]] = []
+    _install_resume_stub(monkeypatch, frames=3, entries=entries)
+    backend = _backend()
+    ws = _StubWebSocket()
+
+    _resume(backend, ws, frame_index=2)
+    _resume(backend, ws, frame_index=2)
+
+    assert (
+        entries[0]["base_tokens"]
+        is not entries[1]["base_tokens"]
+    )
+
+
+def test_a_rewind_restores_the_step_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cancelled resume commits a short history without moving
+    total_steps, so the figure outlives the run it described."""
+    _install_resume_stub(
+        monkeypatch, frames=2, yield_done=False
+    )
+    backend = _backend()
+    ws = _StubWebSocket()
+    _resume(backend, ws, frame_index=2, cancelled=True)
+
+    _rewind(backend, ws)
+
+    state = backend.last_run_state
+    assert state is not None
+    assert state["total_steps"] == ORIGINAL_TOTAL_STEPS
+    assert len(state["frame_checkpoints"]) == ORIGINAL_FRAMES
+
+
+def test_a_rewind_before_any_edit_changes_nothing() -> None:
+    """Sent on every session open, including the first, so the
+    no-op case is the common one."""
+    backend = _backend()
+    original = _snapshot(backend)
+    ws = _StubWebSocket()
+
+    _rewind(backend, ws)
+
+    _assert_run_untouched(backend, original)
+    assert ws.sent == []
+
+
+def test_a_stale_window_cannot_rewind_a_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The refusal that matters: another window may be mid-edit on
+    this run, and rewinding for it would discard live work."""
+    _install_resume_stub(monkeypatch, frames=3)
+    backend = _backend()
+    ws = _StubWebSocket()
+    _resume(backend, ws, frame_index=2)
+    after_edit = _snapshot(backend)
+    ws.sent.clear()
+
+    _rewind(backend, ws, run_token="someone-elses-run")
+
+    _assert_run_untouched(backend, after_edit)
+    assert len(ws.sent) == 1
+    assert ws.sent[0]["type"] == "error"
+
+
+def test_a_rewind_without_a_run_is_not_an_error() -> None:
+    """A page can open an edit session against a worker that has
+    been restarted under it. Refusing here would surface as an
+    error the user cannot act on; the resume that follows is what
+    tells them the run is gone."""
+    backend = LladaBackend()
+    backend.tokenizer = _StubTokenizer()
+    backend.run_counter += 1
+    ws = _StubWebSocket()
+
+    _rewind(backend, ws)
+
+    assert backend.last_run_state is None
+    assert ws.sent == []

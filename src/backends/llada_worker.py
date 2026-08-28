@@ -36,6 +36,10 @@ from src.backends.worker_base import (
     FrameStreamer,
     StaleRunError,
 )
+from src.inference.checkpoint import (
+    FrameCheckpoint,
+    LladaFrame,
+)
 from src.inference.hf_download import download_with_progress
 from src.inference.load_progress import (
     load_target_bytes,
@@ -76,8 +80,8 @@ def _apply_seed(seed: int) -> None:
 
 def _commit_resume(
     state: Dict[str, Any],
-    base_history: List[torch.Tensor],
-    resume_history: List[torch.Tensor],
+    base_history: List[FrameCheckpoint],
+    resume_history: List[FrameCheckpoint],
     *,
     done: bool,
 ) -> None:
@@ -106,8 +110,8 @@ def _commit_resume(
     assert len(candidate) > len(base_history), (
         "a committed candidate extends the surviving prefix"
     )
-    state["tensor_history"] = candidate
-    assert len(state["tensor_history"]) == len(candidate), (
+    state["frame_checkpoints"] = candidate
+    assert len(state["frame_checkpoints"]) == len(candidate), (
         "the retained history is the candidate"
     )
     if done:
@@ -115,6 +119,13 @@ def _commit_resume(
 
 
 class LladaBackend(Backend):
+    # A resume replaces the retained history, so an abandoned edit
+    # session has to be able to put it back. ``total_steps`` moves
+    # with it and is restored in ``rewind_run`` below.
+    REWIND_KEYS = (
+        ("frame_checkpoints", "generated_checkpoints"),
+    )
+
     def __init__(self) -> None:
         self.model_info = LLADA
         self.model: Any = None
@@ -294,7 +305,7 @@ class LladaBackend(Backend):
         self.begin_run()
         _apply_seed(params["seed"])
         start = time.monotonic()
-        tensor_history: List[torch.Tensor] = []
+        frame_checkpoints: List[FrameCheckpoint] = []
         try:
             generator = streaming_generate(
                 self.model,
@@ -307,7 +318,7 @@ class LladaBackend(Backend):
                 cfg_scale=params["cfg_scale"],
                 remasking=params["remasking"],
                 cancel_event=cancel_event,
-                tensor_history=tensor_history,
+                frame_checkpoints=frame_checkpoints,
             )
             done = await stream.run(generator, start)
             # The sampler returns without a terminal frame when it
@@ -316,12 +327,13 @@ class LladaBackend(Backend):
             # that has already stopped.
             if not done:
                 await stream.send_cancelled(
-                    self._resume_final_text(tensor_history), start
+                    self._resume_final_text(frame_checkpoints),
+                    start,
                 )
             # Committed either way: a stopped run keeps the frames
             # the browser already saw, which is the same contract
             # LIFE-07 settled for a cancelled resume.
-            self._store_state(params, tensor_history)
+            self._store_state(params, frame_checkpoints)
         except Exception as exc:  # noqa: BLE001
             logger.exception("generation failed")
             await ws.send_json(
@@ -360,7 +372,7 @@ class LladaBackend(Backend):
     def _store_state(
         self,
         params: Dict[str, Any],
-        tensor_history: List[torch.Tensor],
+        frame_checkpoints: List[FrameCheckpoint],
     ) -> None:
         # The generator's own encode, so a resumed run re-enters the
         # exact prefix it produced rather than a re-derivation of it.
@@ -380,7 +392,16 @@ class LladaBackend(Backend):
             dim=-1,
         ).cpu()
         self.last_run_state = {
-            "tensor_history": tensor_history,
+            "frame_checkpoints": frame_checkpoints,
+            # The same checkpoints under a second name, as the run
+            # was generated. A resume replaces the list above; this
+            # one it never touches, so an edit session can start
+            # from the run the browser is showing rather than from
+            # a branch the user already discarded. Two lists over
+            # one set of objects, so it costs references and not
+            # tensors.
+            "generated_checkpoints": list(frame_checkpoints),
+            "generated_total_steps": params["steps"],
             "prompt_ids": prompt_ids,
             "attention_mask": full_attention,
             "gen_length": gen_length,
@@ -388,6 +409,11 @@ class LladaBackend(Backend):
             "temperature": params["temperature"],
             "cfg_scale": params["cfg_scale"],
             "remasking": params["remasking"],
+            # Kept for provenance rather than for the resume, which
+            # re-enters from the chosen frame's own random state. A
+            # frame that outran the checkpoint budget has none, and
+            # then this is all a resume has to go on.
+            "seed": params["seed"],
         }
 
     # -- resume --
@@ -401,7 +427,9 @@ class LladaBackend(Backend):
                 "No previous generation to resume from."
             )
         frame_index = int(data.get("frame_index", -1))
-        history: List[torch.Tensor] = state["tensor_history"]
+        history: List[FrameCheckpoint] = state[
+            "frame_checkpoints"
+        ]
         if frame_index < 0 or frame_index >= len(history):
             raise ValueError(
                 f"frame_index {frame_index} is out of range"
@@ -471,24 +499,29 @@ class LladaBackend(Backend):
         start = time.monotonic()
         frame_index = resume_params["frame_index"]
         max_frames: Optional[int] = data.get("max_frames")
-        base_tensor = state["tensor_history"][frame_index]
+        base = state["frame_checkpoints"][frame_index]
+        assert isinstance(base.extra, LladaFrame), (
+            "a LLaDA checkpoint carries reveal confidence"
+        )
         # Staged, never truncated in place. The prefix is a new
-        # list of the same tensor references, and streaming_resume
-        # builds its own sequence with torch.cat rather than
-        # writing through base_tensor, so rolling back costs
-        # nothing and duplicates no tensor storage.
-        base_history: List[torch.Tensor] = state[
-            "tensor_history"
+        # list of the same checkpoint references, and
+        # streaming_resume builds its own sequence with torch.cat
+        # rather than writing through the record, so rolling back
+        # costs nothing and duplicates no tensor storage.
+        base_history: List[FrameCheckpoint] = state[
+            "frame_checkpoints"
         ][:frame_index]
         assert len(base_history) == frame_index, (
             "the staged prefix stops at the resume frame"
         )
-        resume_history: List[torch.Tensor] = []
+        resume_history: List[FrameCheckpoint] = []
         try:
             generator = streaming_resume(
                 self.model,
                 self.tokenizer,
-                base_tokens=base_tensor,
+                base_tokens=base.ids,
+                base_conf=base.extra.reveal_conf,
+                base_rng=base.rng,
                 prompt_ids=state["prompt_ids"],
                 attention_mask=state["attention_mask"],
                 remask_positions=resume_params[
@@ -502,7 +535,7 @@ class LladaBackend(Backend):
                 cfg_scale=state["cfg_scale"],
                 remasking=state["remasking"],
                 cancel_event=cancel_event,
-                tensor_history=resume_history,
+                frame_checkpoints=resume_history,
             )
             done = await stream.run(
                 generator, start, max_frames=max_frames
@@ -550,8 +583,31 @@ class LladaBackend(Backend):
                 )
             )
 
+    def rewind_run(self) -> None:
+        """Undo every branch this run has committed.
+
+        The counterpart to ``_commit_resume``. A guided session can
+        commit several partial resumes before it is abandoned, and
+        the browser rolls all of them back at once from a snapshot
+        taken when the session opened, so the worker matches that by
+        returning to the generated run rather than by unwinding one
+        segment at a time.
+
+        ``total_steps`` comes back too, which is the one thing the
+        shared restore cannot do from a key pair. It happens to
+        survive a completed resume unchanged, because the branch
+        runs exactly the steps the original had left, but a
+        cancelled one commits a short history and leaves the figure
+        describing a run that no longer exists.
+        """
+        super().rewind_run()
+        state = self.last_run_state
+        if state is None:
+            return
+        state["total_steps"] = state["generated_total_steps"]
+
     def _resume_final_text(
-        self, resume_history: List[torch.Tensor]
+        self, resume_history: List[FrameCheckpoint]
     ) -> str:
         """Decode the last staged resume frame, or "" if none.
 
@@ -562,7 +618,7 @@ class LladaBackend(Backend):
         if len(resume_history) == 0:
             return ""
         decoded = self.tokenizer.batch_decode(
-            resume_history[-1],
+            resume_history[-1].ids,
             skip_special_tokens=True,
         )
         assert len(decoded) > 0, "batch_decode returned nothing"

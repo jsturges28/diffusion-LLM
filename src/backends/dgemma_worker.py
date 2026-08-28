@@ -33,6 +33,7 @@ from src.backends.worker_base import (
     FrameStreamer,
     StaleRunError,
 )
+from src.inference.checkpoint import FrameCheckpoint
 from src.inference.dgemma_nf4 import load_quantized
 from src.inference.load_progress import (
     HOST_STAGE_CEILING_PICKLED,
@@ -60,6 +61,14 @@ def _clamp_float(
 
 
 class DgemmaBackend(Backend):
+    # A resume splices the retained history, so an abandoned edit
+    # session has to be able to put it back. No step count beside
+    # it, unlike LLaDA: the remaining budget is derived from
+    # ``max_denoising_steps``, which a resume never writes to.
+    REWIND_KEYS = (
+        ("frame_history", "generated_frame_history"),
+    )
+
     def __init__(self) -> None:
         self.model_info = DGEMMA
         self.model: Any = None
@@ -181,7 +190,7 @@ class DgemmaBackend(Backend):
 
         self.begin_run()
         start = time.monotonic()
-        frame_history: List[Dict[str, Any]] = []
+        frame_history: List[FrameCheckpoint] = []
         try:
             generator = streaming_generate(
                 self.model,
@@ -215,13 +224,14 @@ class DgemmaBackend(Backend):
     def _store_state(
         self,
         params: Dict[str, Any],
-        frame_history: List[Dict[str, Any]],
+        frame_history: List[FrameCheckpoint],
     ) -> None:
         """Retain the just-finished run so it can be resumed.
 
-        ``frame_history`` holds one entry per streamed frame with its
-        canvas token ids and canvas index, mirroring LLaDA's tensor
-        history but at the token-id level.
+        ``frame_history`` holds one checkpoint per streamed frame:
+        its canvas ids and canvas index, the stability state its
+        confidence was derived from, and the random state the next
+        step would have drawn from.
         """
         self.last_run_state = {
             "prompt": params["prompt"],
@@ -234,7 +244,16 @@ class DgemmaBackend(Backend):
                 "max_denoising_steps"
             ],
             "frame_history": frame_history,
+            # The same checkpoints under a second name, as the run
+            # was generated. A resume splices the list above; this
+            # one it never touches, so an edit session can start
+            # from the run the browser is showing rather than from
+            # a branch the user already discarded. Two lists over
+            # one set of objects, so it costs references and not
+            # canvases.
+            "generated_frame_history": list(frame_history),
         }
+
 
     # -- resume --
 
@@ -246,16 +265,14 @@ class DgemmaBackend(Backend):
             raise ValueError(
                 "No previous generation to resume from."
             )
-        history: List[Dict[str, Any]] = state["frame_history"]
+        history: List[FrameCheckpoint] = state["frame_history"]
         if len(history) == 0:
             raise ValueError(
                 "No frames available to resume from."
             )
         # Single-canvas scope: a multi-canvas run cannot be
         # re-entered with this seed-canvas strategy.
-        max_canvas = max(
-            int(f.get("canvas_index", 0)) for f in history
-        )
+        max_canvas = max(f.canvas_index for f in history)
         if max_canvas > 0:
             raise ValueError(
                 "Resume is only supported for single-canvas"
@@ -272,7 +289,7 @@ class DgemmaBackend(Backend):
             raise ValueError(
                 "remask_positions must be a non-empty list."
             )
-        canvas_length = len(history[frame_index]["ids"])
+        canvas_length = int(history[frame_index].ids.numel())
         positions: List[int] = []
         for pos in raw:
             pos = int(pos)
@@ -333,17 +350,15 @@ class DgemmaBackend(Backend):
         start = time.monotonic()
         frame_index = resume_params["frame_index"]
         max_frames: Optional[int] = data.get("max_frames")
-        seed_ids = list(
-            state["frame_history"][frame_index]["ids"]
-        )
+        base = state["frame_history"][frame_index]
         base_history = state["frame_history"][:frame_index]
-        resume_frames: List[Dict[str, Any]] = []
+        resume_frames: List[FrameCheckpoint] = []
         try:
             generator = streaming_resume(
                 self.model,
                 self.tokenizer,
                 prompt=state["prompt"],
-                seed_canvas_ids=seed_ids,
+                base=base,
                 remask_positions=resume_params[
                     "remask_positions"
                 ],

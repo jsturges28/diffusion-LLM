@@ -21,6 +21,12 @@ Passing proves the formatter exists and both paths use it, that the
 scrubber calls it, that the step total is captured rather than
 discarded, and that it survives the session snapshot so scrubbing
 still works after coming back from Analytics.
+
+It also pins which of the two numbers each readout gets. They were
+one variable at first, and a resume overwrote it with the steps its
+branch had left. A run edited at frame 64 of 128 then scrubbed to
+"Step 128/64", and abandoning a branch with Retry left the finished
+run measured against the segment that no longer existed.
 """
 
 from __future__ import annotations
@@ -116,6 +122,51 @@ def test_the_step_total_is_captured() -> None:
     assert "lastRunTotalSteps =" in _region(
         "function handleFrame(data)", 3000
     )
+
+
+def test_a_resume_does_not_claim_the_run_total() -> None:
+    """The two numbers, kept apart.
+
+    A resume's frames report the steps that branch has left, which
+    is the right figure for the live line and the wrong one for a
+    scrubber counting the whole run.
+    """
+    body = _region("function handleFrame(data)", 3000)
+    guarded = body.find("if (!isResuming) {")
+    written = body.find("lastRunTotalSteps = frameSteps;")
+
+    assert guarded != -1, "the run total is written unguarded"
+    assert written != -1
+    assert 0 < written - guarded < 80
+
+
+def test_the_live_line_reads_the_frame_not_the_run() -> None:
+    """Otherwise the guard above would freeze the live readout at
+    the generation's total and "Resuming 12/64" would read
+    "Resuming 12/128"."""
+    body = _region("function handleFrame(data)", 3000)
+    start = body.find("statusStep.textContent = stepReadout(")
+    call = body[start : start + 220]
+
+    assert "frameSteps" in call
+    assert "lastRunTotalSteps" not in call
+
+
+def test_the_scrubber_reads_the_run_not_the_frame() -> None:
+    body = _region("function renderScrubStepReadout(index)", 700)
+
+    assert "lastRunTotalSteps" in body
+    assert "frameSteps" not in body
+
+
+def test_substitution_counts_as_a_resume() -> None:
+    """What If reuses the resume splice path, so its branch must
+    not claim the run total either. For an autoregressive run the
+    two numbers coincide, which would make this right by accident
+    rather than on purpose."""
+    body = _region("function doSubstitute(", 1400)
+
+    assert "isResuming = true;" in body
 
 
 def test_a_fresh_run_clears_it() -> None:

@@ -435,7 +435,7 @@
           <dt>Thinking</dt>
           <dd>Enables a step-by-step reasoning pass before the answer. When on, the model's private reasoning is separated into a collapsible <em>Reasoning</em> panel above the output, keeping the final answer clean.</dd>
           <dt>Entropy signal</dt>
-          <dd>Changes how per-token confidence is measured. Off (default), confidence is a fast <em>stability proxy</em>. On, it is the model's true certainty computed from the full output distribution (the max-softmax probability) at each step: more faithful, but slower and heavier, so enable it only when you specifically want to study confidence.</dd>
+          <dd>Changes how per-token confidence is measured. Off (default), confidence is a fast <em>stability proxy</em>. On, it is the model's true certainty computed from the full output distribution (the max-softmax probability) at each step: more faithful, but slower and heavier, so enable it only when you specifically want to study confidence. It also makes the canvas readable while it is still forming: with the signal on, unsettled positions carry a real number too, so each mask is faded by how sure the model is of the guess underneath it rather than all sitting at the same solid floor.</dd>
         </dl>
         <h4>SmolLM3 (autoregressive)</h4>
         <dl>
@@ -461,11 +461,11 @@
           <dt>LLaDA</dt>
           <dd>The softmax probability of the token at the moment it was unmasked. It is recorded once and stays fixed for the rest of the run, since resolved tokens are never revisited.</dd>
           <dt>DiffusionGemma</dt>
-          <dd>By default a lightweight <em>stability proxy</em>: how many consecutive steps a position has held the same prediction (so a freshly settled token starts low and climbs as it stays put). Enable <strong>Entropy signal</strong> to instead use the true max-softmax probability from the model's logits.</dd>
+          <dd>By default a lightweight <em>stability proxy</em>: how many consecutive steps a position has held the same prediction (so a freshly settled token starts low and climbs as it stays put). An unsettled position has just changed, so its proxy is always zero and no value is recorded for it. Enable <strong>Entropy signal</strong> to instead use the true max-softmax probability from the model's logits, which is measured for settled and unsettled positions alike.</dd>
           <dt>SmolLM3</dt>
           <dd>The softmax probability of the chosen token at the moment it was generated. Like LLaDA, it is recorded once and stays fixed, since autoregressive tokens are never revisited.</dd>
         </dl>
-        <p><strong>Hover any token</strong> in the output to read its confidence for the current frame in the metrics strip described below; masked / unresolved tokens report&nbsp;0. Select <strong>Heatmap</strong> in the <strong>Overlay</strong> drawer (top-right of the output area) to recolor resolved tokens by confidence: dim, desaturated tones mark low-confidence tokens and bright green marks high-confidence ones. The heatmap is a live view over the frame you are viewing and is not saved. See <em>Visual overlays &amp; settings</em> below for the other overlays.</p>
+        <p><strong>Hover any token</strong> in the output to read its confidence for the current frame in the metrics strip described below; masked / unresolved tokens report&nbsp;0, except on a DiffusionGemma run with <strong>Entropy signal</strong> on, where they report the model's certainty in the guess behind the mask. Select <strong>Heatmap</strong> in the <strong>Overlay</strong> drawer (top-right of the output area) to recolor resolved tokens by confidence: dim, desaturated tones mark low-confidence tokens and bright green marks high-confidence ones. The heatmap is a live view over the frame you are viewing and is not saved. See <em>Visual overlays &amp; settings</em> below for the other overlays.</p>
 
         <h3>The metrics strip</h3>
         <p>The thin row directly above the output is where a single token's numbers are read. Hover a token and it fills in: the token itself, its <strong>position</strong> in the canvas, its <strong>confidence</strong> and its <strong>entropy</strong>, each with a small bar on the same color ramp the overlays use. Whitespace tokens are shown with visible stand-ins (<code>&middot;</code> for a space, <code>&crarr;</code> for a newline), so a token that looks like nothing still reads as something.</p>

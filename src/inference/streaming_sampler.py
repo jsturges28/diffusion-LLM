@@ -21,6 +21,13 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from src.inference.checkpoint import (
+    CheckpointBudget,
+    FrameCheckpoint,
+    LladaFrame,
+    RngState,
+    rng_restore,
+)
 from src.inference.llada_sampler import (
     add_gumbel_noise,
     get_num_transfer_tokens,
@@ -28,6 +35,67 @@ from src.inference.llada_sampler import (
 from src.inference.reveal import newly_revealed
 
 MASK_ID: int = 126336
+
+
+def checkpoint_append(
+    history: List[FrameCheckpoint] | None,
+    budget: CheckpointBudget,
+    x: torch.Tensor,
+    prompt_len: int,
+    reveal_conf: torch.Tensor,
+) -> None:
+    """Record what a resume would need to re-enter this frame.
+
+    The canvas and its reveal confidence are copied to CPU because
+    the checkpoint outlives the run, and holding device tensors for
+    every frame of a 128-step run would keep that memory from the
+    next model to load.
+
+    The random state is taken here, after the step that produced the
+    frame, so restoring it puts the sampler exactly where the *next*
+    step would have drawn from.
+    """
+    if history is None:
+        return
+    assert prompt_len >= 0, "a prompt cannot have negative length"
+    assert x.dim() == 2, "the canvas carries a batch dimension"
+    history.append(
+        FrameCheckpoint(
+            ids=x[:, prompt_len:].clone().cpu(),
+            canvas_index=0,
+            rng=budget.capture_rng(),
+            extra=LladaFrame(
+                reveal_conf=reveal_conf.clone().cpu()
+            ),
+        )
+    )
+
+
+def resume_reveal_conf(
+    base_conf: torch.Tensor,
+    remask_positions: List[int],
+    gen_length: int,
+) -> torch.Tensor:
+    """The confidence a resumed canvas starts from.
+
+    Every surviving position keeps the probability it was actually
+    revealed at. Before this, they were all set to 1.0, which made an
+    edited run's heatmap and mean confidence report a certainty the
+    model never expressed.
+
+    Remasked positions go to zero rather than keeping their old
+    value: the user threw that token away, so the canvas genuinely
+    does not know what belongs there until a step reveals it again.
+    """
+    assert base_conf.dim() == 1, "confidence is one per position"
+    assert base_conf.numel() == gen_length, (
+        "the checkpoint covers the whole generation region"
+    )
+    conf = base_conf.clone()
+    for pos in remask_positions:
+        assert 0 <= pos < gen_length, "remask is in range"
+        conf[pos] = 0.0
+    return conf
 
 
 def build_llada_inputs(
@@ -276,7 +344,7 @@ async def streaming_generate(
     cfg_scale: float = 0.0,
     remasking: str = "low_confidence",
     cancel_event: threading.Event | None = None,
-    tensor_history: List[torch.Tensor] | None = None,
+    frame_checkpoints: List[FrameCheckpoint] | None = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Async generator that yields one dict per diffusion step.
 
@@ -292,10 +360,10 @@ async def streaming_generate(
 
     Parameters
     ----------
-    tensor_history :
-        If provided, each frame's generation-region tensor
-        (shape (1, gen_length), on CPU) is appended here so
-        the server can support resume-from-frame.
+    frame_checkpoints :
+        If provided, each frame's checkpoint (canvas ids, reveal
+        confidence, random state) is appended here so the server can
+        support resume-from-frame.
     """
     assert gen_length % block_length == 0
     num_blocks = gen_length // block_length
@@ -333,15 +401,15 @@ async def streaming_generate(
 
     prompt_index = x != MASK_ID
 
-    if tensor_history is not None:
-        tensor_history.append(
-            x[:, prompt_len:].clone().cpu()
-        )
-
     reveal_conf = torch.zeros(gen_length, device=x.device)
     # Positions already counted as born, so a token is only ever
     # revealed once. Empty here because the canvas starts all masked.
     seen_revealed: set[int] = set()
+
+    budget = CheckpointBudget()
+    checkpoint_append(
+        frame_checkpoints, budget, x, prompt_len, reveal_conf
+    )
 
     initial_text = tokenizer.batch_decode(
         x[:, prompt_len:], skip_special_tokens=False
@@ -403,10 +471,13 @@ async def streaming_generate(
                 gen_step_conf[gen_transfer]
             )
 
-            if tensor_history is not None:
-                tensor_history.append(
-                    x[:, prompt_len:].clone().cpu()
-                )
+            checkpoint_append(
+                frame_checkpoints,
+                budget,
+                x,
+                prompt_len,
+                reveal_conf,
+            )
 
             step_text = tokenizer.batch_decode(
                 x[:, prompt_len:],
@@ -450,6 +521,8 @@ async def streaming_resume(
     tokenizer: Any,
     *,
     base_tokens: torch.Tensor,
+    base_conf: torch.Tensor,
+    base_rng: RngState | None,
     prompt_ids: torch.Tensor,
     attention_mask: torch.Tensor,
     remask_positions: List[int],
@@ -459,7 +532,7 @@ async def streaming_resume(
     cfg_scale: float = 0.0,
     remasking: str = "low_confidence",
     cancel_event: threading.Event | None = None,
-    tensor_history: List[torch.Tensor] | None = None,
+    frame_checkpoints: List[FrameCheckpoint] | None = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Resume diffusion from a saved frame with user remasks.
 
@@ -472,6 +545,14 @@ async def streaming_resume(
     base_tokens :
         Generation-region tensor at the resume frame,
         shape (1, gen_length), on CPU.
+    base_conf :
+        Reveal confidence at that frame, shape (gen_length,), so
+        surviving tokens keep the certainty they were written with.
+    base_rng :
+        The generator state captured at that frame, restored before
+        the first step so two attempts at one edit agree. None when
+        the run outran its checkpoint budget, in which case the
+        resume draws from wherever the process left off.
     prompt_ids :
         Original prompt token IDs, shape (1, prompt_len).
     attention_mask :
@@ -484,6 +565,12 @@ async def streaming_resume(
     """
     assert remaining_steps > 0
     assert len(remask_positions) > 0
+
+    # Before the canvas is touched, so the first step draws from the
+    # state the chosen frame left behind rather than from whatever
+    # random work has happened since the run that produced it.
+    if base_rng is not None:
+        rng_restore(base_rng)
 
     prompt_len: int = prompt_ids.shape[1]
     device = model.device
@@ -512,15 +599,16 @@ async def streaming_resume(
         block_mask_index, remaining_steps
     )
 
-    # Pre-resolved positions from the prior run are treated as
-    # committed (confidence 1.0); revealed positions update below.
-    reveal_conf = torch.zeros(gen_length, device=x.device)
-    reveal_conf[x[0, prompt_len:] != MASK_ID] = 1.0
+    # Surviving positions keep the confidence they were revealed at
+    # in the run this branched from; remasked ones drop to zero.
+    reveal_conf = resume_reveal_conf(
+        base_conf, remask_positions, gen_length
+    ).to(x.device)
 
-    if tensor_history is not None:
-        tensor_history.append(
-            x[:, prompt_len:].clone().cpu()
-        )
+    budget = CheckpointBudget()
+    checkpoint_append(
+        frame_checkpoints, budget, x, prompt_len, reveal_conf
+    )
 
     # A resume starts with most of the canvas already written by the
     # run it branched from. Seeding from that state (rather than
@@ -574,10 +662,9 @@ async def streaming_resume(
             gen_step_conf[gen_transfer]
         )
 
-        if tensor_history is not None:
-            tensor_history.append(
-                x[:, prompt_len:].clone().cpu()
-            )
+        checkpoint_append(
+            frame_checkpoints, budget, x, prompt_len, reveal_conf
+        )
 
         step_text = tokenizer.batch_decode(
             x[:, prompt_len:],
