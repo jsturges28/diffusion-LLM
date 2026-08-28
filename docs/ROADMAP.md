@@ -1108,6 +1108,33 @@ The Help copy in `src/web/static/index.html` led with repetition before this
 and was corrected to lead with domain. If that paragraph is ever rewritten
 again, this is the evidence it has to agree with.
 
+**A DiffusionGemma canvas brightens together as it nears its stop.**
+Observed on 2026-08-28, and recorded because it was written down as a
+prediction first and could have come back the other way.
+
+The reasoning behind the prediction was that adaptive stopping fires on two
+conditions read over the whole canvas, so confidence should rise across
+positions in concert rather than position by position, and reset when the
+next canvas starts from fresh noise. That is what a 512-token two-canvas run
+with the Entropy Signal on showed. It is weak evidence in the sense that it
+is one run judged by eye rather than a measurement, but it is the right
+shape, and it means the mask-opacity overlay is reading the same quantity the
+halting criterion does.
+
+Two things fell out of looking that were not what the item asked:
+
+- **The grading was only ever visible on rewind.** The live streaming view
+  passed no callbacks to the span builder, so the canvas was flat while it
+  was being written and graded only when scrubbed back over. Fixed the same
+  day; the entry under Shipped records why the gap existed.
+- **A revision is invisible, and a birth is not.** On DiffusionGemma a
+  position can settle, be revised, and settle again, and only the first is
+  marked. Watching a canvas replace its placeholder runs with real content,
+  which is the most interesting thing it does, currently produces no visual
+  at all. Scoped in the XAI backlog as a second glow rather than a wider
+  first one, because the suppression that hides it is the same mechanism
+  that stops a churning position from strobing.
+
 **Collections ship without storage eviction.** The original framing paired
 favorites with storage-pressure relief; the measurement killed that half. 175
 runs occupied 440 MB against 189 GB free, so the pressure eviction would
@@ -1383,9 +1410,9 @@ Shipped from this backlog (see `README.md`):
   floor to full as it nears the reveal, so the "heating up" before a commit is
   visible live and while scrubbing. DiffusionGemma feeds the same overlay on
   runs with the Entropy Signal on, since `XAI-01` landed the capture change
-  scoped under "Candidate reveal for DiffusionGemma" above. Whether its canvas
-  brightens toward each boundary and resets dim at the next is predicted but
-  not yet observed.
+  scoped under "Candidate reveal for DiffusionGemma" above. Its canvas does
+  brighten roughly together as it nears each adaptive stop; see the settled
+  decision recorded from that observation.
 
   The live half arrived later than this entry did, and the gap is worth
   recording because it made a working feature look broken. When per-token

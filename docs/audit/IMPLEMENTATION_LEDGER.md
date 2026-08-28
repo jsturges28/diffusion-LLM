@@ -75,14 +75,11 @@ commit, **M** a short multi-commit change, **L** a staged boundary migration.
 
 ## Ready now
 
-One finding has no unmet blockers.
+Nothing. Every finding is done, partial with its next step recorded, or
+blocked behind the stage 6 ordering.
 
-- **TRUST-04** (medium, L), released by `LIFE-04`: move downloads into the
-  same owned-operation model as activation, now that a long-running
-  operation can be cancelled and its disconnect is bounded.
-
-`LIFE-04` and `XAI-01` were on this list and are done; see their entries
-below. `ORG-02` was on it too and is now in the hardware queue instead:
+`LIFE-04`, `XAI-01` and `TRUST-04` were the last entries here and are
+done; see their entries below. `ORG-02` was on it too and is now in the hardware queue instead:
 its state core is written and tested, but none of its callers has been
 run.
 
@@ -169,20 +166,31 @@ were cleared on 2026-08-11 in the same sitting: the maintainer confirmed items
 could say least about, the amber invalid row's alignment against its
 neighbours and the two-window model switch.
 
-**As of 2026-08-18 three entries remain**, and none blocks anything.
+**As of 2026-08-28 three entries remain**, and none blocks anything.
 The stage 4 findings cleared on 2026-08-17, which released `XAI-01`,
 `LIFE-04` and `ORG-02`; `ORG-02`'s own state core and the save work that
-came out of testing it cleared on 2026-08-18, items 162 to 166. What is
-left is `XAI-01`'s own items, `TRUST-03`'s offline retest, and
-`LIFE-02`'s two staged-failure items, 143 and 144, which are awkward to
-arrange rather than pending.
+came out of testing it cleared on 2026-08-18, items 162 to 166, and
+`XAI-01` cleared on 2026-08-28, items 180 to 184. What is left is
+`TRUST-04`, newly queued, `TRUST-03`'s offline retest, and `LIFE-02`'s
+two staged-failure items, 143 and 144, which are awkward to arrange
+rather than pending.
 
-- **XAI-01**: queued on 2026-08-18. The sampler work is tested without a
-  model, but every claim a user would notice needs the GPU: an edited
-  LLaDA branch's heatmap, a resumed DiffusionGemma canvas, one edit
-  repeated twice, and the mask-opacity overlay the capture change feeds.
-  That last one is a prediction rather than a fix, so a null result is
-  information; see `docs/MANUAL_VERIFICATION.md` items 180 to 183.
+- **TRUST-04**: queued on 2026-08-28 and cleared the same day, over
+  two passes. The first cleared 186, 187 and 189 and turned up the
+  frozen-row bug in 185. The second cleared 185 and 188 and turned
+  up the stale-flag inconsistency between windows, both written up
+  below. What is left is a look at the two items those fixes
+  changed: 185 without its bar, and 188's new cross-window prompt
+  check.
+
+`XAI-01` cleared with more than a tick. Item 183 asked a question rather
+than confirming a fix, and the prediction held: a DiffusionGemma canvas
+does brighten roughly together as it nears its adaptive stop. Item 184
+did not exist when the batch was queued; it came out of 183, when the
+maintainer noticed the brightening appeared only on rewind and never
+while the run streamed. That was the live renderer passing no callbacks,
+fixed the same day, and it is why a question-shaped item earns its place
+beside the fix-shaped ones.
 
 `ORG-02`'s browser-smoke clause is recorded as unmet rather than queued:
 satisfying it in the sandbox would mean taking jsdom as the project's
@@ -269,13 +277,13 @@ on real hardware.
 | LIFE-03 | critical | L | done | none | Two commits: operation identity, then the resident mismatch |
 | LIFE-01 | high | M | done | none | Name every run and refuse a stateful request that means another |
 | PROTOCOL-01 | medium | M | done | none | Two commits: scoped error envelopes, then the client routing |
-| XAI-01 | high | M | needs hardware | LIFE-01 (done) | Bounded checkpoints for both diffusion backends; carried the capture change |
+| XAI-01 | high | M | done | LIFE-01 (done) | Bounded checkpoints for both diffusion backends; carried the capture change |
 | LIFE-04 | high | L | done | LIFE-03 (done) | Carried RUNTIME-01's queue bound, as its own Direction asks |
 | LIFE-05 | high | M | partial | none | Single-instance the desktop launcher; host lease deferred, see Deviations |
-| TRUST-04 | medium | L | ready | LIFE-04 (done) | |
+| TRUST-04 | medium | L | needs hardware | LIFE-04 (done) | Download is a child process now; absorbed ORG-02's download client |
 | DATA-02 | high | L | partial | none | Lost-update slice done; server-authoritative path decided, semantics remain |
 | RUNTIME-01 | medium | L | partial | ORG-02 + DATA-05 | Queue bound landed with LIFE-04; append-only frames remain |
-| ORG-02 | medium | L | partial | none | State core verified; download client, ES modules and server-rendered boot remain |
+| ORG-02 | medium | L | partial | none | State core verified; ES modules and server-rendered boot remain (download client went with TRUST-04) |
 | RUNTIME-03 | medium | S | blocked | ORG-02, paired | |
 | ROADMAP-01 | high | M | blocked | stage 6 order | |
 | ROADMAP-05 | high | M | blocked | stage 6 order | |
@@ -1126,6 +1134,130 @@ check catches `None` anyway. The branch stayed, since a client that
 never learned the run is a different situation to report than an
 ordinary two-window race, but the test now pins that the two
 *messages differ* rather than pinning either string.
+
+### TRUST-04
+
+**Done on 2026-08-28**, awaiting hardware. A weight download is now a
+child process the supervisor can name and end, rather than an asyncio
+task delegating to a thread whose helper started a second, daemon
+thread and joined it through completion. Nothing could reach that:
+cancelling the task left `to_thread` running, `stop()` and the
+shutdown hook touched only the model worker, and closing the desktop
+left a multi-gigabyte transfer running against a 35-second join.
+
+**Moving it out of process was cheap for a reason worth recording.**
+Progress never came from the downloader. `hf_download` samples the
+size of the cache directory on disk, because `snapshot_download` will
+not route byte-level progress through a tqdm hook. So the supervisor
+keeps sampling exactly as before while a different process does the
+fetching, and the two need no channel between them: the child's whole
+report is its exit status. That is why this landed without a pipe, a
+status file, or a progress protocol, any of which would have been a
+second thing to keep in step.
+
+Three exit codes carry the outcome, and the offline case keeps its
+sentence: `describe_unreachable` now takes an optional cause, so the
+supervisor rebuilds the message from the repo alone and simply omits
+the parenthetical naming the exception it no longer has.
+
+**Cancel and shutdown share the worker's escalation ladder.**
+`_end_process` gained a label rather than a twin, so terminate,
+bounded wait, kill, bounded wait has one definition and one pair of
+timeouts. Downloads also inherit the orphan guards `spawn_worker`
+already applies, which means a hard-killed supervisor takes the fetch
+with it through PDEATHSIG, something the old daemon thread could not
+do at all.
+
+**Resumability is preserved by doing nothing**, which the finding's
+Direction asked for explicitly. Killing the child leaves
+`*.incomplete` blobs, `is_repo_cached` already reports a partial cache
+as not-cached, and the next click resumes. Nothing deletes the cache:
+a valid snapshot in it may be shared with another process. The
+README's Implementation Status promised "cache cleanup" alongside the
+killable fetch; that half was wrong and has been reworded rather than
+ticked.
+
+**It absorbed `ORG-02`'s download client**, which that finding's own
+Direction listed as the next step after the state core ("then extract
+the remaining API clients with request epochs"). The two belonged
+together: `TRUST-04` adds a cancel, and the client is where a cancel
+is pressed. Three readers of one endpoint became one watcher with
+listeners, which also fixed something nobody had filed: sitting on the
+downloading row polled `/api/models/download-status` twice, from
+`menu.js` every 500ms and `download_toast.js` every 1000ms, on two
+clocks with two ideas of what a terminal state meant. `ORG-02`'s row
+no longer claims this slice.
+
+**Downloads got an operation number**, mirroring `activation_id`,
+because two windows can both watch one fetch and only one of them
+started it. Its refusal is request-scoped for the same reason the
+rewind's is.
+
+**A stale evidence pointer, recorded rather than chased.** The
+finding cites `HANDOFF.md:3202`. That file is under 200 lines since
+`META-01` cut it, so the reference died with the page. Same class as
+`ANALYTICS-03`'s stale citations; re-derive rather than hunt.
+
+**Found while verifying: a cancelled download froze its own row.**
+Item 185's functional half passed on the first hardware pass and its
+UI half did not. Pressing Cancel stopped the fetch and left the last
+percentage on screen under a Cancel button with nothing to cancel;
+the only way to continue was to click the veneer somewhere the
+button was not.
+
+Mine, and introduced by the client extraction rather than by the
+download work. The old `pollDownload` loop handled four states and
+called `resetDownload` on "idle". Routing everything through
+`syncDownloadBinding` lost that: it treats idle as not-active, and
+its single not-active branch dropped the row binding and returned
+without touching the veneer. It went unnoticed because
+idle-while-bound used to be reachable only through the ack after
+done or error, by which point the veneer had already been rewritten.
+Cancel made it the ordinary path. The branch now distinguishes "the
+download is over", which resets, from "still running, its row is on
+another page", which must not, and a test pins both directions
+because reversing them is the plausible way to fix one and break the
+other.
+
+**And a distinction the row never had.** `downloaded` is false both
+for a model never fetched and for one stopped at 8%, so the veneer
+offered to download something that would actually resume. The fact
+was already being computed inside `is_repo_cached`, which checks for
+`*.incomplete` parts, and thrown away one layer down; it is now a
+`partial` flag beside `downloaded`, so the row reads "Click to
+Resume Download".
+
+**A frozen progress bar was tried and dropped**, on the maintainer's
+call after seeing it, and the reasoning is worth keeping because the
+first instinct was wrong. Leaving the bar at the percentage the
+fetch reached looked like free information. It was not: it existed
+only in the window that pressed Cancel, disappeared on reload, and
+went stale in place if the menu stayed open, so two windows side by
+side showed one state two ways. That is the same "plausible but
+false number" this project refuses elsewhere. Every idle veneer over
+a partial cache now renders identically, and the bar returns when
+the fetch does.
+
+**Which exposed the real inconsistency underneath.** A page's model
+flags come from one fetch at load, so a download ending anywhere
+else left every other window describing a cache that had since
+changed: the second window offered "Click to Download" for a model
+the first had just cancelled part way. A reading that stops being
+`downloading` now re-reads `/api/models` and copies `downloaded` and
+`partial` onto the cached models, in every window rather than only
+the one that acted. Deliberately not `loadModels`, which re-renders
+the list and would tear down the veneer it is correcting. It also
+fixes a case nobody had reported: a successful download in one
+window used to leave the other still offering to fetch it.
+
+**What the sandbox could not do.** This is a finding about
+terminating processes, and an agent sandbox refuses to signal a
+process in its own session, which is exactly where `spawn_worker`
+puts its children. So the manager-level cases run against fakes and
+the argv is asserted without launching anything, the same split
+`test_worker_process.py` made for `LIFE-02`. Whether SIGTERM ends a
+real download, and whether the app closes inside its 35 seconds while
+one is running, are items 185 to 189.
 
 ### XAI-01
 

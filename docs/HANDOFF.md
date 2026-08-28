@@ -123,8 +123,15 @@ one `done` carrying `cancelled`. Generate becomes Stop in the browser. Pass
 five gave both diffusion backends a bounded per-frame checkpoint holding the
 canvas, its confidence state and the generator state (`XAI-01`), so an edited
 branch reports the confidence the model actually gave rather than a flat 1.0
-and one edit repeats across intervening random work. What remains of the
-stage is `TRUST-04`.
+and one edit repeats across intervening random work. Pass six gave downloads
+an owner (`TRUST-04`): a fetch is a child process the supervisor terminates
+on cancel and on shutdown, leaving its partial parts so the next attempt
+resumes.
+
+**The ready list is empty for the first time.** Every finding is done,
+partial with its next step recorded, or blocked behind the stage 6 ordering.
+What is outstanding is hardware confirmation, not work; the ledger's
+validation queue is the list to read.
 
 **The analytics read path is done** (`ANALYTICS-03`, `ANALYTICS-04`, and
 `ANALYTICS-02`'s repair half, one plan because they shared one seam).

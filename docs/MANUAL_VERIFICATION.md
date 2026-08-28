@@ -1656,3 +1656,92 @@ information rather than a bug report.
     unnoticeable, but the sandbox cannot measure that. If streaming
     feels choppier than you remember, say so: the change is one
     property on one object and is cheap to take back out.
+
+## Owning a download (TRUST-04)
+
+A download is now a child process rather than threads inside the
+supervisor. The sandbox can prove the supervisor asks it to stop; it
+cannot prove the operating system obliges, or that the app closes
+inside its 35 seconds while a real transfer is running. That is what
+these are for. All of them need a model whose weights are **not**
+cached, and a slow enough connection that you have time to act.
+
+185. **Cancel stops a fetch, and keeps what arrived.** From the Main
+    Menu, click an uncached model to start its download. Let the bar
+    reach somewhere clearly partway, note the percentage, then press
+    **Cancel** beside it. The row should go back to "Click to
+    Download".
+    Now click it again. It should resume from roughly where you
+    stopped rather than from zero, which is the whole reason nothing
+    deletes the partial parts. If it restarts at 0%, the cache was
+    cleaned when it should not have been.
+    Worth confirming with `ls` if you want to be certain: the blobs
+    directory under your Hugging Face cache should still hold
+    `*.incomplete` files after the cancel.
+    **The row should say how to resume.** Confirmed on 2026-08-28
+    that the functional half works and this half did not: the row
+    kept the frozen percentage under a Cancel button that no longer
+    had anything to cancel, and the only way to continue was to
+    click the veneer somewhere the button was not. It should now
+    read **Click to Resume Download**, with no bar and no Cancel.
+    Then reload the menu, or close and reopen the app. The prompt
+    must still say resume, since the server reports the partial
+    cache rather than the page remembering it, and the row should
+    look exactly as it did before the reload. That sameness is the
+    check: a frozen bar was tried first and dropped, because it
+    existed only in the window that cancelled and only until a
+    reload, so one state rendered two ways depending on where you
+    were standing.
+186. **A cancelled download really stops.** The half a test cannot
+    reach, because this sandbox refuses to signal a process in its
+    own session. Start a download, and while it runs check that a
+    child exists: `pgrep -af src.inference.download_main`. Press
+    **Cancel**, then run it again. The process should be gone.
+    If it is still there, the supervisor asked and the child did not
+    listen, which is exactly what the escalation to SIGKILL is for
+    and worth reporting with the log.
+187. **Closing the app takes the download with it.** The finding's
+    actual motivation. Start a download from the desktop app, let it
+    run, then close the window while it is still going.
+    The app should exit promptly rather than hanging near its
+    35-second shutdown bound, and `pgrep -af src.inference.download_main`
+    afterwards should find nothing. Before this, the fetch kept
+    running with nothing able to reach it.
+    Also worth trying the harsher version once: start a download and
+    `kill -9` the supervisor. The child should still go, because it
+    is spawned with the same parent-death signal a model worker gets.
+188. **Two clients, one download.** Note that a second `desktop.py`
+    will not open: `LIFE-05` single-instances it, and running the
+    command again prints "already running... focusing that window
+    instead", which is correct rather than a failure. An earlier
+    version of this item asked for two desktop windows and could
+    not be performed at all.
+    So: leave the desktop window open and point a browser at the
+    address it printed, `http://127.0.0.1:<port>`. Two clients, one
+    supervisor, which is the case the operation number exists for.
+    Start a download from one and confirm the other shows the same
+    progress, through the toast or its own row.
+    Now cancel from the client that did **not** start it. It should
+    either stop the download cleanly or refuse with a sentence
+    naming the other window; what it must not do is silently
+    nothing. Then confirm the client that did start it notices,
+    rather than sitting on a bar that has stopped moving.
+    **Both rows should then read the same.** Whichever client
+    cancelled, the other must also offer **Click to Resume
+    Download**, without being reloaded. Found on 2026-08-28 saying
+    "Click to Download" instead, because a page's model flags came
+    from its own load and nothing told it the cache had changed
+    since. A download ending now re-reads them in every window.
+    Worth trying the success case for the same reason: let a
+    download finish in one client and confirm the other stops
+    offering to download that model, rather than waiting for a
+    reload to notice it is already there.
+189. **The progress bar still moves.** Cheap to overlook, and easy to
+    break: progress is now measured by the supervisor watching the
+    cache directory while a different process does the writing. Just
+    confirm the percentage climbs smoothly rather than sitting at 0%
+    and jumping to 100% at the end.
+    If it sits at zero, the child is fetching without leaving
+    measurable `*.incomplete` parts, which would mean the Xet
+    downloader was not disabled in the child the way it is in the
+    supervisor.
