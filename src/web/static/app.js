@@ -1802,10 +1802,69 @@ function updateRunRateFooter() {
   if (frames === 0) {
     return;
   }
-  var seconds = runFrames.elapsed[frames - 1];
+  elapsedStampSeconds = runFrames.elapsed[frames - 1];
+  elapsedStampAt = Date.now();
+  renderElapsed(elapsedStampSeconds);
+  elapsedTick();
+  renderTpsFooter(currentTokensPerSecond());
+}
+
+// How often the elapsed line moves on its own. Fast enough that the
+// tenth of a second it prints is honest, slow enough to be nothing
+// against the render each frame already costs.
+var ELAPSED_TICK_MS = 100;
+
+// The worker's own last measurement, and the local instant it landed.
+//
+// The readout advances between frames as well as on them, because a
+// frame-driven number cannot tell a wedged run from a merely slow one:
+// both simply stop. But it interpolates from this pair rather than
+// running a browser clock, because the value here is the worker's
+// (time.monotonic inside the run) and is the same figure that reaches
+// the saved run and the Analytics duration. A local clock would count
+// the socket hop and the render too, and drift above the record. Every
+// frame re-stamps, so the drift is bounded by one frame interval.
+var elapsedStampSeconds = null;
+var elapsedStampAt = 0;
+var elapsedTimer = null;
+
+function renderElapsed(seconds) {
   statusElapsed.textContent =
     "Elapsed: " + seconds.toFixed(1) + "s";
-  renderTpsFooter(currentTokensPerSecond());
+}
+
+function elapsedTick() {
+  if (elapsedTimer !== null) {
+    return;
+  }
+  elapsedTimer = setInterval(function () {
+    if (elapsedStampSeconds === null) {
+      return;
+    }
+    var since = (Date.now() - elapsedStampAt) / 1000;
+    renderElapsed(elapsedStampSeconds + since);
+  }, ELAPSED_TICK_MS);
+}
+
+// Stop ticking and forget the stamp. The readout is about to be
+// cleared or rebuilt, so nothing may paint over what replaces it.
+function elapsedStop() {
+  if (elapsedTimer !== null) {
+    clearInterval(elapsedTimer);
+    elapsedTimer = null;
+  }
+  elapsedStampSeconds = null;
+}
+
+// The run ended: land on the worker's own last figure rather than on
+// whatever the final tick had extrapolated to. That figure is the one
+// the saved run carries, so the page must not come to rest showing a
+// different number from the record it just wrote.
+function elapsedSettle() {
+  if (elapsedStampSeconds !== null) {
+    renderElapsed(elapsedStampSeconds);
+  }
+  elapsedStop();
 }
 
 // null whenever the rate would be meaningless rather than merely
@@ -6287,6 +6346,10 @@ function editRunLabel(fromFrame, toFrame) {
 // about the outcome, so both endings look the same here and the
 // footer is left to draw the distinction.
 function endRunStatus() {
+  // Every terminal path comes through here: a done frame, a cancelled
+  // one, a dropped connection, and a run-scoped error. So this is
+  // where the elapsed line stops moving, rather than at four of them.
+  elapsedSettle();
   statusRetire(runStatusHandle);
   runStatusHandle = null;
 }
@@ -6326,6 +6389,9 @@ function setSaveAvailable(available) {
 // flight; clearing the chips here would put back the overwriting this
 // stack exists to fix.
 function resetStatus() {
+  // Before the dash below, or a tick still in flight would paint a
+  // stale number back over it a fraction of a second later.
+  elapsedStop();
   statusStep.textContent =
     "Step -/-";
   statusElapsed.textContent =
