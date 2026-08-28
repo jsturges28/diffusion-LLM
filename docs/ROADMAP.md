@@ -840,6 +840,43 @@ Agreed with the maintainer (deliberate each in Ask mode before Plan). (The
    Analytics **Entropy by Position** chart read the final frame today, which for
    diffusion would show only each position's last value, so they would want a
    frame selector or a different shape entirely.
+3. **An elapsed readout that ticks on a clock.** Much smaller than the two
+   above and listed here because it was accepted on 2026-08-28, not because
+   it is their peer.
+
+   Today the readout advances only when a frame lands: `updateRunRateFooter`
+   has exactly one caller, inside `handleFrame`, and it prints
+   `runFrames.elapsed[last]`. Between frames the number is frozen, so a
+   wedged run and a merely slow one look identical, which is the case worth
+   fixing rather than the smoothness.
+
+   The wrinkle, and the reason this is not a one-liner: that value is the
+   *worker's*, stamped as `time.monotonic() - start_time` in
+   `worker_base.py`. It measures inference and excludes the socket hop, the
+   proxy and any render backlog, and it is the same figure that reaches the
+   saved run and the Analytics duration. Replacing it with a browser clock
+   would make the live number drift above the recorded one, which is the
+   same class of defect as the live-versus-Analytics throughput disagreement
+   `ANALYTICS-02` fixed.
+
+   So: interpolate, do not substitute. Stamp each frame's worker elapsed
+   alongside `Date.now()`, tick at roughly 100ms showing the worker value
+   plus the local delta since that stamp, and re-sync on every frame. Drift
+   is then bounded by one frame interval and the terminal frame lands on the
+   worker's exact figure. The ticker has to be cleared on the terminal
+   frame, on a disconnect, and on leaving the page, or it outlives the run
+   it describes.
+
+   One open question to settle first, because it is a judgement call rather
+   than a consequence. Throughput never consults a clock: run-average sums
+   `runFrames.revealed` over the worker's elapsed, and last-step divides one
+   frame's reveals by the delta between two worker stamps. Both read the
+   array Analytics reads, which is exactly what makes the two pages agree.
+   Once elapsed ticks locally, run-average *could* decay during a stall for
+   the same reason the elapsed climb is informative. Decide whether it
+   should: a decaying rate is useful while a run is stuck and restless the
+   rest of the time, and the answer may be that only the elapsed line
+   moves between frames.
 
 ---
 
@@ -1222,19 +1259,27 @@ explain: early in a canvas the display would fill with `" the"` and then be
 eaten by real content, which is precisely why the convergence curve overstates
 (see the ledger).
 
-*Layer two is opacity, and it needs one small change.* Fade each unsettled
-token by the model's confidence in it. Confidence is already computed with
+*Layer two is opacity, and it needed one small change.* Fade each unsettled
+token by the model's confidence in it. Confidence was already computed with
 Entropy Signal on and then discarded for exactly the positions that would be
-faded, because `_emit` writes `c` only `if not unresolved`. Writing it
-unconditionally is the whole capture change.
+faded, because `_emit` wrote `c` only `if not unresolved`.
 
-**Still owed as of 2026-08-18.** The convergence fix that shipped that
-day deliberately did not make it. Agreement with the committed canvas
-turned out to be exact and retroactive, so the chart needed nothing
-from the worker, and adding a sampler change that only helps runs
-saved afterwards would have widened a session that had no use for it.
-Both layers below, and the stopping readout after them, still want it,
-and it remains one line plus a hardware pass.
+**Shipped with `XAI-01` on 2026-08-18, gated rather than unconditional.**
+This entry used to say that writing `c` unconditionally was the whole
+capture change. That was very slightly wrong, and the correction is worth
+keeping. An unresolved position is by definition one that just changed, so
+`_emit` reset its stability count to zero on the same pass and the stability
+branch could only ever write `0.0`. Since `maskOpacity` returns the floor for
+zero and for absent alike, writing it would have cost payload on every frame
+of every run for a pixel-identical canvas. So `c` is written for an unsettled
+position only when `conf_override` supplied a real softmax confidence, which
+is exactly when the Entropy Signal is on. The overlay itself needed no work:
+`tokenOpacityFn` was already asking every masked token for its confidence and
+receiving nothing.
+
+Layer one, and the stopping readout below, no longer wait on a capture
+change. Both remain unbuilt, and both now have the number they need on any
+run recorded with the signal on.
 
 An earlier worry, recorded because it was wrong and the correction is the
 useful part: the streamed logits are temperature-scaled, and the schedule
@@ -1283,11 +1328,47 @@ distribution. The exact version is one more reduction over a softmax
 `_from_logits` already materialises; the heavy part, moving the logits to the
 CPU, is paid already whenever Entropy Signal is on.
 
-One measurement caveat for whoever picks this up: those confidence figures
-average over the positions carrying `c`, which is the stable subset rather
-than the whole canvas the criterion uses. Near a halt they coincide because
-everything is stable, so the tail is trustworthy; the early numbers are on a
-biased sample, and the `c` change above is what removes the bias.
+One measurement caveat, now historical but worth keeping because it dates
+the data: the figures above average over the positions carrying `c`, which
+at the time was the stable subset rather than the whole canvas the criterion
+uses. Near a halt the two coincide because everything is stable, so the tail
+those numbers describe is trustworthy while the early ones sit on a biased
+sample. The `c` change removing that bias shipped with `XAI-01` on
+2026-08-28, so a run recorded with the Entropy Signal on since then carries
+the unsettled positions too and needs no such allowance. Anything measured
+before that date does.
+
+**A second glow for a revision, distinct from a birth.** Raised on
+2026-08-28 while confirming that mask opacity had started grading live. The
+observation: on LLaDA and the autoregressive models the birth glow is
+complete, because a position is decided once and the first settle is the
+whole story. On DiffusionGemma a position can settle, be revised, and settle
+again, and only the first of those is marked. Watching a canvas replace its
+placeholder `" the"` runs with real content, which is the most interesting
+thing it does, currently produces no visual at all.
+
+The suppression is deliberate and should stay. `_emit` keeps a
+`_seen_revealed` set precisely so a churning position does not strobe every
+few steps, and without it the glow would stop carrying information. Which
+means the fix is not to loosen the guard: the anti-flicker rule and the
+missing revision signal are the same mechanism, so the answer has to be a
+*second* signal rather than a wider first one.
+
+A revision and a birth are different events and deserve different marks. A
+birth is a hole being filled; a revision is the model changing its mind,
+which is arguably the more informative of the two and the one this project
+exists to surface. The data is already in hand: `_prev` and `_stable` sit in
+`_emit`, so "settled, then settled to something different" is detectable with
+no new capture and no payload change, in the same place the `c` gate now
+lives.
+
+What needs deliberating is what it should look like, since a mark that fires
+on every re-settle would reintroduce the flicker under a new name. Worth
+considering a decay rather than a flash, or a threshold on how long the
+previous value had held, so that a position thrashing between two candidates
+reads differently from one that committed, sat, and then genuinely changed.
+Scoped per canvas either way: `put` clears the seen set at each commit, so
+every position is legitimately newborn on the next canvas.
 
 Shipped from this backlog (see `README.md`):
 - Token commit-order coloring: tokens are tinted by the step at which they
@@ -1300,10 +1381,25 @@ Shipped from this backlog (see `README.md`):
 - Confidence-driven mask opacity (LLaDA): a still-masked token's opacity tracks
   the model's live predicted confidence for that position, rising from a solid
   floor to full as it nears the reveal, so the "heating up" before a commit is
-  visible live and while scrubbing. DiffusionGemma is a separate follow-up, now
-  scoped under "Candidate reveal for DiffusionGemma" above: it needs a capture
-  change first, because confidence is discarded for exactly the positions that
-  would be faded.
+  visible live and while scrubbing. DiffusionGemma feeds the same overlay on
+  runs with the Entropy Signal on, since `XAI-01` landed the capture change
+  scoped under "Candidate reveal for DiffusionGemma" above. Whether its canvas
+  brightens toward each boundary and resets dim at the next is predicted but
+  not yet observed.
+
+  The live half arrived later than this entry did, and the gap is worth
+  recording because it made a working feature look broken. When per-token
+  spans replaced the character renderer in the streaming view, the new path
+  passed no callbacks, deliberately, so that refactor would not change what
+  the page looked like. The `opacityFor` hook it added was therefore used
+  only by the scrubbed path: a mask graded itself when you scrubbed back over
+  a finished run and stayed flat while the run was being written. It surfaced
+  on 2026-08-28 on DiffusionGemma, where the number exists only with the
+  Entropy Signal on, so the flat live canvas read as the capture change
+  failing rather than as a renderer never asking. Only `opacityFor` is wired
+  live: `colorFor` has nothing to do while the overlay drawer is hidden, and
+  `maskedFor` and `classFor` serve a remask selection that cannot be made
+  mid-run.
 - Randomize remasks in Edit Frames (slider + N-of-M + Shuffle): seeds the
   meta-explainability question of whether a remask pattern shapes convergence.
 - "New run saved" analytics cue: a persisted count badge (generator + Main Menu)

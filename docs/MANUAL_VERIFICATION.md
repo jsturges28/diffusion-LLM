@@ -1553,3 +1553,106 @@ does nothing at all.
     Then go to Analytics and come back, and scrub again. The readout
     has to keep working, which is the part that needs the step total to
     have survived the trip.
+    **The denominator has to describe the run, not the last branch.**
+    Note what a fresh LLaDA run reads at some frame, say `Step 64/128`.
+    Then edit at a frame, resume to the end, and scrub back: the total
+    must still be 128, not the number of steps the branch ran. Retry
+    out of an edit and check the same frame again, and edit at a
+    second frame and retry before rechecking the first. All of them
+    should read 128. Found on 2026-08-28 during item 182, where a
+    branch from frame 28 left the run reading `Step 64/100`. The live
+    line during a resume is different on purpose and should still
+    count the branch: `Resuming 12/64` is right while it runs.
+
+## Intervention checkpoints (XAI-01)
+
+The sampler work is tested without a model, so what is left here is
+everything a user would actually see. Items 180 to 182 confirm fixes.
+Item 183 is different: it tests a prediction, and a null result is
+information rather than a bug report.
+
+180. **An edited LLaDA branch reports real confidence.** Generate a
+    LLaDA run, enter **Edit Frames**, remask a few positions somewhere
+    in the middle, and resume. Then turn on the **Heatmap** overlay and
+    scrub to the first frame of the resumed branch.
+    Before this, every token the edit did not touch was drawn at full
+    confidence, so the prefix was a flat wall of bright green and the
+    mean confidence under it read near 1.00. It should now be varied,
+    the same mixture of tones the original run showed at those
+    positions, and the mean should be a plausible number well under 1.
+    The positions you remasked are the control: they should show as
+    masks with no confidence at all until a step reveals them again.
+181. **A resumed DiffusionGemma canvas does not flash empty.** Load
+    DiffusionGemma, generate a single-canvas run (256 tokens or fewer,
+    since resume is single-canvas), edit a few positions and resume,
+    watching the first resumed frame closely.
+    Previously it rendered as an entirely masked canvas for one frame
+    before snapping back, and the tokens then climbed from zero
+    confidence even though they had been settled for many steps. It
+    should now show the canvas you branched from, with the positions
+    you remasked as the only unsettled ones.
+182. **One edit repeats.** The audit's own verification, and the reason
+    the random state is retained at all. Generate a LLaDA run, enter
+    **Edit Frames**, remask a few positions at a chosen frame and
+    **Resume to End**. Note the output. Click the blue **Retry**, go
+    back to the *same* frame, remask the *same* positions, and resume
+    again.
+    The second branch should match the first, character for character.
+    An earlier attempt at this item asked you to generate a second run
+    in between; that cannot work, because starting a generation
+    retires the previous run's retained state and the first run then
+    cannot be edited at all.
+    Two things had to be true for this to pass, and each fails
+    differently. The random state is one: without it the resume drew
+    from wherever the process happened to be, so the branch moved
+    depending on what you had done since. The rewind is the other:
+    a completed resume replaces the worker's retained frames with the
+    branch it produced, and until Retry told the worker to undo that,
+    the second attempt re-entered a frame from the *first branch*
+    while you were looking at the original run. That one is worth
+    provoking deliberately, so if you have the patience: edit at a
+    late frame, Retry, then edit at an *earlier* frame and Retry
+    again, then repeat the late edit. It should still match.
+    Worth knowing what this does not claim: a resumed branch is not
+    expected to match the *original* run frame for frame, because the
+    resume re-enters the whole generation region as one block rather
+    than the original block schedule. Two resumes agreeing is the
+    property under test.
+    The same repeat works on single-canvas DiffusionGemma, where the
+    stability state comes back with the canvas.
+183. **Does the DiffusionGemma canvas brighten toward a boundary?**
+    Prediction, not a fix. Generate a multi-canvas DiffusionGemma run
+    with **Entropy signal** on and watch the masked positions rather
+    than the text.
+    Each mask is now faded by the model's certainty in the guess behind
+    it; with the signal off they all sit at the same solid floor, which
+    is worth seeing once for contrast. The predicted behaviour is that
+    a canvas brightens roughly together as it approaches its adaptive
+    stop, then resets dim when the next canvas begins.
+    If it does not brighten, say so rather than treating it as a
+    failure. It would mean the confidence means something other than
+    the candidate-reveal and adaptive-stopping items in the ROADMAP
+    assume, and those want rethinking before they are built.
+184. **Masks grade themselves while the run is being written.** Found
+    on 2026-08-28 while looking at 183: the grading only ever ran on
+    the scrubber, so a live canvas was flat and the brightness
+    appeared on rewind. Watch a **LLaDA** run stream and look at the
+    masks rather than the text. They should start solid and brighten
+    individually as each nears its reveal, which is the "heating up"
+    the README describes, instead of sitting at one shade until the
+    run ends. Scrub back afterwards and it should look the same as
+    it did live.
+    Then a **DiffusionGemma** run with **Entropy signal** on, where
+    the same grading should now be visible during generation. This
+    is what item 183 was trying to look at, so the two are best done
+    together: with the live view graded, the question of whether a
+    canvas brightens together toward its adaptive stop can be
+    watched as it happens rather than reconstructed by scrubbing.
+    With the signal off it should stay flat, which is correct
+    rather than a regression.
+    **Watch the frame rate.** This grades every position on every
+    frame, up to 256 on a DiffusionGemma canvas. The renderer only
+    writes to the page where a value actually moved, so it should be
+    unnoticeable, but the sandbox cannot measure that. If streaming
+    feels choppier than you remember, say so: the change is one
+    property on one object and is cheap to take back out.

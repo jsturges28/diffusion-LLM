@@ -119,8 +119,12 @@ scope, so a probe refused as busy no longer tears down What If
 socket loop keeps reading while a generation runs as a task, so Cancel and
 disconnect land while there is still something to stop, producer queues are
 bounded (`RUNTIME-01`'s first step), and every model ends a stopped run with
-one `done` carrying `cancelled`. Generate becomes Stop in the browser. What
-remains of the stage is `XAI-01` and `TRUST-04`.
+one `done` carrying `cancelled`. Generate becomes Stop in the browser. Pass
+five gave both diffusion backends a bounded per-frame checkpoint holding the
+canvas, its confidence state and the generator state (`XAI-01`), so an edited
+branch reports the confidence the model actually gave rather than a flat 1.0
+and one edit repeats across intervening random work. What remains of the
+stage is `TRUST-04`.
 
 **The analytics read path is done** (`ANALYTICS-03`, `ANALYTICS-04`, and
 `ANALYTICS-02`'s repair half, one plan because they shared one seam).

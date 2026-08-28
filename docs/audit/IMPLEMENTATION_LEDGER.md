@@ -75,25 +75,22 @@ commit, **M** a short multi-commit change, **L** a staged boundary migration.
 
 ## Ready now
 
-Two findings have no unmet blockers, both from stage 4. The analytics
-trio was the rest of this list and is done; see its entry below.
+One finding has no unmet blockers.
 
-- **XAI-01** (high, M), released by `LIFE-01`: preserve complete
-  intervention checkpoints rather than only token IDs. Run ownership being
-  explicit is the condition the report attaches to it.
 - **TRUST-04** (medium, L), released by `LIFE-04`: move downloads into the
   same owned-operation model as activation, now that a long-running
   operation can be cancelled and its disconnect is bounded.
 
-`LIFE-04` was on this list and is done; see its entry below. `ORG-02` was
-on it too and is now in the hardware queue instead: its state core is
-written and tested, but none of its callers has been run.
+`LIFE-04` and `XAI-01` were on this list and are done; see their entries
+below. `ORG-02` was on it too and is now in the hardware queue instead:
+its state core is written and tested, but none of its callers has been
+run.
 
 `ANALYTICS-03` and `ANALYTICS-04` were the analytics trio and are done,
 as is `ANALYTICS-02`'s repair half. They went together because they
 shared one seam: three separate plans would each have rebuilt the same
-resolver, selection model and label path. Only `ANALYTICS-02`'s persist
-half remains, and it belongs with `XAI-01` rather than here.
+resolver, selection model and label path. `ANALYTICS-02`'s persist half
+is closed as superseded; see its entry below.
 
 `QUALITY-01` is not on this list because it is not a standalone task. The
 report asks for its lifecycle and browser-contract fixtures to land with each
@@ -135,10 +132,26 @@ production owner. Track it as an obligation attached to other findings.
   records already on disk and adds no persisted field, which is the
   condition this list previously set for reopening it early.
 
-  The **persist half** remains: compact per-frame counts emitted by the
-  samplers and stored with the run. That touches the saved-run contract and
-  the worker, so it belongs with `XAI-01`, which changes what a worker
-  records about a run for the same kind of reason.
+  The **persist half is closed as superseded**, decided on 2026-08-18
+  while scoping it alongside `XAI-01`. Its Direction offers persisting
+  counts and repairing from token records as alternatives, and the repair
+  shipped. Every count it names is derivable from data already saved:
+  canvas token count and unresolved count from the frame's token records,
+  newly revealed as the difference between consecutive frames, canvas
+  index from `canvas_index`, and cumulative produced from the two
+  together, which is what `tokens_produced_series` already computes. This
+  entry previously said the half belonged with `XAI-01` because both
+  change what a worker records. That reading was wrong in a way worth
+  naming: `XAI-01` changes what the worker *retains in memory* for a
+  resume, while this would change what a *save writes to disk*, and they
+  share a file rather than a seam. Implementing it now would duplicate
+  data the metrics path already reads and widen the save format for no
+  correctness gain.
+
+  What it would still buy is a cheaper metrics request, since the endpoint
+  reads `tokens.json` per run. That is a performance question and belongs
+  with `RUNTIME-01`'s append-only frame work if it is ever worth taking,
+  not with a correctness finding that is satisfied.
 
 ## Hardware validation queue
 
@@ -156,12 +169,20 @@ were cleared on 2026-08-11 in the same sitting: the maintainer confirmed items
 could say least about, the amber invalid row's alignment against its
 neighbours and the two-window model switch.
 
-**As of 2026-08-18 two entries remain**, and neither blocks anything.
+**As of 2026-08-18 three entries remain**, and none blocks anything.
 The stage 4 findings cleared on 2026-08-17, which released `XAI-01`,
 `LIFE-04` and `ORG-02`; `ORG-02`'s own state core and the save work that
 came out of testing it cleared on 2026-08-18, items 162 to 166. What is
-left is `TRUST-03`'s offline retest and `LIFE-02`'s two staged-failure
-items, 143 and 144, which are awkward to arrange rather than pending.
+left is `XAI-01`'s own items, `TRUST-03`'s offline retest, and
+`LIFE-02`'s two staged-failure items, 143 and 144, which are awkward to
+arrange rather than pending.
+
+- **XAI-01**: queued on 2026-08-18. The sampler work is tested without a
+  model, but every claim a user would notice needs the GPU: an edited
+  LLaDA branch's heatmap, a resumed DiffusionGemma canvas, one edit
+  repeated twice, and the mask-opacity overlay the capture change feeds.
+  That last one is a prediction rather than a fix, so a null result is
+  information; see `docs/MANUAL_VERIFICATION.md` items 180 to 183.
 
 `ORG-02`'s browser-smoke clause is recorded as unmet rather than queued:
 satisfying it in the sandbox would mean taking jsdom as the project's
@@ -239,7 +260,7 @@ on real hardware.
 | DATA-05 | high | L | done | none | Three commits: strict boundary, version and frame stream, invalid runs |
 | DATA-04 | high | M | done | none | Persist run provenance from the run, not manager state |
 | RUNTIME-02 | medium | M | done | none | Bound the GIF and label the model that produced it |
-| ANALYTICS-02 | high | M | partial | none | Repair half done; persist half belongs with XAI-01 |
+| ANALYTICS-02 | high | M | done | none | Repair half shipped; persist half superseded by it, see entry |
 | ANALYTICS-03 | medium | L | done | DATA-01, DATA-05 (both done) | Catalog 1.33 MiB to 70.6 KiB over 222 runs |
 | ANALYTICS-04 | high | M | done | DATA-01 (done) | Path escape was already closed by DATA-01; see entry |
 | LIFE-02 | high | M | needs hardware | none | Two commits: the process seam, then verified termination |
@@ -248,7 +269,7 @@ on real hardware.
 | LIFE-03 | critical | L | done | none | Two commits: operation identity, then the resident mismatch |
 | LIFE-01 | high | M | done | none | Name every run and refuse a stateful request that means another |
 | PROTOCOL-01 | medium | M | done | none | Two commits: scoped error envelopes, then the client routing |
-| XAI-01 | high | M | ready | LIFE-01 (done) | |
+| XAI-01 | high | M | needs hardware | LIFE-01 (done) | Bounded checkpoints for both diffusion backends; carried the capture change |
 | LIFE-04 | high | L | done | LIFE-03 (done) | Carried RUNTIME-01's queue bound, as its own Direction asks |
 | LIFE-05 | high | M | partial | none | Single-instance the desktop launcher; host lease deferred, see Deviations |
 | TRUST-04 | medium | L | ready | LIFE-04 (done) | |
@@ -1105,6 +1126,155 @@ check catches `None` anyway. The branch stayed, since a client that
 never learned the run is a different situation to report than an
 ordinary two-window race, but the test now pins that the two
 *messages differ* rather than pinning either string.
+
+### XAI-01
+
+**Done on 2026-08-18**, awaiting hardware. Both diffusion backends now
+keep a bounded checkpoint per streamed frame in
+`src/inference/checkpoint.py`: the canvas ids, the confidence state the
+display was built from, and the torch generator state the next step
+would have drawn from.
+
+**The two backends had the same bug in mirror image**, which is what
+made this one change rather than two. LLaDA's resume assigned every
+surviving token a confidence of `1.0`, so an edited run's heatmap and
+mean confidence were fabricated for every position the user had not
+touched. DiffusionGemma built a *fresh* streamer, whose empty `_prev`
+made every position count as changed: the first resumed frame rendered
+as an entirely masked canvas, confidence restarted from zero for
+tokens that had been stable for many steps, and the inherited prefix
+was reported born a second time. That last one is the rebirth LLaDA's
+resume fixes deliberately at `streaming_sampler.py:525-531`; the
+DiffusionGemma path never got it. One invents certainty, the other
+destroys it, and neither was retaining the state that would have said.
+
+**Re-seeding was rejected by the report and the code agrees.** LLaDA's
+resume called no seeding at all and its retained state did not even
+keep the seed. Seeding it would have reproduced the run's *first* step,
+not the step the user picked, so the same edit made before and after
+another generation would still diverge. The checkpoint holds
+`torch.get_rng_state()` and, when present, the CUDA states, and the
+resume restores them. The seed is now retained too, for provenance and
+as the fallback for a frame that outran the budget.
+
+**The bound degrades rather than evicts.** A CPU generator state is
+5,056 bytes, so a 129-frame LLaDA run spends about 650 KiB against a
+64 MiB ceiling: the bound is a rail against an unfamiliar step count,
+not something a real run negotiates with. Past it the canvas and
+confidence keep being recorded and only the random state stops, so such
+a frame still resumes, just without the bit-for-bit repeat. Dropping
+old checkpoints instead would have taken away the early frames an edit
+is most likely to re-enter.
+
+**Where DiffusionGemma records its checkpoint is a real decision.** The
+streamer computes the state, but the *consumer* loop appends it. The
+frame queue is bounded, so the producer can run ahead of a consumer
+that breaks on cancel; recording producer-side would put frames in the
+history that the client never saw, and a later resume could then name a
+frame index the browser does not have. The streamer stashes by frame
+index and the consumer pops, which also keeps the stash to the in-flight
+window rather than the whole run.
+
+**The `c`-on-unresolved capture change came with it**, since it is one
+condition in the same `_emit`. It is gated on the Entropy Signal rather
+than written unconditionally, which corrects what the ROADMAP said. An
+unresolved position is by definition one that just changed, so its
+stability count was reset to zero on the same pass and the stability
+branch could only ever write `0.0`; `maskOpacity` treats zero and
+absent alike, so writing it would cost payload on every frame for a
+pixel-identical canvas. With the signal on it is the model's own
+probability, which is what the mask-opacity overlay has been waiting
+for: that consumer was already built and simply never received a
+number on DiffusionGemma.
+
+**Found while implementing: a one-in-a-hundred race.** The first
+version recorded the checkpoint *after* `frame_queue_put` succeeded, on
+the reasoning that an undelivered frame should leave nothing behind.
+That is a race, and it announced itself as a single stray traceback in
+an otherwise green suite, which is exactly how such a thing gets
+dismissed as flakiness. The put enqueues immediately and the consumer
+runs on the event loop, so it can dequeue a frame and claim its
+checkpoint before the producer thread has written one. The record now
+happens before the hand-off and is dropped again if the put fails,
+which keeps both properties. `test_dgemma_resume.py` pins the ordering
+by asserting inside a queue's own `put` rather than by hoping for an
+interleaving, and that test fails against the original order.
+
+**Found while verifying: abandoning an edit rolled back only the
+browser.** Item 182 came back with a differing branch, and the
+procedure was at fault twice over, which is what made the underlying
+defect visible.
+
+The item asked for a second generation as the intervening random
+work. That cannot be done: `begin_run` nulls `last_run_state`, so
+the first run stops being resumable at all and there is nothing left
+to repeat the edit against. The item is rewritten around Retry.
+
+The real finding is underneath. `_commit_resume` replaces the
+retained history with `base_history + resume_history`, and every way
+out of an edit session restored the browser and told the worker
+nothing: `retryGuidedEdit` and `exitRemaskMode` both call
+`restoreEditSnapshot`, which touches local arrays only, and a
+run-scoped error unwinds the same way. The two then disagreed about
+which frames exist. Editing a frame *before* the previous edit point
+stayed correct, because the prefix below it is still original, but
+editing at or after it re-entered a canvas from the branch the user
+had just discarded while they clicked tokens on the one on screen.
+Silent, because a wrong canvas still denoises into fluent text, and
+that is why the LIFE-07 pass of four retries looked clean.
+
+Pre-existing rather than introduced by the checkpoint work: the
+diff on `_commit_resume` was a rename and a retype. It is fixed by
+`MSG_REWIND`, sent when a session *opens* rather than when one is
+abandoned. That reads backwards until you count the exits: two of
+them (a reload, a closed tab) cannot send anything, because
+`preEditSnapshot` is memory-only and the session snapshot is
+deliberately not written mid-edit. `captureEditSnapshot` is called
+exactly twice in `app.js` and is the one moment the browser is known
+to be showing the un-edited run, so a single send there covers every
+exit including the ones that cannot speak for themselves.
+
+**Found while verifying the fix: the step readout kept the branch's
+denominator.** Confirming item 182 the hard way, edit at 64, retry,
+edit at 28, retry, edit at 64 again, produced matching output and one
+wrong number: the first edit's frame read `Step 64/128` and the third
+read `Step 64/100`. The outputs matching is what proved this was not
+the rewind: the worker handed back the right canvas both times.
+
+`lastRunTotalSteps` was assigned from whatever frame arrived last,
+and a resume's frames report the steps that branch has left rather
+than the run's total, which is exactly what makes the live
+`Resuming 12/64` meaningful. Two numbers under one name. The value
+then outlived the session, because `captureEditSnapshot` does not
+record it and only a new generation clears it.
+
+Fixed by telling them apart rather than by adding it to the snapshot:
+the live line reads the frame's own figure, and only a generation
+writes the run's. That also fixes a case nobody had reported, since a
+*confirmed* edit at frame 64 of 128 left the finished 129-frame run
+scrubbing to `Step 128/64`. The guard covers What If too, because
+`doSubstitute` reuses the same resume splice path.
+
+Three notes for whoever touches this next. The refusal is
+request-scoped: a session opens with a rewind, so a run-scoped one
+would tear the session down mid-setup, and a window that cannot
+rewind cannot resume either, where the refusal does own the run. And
+the restore lives in `worker_base.rewind_retained_history` rather
+than in each backend, partly because they differ only in key names
+and partly because `dgemma_worker` cannot be imported under `.venv`
+at all: its quantized loader reaches `bitsandbytes`, which lives
+only in `.venv-dgemma`. Keeping the logic on the base is what makes
+that backend's rewind testable. Its wiring was confirmed by hand
+under `.venv-dgemma`; only the shared restore is gated by the suite.
+
+**What this does not do.** A resume still does not reproduce the
+original run frame for frame, because LLaDA's resume re-enters the
+whole generation region as a single block rather than the original
+block schedule. The report's verification asks for one edit repeated
+twice to agree, which is what the checkpoint delivers and what
+`test_llada_resume_conf.py` pins, including a negative-space test so
+that claim cannot go vacuous if the stub ever stops depending on the
+generator.
 
 ### The analytics read path (ANALYTICS-02 repair, 03, 04)
 
