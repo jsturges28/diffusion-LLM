@@ -23,6 +23,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -91,8 +92,13 @@ from src.web.ui_state import (
     mutate_ui_state_key,
     set_ui_state_key,
 )
+from src.inference.download_main import (
+    DOWNLOAD_EXIT_OK,
+    DOWNLOAD_EXIT_UNREACHABLE,
+)
 from src.web.worker_process import (
     WorkerHandle,
+    download_command,
     spawn_worker,
     worker_command,
 )
@@ -144,6 +150,20 @@ WORKER_PROGRESS_POLL_S = 0.25
 # Grace period for a stopped worker's VRAM to be reclaimed
 # before the pre-flight check refuses the next activation.
 VRAM_SETTLE_TIMEOUT_S = 8.0
+# How often the supervisor measures a download's cache directory
+# while a child process fetches it. Matches the cadence the
+# in-process sampler used, which the progress bar was tuned against.
+DOWNLOAD_PROGRESS_POLL_S = 0.5
+# A ceiling on that sampling, so the loop is finite. Six hours is far
+# past any real fetch on any plausible connection; reaching it means
+# the child is wedged, which is reported rather than waited out.
+DOWNLOAD_POLL_SECONDS_MAX = 6 * 60 * 60
+DOWNLOAD_POLL_ITERATIONS_MAX = int(
+    DOWNLOAD_POLL_SECONDS_MAX / DOWNLOAD_PROGRESS_POLL_S
+)
+
+assert DOWNLOAD_PROGRESS_POLL_S > 0.0, "a poll must advance"
+assert DOWNLOAD_POLL_ITERATIONS_MAX > 0, "sample at least once"
 
 
 # -- Model worker manager --
@@ -393,13 +413,37 @@ def _is_repo_checkpoint(checkpoint: str) -> bool:
     return value.count("/") == 1
 
 
+def _is_partial(checkpoint: str) -> bool:
+    """Whether an interrupted fetch left parts of this one behind.
+
+    Reported beside ``downloaded`` because that flag alone cannot
+    tell a model never fetched from one stopped part way, and the
+    two want different words on the row: offering to start a
+    download over is wrong when clicking it will resume.
+
+    Always false for a local path. Those are produced offline rather
+    than fetched, so there is no partial state for them to be in.
+    """
+    if not _is_repo_checkpoint(checkpoint):
+        return False
+    try:
+        from src.inference.hf_download import (
+            has_partial_download,
+        )
+
+        return has_partial_download(checkpoint)
+    except Exception:  # noqa: BLE001 - probe failure: assume not
+        return False
+
+
 def _is_downloaded(checkpoint: str) -> bool:
     """Whether the checkpoint's files are fully present locally.
 
     A partial cache (an interrupted download leaving ``*.incomplete``
-    parts) counts as not-downloaded so the menu keeps the "Click to
-    Download" veneer and a re-click resumes, rather than the model being
-    marked ready and hanging on load.
+    parts) counts as not-downloaded so the menu keeps its download
+    veneer and a re-click resumes, rather than the model being
+    marked ready and hanging on load. ``_is_partial`` above is what
+    lets that veneer say "resume" rather than "download".
     """
     if _is_repo_checkpoint(checkpoint):
         try:
@@ -485,6 +529,7 @@ class ModelManager:
         vram_settle_timeout_s: float = VRAM_SETTLE_TIMEOUT_S,
         health_poll_s: float = WORKER_HEALTH_POLL_S,
         progress_poll_s: float = WORKER_PROGRESS_POLL_S,
+        download_poll_s: float = DOWNLOAD_PROGRESS_POLL_S,
     ) -> None:
         # Injected so a test can drive the lifecycle without a real
         # subprocess, a real socket, or a three-minute deadline. The
@@ -498,6 +543,7 @@ class ModelManager:
         self._vram_settle_timeout_s = vram_settle_timeout_s
         self._health_poll_s = health_poll_s
         self._progress_poll_s = progress_poll_s
+        self._download_poll_s = download_poll_s
         self.active_id: Optional[str] = None
         self.active_device: Optional[str] = None
         self.active_versions: Dict[str, str] = {}
@@ -539,6 +585,14 @@ class ModelManager:
         self.download_error: Optional[str] = None
         # Held so the fire-and-forget download task is not GC'd mid-run.
         self._download_task: Optional[asyncio.Task] = None
+        # The child doing the fetching. A download used to be threads
+        # inside this process with nothing able to reach them; this is
+        # what makes cancel and shutdown mean something.
+        self._download_proc: Optional[WorkerHandle] = None
+        # Which download the state describes, on the same terms as
+        # activation_id: monotonic, never reset, so a window can tell
+        # its own download's outcome from another window's.
+        self.download_id: int = 0
 
     @staticmethod
     def _free_port() -> int:
@@ -919,12 +973,13 @@ class ModelManager:
 
     # -- download-only (pre-fetch weights, no VRAM) --
 
-    def start_download(self, model_id: str) -> None:
+    def start_download(self, model_id: str) -> int:
         """Begin downloading a model's weights without loading them.
 
-        Runs in a background task so a resident model keeps serving.
-        Raises for an unknown / non-downloadable model, or if a
-        download is already running.
+        Runs as a child process so a resident model keeps serving and
+        so the fetch has an owner: see ``cancel_download``. Returns
+        the operation number naming it. Raises for an unknown or
+        non-downloadable model, or if a download is already running.
         """
         if model_id not in REGISTRY:
             raise KeyError(model_id)
@@ -935,37 +990,139 @@ class ModelManager:
             )
         if self.download_state == "downloading":
             raise RuntimeError("a download is already running")
+        handle = self._spawn(
+            download_command(
+                python=Path(sys.executable), repo_id=checkpoint
+            ),
+            cwd=REPO_ROOT,
+            env=dict(os.environ),
+        )
+        self._download_proc = handle
         self.download_target = model_id
         self.download_state = "downloading"
         self.download_progress = None
         self.download_error = None
+        self.download_id += 1
         self._download_task = asyncio.create_task(
-            self._run_download(model_id, checkpoint)
+            self._watch_download(checkpoint, handle)
         )
+        return self.download_id
 
-    async def _run_download(
-        self, model_id: str, checkpoint: str
+    async def _watch_download(
+        self, checkpoint: str, handle: WorkerHandle
     ) -> None:
+        """Sample progress from disk until the child exits.
+
+        The child reports nothing, and needs no channel to: progress
+        is the size of the cache directory, which this process can
+        measure while another does the fetching. That is the whole
+        reason a download could move out of process cheaply.
+        """
         from src.inference.hf_download import (
-            download_with_progress,
+            repo_progress,
+            repo_total_bytes,
         )
 
-        def _sink(progress: Dict[str, Any]) -> None:
-            self.download_progress = progress
-
-        try:
-            await asyncio.to_thread(
-                download_with_progress,
-                checkpoint,
-                sink=_sink,
+        total = await asyncio.to_thread(
+            repo_total_bytes, checkpoint
+        )
+        code: Optional[int] = None
+        for _ in range(DOWNLOAD_POLL_ITERATIONS_MAX):
+            code = handle.poll()
+            if code is not None:
+                break
+            self.download_progress = await asyncio.to_thread(
+                repo_progress, checkpoint, total
             )
-        except Exception as exc:  # noqa: BLE001
-            self.download_state = "error"
-            self.download_error = str(exc)
-            logger.exception("download failed for %s", model_id)
-            return
+            await asyncio.sleep(self._download_poll_s)
+        self._settle_download(checkpoint, code)
+
+    def _settle_download(
+        self, checkpoint: str, code: Optional[int]
+    ) -> None:
+        """Turn the child's exit status into a reportable outcome.
+
+        The status is the entire protocol between the two processes,
+        so this is where it is read. ``None`` means the sampler hit
+        its ceiling with the child still running, which is a bug
+        rather than a slow download: the ceiling is hours.
+        """
+        self._download_proc = None
         self.download_progress = None
-        self.download_state = "done"
+        if code == DOWNLOAD_EXIT_OK:
+            self.download_state = "done"
+            return
+        self.download_state = "error"
+        if code == DOWNLOAD_EXIT_UNREACHABLE:
+            from src.inference.hf_download import (
+                describe_unreachable,
+            )
+
+            self.download_error = describe_unreachable(checkpoint)
+            return
+        if code is None:
+            self.download_error = (
+                "the download is still running but is no longer"
+                " being watched; restart the app"
+            )
+            logger.error(
+                "download sampler gave up on %s while it ran",
+                checkpoint,
+            )
+            return
+        self.download_error = (
+            f"the download failed (exit {code}). The log has the"
+            " underlying error."
+        )
+
+    async def cancel_download(
+        self, operation: Optional[int] = None
+    ) -> None:
+        """Stop an in-flight download and leave its parts on disk.
+
+        Refuses an operation that is not the current one, the way
+        ``cancel_activation`` does, so a stale window cannot end a
+        download somebody else started.
+
+        The partial blobs stay exactly where they are. That is what
+        makes a re-click resume rather than restart, and deleting the
+        cache was rejected in the finding's own Direction because a
+        valid snapshot in it may be shared with another process.
+        """
+        if self.download_state != "downloading":
+            return
+        if operation is not None and operation != self.download_id:
+            raise ActivationRefused(
+                "That download has already finished or belongs to"
+                " another window."
+            )
+        await self._end_download()
+        self.download_state = "idle"
+        self.download_target = None
+        self.download_progress = None
+        self.download_error = None
+
+    async def _end_download(self) -> None:
+        """Stop watching, then stop the child, in that order.
+
+        The watcher first: it would otherwise see the exit it was
+        never told to expect and report a cancellation as a failed
+        download.
+        """
+        task = self._download_task
+        self._download_task = None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # noqa: BLE001 - reported, not raised
+                logger.exception("download watcher failed")
+        handle = self._download_proc
+        self._download_proc = None
+        if handle is not None:
+            await self._end_process(handle, "download")
 
     def ack_download(self) -> None:
         """Clear a finished pre-fetch so its completion notice fires once.
@@ -1018,6 +1175,11 @@ class ModelManager:
             )
 
     async def stop(self) -> None:
+        # Outside the lock, and before it: a download is independent
+        # of the worker (it can run alongside a resident model), and
+        # taking the lock to end one would make a shutdown wait on
+        # whatever activation happened to hold it.
+        await self._end_download()
         async with self._lock:
             await self._stop_locked()
 
@@ -1090,7 +1252,9 @@ class ModelManager:
         self.load_state = "error" if error else "idle"
         self.load_error = error
 
-    async def _end_process(self, handle: WorkerHandle) -> None:
+    async def _end_process(
+        self, handle: WorkerHandle, what: str = "worker"
+    ) -> None:
         """Terminate, escalate to kill, and wait for the exit.
 
         The wait after the kill is the point. Without it the manager
@@ -1099,19 +1263,26 @@ class ModelManager:
         nothing had confirmed, and the eight-second settle window in
         ``_preflight_vram`` was left standing in for a wait that
         never happened.
+
+        Shared with downloads since `TRUST-04`, which is why ``what``
+        exists: one escalation policy, two kinds of child. A second
+        ladder written for downloads would be a second place for the
+        timeouts to drift.
         """
         if handle.poll() is not None:
             return
         logger.info(
-            "stopping worker %s (pid %s)",
-            self.active_id,
+            "stopping %s (pid %s)",
+            what,
             handle.pid,
         )
         handle.terminate()
         if await self._await_exit(handle, self._stop_timeout_s):
             return
         logger.warning(
-            "worker %s ignored SIGTERM; killing", handle.pid
+            "%s (pid %s) ignored SIGTERM; killing",
+            what,
+            handle.pid,
         )
         handle.kill()
         if await self._await_exit(handle, self._kill_timeout_s):
@@ -1121,8 +1292,9 @@ class ModelManager:
         # I/O, or a wedged GPU driver call). Say so loudly rather
         # than reporting a clean stop that did not happen.
         logger.error(
-            "worker %s survived SIGKILL; its resources are not"
+            "%s (pid %s) survived SIGKILL; its resources are not"
             " confirmed released",
+            what,
             handle.pid,
         )
 
@@ -1270,6 +1442,7 @@ def _models_snapshot() -> Dict[str, Any]:
             info.checkpoint
         )
         data["downloaded"] = _is_downloaded(info.checkpoint)
+        data["partial"] = _is_partial(info.checkpoint)
         models.append(data)
     gpu = _gpu_name()
     # Only classify the failure reason when the name is unreadable, so a
@@ -1431,7 +1604,7 @@ async def cancel_activation(
 async def download_model(model_id: str) -> JSONResponse:
     """Pre-fetch a model's weights (no VRAM). Client polls status."""
     try:
-        manager.start_download(model_id)
+        operation = manager.start_download(model_id)
     except KeyError:
         return JSONResponse(
             status_code=404,
@@ -1446,7 +1619,11 @@ async def download_model(model_id: str) -> JSONResponse:
             content={"ok": False, "message": str(exc)},
         )
     return JSONResponse(
-        {"ok": True, "state": manager.download_state}
+        {
+            "ok": True,
+            "state": manager.download_state,
+            "operation": operation,
+        }
     )
 
 
@@ -1464,8 +1641,34 @@ async def download_status() -> JSONResponse:
             "state": manager.download_state,
             "progress": manager.download_progress,
             "message": manager.download_error,
+            # Which download this state describes, on the same terms
+            # as an activation's: a second window's fetch finishing
+            # must not read as this window's.
+            "operation": manager.download_id,
         }
     )
+
+
+class CancelDownloadRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation: Optional[int] = None
+
+
+@app.post("/api/models/download/cancel")
+async def cancel_download(
+    body: Optional[CancelDownloadRequest] = None,
+) -> JSONResponse:
+    """Stop a fetch, leaving its parts on disk so it can resume."""
+    operation = body.operation if body is not None else None
+    try:
+        await manager.cancel_download(operation)
+    except ActivationRefused as exc:
+        return JSONResponse(
+            status_code=409,
+            content={"ok": False, "message": str(exc)},
+        )
+    return JSONResponse({"ok": True})
 
 
 @app.post("/api/models/download/ack")

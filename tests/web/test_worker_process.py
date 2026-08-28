@@ -37,6 +37,7 @@ import pytest
 
 from src.web.worker_process import (
     SubprocessHandle,
+    download_command,
     spawn_worker,
     worker_command,
 )
@@ -108,6 +109,39 @@ def test_the_command_carries_every_argument() -> None:
     assert command[command.index("--port") + 1] == "41234"
     assert command[command.index("--device") + 1] == "cpu"
     assert command[command.index("--host") + 1] == "127.0.0.1"
+
+
+def test_the_download_command_names_its_module() -> None:
+    """`TRUST-04` runs a fetch through this same seam, so a download
+    is a child the supervisor can name and end rather than a daemon
+    thread nothing could reach."""
+    command = download_command(
+        python=Path("/venv/bin/python"),
+        repo_id="GSAI-ML/LLaDA-8B-Instruct",
+    )
+
+    assert command[0] == "/venv/bin/python"
+    assert command[1:3] == ["-m", "src.inference.download_main"]
+    assert (
+        command[command.index("--repo") + 1]
+        == "GSAI-ML/LLaDA-8B-Instruct"
+    )
+
+
+def test_a_download_inherits_the_orphan_guards() -> None:
+    """Not a separate spawn path, which is the point: a download
+    gets its own session and PDEATHSIG for free, so even a
+    hard-killed supervisor takes the fetch with it. The old
+    in-process daemon thread could not be reached at all."""
+    from src.web.worker_process import _popen_orphan_guards
+
+    guards = _popen_orphan_guards()
+
+    if sys.platform.startswith("linux"):
+        assert guards["start_new_session"] is True
+        assert "preexec_fn" in guards
+    else:
+        assert guards == {}
 
 
 def test_the_command_is_what_the_orphan_sweep_looks_for() -> None:

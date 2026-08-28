@@ -61,10 +61,13 @@
   var reattachSettled = false;
   var lastDownloadStatus = null;
   var prevDownloadState = null;
-  var pollTimer = null;
   // The shared activation client watching the selection in flight,
-  // or null when nothing is loading. It owns its own timer, which is
-  // why it is stopped alongside pollTimer rather than through it.
+  // or null when nothing is loading. It owns its own timer.
+  //
+  // There was a download timer beside this until `TRUST-04` moved
+  // the download transport into its own client too. Downloads are
+  // now watched by the same loop the toast listens to, so this page
+  // has one poller left rather than two against one endpoint.
   var activationWatch = null;
   // The row element whose weights are currently pre-downloading.
   var downloadRow = null;
@@ -401,7 +404,7 @@
 
     if (needsDownload) {
       li.classList.add("needs-download");
-      li.appendChild(buildDownloadVeneer());
+      li.appendChild(buildDownloadVeneer(model));
       wireRow(li, model);
     } else if (ar || fits) {
       wireRow(li, model);
@@ -415,15 +418,30 @@
     return li;
   }
 
+  // What the idle veneer offers. "Not downloaded" covers two
+  // situations the user experiences differently: a model never
+  // fetched, and one whose fetch was stopped part way. Clicking
+  // resumes in the second case rather than starting over, so
+  // offering to download it again would misdescribe the button.
+  //
+  // The server reports the difference (`partial`), so this survives
+  // a reload rather than being remembered only by the page that did
+  // the cancelling.
+  function downloadPrompt(model) {
+    return model && model.partial
+      ? "Click to Resume Download"
+      : "Click to Download";
+  }
+
   // Translucent overlay for uncached models. Three states: an idle
   // "Click to Download" label, a progress area (bar + percent), and a
   // message area (success/error + Ok) shown on finish.
-  function buildDownloadVeneer() {
+  function buildDownloadVeneer(model) {
     var veneer = document.createElement("div");
     veneer.className = "menu-model-veneer";
     var label = document.createElement("span");
     label.className = "menu-model-veneer-label";
-    label.textContent = "Click to Download";
+    label.textContent = downloadPrompt(model);
     veneer.appendChild(label);
     var prog = document.createElement("div");
     prog.className = "menu-model-veneer-progress";
@@ -438,6 +456,26 @@
     bar.appendChild(fill);
     prog.appendChild(pct);
     prog.appendChild(bar);
+    // Stopping a fetch became possible with `TRUST-04`: a download
+    // is a child process now, so there is something to signal. The
+    // control sits here rather than on the toast because this is
+    // where a download is started, and its parts stay on disk, so
+    // pressing it pauses rather than discards.
+    var cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "menu-model-veneer-cancel";
+    cancel.textContent = "Cancel";
+    cancel.title =
+      "Stop downloading. What has arrived is kept, so starting"
+      + " again resumes from here.";
+    // stopPropagation for the same reason Ok does it: the whole row
+    // is the start-a-download target, so a click that reached it
+    // would cancel and immediately restart.
+    cancel.addEventListener("click", function (event) {
+      event.stopPropagation();
+      cancelDownload(veneer.parentNode);
+    });
+    prog.appendChild(cancel);
     veneer.appendChild(prog);
     var message = document.createElement("div");
     message.className = "menu-model-veneer-message";
@@ -685,15 +723,15 @@
     }
   }
 
-  // Stop whatever this page is polling: the download veneer's timer,
-  // and the activation watch, which owns its own. Both are folded in
-  // here because every caller means "stop watching", and stopping
-  // one that is not running is a no-op.
+  // Stop the activation watch, if one is running. Kept as its own
+  // verb rather than inlined because every caller means "stop
+  // watching", and stopping one that is not running is a no-op.
+  //
+  // The download half is deliberately absent: unbinding a row must
+  // not stop the fetch, which belongs to the page rather than to
+  // the row, and which the toast keeps reporting after the user
+  // pages away from it.
   function stopPolling() {
-    if (pollTimer !== null) {
-      clearTimeout(pollTimer);
-      pollTimer = null;
-    }
     if (activationWatch !== null) {
       activationWatch.stop();
       activationWatch = null;
@@ -862,82 +900,111 @@
     if (parts.fill) {
       parts.fill.style.width = "0%";
     }
-    fetch(
-      "/api/models/" + encodeURIComponent(model.id) + "/download",
-      { method: "POST" }
-    )
-      .then(function (response) {
-        return response.json();
-      })
-      .then(function (result) {
-        if (result && result.ok) {
-          pollDownload(model, li);
-        } else {
-          throw new Error(
-            (result && result.message) || "download failed"
-          );
+    var client = downloadClient();
+    if (!client) {
+      downloadFailed(
+        model, li, "the download client did not load"
+      );
+      return;
+    }
+    // No poll started here. Every reading arrives through
+    // onDownloadStatus, from the one watcher the page already runs.
+    client.start(model.id).catch(function (err) {
+      downloadFailed(
+        model, li,
+        err && err.message ? err.message : String(err)
+      );
+    });
+  }
+
+  // The page's one download transport, created by download_toast.js
+  // and shared rather than duplicated: this file used to run a
+  // second 500ms loop against the same endpoint as the toast's.
+  function downloadClient() {
+    return typeof downloadToastClient === "function"
+      ? downloadToastClient()
+      : null;
+  }
+
+  // Stop the fetch and put the row back to "Click to Download".
+  // The bytes already on disk stay there, so pressing the row again
+  // resumes rather than starting the transfer over.
+  function cancelDownload(li) {
+    var client = downloadClient();
+    if (!client || downloadRow !== li) {
+      return;
+    }
+    client
+      .cancel()
+      .then(function () {
+        // What the row offers next depends on this. The server will
+        // say so too on the next load; recording it here is what
+        // makes the veneer right immediately rather than a page
+        // refresh later.
+        var model = modelForRow(li);
+        if (model) {
+          model.partial = true;
         }
       })
       .catch(function (err) {
-        downloadFailed(
-          model, li,
-          err && err.message ? err.message : String(err)
+        // Refused because another window owns it, most likely. Say
+        // so rather than leaving a Cancel that appears to do
+        // nothing.
+        showError(
+          err && err.message ? err.message : "could not cancel"
         );
       });
   }
 
-  function pollDownload(model, li) {
+  // Draw one reading onto the bound row. Called from the shared
+  // status subscription rather than from a loop of its own.
+  function renderDownloadRow(model, li, status) {
     if (downloadRow !== li) {
       return;
     }
-    fetch("/api/models/download-status")
-      .then(function (response) {
-        return response.json();
-      })
-      .then(function (status) {
-        if (downloadRow !== li) {
-          return;
-        }
-        if (status.state === "done") {
-          finishDownload(model, li);
-          return;
-        }
-        if (status.state === "error") {
-          downloadFailed(
-            model, li, status.message || "download failed"
-          );
-          return;
-        }
-        if (status.state === "idle") {
-          resetDownload(li);
-          return;
-        }
-        var pct = status.progress
-          && typeof status.progress.fraction === "number"
-          ? Math.round(status.progress.fraction * 100)
-          : 0;
-        var parts = veneerParts(li);
-        if (parts.pct) {
-          parts.pct.textContent = "Downloading " + pct + "%";
-        }
-        if (parts.fill) {
-          parts.fill.style.width = pct + "%";
-        }
-        pollTimer = setTimeout(function () {
-          pollDownload(model, li);
-        }, 500);
-      })
-      .catch(function () {
-        if (downloadRow !== li) {
-          return;
-        }
-        pollTimer = setTimeout(function () {
-          pollDownload(model, li);
-        }, 800);
-      });
+    if (status.state === "done") {
+      finishDownload(model, li);
+      return;
+    }
+    if (status.state === "error") {
+      downloadFailed(
+        model, li, status.message || "download failed"
+      );
+      return;
+    }
+    if (status.state === "idle") {
+      resetDownload(li);
+      return;
+    }
+    var pct = status.progress
+      && typeof status.progress.fraction === "number"
+      ? Math.round(status.progress.fraction * 100)
+      : 0;
+    var parts = veneerParts(li);
+    if (parts.pct) {
+      parts.pct.textContent = "Downloading " + pct + "%";
+    }
+    if (parts.fill) {
+      parts.fill.style.width = pct + "%";
+    }
   }
 
-  // Restore the veneer to its idle "Click to Download" state.
+  // Restore the veneer to its idle, clickable state.
+  //
+  // A stopped download leaves its bytes on disk, so the row offers
+  // to resume rather than to start over. The Cancel button goes,
+  // because there is no longer anything running for it to act on.
+  //
+  // The bar goes too, and that was a decision rather than an
+  // omission. It briefly stayed, frozen at the percentage the fetch
+  // reached, and the figure turned out to be the one thing here
+  // that could not be made true: it existed only in the window that
+  // pressed Cancel, vanished on reload, and went stale in place if
+  // the menu was left open. Two windows side by side showed the
+  // same state two ways. A number that cannot be kept honest is
+  // worth less than no number, so every idle veneer over a partial
+  // cache now renders identically, and the bar returns when the
+  // fetch does.
   function resetDownload(li) {
     stopPolling();
     downloadRow = null;
@@ -949,7 +1016,10 @@
     }
     if (parts.label) {
       parts.label.hidden = false;
+      parts.label.textContent = downloadPrompt(modelForRow(li));
     }
+    // Cancel needs no hiding of its own: it lives inside the
+    // progress area, so it goes with it and comes back with it.
     if (parts.fill) {
       parts.fill.style.width = "0%";
     }
@@ -987,6 +1057,9 @@
     li.classList.remove("needs-download");
     li._needsDownload = false;
     model.downloaded = true;
+    // Nothing left half-fetched, so the row must not offer to
+    // resume if the veneer is ever rebuilt for it.
+    model.partial = false;
     var veneer = li.querySelector(".menu-model-veneer");
     if (veneer) {
       veneer.parentNode.removeChild(veneer);
@@ -1053,10 +1126,67 @@
     return null;
   }
 
+  // The model a row stands for, by the id the row already carries.
+  function modelForRow(li) {
+    return li ? modelById(li.getAttribute("data-id")) : null;
+  }
+
+  // Re-read what the server knows about each model's cache, and
+  // relabel the veneers from it.
+  //
+  // The flags a page holds come from one fetch at load, so a
+  // download that ends anywhere else leaves every other window
+  // describing a cache that has since changed. That showed up as a
+  // second window offering "Click to Download" for a model the
+  // first had just cancelled part way, and it would show up again
+  // as a window offering to download something another window has
+  // already finished.
+  //
+  // Deliberately not `loadModels()`. That re-renders the list,
+  // which would tear down the very veneer this is trying to correct
+  // and throw away the page the user is on. Only two fields move,
+  // so only two fields are copied.
+  function refreshModelFlags() {
+    return modelClientLoad()
+      .then(function (info) {
+        var fresh = modelClientList(info) || [];
+        for (var i = 0; i < fresh.length; i++) {
+          var model = modelById(fresh[i].id);
+          if (model) {
+            model.downloaded = fresh[i].downloaded;
+            model.partial = fresh[i].partial;
+          }
+        }
+        relabelVeneers();
+      })
+      .catch(function () {
+        // The flags stay as they were, which is what the page has
+        // been showing anyway. The next reading tries again.
+      });
+  }
+
+  // Re-word every idle veneer from the flags now in hand. Cheap and
+  // idempotent, so it runs over all of them rather than tracking
+  // which row a download belonged to.
+  function relabelVeneers() {
+    if (!modelList) {
+      return;
+    }
+    var rows = modelList.querySelectorAll(".menu-model-row");
+    for (var i = 0; i < rows.length; i++) {
+      var label = rows[i].querySelector(
+        ".menu-model-veneer-label"
+      );
+      if (label && !label.hidden) {
+        label.textContent = downloadPrompt(modelForRow(rows[i]));
+      }
+    }
+  }
+
   function ensureVeneer(li) {
     var veneer = li.querySelector(".menu-model-veneer");
     if (!veneer) {
-      veneer = buildDownloadVeneer();
+      veneer = buildDownloadVeneer(modelForRow(li));
       li.appendChild(veneer);
     }
     return veneer;
@@ -1087,7 +1217,6 @@
     if (parts.fill) {
       parts.fill.style.width = pct + "%";
     }
-    pollDownload(model, li);
   }
 
   // Show the terminal (done/error) veneer on the target row when the menu
@@ -1135,8 +1264,28 @@
     var target = status ? status.target : null;
     var active = state === "downloading"
       || state === "done" || state === "error";
-    var row = (active && target) ? rowById(target) : null;
+    // The download is over, by cancel or by ack. Put the veneer back
+    // rather than only dropping the reference: leaving it would
+    // freeze the last percentage on screen under a Cancel button
+    // with nothing left to cancel, which is what a Cancel did until
+    // this branch learned to tell itself apart from the one below.
+    //
+    // It went unnoticed for a while because idle-while-bound used to
+    // be rare. The only route to it was the ack after done or error,
+    // by which point the veneer had already been rewritten. Cancel
+    // made it the ordinary case.
+    if (!active) {
+      if (downloadRow) {
+        resetDownload(downloadRow);
+      }
+      return;
+    }
+    var row = target ? rowById(target) : null;
     if (!row) {
+      // Still running, but its row is on another page. Drop the
+      // binding without touching the veneer: resetting here would
+      // rewrite a row the user has merely paged away from, and the
+      // toast is what reports the download from here.
       if (downloadRow) {
         stopPolling();
         downloadRow = null;
@@ -1164,6 +1313,19 @@
   function onDownloadStatus(status) {
     lastDownloadStatus = status;
     var state = status ? status.state : "idle";
+    // A fetch that was running is not any more, however it ended:
+    // finished, failed, or cancelled here or in another window. The
+    // cache on disk has changed, so what this page believes about
+    // it is now a guess. Read it again.
+    //
+    // Off the transition rather than the state, so this is at most
+    // a couple of requests per download and none at all while one
+    // runs. It is also why every window corrects itself, not only
+    // the one that pressed something.
+    if (prevDownloadState === "downloading"
+      && state !== "downloading") {
+      refreshModelFlags();
+    }
     if (state === "downloading") {
       document.body.classList.add("menu-busy");
     } else if (
@@ -1176,6 +1338,14 @@
     prevDownloadState = state;
     if (reattachSettled) {
       syncDownloadBinding();
+    }
+    // After the binding, so a row bound by this very reading is
+    // drawn by it rather than waiting for the next one.
+    if (downloadRow && status) {
+      var model = modelById(status.target);
+      if (model) {
+        renderDownloadRow(model, downloadRow, status);
+      }
     }
   }
 
@@ -1213,10 +1383,17 @@
   // On menu load: if a download is in flight or freshly finished, page to
   // its row so the veneer is visible, apply the fence, and bind it.
   function reattachDownload() {
-    fetch("/api/models/download-status")
-      .then(function (response) {
-        return response.json();
-      })
+    var client = downloadClient();
+    if (!client) {
+      reattachSettled = true;
+      return;
+    }
+    // A single read rather than the subscription: this runs once at
+    // load and has to settle before the first render, where a
+    // subscription would arrive whenever the shared loop next came
+    // round.
+    client
+      .readOnce()
       .then(function (status) {
         lastDownloadStatus = status;
         prevDownloadState = status.state;

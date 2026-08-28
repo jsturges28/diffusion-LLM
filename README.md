@@ -509,7 +509,7 @@ Detailed, living notes for each item (technical hooks, files to touch, open ques
 ### Possible extensions
 
 - [ ] Entropy and top-k alternatives for the diffusion models, where a position is re-decided each step and the signal becomes a trajectory rather than a single value
-- [ ] Real download cancellation (killable subprocess fetch + cache cleanup); today the `.incomplete`/resume path makes an interrupted download recoverable instead
+- [x] Real download cancellation: the fetch runs as its own process, so **Cancel** on the downloading row ends it, and closing the app takes it with it instead of leaving a multi-gigabyte transfer running. Deliberately **without** cache cleanup, which the original wording promised: the partial `.incomplete` parts are exactly what lets the next attempt resume, and the cache may be shared with another process
 - [ ] Side-by-side comparison with autoregressive generation
 - [ ] Alignment experiments (RLHF / DPO) or fine-tuning on custom instruction data
 

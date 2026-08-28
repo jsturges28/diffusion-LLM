@@ -135,7 +135,7 @@ def _install_fetch(
         hf_download, "is_repo_cached", lambda repo_id: cached
     )
     monkeypatch.setattr(
-        hf_download, "_repo_total_bytes", lambda repo_id: 0
+        hf_download, "repo_total_bytes", lambda repo_id: 0
     )
     monkeypatch.setattr(
         hf_download,

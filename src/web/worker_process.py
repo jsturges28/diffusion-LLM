@@ -118,6 +118,26 @@ def worker_command(
     ]
 
 
+def download_command(
+    *, python: Path, repo_id: str
+) -> List[str]:
+    """The argv that fetches one repository's weights.
+
+    A download is spawned through the same seam as a worker, and for
+    the same reason: it is long-running, it holds resources, and the
+    supervisor has to be able to end it. Built here beside
+    ``worker_command`` so both argv shapes are asserted in tests
+    without launching anything.
+    """
+    return [
+        str(python),
+        "-m",
+        "src.inference.download_main",
+        "--repo",
+        repo_id,
+    ]
+
+
 def spawn_worker(
     command: Sequence[str],
     *,

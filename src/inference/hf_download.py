@@ -36,7 +36,7 @@ _POLL_MAX_SECONDS: float = 6 * 60 * 60
 _POLL_MAX_ITERATIONS: int = int(_POLL_MAX_SECONDS / _POLL_INTERVAL_SECONDS)
 
 
-def _repo_total_bytes(repo_id: str) -> int:
+def repo_total_bytes(repo_id: str) -> int:
     """Total download size for ``repo_id`` from Hub file metadata.
 
     Sums the size of every sibling file. Returns 0 when the metadata is
@@ -79,6 +79,19 @@ def _has_incomplete(blobs_dir: Path) -> bool:
     return False
 
 
+def has_partial_download(repo_id: str) -> bool:
+    """Whether an interrupted fetch left parts of ``repo_id`` behind.
+
+    The same ``*.incomplete`` check ``is_repo_cached`` makes, exposed
+    because the answer is worth more than the boolean it is folded
+    into. "Not cached" covers both a model never fetched and one
+    stopped at 8%, and the menu wants to say "resume" for the second
+    rather than offering to start it over.
+    """
+    assert isinstance(repo_id, str) and repo_id, "repo_id required"
+    return _has_incomplete(_repo_blobs_dir(repo_id))
+
+
 def is_repo_cached(repo_id: str) -> bool:
     """Whether ``repo_id`` is *fully* cached, with no partial parts.
 
@@ -114,8 +127,8 @@ def _downloaded_bytes(blobs_dir: Path) -> int:
     return total
 
 
-def _emit(sink: ProgressSink, done: int, total: int) -> None:
-    """Report one progress sample in the shared sink shape."""
+def progress_sample(done: int, total: int) -> Dict[str, Any]:
+    """One progress reading, in the shape every consumer expects."""
     assert done >= 0, "downloaded bytes must be non-negative"
     assert total >= 0, "total bytes must be non-negative"
     fraction = (done / total) if total > 0 else 0.0
@@ -123,13 +136,33 @@ def _emit(sink: ProgressSink, done: int, total: int) -> None:
         fraction = 0.0
     elif fraction > 1.0:
         fraction = 1.0
-    sink(
-        {
-            "fraction": round(fraction, 4),
-            "downloaded_bytes": int(done),
-            "total_bytes": int(total),
-        }
-    )
+    return {
+        "fraction": round(fraction, 4),
+        "downloaded_bytes": int(done),
+        "total_bytes": int(total),
+    }
+
+
+def repo_progress(
+    repo_id: str, total_bytes: int
+) -> Dict[str, Any]:
+    """Sample a fetch that some other process is performing.
+
+    The supervisor runs its downloads as child processes so it can
+    terminate one, and reads their progress from here. That costs no
+    channel between the two, because progress was never coming from
+    the downloader in the first place: it is the size of the cache
+    directory on disk, which anyone can measure. ``total_bytes`` is
+    passed in rather than looked up because it is one HTTP call and
+    the caller samples this twice a second.
+    """
+    blobs = _repo_blobs_dir(repo_id)
+    return progress_sample(_downloaded_bytes(blobs), total_bytes)
+
+
+def _emit(sink: ProgressSink, done: int, total: int) -> None:
+    """Report one progress sample in the shared sink shape."""
+    sink(progress_sample(done, total))
 
 
 class WeightsUnavailableError(RuntimeError):
@@ -143,14 +176,28 @@ class WeightsUnavailableError(RuntimeError):
     """
 
 
-def _describe_unreachable(repo_id: str, cause: BaseException) -> str:
+def describe_unreachable(
+    repo_id: str, cause: Optional[BaseException] = None
+) -> str:
+    """The offline sentence, with or without the exception to blame.
+
+    A download running in a child process reports its outcome as an
+    exit status, so the supervisor rebuilds this message from the
+    repo alone and the parenthetical is simply left off. In process,
+    the caller still has the exception and keeps it.
+    """
     assert isinstance(repo_id, str) and repo_id, "repo_id required"
-    return (
+    message = (
         f"{repo_id} is not downloaded and the Hugging Face Hub"
         " could not be reached. Connect to the internet and try"
         " again, or download this model once while online; after"
         " that it loads from the local cache with no network."
-        f" (underlying error: {type(cause).__name__})"
+    )
+    if cause is None:
+        return message
+    return (
+        message
+        + f" (underlying error: {type(cause).__name__})"
     )
 
 
@@ -222,7 +269,7 @@ def download_with_progress(
     if is_repo_cached(repo_id):
         return snapshot_download(repo_id, local_files_only=True)
 
-    total_bytes = _repo_total_bytes(repo_id)
+    total_bytes = repo_total_bytes(repo_id)
     blobs_dir = _repo_blobs_dir(repo_id)
 
     result: Dict[str, str] = {}
@@ -263,7 +310,7 @@ def download_with_progress(
         # reraised untouched so its own message survives.
         if _is_unreachable(cause):
             raise WeightsUnavailableError(
-                _describe_unreachable(repo_id, cause)
+                describe_unreachable(repo_id, cause)
             ) from cause
         raise cause
 

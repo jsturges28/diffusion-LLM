@@ -9,17 +9,18 @@
 // the menu re-attaches the veneer. The menu registers an inline-visibility
 // predicate so the toast stays hidden while the real progress bar shows.
 //
-// Classic script (no modules); included after overlays.js on every page.
+// Classic script (no modules); included after download_client.js on
+// every page. The transport lives there since `TRUST-04`: this file
+// used to run its own 1000ms loop from boot to unload while menu.js
+// ran a second one at 500ms against the same URL, so sitting on a
+// downloading row polled it twice on two clocks. Now both listen to
+// one watcher and this file is only the toast.
 
 "use strict";
 
 (function () {
-  var POLL_MS = 1000;
-  var STATUS_URL = "/api/models/download-status";
-  var ACK_URL = "/api/models/download/ack";
-
   var toastEl = null;
-  var pollTimer = null;
+  var client = null;
   var lastStatus = null;
   // Page-provided hooks: the inline-veneer predicate (menu only), a click
   // override that navigates to the download without a reload, and a status
@@ -253,39 +254,35 @@
     }
   }
 
-  function poll() {
-    fetch(STATUS_URL)
-      .then(function (response) {
-        return response.json();
-      })
-      .then(function (status) {
-        lastStatus = status;
-        if (typeof statusListener === "function") {
-          try {
-            statusListener(status);
-          } catch (_e) {
-            // A subscriber error must not stop the poll loop.
-          }
-        }
-        render(status);
-      })
-      .catch(function () {
-        // Transient failure: keep the last state and retry next tick.
-      })
-      .then(function () {
-        pollTimer = setTimeout(poll, POLL_MS);
-      });
+  // Every reading, from the one watcher this page runs.
+  function onStatus(status) {
+    lastStatus = status;
+    if (typeof statusListener === "function") {
+      try {
+        statusListener(status);
+      } catch (_e) {
+        // A subscriber error must not stop the loop. The client
+        // guards this too; kept because the listener is this
+        // module's own contract with the menu, not the client's.
+      }
+    }
+    render(status);
   }
 
   // Acknowledge a finished download (done/error -> idle) so the toast and
   // the menu re-attach stop firing. Best-effort; the poll reconciles.
   function ack() {
-    return fetch(ACK_URL, { method: "POST" }).catch(function () {});
+    return client.ack();
   }
 
   function init() {
     ensureToast();
-    poll();
+    client = downloadClientCreate();
+    client.subscribe(onStatus);
+    // Observe rather than start: every page runs this, and none of
+    // them began the fetch. Claiming an operation here would let a
+    // page that is only watching cancel somebody else's download.
+    client.observe();
   }
 
   // Public API (globals; classic scripts share one scope).
@@ -301,6 +298,12 @@
   };
   window.downloadToastRefresh = refresh;
   window.downloadToastAck = ack;
+  // The page's one download transport, handed out so the menu can
+  // start and cancel through the same watcher it is listening to
+  // rather than opening a second one.
+  window.downloadToastClient = function () {
+    return client;
+  };
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init);

@@ -4266,6 +4266,28 @@ body.menu-busy
   color: var(--danger);
 }
 
+/* Quieter than Ok: this one interrupts something the user asked
+   for, so it should not read as the obvious next action the way a
+   terminal acknowledgement does. */
+.menu-model-veneer-cancel {
+  padding: 3px 14px;
+  font-family: inherit;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--text-secondary);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.menu-model-veneer-cancel:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
 .menu-model-veneer-ok {
   padding: 4px 18px;
   font-family: inherit;
