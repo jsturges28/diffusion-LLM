@@ -1173,6 +1173,39 @@ The Help copy in `src/web/static/index.html` led with repetition before this
 and was corrected to lead with domain. If that paragraph is ever rewritten
 again, this is the evidence it has to agree with.
 
+**A mask's confidence distribution is a fingerprint of the remasking
+strategy.** Measured on 2026-08-30, again from a prediction written before
+the run, which is the only reason it is worth keeping.
+
+Two LLaDA runs, same prompt, same 128 steps, same 160-token canvas, with
+`remasking` the only deliberate difference. Taking the median top-1
+probability among masked positions per frame, then across the run:
+
+- `low_confidence`: **0.145**. At frame 1, 96 percent of masked positions sit
+  below 0.2, and at frame 90 still 64 percent do. It never climbs.
+- `random`: **0.992**. Frame 1 is identical at 0.112, since both start from
+  the same all-masked canvas, but by frame 10 the median is 0.353, by frame
+  30 it is 0.945, and from frame 90 it is pinned at 1.000.
+
+The mechanism is that `low_confidence` retains exactly the positions the
+model is least sure of, so the masked set *is* the low-confidence tail by
+construction and each step shaves its top off. `random` retains an arbitrary
+sample, which is mostly positions whose context now determines them
+completely, so the masked set fills with tokens the model is certain of and
+merely has not been allowed to write. This also explains, from a second
+direction, why the mask-opacity retune found a median between 0.11 and 0.21
+across a whole run: that measurement was taken on a `low_confidence` run.
+
+Not controlled, and worth saying: one run per arm, both with seed -1, both
+carrying one edit. At a sevenfold separation in the median the direction is
+not in doubt, but the exact figures are one draw each.
+
+The consequence for the flicker scoped under layer three is that the strategy
+would become directly visible as how much the canvas moves. Counting
+positions whose top candidate does not dominate the cycle, the median per
+frame is 63 under `low_confidence` against 15 under `random`: one churns, the
+other sits nearly still while producing the same kind of text.
+
 **A DiffusionGemma canvas brightens together as it nears its stop.**
 Observed on 2026-08-28, and recorded because it was written down as a
 prediction first and could have come back the other way.
@@ -1412,6 +1445,58 @@ also new, per-frame *and* per-position, where `alternatives.json` today is
 per-position only, which suffices for an autoregressive run because a position
 is decided once and does not for a diffusion draft that is re-decided every
 step. Budget roughly frames x canvas width x k records.
+
+**Two renderings, one capture.** Scoped 2026-08-30. The stack above encodes
+probability share as stacked opacity, which is spatial. The alternative is to
+encode it as a *duty cycle*, cycling a position through its candidates so
+each is shown for its share of the time. Same data, same semantics, different
+channel, so both are display choices over this one capture rather than
+separate features, and the dependencies above cover them equally. The
+time-average of the flicker is literally the distribution, which makes it a
+temporal dither, and it degrades correctly at both ends: a dominant candidate
+holds the position almost still with ghosting below fusion, a flat one
+churns.
+
+What was worked out before anyone builds it:
+
+- **The two models are 24x apart and only one has a problem.** Measured:
+  DiffusionGemma runs at about 960ms per step, so splitting one step five
+  ways gives 192ms per candidate and a per-step cycle simply works. LLaDA
+  runs at about 40ms, giving 8ms, which is half a frame at 60Hz. Build it
+  for DiffusionGemma first: no timing work, no accumulation, a tenth of the
+  effort, and it answers the perception question for both.
+- **Separate the display clock from the data clock.** Driving the animation
+  off frame arrival restarts the cycle 12 times per 500ms on LLaDA. The
+  animation needs its own timer, fed either by *latching* the most recent
+  real distribution for a cycle, or by *smoothing* across steps with an
+  exponential moving average. Build both and compare: latching only ever
+  shows distributions that actually occurred, smoothing evolves continuously
+  instead of jumping, and the capture is identical either way.
+- **Tie the capture rate to the display rate, not the step rate.** If the
+  display latches every 500ms the worker need only send top-k that often,
+  which is every twelfth frame on LLaDA. Per step it would be roughly 24KB
+  and 20,000 candidate objects a second for the browser to parse; tied to
+  the display it is a fiftieth of that. This also takes `RUNTIME-01` off the
+  critical path for a live-only version, since nothing has to be persisted
+  to animate. It does not clear `ROADMAP-03`, because a per-frame top-k
+  field on the wire is exactly the bespoke sidecar that finding exists to
+  prevent.
+- **The duty cycle selects for itself.** An earlier sketch had a rule
+  choosing which positions deserve to flicker. Unnecessary: a position at
+  c=0.99 gives its top candidate 495ms of a 500ms cycle and renders static,
+  while one at c=0.11 churns. Confidence *is* the amount of motion, so calm
+  positions cost no attention and no rule has to exclude them. A cap is a
+  motion budget, not a selection mechanism, and it binds only in the opening
+  frames where a canvas is genuinely undetermined.
+- **Reduced motion is a hard requirement here**, not the courtesy it is for
+  the birth glow. A canvas of 158 positions each changing ten times a second
+  is well past any flashing guidance in aggregate, so the effect must be
+  inert under `prefersReducedMotion` and capped even when motion is allowed.
+- **It is an alternative to the mask reveal, not a layer on it.** Cycling
+  changes a position's width, so each needs reserving to its widest
+  candidate, which pads the canvas and ruins the natural text flow that the
+  reveal exists to give. The Settings copy should present them as two ways
+  to read the same thing rather than as stackable.
 
 Note one asymmetry if this is ever mapped onto LLaDA as a display preference,
 which it could be. On DiffusionGemma layer one reveals something currently
