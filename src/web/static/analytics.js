@@ -4181,11 +4181,7 @@ function convergenceOptions(remaskSet) {
           afterLabel: function (ctx) {
             var pos = remaskSet[ctx.dataIndex];
             if (!pos) { return ""; }
-            return "User remasked "
-              + pos.length + " token"
-              + (pos.length !== 1 ? "s" : "")
-              + ": ["
-              + pos.join(", ") + "]";
+            return overlaysRemaskSummary(pos);
           },
         },
       },

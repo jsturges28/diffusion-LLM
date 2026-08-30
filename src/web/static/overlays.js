@@ -43,6 +43,36 @@ function diffColor(changed) {
   return "hsl(0, 0%, 45%)";
 }
 
+// How many remasked positions a tooltip names before it starts
+// counting instead. A chart tooltip is sized by its longest line, so
+// an unbounded list is a box that grows with the edit: 44 positions
+// ran it off the side of the chart. Five is enough to see where an
+// edit landed, and the exact identity of the 44th is not something
+// anyone reads off a hover.
+var OVERLAYS_REMASK_LIST_MAX = 5;
+
+// A frame's remask selection, as the lines a chart tooltip should
+// draw. Two of them rather than one sentence, because the box is
+// sized by its longest line and it is drawn onto the chart canvas,
+// so it cannot escape a 380px column no matter where it is placed.
+// Truncating to five alone still left 60 characters against a budget
+// of about 57; splitting the count from the list drops the longest
+// line to the mid thirties and gives the numbers room to grow.
+function overlaysRemaskSummary(positions) {
+  var count = positions.length;
+  var plural = count !== 1 ? "s" : "";
+  var shown = positions.slice(0, OVERLAYS_REMASK_LIST_MAX);
+  var rest = count - shown.length;
+  var body = shown.join(", ");
+  if (rest > 0) {
+    body += ", ... and " + rest + " others";
+  }
+  return [
+    "User remasked " + count + " token" + plural + ":",
+    "[" + body + "]",
+  ];
+}
+
 // A still-unsettled position fades by how sure the model is of what
 // it is holding there, so a canvas shows its own certainty forming
 // rather than a flat field.

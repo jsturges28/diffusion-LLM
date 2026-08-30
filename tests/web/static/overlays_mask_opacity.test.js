@@ -1,9 +1,10 @@
-// Tests for the shared mask-opacity curve in overlays.js.
+// Tests for the shared mask-opacity curve and the remask summary in
+// overlays.js.
 //
 // Strategy: load the shipped file into a fresh vm context, the same
-// pattern the other browser tests use, and call the curve directly.
-// It is pure over its argument, so no DOM and no storage are
-// involved.
+// pattern the other browser tests use, and call the two functions
+// directly. Both are pure over their arguments, so no DOM and no
+// storage are involved.
 //
 // The curve lived in app.js until it was needed on both pages, which
 // is also why it had no test of its own: app.js cannot be loaded this
@@ -56,6 +57,8 @@ function load() {
   });
   return sandbox;
 }
+
+// ---- The curve ----
 
 test("a hopeless position sits at the floor", () => {
   const sandbox = load();
@@ -151,4 +154,95 @@ test("a confidence outside the unit range is clamped", () => {
 
   assert.equal(sandbox.overlaysMaskOpacity(-0.5), 0.05);
   assert.equal(sandbox.overlaysMaskOpacity(4), 1);
+});
+
+// ---- The remask summary ----
+
+// Chart.js renders one line per entry when a tooltip callback returns
+// an array, and the box takes the width of the longest. Only that
+// longest line can clip, so it is what every width test below reads.
+function widest(lines) {
+  return lines.reduce((a, b) => (a.length >= b.length ? a : b));
+}
+
+test("a small selection is listed in full", () => {
+  const sandbox = load();
+
+  assert.deepEqual(
+    Array.from(sandbox.overlaysRemaskSummary([2, 3, 4])),
+    ["User remasked 3 tokens:", "[2, 3, 4]"]
+  );
+});
+
+test("one position stays singular", () => {
+  const sandbox = load();
+
+  assert.match(
+    sandbox.overlaysRemaskSummary([7])[0], /1 token:/
+  );
+});
+
+test("a large selection is counted rather than listed", () => {
+  // The bug: a 44-token edit put 44 numbers on one tooltip line, and
+  // a chart tooltip is sized by its longest line, so the box ran off
+  // the side of the chart.
+  const sandbox = load();
+  const positions = [];
+  for (let i = 0; i < 44; i++) {
+    positions.push(i);
+  }
+
+  assert.deepEqual(
+    Array.from(sandbox.overlaysRemaskSummary(positions)),
+    ["User remasked 44 tokens:", "[0, 1, 2, 3, 4, ... and 39 others]"]
+  );
+});
+
+test("the count and the list are separate lines", () => {
+  // Truncating alone was not enough: five positions still came to 60
+  // characters on one line against a budget of about 57, so the box
+  // clipped by three. The split is what actually fixed the width.
+  const sandbox = load();
+
+  const lines = sandbox.overlaysRemaskSummary([1, 3, 4, 6, 10, 22]);
+
+  assert.equal(lines.length, 2);
+  assert.ok(
+    widest(lines).length < 45,
+    `longest line was ${widest(lines).length} characters`
+  );
+});
+
+test("the summary is bounded whatever the selection", () => {
+  // The property the width fix rests on, stated independently of the
+  // exact wording above. Positions run to three digits on a 256-wide
+  // canvas, so the worst case is five of those plus the tail.
+  const sandbox = load();
+  const huge = [];
+  for (let i = 100; i < 4096; i++) {
+    huge.push(i);
+  }
+
+  const longest = widest(sandbox.overlaysRemaskSummary(huge));
+
+  assert.ok(
+    longest.length < 50, `longest line was ${longest.length}`
+  );
+});
+
+test("the cap is exactly the boundary it claims", () => {
+  const sandbox = load();
+  const max = sandbox.OVERLAYS_REMASK_LIST_MAX;
+  const exact = [];
+  for (let i = 0; i < max; i++) {
+    exact.push(i);
+  }
+
+  assert.doesNotMatch(
+    sandbox.overlaysRemaskSummary(exact)[1], /others/
+  );
+  assert.match(
+    sandbox.overlaysRemaskSummary(exact.concat([max]))[1],
+    /and 1 others/
+  );
 });

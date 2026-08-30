@@ -5799,16 +5799,22 @@ function updateGuidedUI() {
       scrubberSlider.max =
         String(runFrames.history.length - 1);
       unlockScrubberNav();
+      // Both actions stay reachable from any frame. Neither reads the
+      // scrubber: Confirm saves the whole run and then jumps to the
+      // last frame itself, and Retry restores the pre-edit arrays and
+      // goes back to the first editable frame. Hiding them mid-review
+      // only made scrubbing back look like it had cancelled the edit.
+      btnConfirmEdit.hidden = false;
+      btnRetryEdit.hidden = false;
       if (currentScrubFrame === runFrames.history.length - 1) {
         guidedEditStatus.textContent =
           "Edit complete. Confirm to save, or"
           + " retry from the start.";
-        btnConfirmEdit.hidden = false;
-        btnRetryEdit.hidden = false;
       } else {
         guidedEditStatus.textContent =
-          "Reviewing edited run. Return to the last"
-          + " frame to confirm or retry.";
+          "Reviewing frame " + currentScrubFrame
+          + " of the edited run. Confirm to save, or"
+          + " retry from the start.";
       }
       break;
   }

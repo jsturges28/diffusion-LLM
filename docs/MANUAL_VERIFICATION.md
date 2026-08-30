@@ -1860,3 +1860,32 @@ and the wiring; only a screen can say whether the result is legible.
     vs Original**, on both pages: the diff overlay was flat
     everywhere before this and is the likeliest place for a gap to
     survive.
+197. **Confirm and Retry survive a scrub.** Run a guided edit through
+    to the end. On the last frame the green check and the blue retry
+    appear as before. Now scrub back several frames: both should
+    stay, and the status line should name the frame you are on
+    rather than telling you to go back to the end.
+    Then use them from there, which is the half that matters.
+    Confirming from a mid-run frame should save the whole run and
+    leave the scrubber on the last frame; retrying should discard
+    the branch and drop you at the first editable frame. Neither
+    reads the scrubber, so a save that came out short would mean
+    something deeper than this change.
+198. **A large edit no longer widens the tooltip.** In Analytics,
+    open an edited run with many remasked positions (the 44-token
+    edit that surfaced this is ideal) and hover the resume point on
+    the **Convergence** chart. It should read over two lines,
+    `User remasked 44 tokens:` then
+    `[2, 3, 4, 5, 6, ... and 39 others]`, and the box should sit
+    inside the chart rather than running off its side.
+    Truncating alone was not enough and the split is why: the
+    tooltip is drawn onto the chart canvas, so it cannot exceed a
+    380px column, which is about 57 characters at this font. Five
+    positions on one line came to 60 and clipped by three. Two lines
+    put the longest at 34.
+    The placement is still open. A list whose length depends on the
+    data does not really belong in a fixed-width box drawn inside a
+    chart, and the other two charts say only
+    `Resume point (44 tokens remasked)`. Moving the list to a
+    reserved row under the chart is scoped in the ROADMAP; this item
+    covers only that the current box no longer clips.
