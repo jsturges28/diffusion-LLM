@@ -2323,6 +2323,7 @@ function renderDiffOverlay(frameIndex) {
         editedOpacity: diffEditedOpacity,
         blend: diffBlend,
         revealMask: appSettings.revealMaskCandidate,
+        opacityFor: tokenOpacityFn,
       },
       MASK_CHAR
     )
@@ -4622,20 +4623,10 @@ function applySettings() {
 // Token-level rendering for scrubber mode.
 // Each token is a clickable span; resolved tokens
 // can be clicked to toggle remasking.
-// Map a still-masked position's predicted confidence to opacity:
-// unresolved/0-confidence masks sit at a solid floor and grow more
-// opaque (energized) as the model's confidence rises toward the reveal
-// range (~0.3+ for low_confidence), then the token resolves into text.
-var MASK_OPACITY_FLOOR = 0.35;
-var MASK_OPACITY_CAP = 0.4;
-
-function maskOpacity(c) {
-  if (typeof c !== "number" || c <= 0) {
-    return MASK_OPACITY_FLOOR;
-  }
-  var frac = Math.min(c / MASK_OPACITY_CAP, 1);
-  return MASK_OPACITY_FLOOR + (1 - MASK_OPACITY_FLOOR) * frac;
-}
+//
+// The confidence-to-opacity curve itself is overlaysMaskOpacity in
+// overlays.js, shared with Analytics so the same mask reads the same
+// on both pages.
 
 // A user-remasked position draws the mask glyph even though its
 // token is still resolved: the selection is a statement about what
@@ -4675,14 +4666,16 @@ function tokenClassFn(index, tok, masked) {
 }
 
 // Mask opacity tracks the model's live predicted confidence for the
-// position (0 or absent gives the solid floor). A remask selection
-// is held fully opaque instead, so it reads as a choice rather than
-// as one more low-confidence mask.
+// position. A remask selection is held fully opaque instead, so it
+// reads as a choice rather than as one more low-confidence mask.
 function tokenOpacityFn(index, tok, masked) {
   if (!masked || remaskedPositions[index] === true) {
     return null;
   }
-  return maskOpacity(tok ? tok.c : null);
+  if (!tok) {
+    return MASK_OPACITY_FLOOR;
+  }
+  return overlaysMaskOpacity(tok.c);
 }
 
 function tokenColorFn(isOriginal) {

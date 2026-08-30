@@ -435,7 +435,7 @@
           <dt>Thinking</dt>
           <dd>Enables a step-by-step reasoning pass before the answer. When on, the model's private reasoning is separated into a collapsible <em>Reasoning</em> panel above the output, keeping the final answer clean.</dd>
           <dt>Entropy signal</dt>
-          <dd>Changes how per-token confidence is measured. Off (default), confidence is a fast <em>stability proxy</em>. On, it is the model's true certainty computed from the full output distribution (the max-softmax probability) at each step: more faithful, but slower and heavier, so enable it only when you specifically want to study confidence. It also makes the canvas readable while it is still forming: with the signal on, unsettled positions carry a real number too, so each mask is faded by how sure the model is of the guess underneath it rather than all sitting at the same solid floor.</dd>
+          <dd>Changes how per-token confidence is measured. Off (default), confidence is a fast <em>stability proxy</em>. On, it is the model's true certainty computed from the full output distribution (the max-softmax probability) at each step: more faithful, but slower and heavier, so enable it only when you specifically want to study confidence. It also makes the canvas readable while it is still forming: with the signal on, unsettled positions carry a real number too, so each mask is faded by how sure the model is of the guess underneath it. With it off they carry no number at all and draw solid, because a position nobody measured should not be shown as one the model despaired of.</dd>
         </dl>
         <h4>SmolLM3 (autoregressive)</h4>
         <dl>
@@ -465,6 +465,7 @@
           <dt>SmolLM3</dt>
           <dd>The softmax probability of the chosen token at the moment it was generated. Like LLaDA, it is recorded once and stays fixed, since autoregressive tokens are never revisited.</dd>
         </dl>
+        <p>On a diffusion run that confidence is also drawn without hovering: an unresolved position is <strong>faded by how sure the model is</strong> of what it is holding there, so a mask nobody has an opinion about is barely visible and firms up as the model commits, whether it is drawn as <code>░</code> or as the candidate itself. The fade follows a square-root curve rather than a straight line, because these confidences cluster low and a linear ramp would put a whole canvas in one shade. It reads the same on a saved run in Analytics as it does live. A position with no recorded confidence draws solid instead: the opening frame, a run saved before the measurement existed, or a DiffusionGemma run without the <strong>Entropy signal</strong>.</p>
         <p><strong>Hover any token</strong> in the output to read its confidence for the current frame in the metrics strip described below; masked / unresolved tokens report&nbsp;0, except on a DiffusionGemma run with <strong>Entropy signal</strong> on, where they report the model's certainty in the guess behind the mask. Select <strong>Heatmap</strong> in the <strong>Overlay</strong> drawer (top-right of the output area) to recolor resolved tokens by confidence: dim, desaturated tones mark low-confidence tokens and bright green marks high-confidence ones. The heatmap is a live view over the frame you are viewing and is not saved. See <em>Visual overlays &amp; settings</em> below for the other overlays.</p>
 
         <h3>The metrics strip</h3>
@@ -521,6 +522,7 @@
           </li>
         </ol>
         <p>A single edit followed by <strong>Resume to End</strong> is the simplest case; you can also chain as many frame edits as you like. Each partial resume generates only the frames between your last edit and your next target, so earlier edits propagate forward through every subsequent segment. The scrubber enforces forward-only navigation; later edits cannot precede earlier ones.</p>
+        <p>When the branch finishes you land in <strong>review</strong>, with the whole run on the scrubber and <strong>Confirm</strong> and <strong>Retry</strong> available from any frame. Scrub freely: reading back through what the branch did is the point of the step, and neither action depends on where you stop. Confirm saves the run whole and returns you to its last frame; Retry throws the branch away and starts the session again from the first editable frame.</p>
         <p>Click <strong>Exit</strong> at any time to leave guided editing; this discards any in-progress edits and restores the original run. All remask edits (frame indices and token positions) are recorded automatically and included in saved results.</p>
 
         <h3>Visual overlays &amp; settings</h3>

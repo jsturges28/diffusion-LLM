@@ -20,6 +20,12 @@ like a broken one.
 Passing proves the live view grades masks, that its two render paths
 cannot drift apart on it, and that the three hooks which would be
 meaningless mid-run are still left off.
+
+The curve itself has since moved to `overlays.js`, so that both pages
+draw a mask the same way, and it is tested by being run rather than
+by being read: see `tests/web/static/overlays_mask_opacity.test.js`.
+What stays here is the wiring, which source inspection is the only
+tool for.
 """
 
 from __future__ import annotations
@@ -140,11 +146,13 @@ def test_a_resolved_token_is_not_graded() -> None:
     assert "!masked" in body
 
 
-def test_an_ungraded_mask_falls_to_the_floor() -> None:
-    """Absent and zero mean the same thing to the renderer, which is
-    what lets a run without the Entropy Signal look exactly as it
-    did before any of this."""
-    body = _region("function maskOpacity(c)", 300)
+def test_the_curve_is_the_shared_one() -> None:
+    """The generator no longer owns it. The curve moved to
+    `overlays.js` when Analytics needed the same mask to read the
+    same way, and its behavior is tested by running it, in
+    `tests/web/static/overlays_mask_opacity.test.js`, rather than by
+    reading it here."""
+    body = _region("function tokenOpacityFn(index, tok, masked)", 300)
 
-    assert 'typeof c !== "number" || c <= 0' in body
-    assert "MASK_OPACITY_FLOOR" in body
+    assert "overlaysMaskOpacity(" in body
+    assert "function maskOpacity" not in _source()

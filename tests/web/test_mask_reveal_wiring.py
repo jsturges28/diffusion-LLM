@@ -1,22 +1,33 @@
-"""The mask reveal reaches every surface that draws a token.
+"""What a mask says reaches every surface that draws one.
 
 Strategy: source inspection of the shipped classic scripts, the
 approach this repo uses for pages that cannot be imported. What the
-builder does with the flag is tested properly in
-`tests/web/static/overlays_span.test.js`, and the settings round trip
-in `tests/web/static/overlays_settings.test.js`. What needs guarding
-here is the wiring in between, which those two cannot see: a setting
-that no caller passes is a toggle that does nothing.
+builder does with these is tested properly in
+`tests/web/static/overlays_span.test.js`, the settings round trip in
+`tests/web/static/overlays_settings.test.js`, and the opacity curve
+in `tests/web/static/overlays_mask_opacity.test.js`. What needs
+guarding here is the wiring in between, which none of those can see:
+a preference no caller passes is a toggle that does nothing, and a
+curve no caller passes is a flat canvas.
 
-There are more of those callers than the feature suggests. The
+There are more of those callers than either feature suggests. The
 generator draws tokens live, scrubbed, crossfaded against a retained
-pre-edit run, and as a faded preview of the frame an edit will
-regenerate. Analytics draws them for a saved run and for the same two
-comparison overlays, and had never read the settings at all, which is
-what makes the reveal retroactive rather than live-only.
+pre-edit run, through the diff overlay, and as a faded preview of the
+frame an edit will regenerate. Analytics draws them for a saved run
+and for the same two comparison overlays, and had never read the
+settings at all, which is what makes the reveal retroactive rather
+than live-only.
 
-Passing proves each of those paths asks for the preference, that
-Analytics reads it, and that the Settings page can set it.
+Two features share this file because they are the same wiring
+mistake twice. The reveal shipped first and reached every path; the
+grading shipped earlier and reached two, leaving Analytics and both
+diff overlays flat for months while the confidence sat in the saved
+file unread. Pinning them together is what stops the next per-token
+property from finding a third gap.
+
+Passing proves each of those paths asks for the preference and for
+the curve, that Analytics reads the settings, and that the Settings
+page can set the one control.
 """
 
 from __future__ import annotations
@@ -30,6 +41,7 @@ STATIC = (
 
 SETTING = "revealMaskCandidate"
 FLAG = "revealMask"
+HOOK = "opacityFor"
 
 
 def _source(name: str) -> str:
@@ -92,6 +104,31 @@ def test_the_preview_no_longer_decides_the_glyph_itself() -> None:
     assert "tok.m ? MASK_CHAR : tok.t" not in body
 
 
+# -- the generator grades its masks --
+
+
+def test_the_generators_live_and_scrubbed_paths_grade() -> None:
+    """The two that always did. Pinned alongside the two that did
+    not, so the set is readable in one place."""
+    live = _region("app.js", "var LIVE_TOKEN_OPTIONS", 120)
+    scrubbed = _region(
+        "app.js", "function tokenLayerOptions(isOriginal)", 400
+    )
+
+    assert f"{HOOK}: tokenOpacityFn" in live
+    assert f"{HOOK}: tokenOpacityFn" in scrubbed
+
+
+def test_the_generators_diff_overlay_grades() -> None:
+    """It did not, and its own colorFor says why that was wrong: it
+    returns null for a masked position specifically to keep the mask
+    identical to the single-layer paths. Without the curve it was
+    the only view where a mask meant nothing."""
+    body = _region("app.js", "function renderDiffOverlay(", 900)
+
+    assert f"{HOOK}: tokenOpacityFn" in body
+
+
 # -- analytics --
 
 
@@ -106,11 +143,14 @@ def test_analytics_reads_the_durable_settings() -> None:
 
 
 def test_the_saved_run_view_asks_for_it() -> None:
-    body = _region(
-        "analytics.js", "function renderOverlayTokens(opts)", 1200
-    )
+    """Anchored on the options object rather than on the function,
+    because a window wide enough to hold the whole function also
+    holds the comparison layers below it, and then dropping the hook
+    here still passes on the neighbour's copy of it."""
+    body = _region("analytics.js", "var edited = {", 300)
 
     assert f"{FLAG}: analyticsSettings.{SETTING}" in body
+    assert f"{HOOK}: overlayOpacityFn" in body
 
 
 def test_the_analytics_comparison_layers_ask_for_it() -> None:
@@ -120,6 +160,7 @@ def test_the_analytics_comparison_layers_ask_for_it() -> None:
     )
 
     assert body.count(f"{FLAG}:") == 2
+    assert body.count(f"{HOOK}:") == 2
 
 
 def test_the_analytics_diff_overlay_asks_for_it() -> None:
@@ -128,6 +169,53 @@ def test_the_analytics_diff_overlay_asks_for_it() -> None:
     )
 
     assert f"{FLAG}: analyticsSettings.{SETTING}" in body
+    assert f"{HOOK}: overlayOpacityFn" in body
+
+
+def test_the_analytics_hook_has_no_selection_to_spare() -> None:
+    """The generator holds a remask selection solid; Analytics has no
+    selection, so its hook is the curve and nothing else. Stated here
+    because the temptation is to copy the generator's version, which
+    would read a `remaskedPositions` that does not exist on the
+    page."""
+    body = _region(
+        "analytics.js",
+        "function overlayOpacityFn(index, tok, masked)",
+        300,
+    )
+
+    assert "overlaysMaskOpacity(" in body
+    assert "remaskedPositions" not in body
+
+
+def test_a_hole_is_faint_rather_than_solid_on_both_pages() -> None:
+    """A position with no token is padding that exists so two stacked
+    layers line up. It is not an unmeasured token, which draws solid,
+    so both hooks send it to the floor before the curve sees it. The
+    two are one line apart in the same function and easy to conflate,
+    which is exactly what happened when the floor moved."""
+    generator = _region(
+        "app.js", "function tokenOpacityFn(index, tok, masked)", 400
+    )
+    analytics = _region(
+        "analytics.js",
+        "function overlayOpacityFn(index, tok, masked)",
+        400,
+    )
+
+    for body in (generator, analytics):
+        assert "if (!tok) {" in body
+        assert "return MASK_OPACITY_FLOOR;" in body
+
+
+def test_the_shared_diff_builder_forwards_the_hook() -> None:
+    """Both pages reach their diff layers through this one function,
+    so a hook it drops is two views flat at once."""
+    body = _region(
+        "overlays.js", "function overlaysBuildDiffLayers(", 1400
+    )
+
+    assert body.count(f"{HOOK}: opacityFor") == 2
 
 
 # -- the settings page --

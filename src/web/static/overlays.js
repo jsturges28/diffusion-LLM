@@ -43,6 +43,42 @@ function diffColor(changed) {
   return "hsl(0, 0%, 45%)";
 }
 
+// A still-unsettled position fades by how sure the model is of what
+// it is holding there, so a canvas shows its own certainty forming
+// rather than a flat field.
+//
+// The curve is concave on purpose, and it was chosen from the data
+// rather than by eye. Measured across a 128-step LLaDA run, the
+// median confidence of a masked position sits between 0.11 and 0.21
+// for the whole run, so a linear map crowds nearly every position
+// into the bottom of the range: the previous ramp, linear to a 0.4
+// cap over a 0.35 floor, put a typical frame between 0.48 and 0.65,
+// a spread too narrow to see on 14px text. Taking the square root
+// spends the channel where the values actually are.
+var MASK_OPACITY_FLOOR = 0.05;
+
+function overlaysMaskOpacity(c) {
+  // Absent is not zero, and the difference matters at this floor.
+  // Zero means the model was asked and had no idea, which earns the
+  // near-invisible end of the ramp. Absent means nothing was ever
+  // measured here: LLaDA's opening frame, every run saved before the
+  // capture, and DiffusionGemma without the Entropy Signal. Grading
+  // those would draw a confident claim about a number nobody has, on
+  // a whole canvas at once, so they stay solid.
+  //
+  // A position with no token at all is a third case and does not
+  // reach here: the callers send it to the floor, because a hole is
+  // structural padding that exists only so two stacked layers line
+  // up, and drawing it at full strength would make the emptier layer
+  // the loudest thing on the canvas.
+  if (typeof c !== "number") {
+    return 1;
+  }
+  var clamped = Math.max(0, Math.min(1, c));
+  return MASK_OPACITY_FLOOR
+    + (1 - MASK_OPACITY_FLOOR) * Math.sqrt(clamped);
+}
+
 // Reference maximum for normalizing per-token entropy (nats) into a
 // display fraction. Entropy arrives raw from the sampler because
 // normalizing by log(vocab) over a ~128k vocabulary would squash
@@ -728,10 +764,15 @@ function overlaysApplyLayerPointers(
 //
 // The generator needs all three. It draws the mask glyph over
 // positions the user selected for remasking even though their tokens
-// are resolved (hence maskedFor), marks those and its clickable and
-// substitutable positions with their own classes (classFor), and
-// grades a mask's opacity by the model's live predicted confidence
-// (opacityFor). Analytics has no live run, so its masks are flat.
+// are resolved (hence maskedFor), and marks those and its clickable
+// and substitutable positions with their own classes (classFor).
+//
+// Both pages pass opacityFor, and it is the one hook whose absence is
+// usually a bug rather than a choice: a mask's fade is a property of
+// the token's own confidence, which a saved run carries just as a
+// live one does. The pages differ only in their exceptions, which is
+// why it stays a callback: the generator holds a remask selection
+// solid, and Analytics has no selection to hold.
 //
 // ``opts.revealMask`` is the user's setting, not a callback: with it
 // on, an unsettled position draws the token it is holding instead of
@@ -852,15 +893,17 @@ function overlaysBuildTokenLayer(tokens, opts) {
 // a DocumentFragment of two ``.token-layer`` nodes; the caller owns
 // the container (and must give it the stacking mode). ``diff`` is an
 // overlaysComputeDiff() result; ``opts`` carries opacities in [0,100]
-// (originalOpacity / editedOpacity), a ``blend`` flag, and the
-// ``revealMask`` preference, which both layers take together: they
-// are two readings of the same canvas, and drawing one as words and
-// the other as blocks would make the diff unreadable.
+// (originalOpacity / editedOpacity), a ``blend`` flag, the
+// ``revealMask`` preference, and an ``opacityFor`` hook. The last two
+// go to both layers together: they are two readings of the same
+// canvas, and drawing one as faded words and the other as solid
+// blocks would make the diff unreadable.
 function overlaysBuildDiffLayers(
   origTokens, editedTokens, diff, opts, maskChar
 ) {
   var options = opts || {};
   var revealMask = !!options.revealMask;
+  var opacityFor = options.opacityFor;
   var origOpacity =
     typeof options.originalOpacity === "number"
       ? options.originalOpacity : 50;
@@ -878,6 +921,7 @@ function overlaysBuildDiffLayers(
     interactive: !editedTakes,
     maskChar: maskChar,
     revealMask: revealMask,
+    opacityFor: opacityFor,
     colorFor: overlaysDiffColorFor(diff, true, blend),
   });
 
@@ -887,6 +931,7 @@ function overlaysBuildDiffLayers(
     interactive: editedTakes,
     maskChar: maskChar,
     revealMask: revealMask,
+    opacityFor: opacityFor,
     colorFor: overlaysDiffColorFor(diff, false, blend),
   });
   if (blend) {

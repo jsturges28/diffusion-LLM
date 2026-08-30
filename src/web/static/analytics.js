@@ -3497,6 +3497,7 @@ function renderOverlayTokens(opts) {
     colorFor: overlayColorFn(opts.colorFor),
     classFor: editedClassFn,
     revealMask: analyticsSettings.revealMaskCandidate,
+    opacityFor: overlayOpacityFn,
   };
   var original = overlayComparisonFrame();
   if (original !== null) {
@@ -3505,6 +3506,7 @@ function renderOverlayTokens(opts) {
         opts.originalColorFor || opts.colorFor
       ),
       revealMask: analyticsSettings.revealMaskCandidate,
+      opacityFor: overlayOpacityFn,
     });
     return;
   }
@@ -3521,6 +3523,20 @@ function renderOverlayTokens(opts) {
     );
   }
   overlayOutput.appendChild(fragment);
+}
+
+// Fade an unsettled position by the confidence the run recorded for
+// it, the same curve the generator draws live. There is no remask
+// selection to hold solid here, so unlike the generator's version
+// this is the curve and nothing else.
+function overlayOpacityFn(index, tok, masked) {
+  if (!masked) {
+    return null;
+  }
+  if (!tok) {
+    return MASK_OPACITY_FLOOR;
+  }
+  return overlaysMaskOpacity(tok.c);
 }
 
 // Mark the positions a saved edit touched, so a run's interventions
@@ -3549,6 +3565,7 @@ function renderOverlayLayers(
       interactive: !editedTakes,
       colorFor: original.colorFor,
       revealMask: original.revealMask,
+      opacityFor: original.opacityFor,
     })
   );
   overlayOutput.appendChild(
@@ -3559,6 +3576,7 @@ function renderOverlayLayers(
       colorFor: edited.colorFor,
       classFor: edited.classFor,
       revealMask: edited.revealMask,
+      opacityFor: edited.opacityFor,
     })
   );
 }

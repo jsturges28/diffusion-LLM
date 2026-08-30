@@ -1812,3 +1812,51 @@ the default can move, on the strength of what you see.
     the canvas *is*; the reveal is a reading of it. If that reads as
     a contradiction rather than as a distinction, say so, because
     the strip could follow the setting instead.
+
+## A mask that shows its confidence (retuned ramp)
+
+The grading was already running and spending almost none of the
+alpha channel: measured on a saved LLaDA run, a whole frame's masks
+sat between 0.48 and 0.65, which is not a gradient anyone can see.
+The curve is now a square root over a 0.05 floor, chosen against the
+measured confidence distribution rather than by eye, and it is shared
+by both pages for the first time. The sandbox can prove the arithmetic
+and the wiring; only a screen can say whether the result is legible.
+
+194. **A LLaDA canvas grades visibly now.** Generate a LLaDA run and
+    watch the masks rather than the text, first with **Reveal the
+    mask candidate** off so the blocks are the only thing moving.
+    Early frames should look genuinely faint and uneven, with
+    individual positions firming up as they approach their reveal,
+    instead of the flat wash of green this replaced. Scrub back
+    afterwards: it should look the same as it did live.
+    Then the judgement the numbers cannot make. Is the low end too
+    faint to be useful, or is a barely-there mask the honest drawing
+    of a position the model has no opinion about? If a typical frame
+    now reads as empty rather than as uncertain, say so: the floor
+    and the curve are two constants in one function and easy to move.
+195. **Frame 0 is solid, and frame 1 is not.** The one visible step
+    this introduces, called out so it is not mistaken for a flicker.
+    An unmeasured position now draws solid rather than dim, and
+    LLaDA's opening frame carries no confidence at all, so a run
+    should open on a full field of solid blocks and drop into the
+    ramp on the first step.
+    That change is what keeps a run saved before the measurement
+    existed, and a DiffusionGemma run with the Entropy Signal off,
+    from rendering as a near-blank canvas. Worth confirming both:
+    open an older diffusion run in Analytics and generate a short
+    DiffusionGemma run with the signal **off**. Both should show
+    solid, uniform masks. A canvas that looks empty in either case
+    is a real bug, not a taste question.
+196. **Analytics agrees with the generator on the same run.** The
+    asymmetry that prompted this: Analytics never graded its masks
+    at all, so a run looked different depending on which page you
+    opened it from, even though the confidence was in the saved file
+    the whole time.
+    Take one saved diffusion run. Scrub it on the generator, note a
+    frame, then open the same run and frame in Analytics. The masks
+    should be identically faded. Check both comparison views on an
+    edited run too, the **Original / Edited** crossfade and **Diff
+    vs Original**, on both pages: the diff overlay was flat
+    everywhere before this and is the likeliest place for a gap to
+    survive.

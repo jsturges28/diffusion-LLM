@@ -878,6 +878,54 @@ Agreed with the maintainer (deliberate each in Ask mode before Plan). (The
    rest of the time, and the answer may be that only the elapsed line
    moves between frames.
 
+4. **Stop making DiffusionGemma's confidence optional.** Accepted on
+   2026-08-29, and sequenced immediately after the mask-opacity retune so
+   that a changed capture and a changed curve cannot confound each other on
+   hardware. Small, but it is a capability change users will notice, so it
+   wants its own commit.
+
+   The toggle is misnamed, which is most of the case for removing it. It
+   emits argmax confidence, not entropy: DiffusionGemma never writes an `e`
+   field at all, only `ar_sampler.py` does, and a saved DiffusionGemma run
+   carries exactly `t`, `m`, `id`, `c`. So the switch does not choose
+   between two signals. It chooses whether the *primary confidence channel*
+   exists, the one that mask opacity, the Heatmap, and the candidate
+   reveal's fade all read, and a run without it is not a cheaper run but a
+   run with a hole where the measurement goes. The audit reached the same
+   place from the other direction (`AUDIT_REPORT.md`, `ROADMAP-03`):
+   "reusing the existing toggle would also conflate confidence with entropy
+   while paying a large temporary-memory cost".
+
+   **Answer the cost before deleting the gate.** The gate exists for a real
+   number: `_from_logits` builds a float32 softmax over 256 positions by
+   roughly 262K vocabulary entries, about 256 MiB, and `tensor.float()`
+   copies before it, so peak transient is around half a gigabyte per
+   denoising step. Invisible on a 24 GB card holding an 18 GB model, which
+   is why it never surfaced, but it is what the toggle protects. It is also
+   avoidable: max probability is `exp(max_logit - logsumexp(logits))`, two
+   reductions with no probability tensor, and chunking the reduction over
+   positions bounds the transient to tens of megabytes. That is `ROADMAP-03`'s
+   own direction ("numerically stable reductions over logits ... without
+   retaining a full probability tensor longer than required") and it
+   generalizes to entropy and top-k. Once it is cheap, removing the gate is
+   a deletion rather than a bet on the maintainer's hardware being typical.
+
+   The surface is small: the spec in `registry.py`, four sites in
+   `dgemma_worker.py` (parse, generate, `last_run_state`, resume), two
+   assignments in `dgemma_sampler.py`, and a test fixture knob. No frontend,
+   because the parameter panel is generated from `param_specs`. No
+   migration, because the Analytics detail panel renders params
+   model-agnostically and `_compare_label` skips specs it cannot find, so
+   runs already saved with the signal off keep displaying it.
+
+   What it buys beyond the copy cleanup: the stability-*confidence* branch
+   in `_emit` and the `self._stable` counter that feeds it become dead and
+   can go. What it does **not** buy, so nobody over-claims: the absent-`c`
+   guard stays, because LLaDA's frame 0 and every already-saved run keep
+   their shape forever; and `masks_are_real` with the settlement convergence
+   basis stays, because DiffusionGemma infers `m` from a token changing
+   between steps, which is a property of renoising and not of this switch.
+
 ---
 
 ## Autoregressive model support (Phases A and C shipped)
@@ -1477,6 +1525,44 @@ Shipped from this backlog (see `README.md`):
   `maskedFor` and `classFor` serve a remask selection that cannot be made
   mid-run.
 
+  **The curve was retuned on 2026-08-29, and it was measured rather than
+  eyeballed.** The complaint that started it was that the canvas looked like
+  one shade of green with no grading at all. It was grading. Running a saved
+  128-step LLaDA run through the shipped curve, a frame's masked positions
+  came out at p10 0.48, p50 0.58, p90 0.65 at frame 20, and 0.46 / 0.54 /
+  1.00 at frame 78. A 1.35x spread on 14px monospace is not a gradient
+  anyone can see.
+
+  Two causes, and the second is the interesting one. A 0.35 floor spent a
+  third of the channel before confidence said anything. And the map was
+  linear over `[0, 0.4]`, applied to a quantity whose median across that
+  whole run sits between 0.11 and 0.21, so nearly every position landed in
+  the bottom of what was left. Four candidates were measured on the same two
+  frames:
+
+  - Linear, floor 0.35, cap 0.40 (shipped): 0.48 / 0.58 / 0.65.
+  - Linear, floor 0.05, cap 1.0: 0.13 / 0.19 / 0.23, with 31 of 120
+    positions under 0.15. Not "a few ghost tokens", a canvas that is mostly
+    a whisper.
+  - Square root, floor 0.05: 0.32 / 0.41 / 0.46, nothing crushed.
+  - Linear, floor 0.05, cap 0.60: 0.18 / 0.28 / 0.34.
+
+  The square root shipped. The general point outlives the constants: a
+  linear map onto a left-skewed quantity wastes the channel, and any future
+  signal drawn this way (entropy, top-k share) should be checked against its
+  own distribution before a ramp is chosen for it.
+
+  Two decisions came with it. `overlaysMaskOpacity` moved to `overlays.js`,
+  because Analytics had never graded its masks at all: the confidence was in
+  the saved file and no render path on that page asked for it, and the same
+  was true of the Diff overlay on *both* pages, whose `overlaysDiffColorFor`
+  returns null for a masked position specifically to keep masks identical to
+  the single-layer views. And absent confidence now draws solid instead of
+  falling to the floor. The two used to be conflated, which was harmless at
+  0.35 and would have been catastrophic at 0.05: LLaDA's opening frame, every
+  run saved before the capture, and every DiffusionGemma run without the
+  Entropy Signal carry no number at all, and would have rendered as blank
+  canvases. Unmeasured is not the same claim as measured and hopeless.
 - Randomize remasks in Edit Frames (slider + N-of-M + Shuffle): seeds the
   meta-explainability question of whether a remask pattern shapes convergence.
 - "New run saved" analytics cue: a persisted count badge (generator + Main Menu)
