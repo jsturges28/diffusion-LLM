@@ -11,6 +11,8 @@ var settingGpuTickerCb =
   document.getElementById("setting-gpu-ticker");
 var settingBirthGlowCb =
   document.getElementById("setting-token-birth-glow");
+var settingRevealMaskCb =
+  document.getElementById("setting-reveal-mask-candidate");
 var diffusionModeRow =
   document.getElementById("diffusion-mode-row");
 var diffusionModeMount =
@@ -69,6 +71,7 @@ function cloneSettings(source) {
     diffusionTextMode: source.diffusionTextMode,
     gpuTicker: source.gpuTicker,
     tokenBirthGlow: source.tokenBirthGlow,
+    revealMaskCandidate: source.revealMaskCandidate,
     glowBrightnessDiffusion: source.glowBrightnessDiffusion,
     glowFadeMsDiffusion: source.glowFadeMsDiffusion,
     glowBrightnessAutoregressive:
@@ -89,6 +92,10 @@ function syncControls() {
   if (settingBirthGlowCb) {
     settingBirthGlowCb.checked =
       stagedSettings.tokenBirthGlow;
+  }
+  if (settingRevealMaskCb) {
+    settingRevealMaskCb.checked =
+      stagedSettings.revealMaskCandidate;
   }
   if (selectDiffusionMode) {
     selectDiffusionMode.value = stagedSettings.diffusionTextMode;
@@ -517,6 +524,13 @@ function wireControls() {
       // Turning it back on should show what was turned back on.
       // Off is a no-op: playGlowPreview returns early.
       playGlowPreview();
+      updateButtons();
+    });
+  }
+  if (settingRevealMaskCb) {
+    settingRevealMaskCb.addEventListener("change", function () {
+      stagedSettings.revealMaskCandidate =
+        settingRevealMaskCb.checked;
       updateButtons();
     });
   }

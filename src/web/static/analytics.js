@@ -64,6 +64,12 @@ var overlayScrubNext =
 var overlayScrubLabel =
   document.getElementById("overlay-scrubber-label");
 var overlaySelect = null;
+// The durable preferences, read once here as the generator reads
+// them once at boot: the Settings page takes effect on the next load
+// of either page. This is what makes the mask reveal retroactive,
+// since a saved diffusion run carries the same per-position guess a
+// live one does.
+var analyticsSettings = overlaysLoadSettings();
 // Cached frames payload and current overlay mode for the open run.
 var overlayData = null;
 var overlayMode = "none";
@@ -3490,6 +3496,7 @@ function renderOverlayTokens(opts) {
   var edited = {
     colorFor: overlayColorFn(opts.colorFor),
     classFor: editedClassFn,
+    revealMask: analyticsSettings.revealMaskCandidate,
   };
   var original = overlayComparisonFrame();
   if (original !== null) {
@@ -3497,6 +3504,7 @@ function renderOverlayTokens(opts) {
       colorFor: overlayColorFn(
         opts.originalColorFor || opts.colorFor
       ),
+      revealMask: analyticsSettings.revealMaskCandidate,
     });
     return;
   }
@@ -3540,6 +3548,7 @@ function renderOverlayLayers(
       opacity: 1 - compareBlend,
       interactive: !editedTakes,
       colorFor: original.colorFor,
+      revealMask: original.revealMask,
     })
   );
   overlayOutput.appendChild(
@@ -3549,6 +3558,7 @@ function renderOverlayLayers(
       interactive: editedTakes,
       colorFor: edited.colorFor,
       classFor: edited.classFor,
+      revealMask: edited.revealMask,
     })
   );
 }
@@ -3895,6 +3905,8 @@ function renderDiffOverlay() {
         originalOpacity: overlayDiffOrigOpacity,
         editedOpacity: overlayDiffEditOpacity,
         blend: overlayDiffBlendOn,
+        revealMask: analyticsSettings.revealMaskCandidate,
+        opacityFor: overlayOpacityFn,
       }
     )
   );

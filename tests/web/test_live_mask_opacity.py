@@ -54,12 +54,9 @@ def _region(anchor: str, chars: int) -> str:
 
 
 def test_the_live_options_grade_masks() -> None:
-    source = _source()
+    body = _region("var LIVE_TOKEN_OPTIONS", 120)
 
-    assert (
-        "var LIVE_TOKEN_OPTIONS = { opacityFor: tokenOpacityFn };"
-        in source
-    )
+    assert "opacityFor: tokenOpacityFn" in body
 
 
 def test_the_grading_is_the_same_one_the_scrubber_uses() -> None:
@@ -82,11 +79,24 @@ def test_both_live_paths_pass_the_same_options() -> None:
 
 
 def test_nothing_else_supplies_live_options() -> None:
-    """One definition and the two callers above. A third would be a
+    """One definition, the two callers above, and loadSettings
+    writing the mask-reveal preference into it. A fifth would be a
     path that renders live tokens on its own terms."""
     uses = re.findall(r"\bLIVE_TOKEN_OPTIONS\b", _source())
 
-    assert len(uses) == 3
+    assert len(uses) == 4
+
+
+def test_the_reveal_preference_reaches_the_live_options() -> None:
+    """The live options are one object built once, so the setting is
+    copied in where the preferences load rather than read per token
+    per frame inside the render loop."""
+    body = _region("function loadSettings()", 500)
+
+    assert (
+        "LIVE_TOKEN_OPTIONS.revealMask ="
+        " appSettings.revealMaskCandidate" in body
+    )
 
 
 # -- and only that one --

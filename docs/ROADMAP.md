@@ -1286,6 +1286,25 @@ explain: early in a canvas the display would fill with `" the"` and then be
 eaten by real content, which is precisely why the convergence curve overstates
 (see the ledger).
 
+**Shipped on 2026-08-28 as the Settings toggle "Reveal the mask candidate",
+for both diffusion models rather than only this one.** Off by default. The
+client owns the glyph now: the shared span builder substitutes `tok.t` for
+the mask character when the preference is on, keeping `token-mask` and the
+confidence fade, so a revealed guess reads as a dim tinted word and never as
+a settled one. See the correction below on what LLaDA needed.
+
+The metrics strip was deliberately left alone, and the reasoning is worth
+keeping because the plan for this work assumed the opposite. It looked as
+though the strip already named the candidate for DiffusionGemma, since both
+pages hand it `tokenText: tok.t`. They do, but `overlaysMetricTokenText`
+returns the mask character for any position flagged masked, so the strip has
+always shown `░` there for both models and still does. That reads as a
+distinction rather than a contradiction: the canvas is a reading of the
+model's draft, and the strip is a statement about the position, which is
+also why it reports a remask selection as masked. If hardware says the
+mismatch is jarring rather than clarifying, the fix is one branch in that
+function; the manual item asks the question.
+
 *Layer two is opacity, and it needed one small change.* Fade each unsettled
 token by the model's confidence in it. Confidence was already computed with
 Entropy Signal on and then discarded for exactly the positions that would be
@@ -1305,8 +1324,8 @@ is exactly when the Entropy Signal is on. The overlay itself needed no work:
 receiving nothing.
 
 Layer one, and the stopping readout below, no longer wait on a capture
-change. Both remain unbuilt, and both now have the number they need on any
-run recorded with the signal on.
+change. Layer one shipped on 2026-08-28; the stopping readout remains
+unbuilt, and has the number it needs on any run recorded with the signal on.
 
 An earlier worry, recorded because it was wrong and the correction is the
 useful part: the streamed logits are temperature-scaled, and the schedule
@@ -1334,6 +1353,21 @@ which it could be. On DiffusionGemma layer one reveals something currently
 thrown away; on LLaDA a mask is a real token with nothing behind it, so the
 same display would require newly computing what the model was considering.
 Identical on screen, quite different underneath.
+
+**That last sentence was wrong, and the correction is the useful part.**
+Found on 2026-08-28 while scoping layer one for both models. LLaDA's
+`_diffusion_step` takes an argmax over every position on every step, uses it
+to fill the few positions it reveals, and drops the rest one line later. The
+softmax over that same argmax is `true_conf`, which the sampler has always
+returned and which drives LLaDA's mask opacity. So the app has been reporting
+how confident the model is about a guess it could not name, and nothing new
+had to be computed: `_diffusion_step` returns `x0` alongside what it already
+returned, and `_build_token_list` decodes it into `t` for masked positions.
+The asymmetry that does survive is one of recording rather than of
+computation. DiffusionGemma keeps the guess in the frame already, so layer
+one is retroactive there; LLaDA wrote the glyph into `t`, so its reveal is
+forward-only and a run saved before this shows blocks, correctly, because
+nothing else was written down.
 
 **A live adaptive-stopping readout, which pairs with the above.** Same signal
 at a canvas scale rather than a token scale. DiffusionGemma halts a canvas
@@ -1397,6 +1431,21 @@ reads differently from one that committed, sat, and then genuinely changed.
 Scoped per canvas either way: `put` clears the seen set at each commit, so
 every position is legitimately newborn on the next canvas.
 
+Revisited on 2026-08-28, the same day, once the mask reveal shipped, because
+the reveal weakens the premise without removing it. This entry opens by
+saying that watching a canvas replace its placeholder `" the"` with real
+content "currently produces no visual at all". With the reveal on you now
+watch exactly that, in text, which was the specific example given. What
+survives is narrower and still worth building: the reveal shows the *state*
+of a position on each frame, and a viewer has to notice a difference between
+two frames to see a change, which is precisely what is hard to catch while
+scrubbing or at speed. A mark says a change *happened* at this position, on
+this step, and stays visible for a moment after. So the entry is not
+subsumed, but it should be built against a canvas that already names its
+candidates: with the reveal off, a revision is a block that stays a block,
+and a mark is the only evidence there is. That, rather than the `" the"`
+example, is the case to design for.
+
 Shipped from this backlog (see `README.md`):
 - Token commit-order coloring: tokens are tinted by the step at which they
   resolved (light green early to red-orange late), as a persistent overlay. Now
@@ -1427,6 +1476,7 @@ Shipped from this backlog (see `README.md`):
   live: `colorFor` has nothing to do while the overlay drawer is hidden, and
   `maskedFor` and `classFor` serve a remask selection that cannot be made
   mid-run.
+
 - Randomize remasks in Edit Frames (slider + N-of-M + Shuffle): seeds the
   meta-explainability question of whether a remask pattern shapes convergence.
 - "New run saved" analytics cue: a persisted count badge (generator + Main Menu)

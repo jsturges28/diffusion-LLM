@@ -22,6 +22,14 @@
 // is the subtle one, because live rendering keeps one span per
 // position for the whole run and updates it in place.
 //
+// The reveal tests below cover the other half of what this function
+// decides: whether an unsettled position draws the glyph or the
+// token the model is currently holding there. The invariant worth
+// stating once is that the two are independent. Revealing changes
+// the text and nothing else, so a revealed position keeps token-mask
+// and keeps its confidence fade, and therefore still reads as a
+// guess rather than as an answer.
+//
 // Run with: node --test tests/web/static/
 
 "use strict";
@@ -201,4 +209,129 @@ test("a mask and a resolved token are classed apart", () => {
 
   assert.match(maskSpan.className, /token-mask/);
   assert.match(wordSpan.className, /token-resolved/);
+});
+
+// ---- Revealing the candidate behind a mask ----
+
+test("a mask draws the glyph by default", () => {
+  // The flag absent is every caller written before the setting
+  // existed, and they must be unaffected.
+  const sandbox = load();
+  const span = fakeSpan();
+
+  sandbox.overlaysSyncTokenSpan(span, 0, masked(0.4), MASK, {});
+
+  assert.equal(span.textContent, MASK);
+});
+
+test("a mask draws its candidate when the flag is set", () => {
+  const sandbox = load();
+  const span = fakeSpan();
+
+  sandbox.overlaysSyncTokenSpan(span, 0, masked(0.4), MASK, {
+    revealMask: true,
+  });
+
+  assert.equal(span.textContent, " the");
+});
+
+test("a revealed candidate is still classed as a mask", () => {
+  // The whole feature rests on this. A word drawn at a position that
+  // has not settled must not be readable as one that has.
+  const sandbox = load();
+  const span = fakeSpan();
+
+  sandbox.overlaysSyncTokenSpan(span, 0, masked(0.4), MASK, {
+    revealMask: true,
+  });
+
+  assert.match(span.className, /token-mask/);
+  assert.doesNotMatch(span.className, /token-resolved/);
+});
+
+test("a revealed candidate keeps its confidence fade", () => {
+  const sandbox = load();
+  const span = fakeSpan();
+
+  sandbox.overlaysSyncTokenSpan(span, 0, masked(0.4), MASK, {
+    revealMask: true,
+    opacityFor: gradeMasks,
+  });
+
+  assert.equal(span.textContent, " the");
+  assert.equal(span.style.opacity, "0.4");
+});
+
+test("a hole draws the glyph even with the reveal on", () => {
+  // There is no candidate to name at a position with no token, and
+  // reading tok.t off null would throw.
+  const sandbox = load();
+  const span = fakeSpan();
+
+  sandbox.overlaysSyncTokenSpan(span, 3, null, MASK, {
+    revealMask: true,
+  });
+
+  assert.equal(span.textContent, MASK);
+});
+
+test("a run saved before the capture reveals nothing new", () => {
+  // LLaDA wrote the glyph into t for years, and frame 0 still does,
+  // because the model has not looked at the canvas yet. Substituting
+  // it yields the glyph, so the setting is simply inert there rather
+  // than a hole to guard against.
+  const sandbox = load();
+  const span = fakeSpan();
+
+  sandbox.overlaysSyncTokenSpan(
+    span, 0, { t: MASK, m: true, id: 126336 }, MASK,
+    { revealMask: true }
+  );
+
+  assert.equal(span.textContent, MASK);
+  assert.match(span.className, /token-mask/);
+});
+
+test("an empty candidate falls back to the glyph", () => {
+  // An empty span collapses, and two stacked layers stop lining up
+  // the moment one of them is a position short.
+  const sandbox = load();
+  const span = fakeSpan();
+
+  sandbox.overlaysSyncTokenSpan(
+    span, 0, { t: "", m: true, id: 7 }, MASK, { revealMask: true }
+  );
+
+  assert.equal(span.textContent, MASK);
+});
+
+test("a hook-masked token is not revealed", () => {
+  // A remask selection is the app hiding a settled token to show
+  // what the next run will redraw. Revealing it would put the word
+  // back and undo the point of the selection.
+  const sandbox = load();
+  const span = fakeSpan();
+
+  sandbox.overlaysSyncTokenSpan(span, 0, resolved(), MASK, {
+    revealMask: true,
+    maskedFor: () => true,
+  });
+
+  assert.equal(span.textContent, MASK);
+  assert.match(span.className, /token-mask/);
+});
+
+test("a reused span puts the glyph back when the reveal is off", () => {
+  // The live path updates one span per position in place, so a
+  // revealed word left behind would outlive the setting that drew it.
+  const sandbox = load();
+  const span = fakeSpan();
+  sandbox.overlaysSyncTokenSpan(span, 0, masked(0.4), MASK, {
+    revealMask: true,
+  });
+  assert.equal(span.textContent, " the");
+
+  sandbox.overlaysSyncTokenSpan(span, 0, masked(0.4), MASK, {});
+
+  assert.equal(span.textContent, MASK);
 });

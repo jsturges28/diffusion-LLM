@@ -2064,9 +2064,15 @@ var liveTokenSpans = [];
 // chosen mid-run. maskedFor and classFor serve remask selection,
 // which is unreachable while a run is in flight.
 //
+// revealMask is a value rather than a hook, and loadSettings writes
+// the user's preference over the default here at boot.
+//
 // The metrics strip still reads these tokens: it works off
 // data-pos, which every span carries.
-var LIVE_TOKEN_OPTIONS = { opacityFor: tokenOpacityFn };
+var LIVE_TOKEN_OPTIONS = {
+  revealMask: false,
+  opacityFor: tokenOpacityFn,
+};
 
 function renderLiveFrame(tokens, revealed) {
   outputArea.classList.remove("token-layers");
@@ -2316,6 +2322,7 @@ function renderDiffOverlay(frameIndex) {
         originalOpacity: diffOriginalOpacity,
         editedOpacity: diffEditedOpacity,
         blend: diffBlend,
+        revealMask: appSettings.revealMaskCandidate,
       },
       MASK_CHAR
     )
@@ -4591,6 +4598,11 @@ function applyPromptContextWarning(count) {
 // happen there and are picked up here on the next load (hydrate).
 function loadSettings() {
   appSettings = parseSettings(localStorage.getItem(SETTINGS_KEY));
+  // The live options are one shared object rebuilt per run rather
+  // than per frame, so the setting is copied in here, where the rest
+  // of the preferences land, instead of being read inside the render
+  // loop for every position on every step.
+  LIVE_TOKEN_OPTIONS.revealMask = appSettings.revealMaskCandidate;
 }
 
 // Apply the (saved) settings to the live app: hover highlight and any
@@ -4687,6 +4699,7 @@ function tokenColorFn(isOriginal) {
 function tokenLayerOptions(isOriginal) {
   return {
     maskChar: MASK_CHAR,
+    revealMask: appSettings.revealMaskCandidate,
     maskedFor: tokenMaskedFn,
     classFor: tokenClassFn,
     opacityFor: tokenOpacityFn,
@@ -4847,14 +4860,21 @@ function renderTargetPlaceholder(frameIndex) {
     wrapper.className = "preview-content";
 
     if (origTokens) {
+      // The shared builder rather than spans by hand, so the mask
+      // reveal reaches this view too. It is a still of the pre-edit
+      // run, and a setting that applied everywhere except the one
+      // place you compare against would be the confusing kind of
+      // gap. .preview-content is pointer-events: none, so the
+      // data-pos the builder adds stays inert here.
+      var previewOptions = {
+        revealMask: appSettings.revealMaskCandidate,
+      };
       for (var i = 0; i < origTokens.length; i++) {
-        var tok = origTokens[i];
-        var span = document.createElement("span");
-        span.className = tok.m
-          ? "token-span token-mask"
-          : "token-span token-resolved";
-        span.textContent = tok.m ? MASK_CHAR : tok.t;
-        wrapper.appendChild(span);
+        wrapper.appendChild(
+          overlaysBuildTokenSpan(
+            i, origTokens[i], MASK_CHAR, previewOptions
+          )
+        );
       }
     } else {
       var textSpan = document.createElement("span");

@@ -157,6 +157,7 @@ def _build_token_list(
     tokenizer: Any,
     reveal_conf: torch.Tensor | None = None,
     mask_conf: torch.Tensor | None = None,
+    mask_guess: torch.Tensor | None = None,
 ) -> List[Dict[str, Any]]:
     """Build per-token metadata for the generation region.
 
@@ -167,6 +168,20 @@ def _build_token_list(
     which the UI maps to mask opacity. c is omitted on masked tokens
     when no prediction exists yet (the initial all-masked frame),
     which the UI treats as fully solid.
+
+    ``t`` is the token this position currently holds, whether or not
+    it has settled, which is the convention DiffusionGemma already
+    follows. A masked position carries the model's current guess at
+    it, and ``m`` is what says the guess is not committed. Drawing
+    the mask glyph is therefore the client's decision rather than
+    this function's, which is what lets the reveal setting exist at
+    all: the glyph used to be written here, and a guess written over
+    is a guess nobody can choose to see.
+
+    ``mask_guess`` absent means there is no prediction yet, which
+    happens once per run on the all-masked opening frame. Those
+    positions keep the glyph, because at that point the model has
+    genuinely not looked at the canvas.
     """
     gen_ids = x[0, prompt_len:].tolist()
     conf = (
@@ -175,14 +190,22 @@ def _build_token_list(
     pred = (
         mask_conf.tolist() if mask_conf is not None else None
     )
+    guess = (
+        mask_guess.tolist() if mask_guess is not None else None
+    )
+    if guess is not None:
+        assert len(guess) == len(gen_ids), (
+            "a prediction per generated position, or none at all"
+        )
     tokens: List[Dict[str, Any]] = []
     for i, token_id in enumerate(gen_ids):
         is_mask = token_id == MASK_ID
-        if is_mask:
+        if is_mask and guess is None:
             display = "░"
         else:
+            shown = guess[i] if is_mask else token_id
             raw = tokenizer.decode(
-                [token_id],
+                [shown],
                 skip_special_tokens=False,
             )
             display = sanitize_frame(raw)
@@ -266,12 +289,15 @@ def _diffusion_step(
     block_end: int,
     num_transfer_tokens: torch.Tensor,
     step_in_block: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
+]:
     """Execute one synchronous diffusion step, mutating x.
 
-    Returns (x, true_conf, transfer_index): the mutated sequence,
-    the per-position softmax confidence of the argmax prediction,
-    and the boolean mask of positions revealed this step.
+    Returns (x, true_conf, transfer_index, x0): the mutated
+    sequence, the per-position softmax confidence of the argmax
+    prediction, the boolean mask of positions revealed this step,
+    and the argmax prediction itself for every position.
     """
     mask_index = x == MASK_ID
 
@@ -329,7 +355,12 @@ def _diffusion_step(
         transfer_index[j, select_index] = True
 
     x[transfer_index] = x0[transfer_index]
-    return x, true_conf, transfer_index
+    # x0 goes back out as well as into x. It is the model's pick for
+    # every position, settled or not, and the line above keeps only
+    # the few that were revealed this step. The rest are what a
+    # masked position is currently holding out for, and the display
+    # had no way to name them because they stopped here.
+    return x, true_conf, transfer_index, x0
 
 
 async def streaming_generate(
@@ -450,7 +481,7 @@ async def streaming_generate(
             ):
                 return
 
-            x, step_conf, step_transfer = (
+            x, step_conf, step_transfer, step_guess = (
                 await asyncio.to_thread(
                     _diffusion_step,
                     x,
@@ -467,6 +498,7 @@ async def streaming_generate(
             )
             gen_transfer = step_transfer[0, prompt_len:]
             gen_step_conf = step_conf[0, prompt_len:]
+            gen_step_guess = step_guess[0, prompt_len:]
             reveal_conf[gen_transfer] = (
                 gen_step_conf[gen_transfer]
             )
@@ -498,7 +530,7 @@ async def streaming_generate(
                 "text": sanitize_frame(step_text),
                 "tokens": _build_token_list(
                     x, prompt_len, tokenizer, reveal_conf,
-                    gen_step_conf,
+                    gen_step_conf, gen_step_guess,
                 ),
                 "revealed": born,
             }
@@ -641,7 +673,7 @@ async def streaming_resume(
         ):
             return
 
-        x, step_conf, step_transfer = (
+        x, step_conf, step_transfer, step_guess = (
             await asyncio.to_thread(
                 _diffusion_step,
                 x,
@@ -658,6 +690,7 @@ async def streaming_resume(
         )
         gen_transfer = step_transfer[0, prompt_len:]
         gen_step_conf = step_conf[0, prompt_len:]
+        gen_step_guess = step_guess[0, prompt_len:]
         reveal_conf[gen_transfer] = (
             gen_step_conf[gen_transfer]
         )
@@ -685,7 +718,7 @@ async def streaming_resume(
             "text": sanitize_frame(step_text),
             "tokens": _build_token_list(
                 x, prompt_len, tokenizer, reveal_conf,
-                gen_step_conf,
+                gen_step_conf, gen_step_guess,
             ),
             "revealed": born,
         }

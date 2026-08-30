@@ -732,6 +732,11 @@ function overlaysApplyLayerPointers(
 // substitutable positions with their own classes (classFor), and
 // grades a mask's opacity by the model's live predicted confidence
 // (opacityFor). Analytics has no live run, so its masks are flat.
+//
+// ``opts.revealMask`` is the user's setting, not a callback: with it
+// on, an unsettled position draws the token it is holding instead of
+// the glyph. Both pages pass it, and it defaults falsy so a caller
+// that says nothing keeps drawing glyphs.
 function overlaysBuildTokenSpan(index, tok, mask, opts) {
   var span = document.createElement("span");
   overlaysSyncTokenSpan(span, index, tok, mask, opts);
@@ -757,6 +762,11 @@ function overlaysSyncTokenSpan(span, index, tok, mask, opts) {
   // rather than skipped: two layers only line up if both emit a span
   // per position.
   var masked = !tok || !!tok.m;
+  // The position's own claim, kept apart from masked because the
+  // hook below can mask a token that did settle. Only this one earns
+  // the reveal: a hook-masked position is the app hiding a settled
+  // token to show intent, and revealing it would undo the point.
+  var unsettled = masked && !!tok;
   // Consulted only for a token that is really there, so the hook can
   // add masking but never strip it off a hole and leave tok.t to be
   // read from null below.
@@ -778,7 +788,12 @@ function overlaysSyncTokenSpan(span, index, tok, mask, opts) {
   if (span.className !== className) {
     span.className = className;
   }
-  var text = masked ? mask : tok.t;
+  var text = mask;
+  if (!masked) {
+    text = tok.t;
+  } else if (unsettled && opts.revealMask) {
+    text = overlaysMaskCandidate(tok, mask);
+  }
   if (span.textContent !== text) {
     span.textContent = text;
   }
@@ -796,6 +811,19 @@ function overlaysSyncTokenSpan(span, index, tok, mask, opts) {
   if (span.style.opacity !== nextOpacity) {
     span.style.opacity = nextOpacity;
   }
+}
+
+// What an unsettled position is currently holding, for the reveal.
+// Falls back to the glyph on anything that would draw as nothing,
+// because an empty span collapses and two stacked layers stop lining
+// up. A saved run recorded before the samplers kept their guess has
+// the glyph in tok.t already, so it falls through unchanged and the
+// setting is simply inert there.
+function overlaysMaskCandidate(tok, mask) {
+  if (typeof tok.t !== "string" || tok.t === "") {
+    return mask;
+  }
+  return tok.t;
 }
 
 // Build one stacked layer of token spans. ``opts`` carries the layer
@@ -824,11 +852,15 @@ function overlaysBuildTokenLayer(tokens, opts) {
 // a DocumentFragment of two ``.token-layer`` nodes; the caller owns
 // the container (and must give it the stacking mode). ``diff`` is an
 // overlaysComputeDiff() result; ``opts`` carries opacities in [0,100]
-// (originalOpacity / editedOpacity) and a ``blend`` flag.
+// (originalOpacity / editedOpacity), a ``blend`` flag, and the
+// ``revealMask`` preference, which both layers take together: they
+// are two readings of the same canvas, and drawing one as words and
+// the other as blocks would make the diff unreadable.
 function overlaysBuildDiffLayers(
   origTokens, editedTokens, diff, opts, maskChar
 ) {
   var options = opts || {};
+  var revealMask = !!options.revealMask;
   var origOpacity =
     typeof options.originalOpacity === "number"
       ? options.originalOpacity : 50;
@@ -845,6 +877,7 @@ function overlaysBuildDiffLayers(
     opacity: origOpacity / 100,
     interactive: !editedTakes,
     maskChar: maskChar,
+    revealMask: revealMask,
     colorFor: overlaysDiffColorFor(diff, true, blend),
   });
 
@@ -853,6 +886,7 @@ function overlaysBuildDiffLayers(
     opacity: editedOpacity / 100,
     interactive: editedTakes,
     maskChar: maskChar,
+    revealMask: revealMask,
     colorFor: overlaysDiffColorFor(diff, false, blend),
   });
   if (blend) {
@@ -1190,6 +1224,10 @@ var SETTINGS_DEFAULTS = {
   diffusionTextMode: "default",
   gpuTicker: true,
   tokenBirthGlow: true,
+  // Off by default. A canvas of blocks is what a diffusion run looks
+  // like, and reading a page of plausible words that are not the
+  // answer yet is a thing to opt into, not to be handed.
+  revealMaskCandidate: false,
   glowBrightnessDiffusion: GLOW_BRIGHTNESS_DEFAULT,
   glowFadeMsDiffusion: GLOW_FADE_MS_DEFAULT,
   glowBrightnessAutoregressive: GLOW_BRIGHTNESS_DEFAULT,
@@ -1210,6 +1248,7 @@ function parseSettings(raw) {
     diffusionTextMode: SETTINGS_DEFAULTS.diffusionTextMode,
     gpuTicker: SETTINGS_DEFAULTS.gpuTicker,
     tokenBirthGlow: SETTINGS_DEFAULTS.tokenBirthGlow,
+    revealMaskCandidate: SETTINGS_DEFAULTS.revealMaskCandidate,
     glowBrightnessDiffusion:
       SETTINGS_DEFAULTS.glowBrightnessDiffusion,
     glowFadeMsDiffusion: SETTINGS_DEFAULTS.glowFadeMsDiffusion,
@@ -1237,6 +1276,10 @@ function parseSettings(raw) {
       // saved before this setting existed should still meet the
       // effect rather than having it silently off forever.
       settings.tokenBirthGlow = parsed.tokenBirthGlow !== false;
+      // Default off when absent, unlike the two above: this one
+      // changes what the canvas says rather than how it looks, so an
+      // older profile keeps the glyphs until it asks otherwise.
+      settings.revealMaskCandidate = !!parsed.revealMaskCandidate;
       parseGlowInto(settings, parsed);
       settings.tpsMode =
         parsed.tpsMode === "last" ? "last" : "total";
@@ -1415,6 +1458,7 @@ function settingsEqual(a, b) {
     && a.diffusionTextMode === b.diffusionTextMode
     && a.gpuTicker === b.gpuTicker
     && a.tokenBirthGlow === b.tokenBirthGlow
+    && a.revealMaskCandidate === b.revealMaskCandidate
     && a.glowBrightnessDiffusion === b.glowBrightnessDiffusion
     && a.glowFadeMsDiffusion === b.glowFadeMsDiffusion
     && a.glowBrightnessAutoregressive

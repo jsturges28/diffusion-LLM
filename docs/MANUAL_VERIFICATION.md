@@ -1745,3 +1745,70 @@ cached, and a slow enough connection that you have time to act.
     measurable `*.incomplete` parts, which would mean the Xet
     downloader was not disabled in the child the way it is in the
     supervisor.
+
+## Revealing the mask candidate
+
+A Settings toggle draws the token a diffusion model is currently
+holding at each unsettled position, instead of `░`. The sandbox can
+prove the guess is recorded and that the renderer substitutes it. It
+cannot answer the question the feature actually asks, which is
+whether a canvas full of plausible-looking words is informative or
+just noise. That is what these are for, and a negative answer is a
+real result: the setting is off by default and can stay that way, or
+the default can move, on the strength of what you see.
+
+190. **A LLaDA canvas names what it is holding.** Turn on
+    **Settings > Appearance > Reveal the mask candidate**, Save, and
+    generate a LLaDA run. The canvas should fill with dim tinted
+    words from the first step rather than with blocks, each word
+    firming up as its position grows confident and then turning the
+    resolved color when it commits.
+    Three specifics worth confirming, because each is a separate
+    decision in the code. The first frame should still be all
+    blocks, since the model has not looked at the canvas yet. A
+    revealed word should stay visibly *dimmer and differently
+    colored* than a settled one at all times, which is what stops a
+    guess from reading as an answer. And scrubbing back over the
+    finished run should look the same as it did live.
+    Then the reading question: does watching the draft rewrite
+    itself tell you more than watching blocks resolve, or does it
+    read as noise? Both answers are useful. Say which.
+191. **A DiffusionGemma canvas, and the placeholder finding.** Same
+    setting, a multi-canvas DiffusionGemma run, ideally with
+    **Entropy signal** on so the words are also faded by
+    confidence.
+    The specific thing to look for is the one the ROADMAP and the
+    ledger describe in a paragraph each: early in a canvas the
+    display should fill with `" the"` and other high-frequency
+    filler, which is then eaten by real content as the canvas
+    settles. That is exactly why the mask-flag convergence curve
+    overstates progress for this model, and the reveal should make
+    it self-evident rather than something to take on faith. If the
+    canvas does *not* fill with filler, that is worth reporting,
+    because the explanation currently in two documents would be
+    wrong.
+192. **Saved runs answer to the setting.** Open a DiffusionGemma run
+    in Analytics, scrub to a mid-run frame, and toggle the setting
+    (Save, then reload Analytics, since both pages read preferences
+    at load). The same saved frame should switch between blocks and
+    words.
+    Then a LLaDA run saved **before** today: it should show blocks
+    either way, and that is correct rather than a bug. LLaDA wrote
+    the glyph into the record, so there is nothing else stored to
+    show; only runs generated from now on carry the guess. A LLaDA
+    run generated today should behave like the DiffusionGemma one.
+193. **The reveal does not leak into the places it should not.**
+    Three views, quickly, with the setting on and a diffusion run
+    that has been edited.
+    In **Edit Frames**, click a resolved token to select it for
+    remasking: it should turn into a block, not stay a word. The
+    selection is a statement about what the next run will redraw,
+    and drawing the old word there would undo the point.
+    In **Edit Another Frame**, the faded preview of the frame you
+    are about to regenerate should honor the setting too, since it
+    is the thing you compare a branch against.
+    Hovering a masked position should still report `░` and the
+    position's confidence in the metrics strip. The strip says what
+    the canvas *is*; the reveal is a reading of it. If that reads as
+    a contradiction rather than as a distinction, say so, because
+    the strip could follow the setting instead.
