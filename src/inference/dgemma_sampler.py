@@ -42,8 +42,12 @@ from src.inference.reveal import newly_revealed
 
 MASK_CHAR = "\u2591"
 
-# Consecutive stable steps for a proxy-confidence of 1.0.
-STABLE_WINDOW = 3
+# Positions reduced at a time when reading confidence off the
+# logits. The transient is this many rows of the vocabulary in
+# float32, so 32 is about 33 MiB against the 256 MiB a whole-canvas
+# softmax would hold. Large enough that the per-chunk overhead is
+# noise, small enough that the peak is not.
+LOGIT_CHUNK_POSITIONS = 32
 
 # Control/structure tokens hidden from the per-token display.
 _STRIP_TOKENS = (
@@ -121,7 +125,6 @@ class FrameQueueStreamer(BaseStreamer):
         # terminal frame claiming the run produced no text at all.
         self.last_text = ""
         self._prev: Optional[List[int]] = None
-        self._stable: Optional[List[int]] = None
         # Positions already reported as born on this canvas. Unlike
         # LLaDA, a draft token here can settle, change again, and
         # settle a second time; without this the same position would
@@ -130,8 +133,13 @@ class FrameQueueStreamer(BaseStreamer):
         self._index = 0
         self._canvas_index = 0
         self._prompt_seen = False
-        # When True, put_draft receives logits (huge on a 262K
-        # vocab) instead of tokens, enabling true entropy/conf.
+        # Whether put_draft receives logits rather than tokens. The
+        # name is transformers', which reads it off the streamer to
+        # decide what to hand over, so the shape of put_draft is the
+        # library's contract and not ours to narrow. Both samplers
+        # set it True: reading confidence off the logits used to be
+        # optional, and stopped being so once it cost a bounded
+        # reduction rather than a canvas-sized softmax.
         self._takes_logits = False
 
     @staticmethod
@@ -145,11 +153,39 @@ class FrameQueueStreamer(BaseStreamer):
     def _from_logits(
         logits: torch.Tensor,
     ) -> tuple[List[int], List[float]]:
+        """The argmax and its probability, without the probabilities.
+
+        A softmax over this vocabulary is the expensive way to ask a
+        cheap question. At 256 positions by roughly 262K entries the
+        probability tensor alone is about 256 MiB in float32, and the
+        cast that precedes it copies, so the old form peaked near
+        half a gigabyte per denoising step to read one number per
+        position.
+
+        ``exp(max - logsumexp)`` is the same quantity from two
+        reductions, in the numerically stable form, and processing a
+        slice of positions at a time bounds what exists at once to
+        one chunk. The reductions also generalise: entropy and top-k
+        come off the same pass, which is where `ROADMAP-03` is going.
+        """
         tensor = logits
         if hasattr(tensor, "dim") and tensor.dim() > 2:
             tensor = tensor[0]
-        probs = torch.softmax(tensor.float(), dim=-1)
-        conf, ids = probs.max(dim=-1)
+        id_chunks: List[torch.Tensor] = []
+        conf_chunks: List[torch.Tensor] = []
+        chunks = torch.split(tensor, LOGIT_CHUNK_POSITIONS, dim=0)
+        for chunk in chunks:
+            # Cast per chunk rather than up front. bf16 accumulates
+            # visible error summing 262K terms, and casting the whole
+            # canvas would restore the allocation this exists to
+            # avoid.
+            wide = chunk.float()
+            top, top_ids = wide.max(dim=-1)
+            spread = torch.logsumexp(wide, dim=-1)
+            id_chunks.append(top_ids)
+            conf_chunks.append(torch.exp(top - spread))
+        ids = torch.cat(id_chunks, dim=0)
+        conf = torch.cat(conf_chunks, dim=0)
         return (
             ids.detach().to("cpu").tolist(),
             conf.detach().to("cpu").tolist(),
@@ -163,8 +199,6 @@ class FrameQueueStreamer(BaseStreamer):
         conf_override: Optional[List[float]] = None,
     ) -> None:
         count = len(ids)
-        if self._stable is None or len(self._stable) != count:
-            self._stable = [0] * count
         tokens: List[Dict[str, Any]] = []
         text_parts: List[str] = []
         resolved: List[bool] = []
@@ -176,18 +210,17 @@ class FrameQueueStreamer(BaseStreamer):
                 or self._prev[i] != token_id
             )
             unresolved = (not committed) and changed
-            if changed:
-                self._stable[i] = 0
-            else:
-                self._stable[i] += 1
             if conf_override is not None:
                 conf = float(conf_override[i])
             elif committed:
                 conf = 1.0
             else:
-                conf = min(
-                    self._stable[i] / STABLE_WINDOW, 1.0
-                )
+                # Only reachable if the model handed over tokens
+                # instead of logits, which it does not while
+                # _takes_logits is set. Nothing was measured, so
+                # nothing is claimed: the write below is skipped and
+                # the client draws the position solid.
+                conf = 0.0
             conf_sum += conf
             display = _sanitize(
                 self.tokenizer.decode(
@@ -199,17 +232,17 @@ class FrameQueueStreamer(BaseStreamer):
                 "m": unresolved,
                 "id": int(token_id),
             }
-            # Settled tokens always carry confidence. Unsettled ones
-            # carry it only when it is real: with the Entropy Signal
-            # off, an unsettled position is by definition one that
-            # just changed, so its stability count was reset to zero
-            # a few lines up and the number could only ever be 0.0.
-            # The client's mask opacity treats zero and absent alike,
-            # so writing it would cost payload on every frame for an
-            # identical canvas. With the signal on it is the model's
-            # own probability, which is what fades each mask by how
-            # sure the model is of the guess underneath it.
-            if not unresolved or conf_override is not None:
+            # Written when it was measured, and not otherwise. Every
+            # position on a frame built from logits qualifies, settled
+            # or not, which is the point of this change. A committed
+            # canvas qualifies too, at 1.0, because the model accepted
+            # it. A frame delivered without logits qualifies nowhere:
+            # absent is the honest record, and the client draws such a
+            # position solid rather than fading it by a number nobody
+            # took. This gate used to read `not unresolved`, which
+            # gave a settled position a stability count dressed up as
+            # a probability.
+            if committed or conf_override is not None:
                 token["c"] = round(conf, 4)
             tokens.append(token)
             resolved.append(not unresolved)
@@ -264,13 +297,11 @@ class FrameQueueStreamer(BaseStreamer):
         """
         if self._budget is None:
             return
-        assert self._stable is not None, "a frame set stability"
         self._checkpoints[self._index] = FrameCheckpoint(
             ids=torch.tensor(ids, dtype=torch.long),
             canvas_index=self._canvas_index,
             rng=self._budget.capture_rng(),
             extra=DgemmaFrame(
-                stable=tuple(self._stable),
                 seen_revealed=frozenset(self._seen_revealed),
             ),
         )
@@ -292,22 +323,16 @@ class FrameQueueStreamer(BaseStreamer):
         """Re-enter a frame with the state that produced it.
 
         Without this a resumed run builds a fresh streamer, whose
-        empty ``_prev`` makes every position read as changed: the
-        first resumed frame renders as an entirely masked canvas,
-        confidence restarts from zero for tokens that had been
-        stable for many steps, and the inherited prefix is reported
-        born a second time.
+        empty ``_prev`` makes every position read as changed, so the
+        first resumed frame renders as an entirely masked canvas and
+        the inherited prefix is reported born a second time.
         """
         extra = checkpoint.extra
         assert isinstance(extra, DgemmaFrame), (
-            "a DiffusionGemma checkpoint carries stability"
+            "a DiffusionGemma checkpoint carries its born set"
         )
         self._prev = checkpoint.ids.tolist()
-        self._stable = list(extra.stable)
         self._seen_revealed = set(extra.seen_revealed)
-        assert len(self._stable) == len(self._prev), (
-            "stability covers the canvas it was taken from"
-        )
 
     def put(self, value: torch.Tensor) -> None:
         if not self._prompt_seen:
@@ -317,7 +342,6 @@ class FrameQueueStreamer(BaseStreamer):
         # Next canvas restarts from fresh noise, so its positions are
         # unrelated to this one's and start unborn again.
         self._prev = None
-        self._stable = None
         self._seen_revealed = set()
         self._canvas_index += 1
 
@@ -521,7 +545,6 @@ async def streaming_generate(
     t_max: float = 0.8,
     t_min: float = 0.4,
     thinking: bool = False,
-    entropy_signal: bool = False,
     seed: int = -1,
     cancel_event: Optional[threading.Event] = None,
     frame_history: Optional[List[FrameCheckpoint]] = None,
@@ -543,7 +566,7 @@ async def streaming_generate(
         stop_event=cancel_event,
         budget=_budget_for(frame_history),
     )
-    streamer._takes_logits = entropy_signal
+    streamer._takes_logits = True
 
     generate_kwargs: Dict[str, Any] = {
         "max_new_tokens": max_new_tokens,
@@ -577,7 +600,6 @@ async def streaming_resume(
     t_max: float = 0.8,
     t_min: float = 0.4,
     thinking: bool = False,
-    entropy_signal: bool = False,
     seed: int = -1,
     cancel_event: Optional[threading.Event] = None,
     frame_history: Optional[List[FrameCheckpoint]] = None,
@@ -641,7 +663,7 @@ async def streaming_resume(
         stop_event=cancel_event,
         budget=_budget_for(frame_history),
     )
-    streamer._takes_logits = entropy_signal
+    streamer._takes_logits = True
     streamer.restore(base)
 
     generate_kwargs: Dict[str, Any] = {

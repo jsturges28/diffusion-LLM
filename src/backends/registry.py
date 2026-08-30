@@ -195,15 +195,6 @@ DGEMMA = ModelInfo(
             help="Enable the step-by-step reasoning"
             " channel.",
         ),
-        ParamSpec(
-            name="entropy_signal",
-            label="Entropy signal",
-            type=ParamType.BOOL,
-            default=False,
-            help="Use true per-token entropy/confidence"
-            " from logits for the heatmap (slower; ships"
-            " large tensors each step).",
-        ),
     ],
 )
 

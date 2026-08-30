@@ -13,9 +13,10 @@ to keep that refactor visually neutral. The `opacityFor` hook existed
 and only the scrubbed path used it. So a mask brightened toward its
 reveal when you scrubbed back over a finished run and stayed flat
 while the run was actually being written, which is the one moment the
-reading says something. On DiffusionGemma, where the number only
-exists with the Entropy Signal on, that made a working feature look
-like a broken one.
+reading says something. On DiffusionGemma, where the number then only
+existed with the Entropy Signal on, that made a working feature look
+like a broken one. That toggle has since been removed and the model
+measures every position, so the confusion it caused cannot recur.
 
 Passing proves the live view grades masks, that its two render paths
 cannot drift apart on it, and that the three hooks which would be

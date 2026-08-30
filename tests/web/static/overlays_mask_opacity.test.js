@@ -76,10 +76,11 @@ test("a certain position is solid", () => {
 
 test("an unmeasured position is solid, not hopeless", () => {
   // The distinction this floor makes load-bearing. LLaDA's opening
-  // frame, every run saved before the capture, and DiffusionGemma
-  // without the Entropy Signal carry no number at all. Treating that
-  // as zero would render a whole canvas at 5 percent and call it a
-  // measurement.
+  // frame carries no number at all, and neither does any run saved
+  // before its model measured every position, DiffusionGemma's
+  // runs from before its Entropy Signal was removed included.
+  // Treating that as zero would render a whole canvas at 5 percent
+  // and call it a measurement.
   const sandbox = load();
 
   assert.equal(sandbox.overlaysMaskOpacity(null), 1);

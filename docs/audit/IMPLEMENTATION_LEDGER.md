@@ -387,6 +387,29 @@ No finding has been contradicted so far. The entries below are things learned
 while working one finding that belong to another, recorded rather than
 opportunistically fixed.
 
+### ROADMAP-03, a down payment made outside the campaign, 2026-08-30
+
+`ROADMAP-03` observes that DiffusionGemma's `entropy_signal` "actually
+materializes a full float32 softmax and emits argmax confidence, not entropy;
+for 256 positions by roughly 262K vocabulary entries, that probability tensor
+alone is about 256 MiB", and directs that captures use "numerically stable
+reductions over logits for max probability, entropy, and optional top-k
+without retaining a full probability tensor longer than required".
+
+Part of that landed early, in a roadmap session rather than an audit one, and
+it is recorded here so the finding is not later credited with work already
+done. `_from_logits` now computes `exp(max - logsumexp)` over chunks of 32
+positions, bounding the transient to roughly 33 MiB, and a test pins it
+against the softmax it replaced. The toggle was then removed: the report is
+right that it "would also conflate confidence with entropy", and once the
+measurement was cheap there was nothing left for a gate to protect. The
+stability-derived confidence that stood in when the toggle was off went with
+it, so `c` now means one thing on every diffusion run.
+
+What `ROADMAP-03` still owns is untouched: the versioned signal manifest, the
+axes, the capture budgets, and the entropy and top-k channels themselves. Only
+the reduction technique was borrowed, on one existing channel, for one model.
+
 ### Stage 1 hardware pass, 2026-08-11
 
 All four queued findings were confirmed by the maintainer in one sitting and

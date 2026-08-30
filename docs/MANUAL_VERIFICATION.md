@@ -1622,11 +1622,11 @@ information rather than a bug report.
     stability state comes back with the canvas.
 183. **Does the DiffusionGemma canvas brighten toward a boundary?**
     Prediction, not a fix. Generate a multi-canvas DiffusionGemma run
-    with **Entropy signal** on and watch the masked positions rather
-    than the text.
-    Each mask is now faded by the model's certainty in the guess behind
-    it; with the signal off they all sit at the same solid floor, which
-    is worth seeing once for contrast. The predicted behaviour is that
+    and watch the masked positions rather than the text. (This item
+    predates the removal of the **Entropy signal** toggle and used to
+    ask for it to be switched on; there is nothing to switch now.)
+    Each mask is faded by the model's certainty in the guess behind
+    it. The predicted behaviour is that
     a canvas brightens roughly together as it approaches its adaptive
     stop, then resets dim when the next canvas begins.
     If it does not brighten, say so rather than treating it as a
@@ -1642,14 +1642,14 @@ information rather than a bug report.
     the README describes, instead of sitting at one shade until the
     run ends. Scrub back afterwards and it should look the same as
     it did live.
-    Then a **DiffusionGemma** run with **Entropy signal** on, where
-    the same grading should now be visible during generation. This
-    is what item 183 was trying to look at, so the two are best done
-    together: with the live view graded, the question of whether a
-    canvas brightens together toward its adaptive stop can be
-    watched as it happens rather than reconstructed by scrubbing.
-    With the signal off it should stay flat, which is correct
-    rather than a regression.
+    Then a **DiffusionGemma** run, where the same grading should be
+    visible during generation. This is what item 183 was trying to
+    look at, so the two are best done together: with the live view
+    graded, the question of whether a canvas brightens together
+    toward its adaptive stop can be watched as it happens rather
+    than reconstructed by scrubbing. (This item also predates the
+    toggle's removal; the "with the signal off it should stay flat"
+    contrast it used to ask for is no longer reachable.)
     **Watch the frame rate.** This grades every position on every
     frame, up to 256 on a DiffusionGemma canvas. The renderer only
     writes to the page where a value actually moved, so it should be
@@ -1774,9 +1774,9 @@ the default can move, on the strength of what you see.
     itself tell you more than watching blocks resolve, or does it
     read as noise? Both answers are useful. Say which.
 191. **A DiffusionGemma canvas, and the placeholder finding.** Same
-    setting, a multi-canvas DiffusionGemma run, ideally with
-    **Entropy signal** on so the words are also faded by
-    confidence.
+    setting, a multi-canvas DiffusionGemma run. The words are faded
+    by confidence as well, which this item used to ask you to enable
+    and which is now unconditional.
     The specific thing to look for is the one the ROADMAP and the
     ledger describe in a paragraph each: early in a canvas the
     display should fill with `" the"` and other high-frequency
@@ -1842,12 +1842,14 @@ and the wiring; only a screen can say whether the result is legible.
     should open on a full field of solid blocks and drop into the
     ramp on the first step.
     That change is what keeps a run saved before the measurement
-    existed, and a DiffusionGemma run with the Entropy Signal off,
-    from rendering as a near-blank canvas. Worth confirming both:
-    open an older diffusion run in Analytics and generate a short
-    DiffusionGemma run with the signal **off**. Both should show
-    solid, uniform masks. A canvas that looks empty in either case
-    is a real bug, not a taste question.
+    existed from rendering as a near-blank canvas. Open an older
+    diffusion run in Analytics: its masks should be solid and
+    uniform. A canvas that looks empty there is a real bug, not a
+    taste question.
+    This item used to name a live second case, a DiffusionGemma run
+    with the Entropy Signal off. That toggle is gone, so the only
+    unmeasured positions left are LLaDA's opening frame and runs
+    already on disk.
 196. **Analytics agrees with the generator on the same run.** The
     asymmetry that prompted this: Analytics never graded its masks
     at all, so a run looked different depending on which page you
@@ -1889,3 +1891,52 @@ and the wiring; only a screen can say whether the result is legible.
     `Resume point (44 tokens remasked)`. Moving the list to a
     reserved row under the chart is scoped in the ROADMAP; this item
     covers only that the current box no longer clips.
+
+## Confidence without a switch (DiffusionGemma)
+
+The Entropy Signal toggle is gone and DiffusionGemma measures every
+position on every step. The sandbox proved the reduction returns the
+same numbers as the softmax it replaced, and that the parameter and
+its plumbing are gone. What it cannot touch is the GPU: whether the
+chunked reduction is actually cheaper in practice, and whether a
+model that now always pays for it still runs at the speed you
+remember.
+
+199. **The parameter is gone and nothing misses it.** Load
+    DiffusionGemma and look at the hyperparameter panel. There
+    should be no **Entropy signal** control, and the panel should
+    lay out cleanly rather than leaving a gap where it was.
+    Generate a short run. Every masked position should be faded by
+    confidence with nothing switched on, which on an older build
+    required the toggle.
+    Then open an older DiffusionGemma run in Analytics, one saved
+    with the signal off. It should still open, still show its
+    parameters including the recorded `entropy_signal: false`, and
+    still draw solid masks. The parameter row survives because the
+    detail panel renders whatever a run recorded; only the control
+    went away.
+200. **The run is not slower, and preferably faster.** This is the
+    claim the whole change rests on and the one the sandbox cannot
+    make. The old path built a float32 softmax over the full
+    vocabulary for every step, roughly a quarter of a gigabyte held
+    at once; the new one reduces 32 positions at a time.
+    Generate a DiffusionGemma run and compare the elapsed time and
+    T/s against a recent run of the same prompt and step count from
+    before this change. It was previously only paid when the toggle
+    was on, so compare against a **signal-on** run rather than a
+    signal-off one, or the comparison is against a run that was not
+    measuring anything.
+    Expect it to be the same or slightly better. Noticeably slower
+    would mean the chunk size is wrong for this hardware, which is
+    one constant.
+    Worth a glance at VRAM headroom in the header while it runs, if
+    the difference is visible there at all.
+201. **A resumed edit still re-enters its canvas.** The resume
+    checkpoint lost a field, so this is the path most likely to have
+    been broken by an invisible mistake.
+    Run DiffusionGemma, **Edit Frames**, remask a few tokens on a
+    mid-run frame, and resume to the end. The first resumed frame
+    should show the inherited canvas rather than a wall of blocks,
+    and the tokens you did not touch should not flash as newly born.
+    Confirm and reopen the run in Analytics to check the branch
+    saved intact.

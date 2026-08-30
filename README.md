@@ -44,7 +44,7 @@ An optional **thinking** channel exposes a step-by-step reasoning pass, which th
 Every resolved token carries a **confidence** value in [0, 1], and every frame carries the mean confidence of its resolved tokens. The source differs per model, cheap by default:
 
 - **LLaDA:** the softmax probability of the token at the moment it was unmasked (fixed thereafter, since resolved tokens are never revisited).
-- **DiffusionGemma:** a lightweight **stability proxy** by default (how many consecutive steps a position has held the same prediction). Enabling the **Entropy signal** toggle switches to the true max-softmax probability from the model's logits (more faithful, but slower and heavier per step). The signal also measures *unsettled* positions, which the proxy cannot: a position that just changed has held its prediction for zero steps by definition. That is what lets each mask be faded by the model's certainty in the guess behind it. Without it a DiffusionGemma run records no confidence for its unsettled positions at all, and they draw solid rather than faded, since an unmeasured position should not be shown as one the model despaired of.
+- **DiffusionGemma:** the max-softmax probability from the model's logits, at every position on every step, settled or not. That is what lets each mask be faded by the model's certainty in the guess behind it. It used to be optional, behind an **Entropy signal** toggle, with a stability proxy (consecutive steps holding the same prediction) standing in when it was off; the toggle is gone, because the measurement now costs a bounded reduction rather than a canvas-sized softmax and a run without it was not a cheaper run, just one with a hole where the number goes. Runs recorded before that change keep whatever they recorded, and their unsettled positions draw solid rather than faded.
 
 Hovering any token reads its position and confidence for that frame into the **metrics strip** above the canvas, and the **Heatmap** overlay recolors resolved tokens by confidence. The strip's left half holds that reading; its right half stays empty until you hover a row of the candidate popover, which fills it with that candidate's probability at full precision, headed by a green chip where the committed token's chip is grey. Per-frame mean confidence and canvas indices are also persisted for the analytics charts.
 
@@ -80,7 +80,6 @@ Both overlays are derived from the recorded per-token frames. In the live genera
 | Temp Start / Temp End | Endpoints of a linear temperature schedule across the denoising steps (hotter early, cooler late). |
 | Seed | Random seed for reproducibility; -1 is nondeterministic. |
 | Thinking | Enables the step-by-step reasoning channel, shown in a separate panel. |
-| Entropy signal | Computes true per-token confidence from logits for the heatmap (slower, off by default). |
 
 **SmolLM3**
 
@@ -404,7 +403,7 @@ The metadata captures the model, prompt, hyperparameters, any remask edits, per-
 - [x] Real-time client-side validation (bounds, divisibility, negative values)
 - [x] Interactive remasking and resume: frame scrubber, click-to-remask, resume from any frame (LLaDA and single-canvas DiffusionGemma via seed-canvas re-entry)
 - [x] Guided multi-frame editing with faded original-run previews and partial resumes
-- [x] Per-token confidence: softmax at reveal (LLaDA), stability proxy or true entropy (DiffusionGemma)
+- [x] Per-token confidence: softmax at reveal (LLaDA), max-softmax probability per step (DiffusionGemma), read off the logits by a chunked reduction rather than a canvas-sized softmax, so it is always measured rather than offered as a toggle
 - [x] Grouped overlay picker (None / Heatmap / Commit Order / Diff vs Original, the latter two diffusion-only), per-token hover readouts, and token-hover highlight option
 - [x] Commit-order (resolution-step) token coloring; counterfactual "Diff vs Original" overlay with opacity sliders and difference blend
 - [x] Durable overlays: per-token records (text, mask, id, confidence) plus the pre-edit snapshot persisted per run, and a static commit-order / Diff-vs-Original viewer in the Analytics Suite
@@ -422,7 +421,7 @@ The metadata captures the model, prompt, hyperparameters, any remask edits, per-
 - [x] Main Menu landing page: looping title-screen video (WebM/MP4) over a GPU/VRAM-aware model picker (Available / Insufficient VRAM) that greys out models that will not fit; generation gated behind model selection
 - [x] Analytics layered "Diff vs Original" overlay (Original/Edited opacity sliders + difference blend) mirroring the generator
 - [x] Opt-in "diffusion-style text" effect (scramble-to-resolve on status messages) with a Default/Cycle mode, honoring reduced motion, reused for Shuffle/Generate/Lock-In button micro-interactions
-- [x] Confidence-driven mask rendering: masks use the accent color and their opacity tracks the model's predicted confidence per position, firming up from near-invisible as a token nears its reveal (LLaDA always; DiffusionGemma with the Entropy signal on, which is what measures a position that has not settled). One square-root curve shared by the generator and Analytics, chosen against the measured confidence distribution; a position with no recorded confidence draws solid, since unmeasured is not the same claim as measured and hopeless
+- [x] Confidence-driven mask rendering: masks use the accent color and their opacity tracks the model's predicted confidence per position, firming up from near-invisible as a token nears its reveal, on both diffusion models and every unsettled position. One square-root curve shared by the generator and Analytics, chosen against the measured confidence distribution; a position with no recorded confidence draws solid, since unmeasured is not the same claim as measured and hopeless
 - [x] **Reveal the mask candidate** (Settings, off by default): an unsettled position draws the token the model currently holds there instead of `░`, keeping the mask tint and confidence fade so a guess never reads as an answer. LLaDA computed that prediction every step and discarded it; it is now recorded in the frame, which also makes the metrics strip name a candidate for a masked position as it already did for DiffusionGemma. Applies live, on the scrubber, in both comparison overlays, and retroactively to saved runs
 - [x] Randomize-remasks control (slider + N-of-M + Shuffle) in Edit Frames; Edit Frames opens on the first editable frame
 - [x] Analytics "new run" cue: an unseen-run count badge on the Analytics link and Main Menu plus per-row green dots cleared when a run is opened; deleting a run decrements it, and the cue self-heals against runs that no longer exist

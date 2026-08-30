@@ -91,10 +91,14 @@ function overlaysMaskOpacity(c) {
   // Absent is not zero, and the difference matters at this floor.
   // Zero means the model was asked and had no idea, which earns the
   // near-invisible end of the ramp. Absent means nothing was ever
-  // measured here: LLaDA's opening frame, every run saved before the
-  // capture, and DiffusionGemma without the Entropy Signal. Grading
-  // those would draw a confident claim about a number nobody has, on
-  // a whole canvas at once, so they stay solid.
+  // measured here: LLaDA's opening frame, and runs saved before
+  // their model measured every position. Grading those would draw a
+  // confident claim about a number nobody has, on a whole canvas at
+  // once, so they stay solid.
+  //
+  // DiffusionGemma used to belong on that list whenever its Entropy
+  // Signal was off. It no longer has one, so for that model this is
+  // now a statement about old runs rather than a live case.
   //
   // A position with no token at all is a third case and does not
   // reach here: the callers send it to the floor, because a hole is

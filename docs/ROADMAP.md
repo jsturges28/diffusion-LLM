@@ -879,10 +879,27 @@ Agreed with the maintainer (deliberate each in Ask mode before Plan). (The
    moves between frames.
 
 4. **Stop making DiffusionGemma's confidence optional.** Accepted on
-   2026-08-29, and sequenced immediately after the mask-opacity retune so
-   that a changed capture and a changed curve cannot confound each other on
-   hardware. Small, but it is a capability change users will notice, so it
-   wants its own commit.
+   2026-08-29 and **shipped on 2026-08-30**, kept here rather than moved
+   because the reasoning is the useful part and the shipped notes below
+   record what changed against it. Sequenced immediately after the
+   mask-opacity retune so that a changed capture and a changed curve could
+   not confound each other on hardware.
+
+   **What shipped.** The reduction first: `_from_logits` computes
+   `exp(max - logsumexp)` over chunks of 32 positions, which is the same
+   number from two reductions with a transient of roughly 33 MiB instead of
+   a canvas-sized softmax, pinned by a test against the old formulation.
+   Then the gate, at all eight sites, and the stability-derived confidence
+   with it. One thing turned out slightly larger than scoped: `_stable` was
+   carried in the resume checkpoint, so `DgemmaFrame` lost a field too, and
+   the entry below on the revision glow is why that was the right call
+   rather than a loss.
+
+   One consequence worth stating plainly, because it crosses the boundary:
+   `mean_conf` is now a mean over real probabilities on every frame, where
+   before it averaged a probability or a stability count depending on the
+   toggle. Runs saved on either side of 2026-08-30 are plotted on the same
+   Analytics axis and are not strictly comparable.
 
    The toggle is misnamed, which is most of the case for removing it. It
    emits argmax confidence, not entropy: DiffusionGemma never writes an `e`
@@ -1466,10 +1483,26 @@ missing revision signal are the same mechanism, so the answer has to be a
 A revision and a birth are different events and deserve different marks. A
 birth is a hole being filled; a revision is the model changing its mind,
 which is arguably the more informative of the two and the one this project
-exists to surface. The data is already in hand: `_prev` and `_stable` sit in
-`_emit`, so "settled, then settled to something different" is detectable with
-no new capture and no payload change, in the same place the `c` gate now
-lives.
+exists to surface. The data is already in hand, and needs no new capture or
+payload.
+
+**Corrected on 2026-08-30: it is in hand in the browser, not the sampler.**
+This paragraph used to say `_prev` and `_stable` sit in `_emit` and that the
+detection belongs there. That sent an implementer to the wrong layer, and it
+mattered, because `_stable` was removed with the stability-derived confidence
+it was the only reader of. Nothing was lost. `overlaysComputeCommitSteps`
+already derives a per-position temporal quantity, the step at which a
+position settled, out of nothing but the frame stream, and drives the Commit
+Order overlay on both pages from it. Every token record carries `id` on every
+frame, live and saved, so "this position changed after having settled" is a
+comparison of consecutive frames and "how long had the old value held" is a
+backwards scan, both computable at frame *f* from the frames the client
+already holds. A resumed branch is no exception, since the pre-edit run is
+held too, in `originalRun.tokens`, which is the same thing
+`overlayOriginalCommitSteps` already handles for Commit Order.
+
+Building it client-side also gets Analytics for free, where a sampler-side
+flag would have needed a new persisted field to be reviewable at all.
 
 What needs deliberating is what it should look like, since a mark that fires
 on every re-settle would reintroduce the flicker under a new name. Worth

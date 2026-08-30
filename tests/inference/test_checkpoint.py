@@ -123,13 +123,8 @@ def test_a_checkpoint_counts_every_part_it_holds() -> None:
 
 
 def test_a_dgemma_payload_grows_with_its_canvas() -> None:
-    small = DgemmaFrame(
-        stable=(0, 1), seen_revealed=frozenset({0})
-    )
-    large = DgemmaFrame(
-        stable=(0, 1, 2, 3),
-        seen_revealed=frozenset({0, 1, 2}),
-    )
+    small = DgemmaFrame(seen_revealed=frozenset({0}))
+    large = DgemmaFrame(seen_revealed=frozenset({0, 1, 2}))
 
     assert large.nbytes() > small.nbytes()
 

@@ -116,21 +116,26 @@ class LladaFrame:
 
 @dataclass(frozen=True)
 class DgemmaFrame:
-    """DiffusionGemma's stability window and born positions.
+    """DiffusionGemma's born positions at one frame.
 
-    ``stable`` is the per-position count of consecutive steps holding
-    the same prediction, which is what its confidence is derived from
-    when the Entropy Signal is off. ``seen_revealed`` is the set of
-    positions already reported as born on this canvas, so a resume
-    does not re-birth the prefix it inherited.
+    ``seen_revealed`` is the set of positions already reported as
+    born on this canvas, so a resume does not re-birth the prefix it
+    inherited.
+
+    This used to carry a per-position count of consecutive steps
+    holding the same prediction, which a confidence derived from
+    stability was computed from. That confidence is gone, and the
+    counter went with it rather than waiting here for the revision
+    glow the ROADMAP once pointed at this field: the client can
+    derive how long a position has held from the frames it already
+    has, the same way overlaysComputeCommitSteps derives a settle
+    step, so the sampler is the wrong place to keep it.
     """
 
-    stable: Tuple[int, ...]
     seen_revealed: FrozenSet[int]
 
     def nbytes(self) -> int:
-        count = len(self.stable) + len(self.seen_revealed)
-        return count * _INT_BYTES_APPROX
+        return len(self.seen_revealed) * _INT_BYTES_APPROX
 
 
 FramePayload = Union[LladaFrame, DgemmaFrame]

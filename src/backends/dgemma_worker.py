@@ -162,9 +162,6 @@ class DgemmaBackend(Backend):
                 self._bounds("t_min", experimental),
             ),
             "thinking": bool(data.get("thinking", False)),
-            "entropy_signal": bool(
-                data.get("entropy_signal", False)
-            ),
             "seed": int(data.get("seed", -1)),
         }
 
@@ -203,7 +200,6 @@ class DgemmaBackend(Backend):
                 t_max=params["t_max"],
                 t_min=params["t_min"],
                 thinking=params["thinking"],
-                entropy_signal=params["entropy_signal"],
                 seed=params["seed"],
                 cancel_event=cancel_event,
                 frame_history=frame_history,
@@ -238,7 +234,6 @@ class DgemmaBackend(Backend):
             "t_max": params["t_max"],
             "t_min": params["t_min"],
             "thinking": params["thinking"],
-            "entropy_signal": params["entropy_signal"],
             "seed": params["seed"],
             "max_denoising_steps": params[
                 "max_denoising_steps"
@@ -368,7 +363,6 @@ class DgemmaBackend(Backend):
                 t_max=state["t_max"],
                 t_min=state["t_min"],
                 thinking=state["thinking"],
-                entropy_signal=state["entropy_signal"],
                 seed=state["seed"],
                 cancel_event=cancel_event,
                 frame_history=resume_frames,
