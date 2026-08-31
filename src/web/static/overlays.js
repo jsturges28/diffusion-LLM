@@ -1047,9 +1047,12 @@ var PERSIST_KEYS = [
   // heights, so a shared offset would land sensibly on at most one.
   "diffusion_overlay_drawer_top_generator",
   "diffusion_overlay_drawer_top_analytics",
-  // The one key here that is not a cache: which runs the user filed
-  // into which collection cannot be recomputed from anything on disk.
-  "diffusion_collections",
+  // diffusion_collections used to be here, and was the only value in
+  // the list that was not a cache. It came off because a key/value
+  // mirror is the wrong shape for it: two windows each replacing the
+  // whole array meant the later write erased the earlier one's
+  // filing. It is stored in the same file, but only the server may
+  // write it, through the operations in collections_client.js.
 ];
 
 // Debounce PUTs per key so rapid writes (e.g. successive settings
@@ -1057,15 +1060,13 @@ var PERSIST_KEYS = [
 var PERSIST_PUT_DEBOUNCE_MS = 250;
 var persistPutTimers = {};
 
-// Written straight out, no debounce. The debounce exists to coalesce
-// streams of writes, and collections do not arrive in streams: they
-// change on discrete acts, a star click, a rename, a delete, a
-// checkbox. What they do have is no way back if one is lost, so the
-// 250 ms during which a change exists only in this tab is a window
-// worth not having. Navigating inside it used to drop the write
-// entirely, and the next page's hydrate then restored the older
-// server copy over it.
-var PERSIST_IMMEDIATE_KEYS = ["diffusion_collections"];
+// Written straight out, no debounce. Empty now that collections have
+// their own endpoints: they were the one value here that could not
+// be recomputed, so the 250 ms during which a change existed only in
+// this tab was a window worth not having. Kept as a list rather than
+// deleted because the reasoning applies to the next such value, and
+// because the branch it drives in persistSet is one line.
+var PERSIST_IMMEDIATE_KEYS = [];
 
 // Values whose PUT is still waiting on a timer, so the flush below
 // can send them when the page is going away.

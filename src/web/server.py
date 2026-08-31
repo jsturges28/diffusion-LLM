@@ -82,6 +82,7 @@ from src.backends.protocol import (
 )
 from src.backends.registry import DEFAULT_MODEL, REGISTRY
 from src.inference.render_gif import history_to_gif
+from src.web import collections as collection_ops
 from src.web import run_store
 from src.web.data_root import (
     RESULTS_DIR_ENV,
@@ -2843,6 +2844,12 @@ async def analytics_delete_run(run_id: str) -> JSONResponse:
 
 # -- Durable UI state (origin-independent frontend preferences) --
 
+# Collections still live in the ui-state file, because that file
+# already has the interprocess lock and the atomic replace this needs.
+# What changed is who may write the key: the generic PUT refuses it,
+# and the operations below are the only way in.
+COLLECTIONS_KEY = "diffusion_collections"
+
 
 class UiStateValue(BaseModel):
     """One UI-state value, stored verbatim as its localStorage string."""
@@ -2930,59 +2937,26 @@ def _reconcile_collections(state: Dict[str, str]) -> Dict[str, str]:
     matters more here: this key holds filing the user did by hand,
     which nothing on disk can reconstruct.
     """
-    if not state.get("diffusion_collections"):
+    if not state.get(COLLECTIONS_KEY):
         return state
     existing = _existing_run_ids()
 
     def prune(raw: Optional[str]) -> Optional[str]:
-        collections = _decode_id_list(raw)
-        if collections is None:
-            return None  # Corrupt: load_ui_state will drop it.
-        kept, dropped = _prune_collection_runs(
-            collections, existing
+        current = collection_ops.decode(raw)
+        kept, dropped = collection_ops.prune_missing(
+            current, existing
         )
-        if dropped == 0:
+        if dropped == 0 and kept == current:
             return None
-        return json.dumps(kept)
+        return collection_ops.encode(kept)
 
     try:
         return mutate_ui_state_key(
-            RESULTS_DIR, "diffusion_collections", prune
+            RESULTS_DIR, COLLECTIONS_KEY, prune
         )
     except (KeyError, ValueError, OSError):
         logger.exception("failed to reconcile collections")
         return state
-
-
-def _prune_collection_runs(
-    collections: List[Any], existing: Set[str]
-) -> Tuple[List[Any], int]:
-    """Filter each collection's runs; return the list and drop count.
-
-    Malformed entries are passed through untouched rather than
-    repaired. This endpoint's job is to remove ids for runs that are
-    gone, and a client that wrote a shape the client itself does not
-    understand is not a problem the server can fix by guessing.
-    """
-    pruned: List[Any] = []
-    dropped = 0
-    for entry in collections:
-        if not isinstance(entry, dict):
-            pruned.append(entry)
-            continue
-        runs = entry.get("runs")
-        if not isinstance(runs, list):
-            pruned.append(entry)
-            continue
-        kept = [
-            run_id for run_id in runs if run_id in existing
-        ]
-        dropped += len(runs) - len(kept)
-        updated = dict(entry)
-        updated["runs"] = kept
-        pruned.append(updated)
-    assert len(pruned) == len(collections), "lost a collection"
-    return pruned, dropped
 
 
 @app.get("/api/ui-state")
@@ -3005,6 +2979,25 @@ async def get_ui_state() -> JSONResponse:
 async def put_ui_state(
     key: str, body: UiStateValue
 ) -> JSONResponse:
+    if key == COLLECTIONS_KEY:
+        # The one key with no whole-value write. Collections are the
+        # only durable value that is intent rather than cache, and
+        # replacing the array wholesale is how one window used to
+        # drop another's filing: both read the same list, both wrote
+        # a different successor, and the later write won. The
+        # operations below say what changed instead, so the lost
+        # update is unrepresentable rather than merely unlikely.
+        return JSONResponse(
+            status_code=409,
+            content={
+                "success": False,
+                "reason": "use_collection_operations",
+                "message": (
+                    "collections are changed through"
+                    " /api/collections, not by replacement"
+                ),
+            },
+        )
     try:
         state = await asyncio.to_thread(
             set_ui_state_key, RESULTS_DIR, key, body.value
@@ -3026,6 +3019,243 @@ async def put_ui_state(
             content={"success": False, "message": str(exc)},
         )
     return JSONResponse(content={"success": True, "state": state})
+
+
+# -- Collections: one endpoint per gesture --
+#
+# Each takes what the user did, not what the list should become, and
+# applies it to whatever is stored at the moment it runs. That is the
+# whole of DATA-02's chosen fork: a client that cannot name a
+# successor state cannot overwrite one it never saw.
+#
+# Every response carries the full list afterwards, so the caller
+# adopts rather than merges, and a window that was behind is level
+# again the moment it acts.
+
+
+class CollectionName(BaseModel):
+    """A collection's display name, for create and rename.
+
+    The run fields are create-only, and they are here so that naming
+    a collection from the filing dialog is one gesture: both halves
+    land under a single lock, or neither does. ``run_ids`` is the
+    same idea for a selection, so naming a collection for six runs
+    cannot leave it made and empty.
+    """
+
+    name: str
+    run_id: Optional[str] = None
+    run_ids: Optional[List[str]] = None
+
+    def ids(self) -> List[str]:
+        if self.run_ids is not None:
+            return self.run_ids
+        if self.run_id is not None:
+            return [self.run_id]
+        return []
+
+
+class CollectionRun(BaseModel):
+    """A run id, for filing and for the star."""
+
+    run_id: str
+
+
+class CollectionRuns(BaseModel):
+    """One run or several, for filing.
+
+    Either field, so the single-run path keeps the shape it had and
+    the table's multi-row selection does not have to send one request
+    per row. Both go to the same operation, which files all of them
+    or none.
+    """
+
+    run_id: Optional[str] = None
+    run_ids: Optional[List[str]] = None
+
+    def ids(self) -> List[str]:
+        if self.run_ids is not None:
+            return self.run_ids
+        if self.run_id is not None:
+            return [self.run_id]
+        return []
+
+
+def _collections_apply(
+    operation: Callable[[List[Dict[str, Any]]], List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    """Run one operation with the state file held against everyone.
+
+    The transform runs inside ``mutate_ui_state_key``, so the read it
+    works from and the write it produces cannot be separated by
+    another process. Returning the list rather than the ui-state
+    mapping keeps the endpoints from re-parsing what they just wrote.
+    """
+    settled: Dict[str, List[Dict[str, Any]]] = {}
+
+    def mutate(raw: Optional[str]) -> Optional[str]:
+        current = collection_ops.decode(raw)
+        updated = operation(current)
+        settled["value"] = updated
+        if updated == current:
+            return None  # A no-op gesture does not rewrite the file.
+        return collection_ops.encode(updated)
+
+    mutate_ui_state_key(RESULTS_DIR, COLLECTIONS_KEY, mutate)
+    assert "value" in settled, "the operation did not run"
+    return settled["value"]
+
+
+async def _collections_respond(
+    operation: Callable[[List[Dict[str, Any]]], List[Dict[str, Any]]],
+) -> JSONResponse:
+    """Apply an operation off the event loop and answer with the list.
+
+    ``CollectionError`` is the client asking for something the
+    contract refuses, so it carries a reason the browser can act on
+    rather than a bare status. ``ValueError`` here is the ui-state
+    size bound, which is the aggregate limit no single operation can
+    see coming.
+    """
+    try:
+        value = await asyncio.to_thread(_collections_apply, operation)
+    except collection_ops.CollectionError as exc:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "success": False,
+                "reason": exc.reason,
+                "message": exc.message,
+            },
+        )
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "success": False,
+                "reason": "collections_full",
+                "message": str(exc),
+            },
+        )
+    except OSError as exc:
+        logger.exception("failed to write collections")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "message": str(exc)},
+        )
+    return JSONResponse(
+        content={"success": True, "collections": value}
+    )
+
+
+@app.get("/api/collections")
+async def get_collections() -> JSONResponse:
+    """The stored collections, reconciled against runs on disk.
+
+    The same prune the hydrate does, exposed on its own so a window
+    can resync without reloading the page.
+    """
+    state = await asyncio.to_thread(load_ui_state, RESULTS_DIR)
+    state = await asyncio.to_thread(_reconcile_collections, state)
+    value = collection_ops.decode(state.get(COLLECTIONS_KEY))
+    return JSONResponse(
+        content={"success": True, "collections": value}
+    )
+
+
+@app.post("/api/collections")
+async def create_collection(body: CollectionName) -> JSONResponse:
+    existing = await asyncio.to_thread(_existing_run_ids)
+    run_ids = body.ids()
+
+    def operation(
+        current: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        made = collection_ops.create(current, body.name)
+        if not run_ids:
+            return made
+        # The id is the server's, and create appends, so the new
+        # collection is the last one. Composing the two pure
+        # operations here is what makes the pair atomic.
+        return collection_ops.add_runs(
+            made, made[-1]["id"], run_ids, existing
+        )
+
+    return await _collections_respond(operation)
+
+
+@app.post("/api/collections/favorite")
+async def favorite_collection_run(
+    body: CollectionRun,
+) -> JSONResponse:
+    """The star, which is one gesture with two meanings.
+
+    Declared above the ``{collection_id}`` routes because FastAPI
+    matches in definition order and "favorite" would otherwise be
+    read as a collection id.
+    """
+    existing = await asyncio.to_thread(_existing_run_ids)
+    return await _collections_respond(
+        lambda current: collection_ops.toggle_favorite(
+            current, body.run_id, existing
+        )
+    )
+
+
+@app.post("/api/collections/{collection_id}/rename")
+async def rename_collection(
+    collection_id: str, body: CollectionName
+) -> JSONResponse:
+    return await _collections_respond(
+        lambda current: collection_ops.rename(
+            current, collection_id, body.name
+        )
+    )
+
+
+@app.delete("/api/collections/{collection_id}")
+async def delete_collection(collection_id: str) -> JSONResponse:
+    return await _collections_respond(
+        lambda current: collection_ops.delete(
+            current, collection_id
+        )
+    )
+
+
+@app.post("/api/collections/{collection_id}/runs")
+async def add_collection_runs(
+    collection_id: str, body: CollectionRuns
+) -> JSONResponse:
+    """File one run or a selection of them.
+
+    ``favorites`` is accepted here even before it exists, so the
+    table's bulk star is a single request: the two operations compose
+    inside one lock rather than needing a create first.
+    """
+    existing = await asyncio.to_thread(_existing_run_ids)
+    run_ids = body.ids()
+
+    def operation(
+        current: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        if collection_id == collection_ops.FAVORITES_ID:
+            current = collection_ops.ensure_favorites(current)
+        return collection_ops.add_runs(
+            current, collection_id, run_ids, existing
+        )
+
+    return await _collections_respond(operation)
+
+
+@app.delete("/api/collections/{collection_id}/runs/{run_id}")
+async def remove_collection_run(
+    collection_id: str, run_id: str
+) -> JSONResponse:
+    return await _collections_respond(
+        lambda current: collection_ops.remove_run(
+            current, collection_id, run_id
+        )
+    )
 
 
 # -- HTML pages with automatic asset cache-busting --

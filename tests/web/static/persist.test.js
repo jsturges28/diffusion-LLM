@@ -14,7 +14,10 @@
 //   - Collections went through a 250 ms debounce. Navigating inside
 //     that window discarded the timer with the document, and the next
 //     page's hydrate then wrote the older server copy back over it.
-//     One window, no race, and no way to recover the filing.
+//     One window, no race, and no way to recover the filing. They
+//     have since left this mechanism entirely: the server owns them
+//     and the key is no longer writable here at all, so what remains
+//     below is the immediate-write branch they proved the need for.
 //   - Every other key still debounces, so those needed a flush on the
 //     way out rather than an exemption.
 //   - A failed PUT resolved silently. The tab kept showing the change
@@ -42,7 +45,6 @@ const SOURCE = path.join(
   "overlays.js"
 );
 
-const COLLECTIONS = "diffusion_collections";
 const SETTINGS = "diffusion_settings";
 
 // A fresh global per test. Returns the sandbox plus the recorders,
@@ -127,13 +129,19 @@ function bodyOf(entry) {
 
 // -- what is written, and when --
 
-test("collections reach the server without waiting", () => {
+test("a key marked immediate skips the debounce", () => {
+  // The list is empty today: collections were its only member, and
+  // they moved to their own endpoints when the server took ownership
+  // of them. The branch stays because the reasoning will apply to
+  // the next value that cannot be recomputed, so this marks a key
+  // itself rather than relying on one being listed.
   const { sandbox, puts } = load();
+  sandbox.PERSIST_IMMEDIATE_KEYS.push(SETTINGS);
 
-  sandbox.persistSet(COLLECTIONS, "[]");
+  sandbox.persistSet(SETTINGS, "{}");
 
   assert.equal(puts.length, 1);
-  assert.match(puts[0].url, /diffusion_collections$/);
+  assert.match(puts[0].url, /diffusion_settings$/);
   assert.equal(puts[0].init.method, "PUT");
 });
 
@@ -264,35 +272,38 @@ test("boot arms the flush", () => {
 // -- saying so when it fails --
 
 test("a rejected write reaches the handler", async () => {
-  const { sandbox } = load({ reject: true });
+  const { sandbox, timers } = load({ reject: true });
   const seen = [];
-  sandbox.persistOnFailure(COLLECTIONS, (key) => seen.push(key));
+  sandbox.persistOnFailure(SETTINGS, (key) => seen.push(key));
 
-  sandbox.persistSet(COLLECTIONS, "[]");
+  sandbox.persistSet(SETTINGS, "{}");
+  fireTimers(timers);
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  assert.deepEqual(seen, [COLLECTIONS]);
+  assert.deepEqual(seen, [SETTINGS]);
 });
 
 test("a 4xx reaches the handler as well", async () => {
   // The bug this closes: a rejected write resolves rather than
   // throwing, so a status-blind caller reads it as success.
-  const { sandbox } = load({ ok: false });
+  const { sandbox, timers } = load({ ok: false });
   const seen = [];
-  sandbox.persistOnFailure(COLLECTIONS, (key) => seen.push(key));
+  sandbox.persistOnFailure(SETTINGS, (key) => seen.push(key));
 
-  sandbox.persistSet(COLLECTIONS, "[]");
+  sandbox.persistSet(SETTINGS, "{}");
+  fireTimers(timers);
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  assert.deepEqual(seen, [COLLECTIONS]);
+  assert.deepEqual(seen, [SETTINGS]);
 });
 
 test("a successful write says nothing", async () => {
-  const { sandbox } = load();
+  const { sandbox, timers } = load();
   const seen = [];
-  sandbox.persistOnFailure(COLLECTIONS, (key) => seen.push(key));
+  sandbox.persistOnFailure(SETTINGS, (key) => seen.push(key));
 
-  sandbox.persistSet(COLLECTIONS, "[]");
+  sandbox.persistSet(SETTINGS, "{}");
+  fireTimers(timers);
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   assert.deepEqual(seen, []);
@@ -311,14 +322,16 @@ test("a key with no handler fails quietly", async () => {
 });
 
 test("a throwing handler does not break the next write", async () => {
-  const { sandbox, puts } = load({ ok: false });
-  sandbox.persistOnFailure(COLLECTIONS, () => {
+  const { sandbox, puts, timers } = load({ ok: false });
+  sandbox.persistOnFailure(SETTINGS, () => {
     throw new Error("reporter is broken");
   });
 
-  sandbox.persistSet(COLLECTIONS, "[]");
+  sandbox.persistSet(SETTINGS, "{}");
+  fireTimers(timers);
   await new Promise((resolve) => setTimeout(resolve, 0));
-  sandbox.persistSet(COLLECTIONS, '["a"]');
+  sandbox.persistSet(SETTINGS, '{"a":1}');
+  fireTimers(timers);
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   assert.equal(puts.length, 2);

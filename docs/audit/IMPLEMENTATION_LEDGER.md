@@ -96,7 +96,12 @@ production owner. Track it as an obligation attached to other findings.
 
 ## Decided, awaiting implementation
 
-- **DATA-02 takes the server-authoritative path**, decided on 2026-08-18.
+Nothing. The one entry here was `DATA-02`'s fork, taken below and then
+built on 2026-08-30; it is kept because the reasoning is why the shape
+looks the way it does.
+
+- **DATA-02 took the server-authoritative path**, decided on 2026-08-18
+  and shipped on 2026-08-30.
   Collections become bounded semantic operations (add, remove, rename)
   rather than a revision and ETag scheme that rejects stale replacements
   and leaves the client to reload and merge.
@@ -118,6 +123,37 @@ production owner. Track it as an obligation attached to other findings.
   `ANALYTICS-03` was written against this decision: collection membership is
   now indexed by run rather than held as a client-owned array per
   collection, which is the shape the operations will want.
+
+  **What verifying it turned up**, folded in on 2026-08-30 as one polish
+  pass rather than left as loose ends. Three were defects: the tab strip
+  widened the page at the cap, because `#toolbar-left` kept the flex
+  default of `min-width: auto` and the strip's own `min-width: 0` never
+  applied; refusals reached the toast as the server's API text, a
+  regression from this same work, since the `reason` field was added so
+  the page could own its wording and then `runCollectionOp` printed
+  `error.message` anyway; and deleting an empty collection asked for
+  confirmation, which is a dialog people learn to dismiss unread before
+  they meet the one that matters.
+
+  The other two were the conveniences the operations made cheap.
+  `add_runs` files a selection all-or-nothing, which is the same argument
+  the finding was written on: N sequential adds can stop at four and
+  leave a half-applied gesture nobody can see the shape of. It composes
+  with `ensure_favorites` under one lock, so the bulk star does not need
+  a create first. And because a collection is a filter rather than a
+  container, a collection view has nothing to add by construction; the
+  **Show all runs** toggle relaxes that one filter so filing can happen
+  from inside it, resetting on tab change so a collection view never
+  quietly shows non-members.
+
+  Bulk filing is add-only. For N runs a collection holds some, all, or
+  none, so a checkbox would have to be tri-state to answer honestly.
+  "File these six into X" is a coherent gesture; "toggle these six
+  against X" is not. Unfiling stays per-run, where the question has an
+  answer. Bulk collection *deletion* was left out for a different
+  reason: 24 collections is a state reached by testing the cap, not by
+  using the app, and skipping the confirm on empty ones is the cheap
+  answer to the same clearing-up problem.
 
 - **ANALYTICS-02's split is resolved**, on the reading its own Direction
   offers. The executive summary listed it among the small safety commits
@@ -281,7 +317,7 @@ on real hardware.
 | LIFE-04 | high | L | done | LIFE-03 (done) | Carried RUNTIME-01's queue bound, as its own Direction asks |
 | LIFE-05 | high | M | partial | none | Single-instance the desktop launcher; host lease deferred, see Deviations |
 | TRUST-04 | medium | L | needs hardware | LIFE-04 (done) | Download is a child process now; absorbed ORG-02's download client |
-| DATA-02 | high | L | partial | none | Lost-update slice done; server-authoritative path decided, semantics remain |
+| DATA-02 | high | L | done | none | Lost-update slice, then the semantics: collections are server-owned operations |
 | RUNTIME-01 | medium | L | partial | ORG-02 + DATA-05 | Queue bound landed with LIFE-04; append-only frames remain |
 | ORG-02 | medium | L | partial | none | State core verified; ES modules and server-rendered boot remain (download client went with TRUST-04) |
 | RUNTIME-03 | medium | S | blocked | ORG-02, paired | |
@@ -878,6 +914,49 @@ that window rather than guessing at a cause.
 Mutation-checked the same way as the store half: putting collections
 back on the debounce, removing the flush, ignoring the status, and
 setting `keepalive` unconditionally each fail the suite.
+
+**The fork, taken on 2026-08-30, which closes this.** Everything above
+made the write path safe. It did not make the *shape* safe, because a
+client still said what the whole list should become, and a successor
+computed from a stale copy is a lost update no lock can catch: the
+loss happens between the read and the write rather than during
+either.
+
+Collections are now changed by one operation per gesture, in
+`src/web/collections.py` as pure transforms and applied through
+`mutate_ui_state_key`, so the read they work from and the write they
+produce cannot be separated. The endpoints answer with the whole list
+afterwards, which is what lets a window that had fallen behind adopt
+rather than merge.
+
+Three details worth keeping:
+
+- **The generic PUT now refuses this key.** Operations beside an
+  endpoint that still accepted the array would have left the finding
+  open while looking closed. This is what makes the lost update
+  unrepresentable rather than merely unlikely, which was the stated
+  reason for preferring this fork over an ETag.
+- **The star is one operation, not several.** Clearing a filled star
+  empties every collection the run is in, and composed client-side
+  that is a bulk change that can stop half way. Creating a collection
+  from a run's caret is likewise one request, by composing two pure
+  transforms under a single lock.
+- **The limits moved with the ownership.** The collection cap, the
+  name bound and the id slugging were the browser's, which meant they
+  bound only the browsers that chose to apply them.
+
+The verification the finding asked for is `test_collection_races.py`:
+sixteen threads and eight forked processes each filing a different
+run, asserting every one lands. Mutating `_collections_apply` back to
+a read-then-write fails both the threaded and the process case, which
+is the proof that the test is measuring the lock's span rather than
+its presence. Two real windows, and the browser against the desktop
+app, are manual items 202 and 203.
+
+What this does not do, deliberately: a window that is merely watching
+stays behind until it acts or presses Refresh, which now asks the
+server. Nothing polls or pushes. The finding asks that no accepted
+change be lost, not that every window be live.
 
 ### QUALITY-01
 

@@ -147,6 +147,14 @@ var btnBulkDelete =
   document.getElementById("btn-bulk-delete");
 var bulkDeleteCount =
   document.getElementById("bulk-delete-count");
+var btnBulkStar =
+  document.getElementById("btn-bulk-star");
+var bulkStarCount =
+  document.getElementById("bulk-star-count");
+var btnBulkCollect =
+  document.getElementById("btn-bulk-collect");
+var btnShowAll =
+  document.getElementById("btn-show-all");
 // Runs staged for the delete confirmation modal (1 for a row's own
 // trashcan, N for the bulk "delete selected" action).
 var pendingDeleteIds = [];
@@ -774,6 +782,16 @@ function updateCompareButton() {
   btnCompare.disabled = ids.length < 2;
 }
 
+// Everything in the actions-column header that answers to the
+// selection. One entry point because they all appear and disappear
+// together, and five call sites each remembering to update three
+// buttons is five chances for two of them to disagree about whether
+// anything is selected.
+function updateBulkActions() {
+  updateBulkDeleteButton();
+  updateBulkCollectButtons();
+}
+
 // Show a trashcan with the selected count in the actions-column header
 // when one or more rows are checked; hide it when the selection is
 // empty. Kept in sync with the compare button on every selection change.
@@ -793,6 +811,47 @@ function updateBulkDeleteButton() {
   btnBulkDelete.setAttribute(
     "aria-label", "Delete " + count + " selected" + noun
   );
+}
+
+// The filing pair, shown and hidden with the delete beside them. The
+// star goes straight to Favorites the way a row's own star does; the
+// caret asks where. Kept in one function because a selection that
+// can be deleted can always be filed, so the two must never disagree
+// about whether there is one.
+function updateBulkCollectButtons() {
+  if (!btnBulkStar || !btnBulkCollect) { return; }
+  var count = checkedRunIds().length;
+  if (count < 1) {
+    btnBulkStar.hidden = true;
+    btnBulkCollect.hidden = true;
+    return;
+  }
+  btnBulkStar.hidden = false;
+  btnBulkCollect.hidden = false;
+  if (bulkStarCount) {
+    bulkStarCount.textContent = "(" + count + ")";
+  }
+  var noun = count === 1 ? " run" : " runs";
+  var label = "Add " + count + " selected" + noun;
+  // Named rather than assumed, because inside a collection the star
+  // files there instead of into Favorites and the only way to know
+  // that before clicking is to be told.
+  var into = " to " + bulkFileTargetName();
+  btnBulkStar.title = label + into;
+  btnBulkStar.setAttribute("aria-label", label + into);
+  btnBulkCollect.title = label + " to a collection";
+  btnBulkCollect.setAttribute(
+    "aria-label", label + " to a collection"
+  );
+}
+
+function bulkFileTargetName() {
+  var target = bulkFileTarget();
+  var collection = findCollection(target);
+  if (collection) {
+    return collection.name;
+  }
+  return target === FAVORITES_ID ? "Favorites" : "the collection";
 }
 
 function buildRemaskFrameSet(remaskEdits) {
@@ -998,60 +1057,40 @@ function groupRuns(runs, key) {
 // ids for deleted runs on every hydrate, which is what keeps a run
 // deleted in another window from lingering as an unopenable row.
 
-var COLLECTIONS_KEY = "diffusion_collections";
-
 // Favorites is created on first use rather than shipped empty, so a
 // user who never stars anything never sees a tab. Its id is fixed so
-// the star always knows where a plain click files to.
+// the star always knows where a plain click files to. The creating
+// is the server's now; this is here because the tab strip sorts it
+// first and the chooser labels it.
 var FAVORITES_ID = "favorites";
-var FAVORITES_NAME = "Favorites";
 
-// Bounds. Names are truncated in the strip anyway, and a collection
-// list long enough to overflow the toolbar would make the tabs
-// useless as navigation.
+// The name length the input enforces, matching the server's bound so
+// a name that fits the field is never refused after typing it. The
+// collection cap is deliberately *not* mirrored here: the server
+// refuses past it and says so, and a second copy of a limit is a
+// second thing to get out of step.
 var COLLECTION_NAME_MAX = 40;
-var COLLECTIONS_MAX = 24;
 
 var collections = [];
 // null means the All view, which is not a collection: it is every run
 // on disk, and it has no membership to add to or remove from.
 var activeCollectionId = null;
+// Inside a collection, whether the membership filter is relaxed so
+// runs can be filed into it from where you are standing. Reset on
+// every tab change, so it never outlives the visit that turned it on.
+var showAllInCollection = false;
 // The run whose chooser is open, and the collection staged for the
 // delete confirmation. Both null when their dialog is closed.
 var chooserRunId = null;
+// The selection the chooser is filing, or null when it was opened
+// from one row. Which of the two is set decides whether the dialog
+// shows toggles or targets.
+var chooserRunIds = null;
 var pendingCollectionDelete = null;
 
-// Read the stored collections, discarding anything malformed. A
-// corrupt value degrades to no collections rather than throwing: this
-// runs during boot, and the table is worth more than the tabs.
-function loadCollections() {
-  collections = [];
-  var raw = null;
-  try {
-    raw = localStorage.getItem(COLLECTIONS_KEY);
-  } catch (_e) {
-    return;
-  }
-  if (!raw) {
-    return;
-  }
-  var parsed = null;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (_e) {
-    return;
-  }
-  if (!Array.isArray(parsed)) {
-    return;
-  }
-  for (var i = 0; i < parsed.length; i++) {
-    var entry = sanitizeCollection(parsed[i]);
-    if (entry !== null) {
-      collections.push(entry);
-    }
-  }
-  rebuildMembershipIndex();
-}
+// Collections are no longer read from localStorage. They are fetched
+// from the server, which owns them, so there is no window-local copy
+// to fall out of step with another window's. See refreshCollections.
 
 // One stored entry, or null when it is not one. Validated on read
 // rather than trusted because this file is shared with a server that
@@ -1080,25 +1119,101 @@ function sanitizeCollection(entry) {
   };
 }
 
-// Write through to the server (see persistSet) so collections survive
-// a desktop restart, where the window origin can change and partition
-// localStorage.
-function saveCollections() {
-  persistSet(COLLECTIONS_KEY, JSON.stringify(collections));
+// The collections API. This page no longer writes the list: it sends
+// the gesture and the server applies it under the file lock, which
+// is what stopped one window's filing from erasing another's.
+var collectionsApi = collectionsClientCreate({});
+
+// Take the server's answer as the truth. Every operation returns the
+// whole list as it stands afterwards, so this replaces rather than
+// merges, and a window that had fallen behind another is level again
+// the moment it acts.
+//
+// Sanitized on the way in for the same reason the stored value was:
+// this page should not be the thing that breaks if the shape it is
+// handed is not the shape it expects.
+function adoptCollections(list) {
+  collections = [];
+  for (var i = 0; i < list.length; i++) {
+    var clean = sanitizeCollection(list[i]);
+    if (clean !== null) {
+      collections.push(clean);
+    }
+  }
+  rebuildMembershipIndex();
+  renderCollectionTabs();
+  renderTable();
 }
 
-// The one key here worth interrupting the user over. Every other
-// persisted value is a cache that costs a preference; this is filing
-// they did by hand, and a silent failure means the tab keeps showing
-// it as saved right up until another window hydrates it away. Says
-// what is true, that the change is in this tab only, rather than
-// naming a cause the page cannot know.
-persistOnFailure(COLLECTIONS_KEY, function () {
-  showToast(
-    "Collections could not be saved. This change is in this"
-      + " window only and will be lost on reload."
-  );
-});
+// Send one gesture and adopt what comes back, or report why not.
+//
+// A refusal now changes nothing here, which is the substantive
+// difference from what this replaced. The old path wrote
+// localStorage first and told the user afterwards that their change
+// existed in this window only and would vanish on reload. There is
+// no such state any more: either the server applied it or it did not
+// happen, and the message says which.
+function runCollectionOp(pending, onDone) {
+  return pending
+    .then(function (list) {
+      adoptCollections(list);
+      if (onDone) {
+        onDone();
+      }
+    })
+    .catch(function (error) {
+      showToast(collectionRefusalText(error));
+    });
+}
+
+// What a refusal says to a person.
+//
+// The server's own messages are deliberately terse, because they are
+// API text read in a response body or a test: "at most 24
+// collections" is exactly right there and reads like a log line in a
+// toast. That is what the reason exists for, so the page can own its
+// own wording without having to parse a sentence.
+//
+// A reason with no entry here falls back to the server's message
+// rather than to something generic, because a specific sentence in
+// the wrong register still beats "something went wrong". The test
+// that every reason has an entry is what keeps that a safety net
+// rather than the normal path.
+// The cap is named without its number on purpose. The page stopped
+// holding that limit when the server took ownership of it, and
+// quoting it here would put a second copy somewhere it could drift.
+// The name bound is different: the input's maxlength needs it
+// anyway, so the page already knows it honestly.
+var COLLECTION_REFUSALS = {
+  collection_limit:
+    "Collection limit reached. Delete one to make another.",
+  collection_runs_limit:
+    "That collection is full.",
+  invalid_name:
+    "Give the collection a name of "
+    + COLLECTION_NAME_MAX + " characters or fewer.",
+  unknown_collection:
+    "That collection no longer exists. Refresh to catch up.",
+  unknown_run:
+    "That run no longer exists. Refresh to catch up.",
+  collections_full:
+    "There is no room to store more collections.",
+  use_collection_operations:
+    "Collections could not be changed. Reload the page.",
+};
+
+function collectionRefusalText(error) {
+  if (!error) {
+    return "The collection could not be changed.";
+  }
+  var known = COLLECTION_REFUSALS[error.reason];
+  if (known) {
+    return known;
+  }
+  return error.message
+    ? error.message
+    : "The collection could not be changed.";
+}
 
 function findCollection(id) {
   for (var i = 0; i < collections.length; i++) {
@@ -1109,27 +1224,10 @@ function findCollection(id) {
   return null;
 }
 
-// Favorites, creating it if this is the first star. Returns null when
-// the collection cap is already reached, which the caller reports
-// rather than silently dropping the click.
-function ensureFavorites() {
-  var favorites = findCollection(FAVORITES_ID);
-  if (favorites) {
-    return favorites;
-  }
-  if (collections.length >= COLLECTIONS_MAX) {
-    return null;
-  }
-  favorites = {
-    id: FAVORITES_ID,
-    name: FAVORITES_NAME,
-    runs: [],
-  };
-  // First, so the tab it creates lands where a user expects the
-  // default one to be rather than after their own collections.
-  collections.unshift(favorites);
-  return favorites;
-}
+// Creating Favorites on the first star, applying the collection cap,
+// and generating an id from a name all moved to the server with the
+// operations, because a limit this page enforces is a limit that
+// holds only for pages that choose to.
 
 // Membership, indexed by run rather than scanned per collection.
 //
@@ -1179,65 +1277,39 @@ function collectionHasRun(collection, runId) {
   return !!(entry && entry[collection.id]);
 }
 
-// Add or remove one run from one collection. Returns whether anything
-// changed, so callers can skip a write and a re-render.
+// Add or remove one run from one collection.
 function setRunMembership(collectionId, runId, member) {
-  var collection = findCollection(collectionId);
-  if (!collection) {
-    return false;
+  if (member) {
+    return runCollectionOp(
+      collectionsApi.addRun(collectionId, runId)
+    );
   }
-  var at = collection.runs.indexOf(runId);
-  if (member && at === -1) {
-    collection.runs.push(runId);
-    return true;
-  }
-  if (!member && at !== -1) {
-    collection.runs.splice(at, 1);
-    return true;
-  }
-  return false;
+  return runCollectionOp(
+    collectionsApi.removeRun(collectionId, runId)
+  );
 }
 
 // The star's plain click: file to Favorites, or take it back out. One
 // click, no dialog, because the common case is deciding a run is
 // worth keeping and that decision should cost nothing.
+//
+// One request, not several, even though a filled star clears the run
+// from every collection it is in. Composed here it would be several
+// writes that can stop half way; sent as one gesture the server
+// applies all of it or none.
 function toggleFavorite(runId) {
-  if (runIsCollected(runId)) {
-    var changed = false;
-    for (var i = 0; i < collections.length; i++) {
-      if (setRunMembership(collections[i].id, runId, false)) {
-        changed = true;
-      }
-    }
-    if (changed) {
-      afterCollectionsChanged();
-    }
-    return;
-  }
-  if (ensureFavorites() === null) {
-    showToast(
-      "Collection limit reached (" + COLLECTIONS_MAX + ")"
-    );
-    return;
-  }
-  setRunMembership(FAVORITES_ID, runId, true);
-  afterCollectionsChanged();
-}
-
-// Reindex, persist, then repaint everything that reads membership:
-// the tabs (their counts changed), and the table (its stars, and its
-// rows if a collection is the active view). The reindex comes first
-// because both of those repaints read through the index.
-function afterCollectionsChanged() {
-  rebuildMembershipIndex();
-  saveCollections();
-  renderCollectionTabs();
-  renderTable();
+  return runCollectionOp(collectionsApi.toggleFavorite(runId));
 }
 
 // Runs the table should show. The All view is every run; a collection
 // is its members, in the table's own sort order rather than the order
 // they were filed, so switching tabs does not also change the sort.
+//
+// Show all relaxes exactly that filter and nothing else. A collection
+// is defined as its members, so a collection view has nothing to add
+// by construction, and this is the smallest way out of that: the tab
+// stays selected so you can still see where you are standing, and
+// the runs it does not hold become visible to file.
 function visibleRuns() {
   if (activeCollectionId === null) {
     return allRuns;
@@ -1247,11 +1319,31 @@ function visibleRuns() {
     // The collection was deleted while active. Fall back to All
     // rather than show an empty table with no way to tell why.
     activeCollectionId = null;
+    showAllInCollection = false;
+    return allRuns;
+  }
+  // Checked after the fallback above, so relaxing the filter cannot
+  // leave a tab selected that no longer exists.
+  if (showAllInCollection) {
     return allRuns;
   }
   return allRuns.filter(function (run) {
     return collectionHasRun(collection, run.run_id);
   });
+}
+
+// Whether a run is already in the collection whose tab is selected.
+// Only asked while Show all is on, where it is the difference
+// between a row to file and one already filed.
+function runIsInActiveCollection(runId) {
+  if (activeCollectionId === null) {
+    return false;
+  }
+  var collection = findCollection(activeCollectionId);
+  if (!collection) {
+    return false;
+  }
+  return collectionHasRun(collection, runId);
 }
 
 // How many of a collection's runs actually exist. Counted against
@@ -1286,6 +1378,44 @@ function renderCollectionTabs() {
     );
   }
   collectionTabs.appendChild(buildCollectionAddButton());
+  updateShowAllToggle();
+}
+
+// The Show all control, which only means anything inside a
+// collection. Updated with the tabs, because the active tab is the
+// one thing that decides whether it applies.
+function updateShowAllToggle() {
+  if (!btnShowAll) {
+    return;
+  }
+  if (activeCollectionId === null) {
+    btnShowAll.hidden = true;
+    return;
+  }
+  btnShowAll.hidden = false;
+  btnShowAll.setAttribute(
+    "aria-pressed", showAllInCollection ? "true" : "false"
+  );
+  btnShowAll.classList.toggle("is-on", showAllInCollection);
+  btnShowAll.textContent = showAllInCollection
+    ? "Showing all runs"
+    : "Show all runs";
+}
+
+function onShowAllToggle() {
+  if (activeCollectionId === null) {
+    return;
+  }
+  showAllInCollection = !showAllInCollection;
+  // Cleared for the same reason a tab change clears it: the rows it
+  // referred to may not be on screen any more, and a bulk gesture
+  // must never reach a run the user cannot see.
+  checkedIds = {};
+  selectAllCb.checked = false;
+  updateCompareButton();
+  updateBulkActions();
+  updateShowAllToggle();
+  renderTable();
 }
 
 function buildCollectionTab(collection, name, count) {
@@ -1431,55 +1561,40 @@ function applyCollectionName(collection, raw) {
     return;
   }
   if (collection) {
-    collection.name = name;
-    afterCollectionsChanged();
-    return;
-  }
-  var created = createCollection(name);
-  if (created === null) {
-    showToast(
-      "Collection limit reached (" + COLLECTIONS_MAX + ")"
+    runCollectionOp(
+      collectionsApi.rename(collection.id, name)
     );
-    renderCollectionTabs();
     return;
   }
-  // Switch to what was just made: creating a collection is almost
-  // always the first half of filing something into it.
-  activeCollectionId = created.id;
-  afterCollectionsChanged();
-}
-
-// Add a collection under a name, or return null at the cap. Ids are
-// derived from the name and disambiguated with a counter, so the
-// stored value stays readable when inspected by hand.
-function createCollection(name) {
-  if (collections.length >= COLLECTIONS_MAX) {
-    return null;
-  }
-  var base = name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  if (base === "") {
-    base = "collection";
-  }
-  var id = base;
-  var suffix = 2;
-  while (findCollection(id) !== null) {
-    id = base + "-" + suffix;
-    suffix++;
-    if (suffix > COLLECTIONS_MAX + 2) {
-      // Unreachable while ids are unique per collection and the cap
-      // holds, but the loop must be bounded regardless.
-      return null;
+  runCollectionOp(collectionsApi.create(name), function () {
+    // Switch to what was just made: creating a collection is almost
+    // always the first half of filing something into it. The id is
+    // the server's, so it is read off the answer rather than
+    // predicted from the name.
+    var created = collections[collections.length - 1];
+    if (created) {
+      activeCollectionId = created.id;
+      renderCollectionTabs();
+      renderTable();
     }
-  }
-  var collection = { id: id, name: name, runs: [] };
-  collections.push(collection);
-  return collection;
+  });
 }
 
+
+// Ask before deleting a collection, unless there is nothing to ask
+// about.
+//
+// The confirmation exists because deleting a populated collection
+// throws away filing done by hand, which nothing on disk can rebuild.
+// An empty one throws away a name. Confirming that too made clearing
+// up twice the clicks and, worse, taught the dialog to be dismissed
+// without reading, which is exactly the habit it needs the user not
+// to have when the collection does hold something.
 function openCollectionDeleteModal(collection) {
+  if (collectionPresentCount(collection) === 0) {
+    deleteCollection(collection.id);
+    return;
+  }
   pendingCollectionDelete = collection.id;
   if (colDeleteLabel) {
     colDeleteLabel.textContent =
@@ -1508,17 +1623,13 @@ function confirmCollectionDelete() {
 // label, not data, which is why it is a plain confirm rather than the
 // same danger copy the run delete carries.
 function deleteCollection(id) {
-  var kept = [];
-  for (var i = 0; i < collections.length; i++) {
-    if (collections[i].id !== id) {
-      kept.push(collections[i]);
+  runCollectionOp(collectionsApi.destroy(id), function () {
+    if (activeCollectionId === id) {
+      activeCollectionId = null;
+      renderCollectionTabs();
+      renderTable();
     }
-  }
-  collections = kept;
-  if (activeCollectionId === id) {
-    activeCollectionId = null;
-  }
-  afterCollectionsChanged();
+  });
 }
 
 // The caret's dialog: every collection with a checkbox, plus a field
@@ -1537,9 +1648,43 @@ function openCollectionChooser(runId) {
   modalCollections.classList.remove("hidden");
 }
 
+// The same dialog, opened for a selection rather than one row. The
+// runs are captured now rather than read at click time, so a
+// selection cleared behind the dialog cannot turn a target click
+// into a no-op.
+function openCollectionBulkChooser(runIds) {
+  chooserRunId = null;
+  chooserRunIds = runIds.slice();
+  if (collectionsRunLabel) {
+    var noun = runIds.length === 1 ? " run" : " runs";
+    collectionsRunLabel.textContent =
+      runIds.length + " selected" + noun;
+  }
+  renderCollectionChoices();
+  if (newCollectionName) {
+    newCollectionName.value = "";
+  }
+  setCollectionsNote("");
+  modalCollections.classList.remove("hidden");
+}
+
 function closeCollectionChooser() {
   chooserRunId = null;
+  chooserRunIds = null;
   modalCollections.classList.add("hidden");
+}
+
+// Whether the dialog is filing a selection rather than one row.
+function chooserIsBulk() {
+  return chooserRunIds !== null;
+}
+
+// The runs the dialog is acting on, either way.
+function chooserRuns() {
+  if (chooserRunIds !== null) {
+    return chooserRunIds;
+  }
+  return chooserRunId === null ? [] : [chooserRunId];
 }
 
 function renderCollectionChoices() {
@@ -1557,7 +1702,9 @@ function renderCollectionChoices() {
   }
   for (var i = 0; i < collections.length; i++) {
     collectionChoices.appendChild(
-      buildCollectionChoice(collections[i])
+      chooserIsBulk()
+        ? buildCollectionTarget(collections[i])
+        : buildCollectionChoice(collections[i])
     );
   }
 }
@@ -1585,6 +1732,47 @@ function buildCollectionChoice(collection) {
   return row;
 }
 
+// A target rather than a toggle, which is the whole difference
+// between filing one run and filing several.
+//
+// A checkbox answers "is this run in here", and for a selection the
+// answer can be "some of them", which a checkbox cannot say without
+// becoming tri-state. Rather than build that, filing a selection is
+// add-only: the row reports how many are already in, and clicking it
+// files the rest. Taking runs back out stays a per-row gesture,
+// where the question has an answer.
+function buildCollectionTarget(collection) {
+  var row = document.createElement("button");
+  row.type = "button";
+  row.className = "collection-choice collection-target";
+  row.setAttribute("data-collection-id", collection.id);
+
+  var name = document.createElement("span");
+  name.textContent = collection.name;
+  row.appendChild(name);
+
+  var runs = chooserRuns();
+  var already = 0;
+  for (var i = 0; i < runs.length; i++) {
+    if (collectionHasRun(collection, runs[i])) {
+      already++;
+    }
+  }
+  var note = document.createElement("span");
+  note.className = "collection-choice-count";
+  if (already === 0) {
+    note.textContent = "add " + runs.length;
+  } else if (already === runs.length) {
+    note.textContent = "all in";
+    row.disabled = true;
+  } else {
+    note.textContent =
+      already + " in, add " + (runs.length - already);
+  }
+  row.appendChild(note);
+  return row;
+}
+
 // Tick or untick one collection for the open run. Applied immediately
 // rather than on Done: the checkbox is the switch, and a dialog whose
 // footer button is the one that commits invites closing it and
@@ -1598,9 +1786,84 @@ function onCollectionChoiceToggle(e) {
   if (!id) {
     return;
   }
-  setRunMembership(id, chooserRunId, box.checked);
-  afterCollectionsChanged();
-  renderCollectionChoices();
+  setRunMembership(id, chooserRunId, box.checked).then(
+    renderCollectionChoices
+  );
+}
+
+// The bulk star: straight into Favorites, no dialog. Deliberately
+// not the row star's toggle. That star means "in any collection" and
+// clears every one of them when it is already lit, which across a
+// mixed selection would be a gesture nobody could predict the result
+// of. Filing is the half that stays honest in bulk.
+function onBulkStar() {
+  var runs = checkedRunIds();
+  if (runs.length === 0) {
+    return;
+  }
+  fileRunsInto(bulkFileTarget(), runs);
+}
+
+// Where the star files. Favorites by default, but the collection you
+// are standing in when you are standing in one: having just turned
+// on Show all to file into this collection, being sent to Favorites
+// instead would be the wrong answer to an unambiguous gesture.
+function bulkFileTarget() {
+  if (activeCollectionId !== null) {
+    return activeCollectionId;
+  }
+  return FAVORITES_ID;
+}
+
+function onBulkCollect() {
+  var runs = checkedRunIds();
+  if (runs.length === 0) {
+    return;
+  }
+  openCollectionBulkChooser(runs);
+}
+
+// Click a target to file the selection into it. Add-only, so this
+// closes: there is no second click that would take them out again,
+// and leaving the dialog open would invite one.
+//
+// Reached by a click rather than by the change the checkbox rows
+// report, because a target row is a button and a button never fires
+// change. Routing this through the change handler is what made the
+// whole rendering inert once: the rows drew correctly, counted
+// correctly, and could not be clicked.
+function onCollectionTargetClick(e) {
+  if (!chooserIsBulk()) {
+    return;
+  }
+  var row = e.target.closest("[data-collection-id]");
+  if (!row || row.disabled) {
+    return;
+  }
+  var id = row.getAttribute("data-collection-id");
+  var runs = chooserRuns();
+  if (!id || runs.length === 0) {
+    return;
+  }
+  closeCollectionChooser();
+  fileRunsInto(id, runs);
+}
+
+// File a selection into one collection, then say so. The toast is
+// the whole feedback here: unlike the row star there is no glyph
+// that changes, and the rows may not even be on screen.
+function fileRunsInto(collectionId, runIds) {
+  return runCollectionOp(
+    collectionsApi.addRuns(collectionId, runIds),
+    function () {
+      var collection = findCollection(collectionId);
+      var noun = runIds.length === 1 ? " run" : " runs";
+      showToast(
+        "Added " + runIds.length + noun + " to "
+        + (collection ? collection.name : "the collection") + "."
+      );
+    }
+  );
 }
 
 function onCreateCollectionFromChooser() {
@@ -1612,24 +1875,44 @@ function onCreateCollectionFromChooser() {
     setCollectionsNote("Give the collection a name.", true);
     return;
   }
-  var created = createCollection(name);
-  if (created === null) {
-    setCollectionsNote(
-      "Collection limit reached ("
-      + COLLECTIONS_MAX + ").",
-      true
-    );
+  // Created and filed in one request: naming a new collection from
+  // the filing dialog is asking for those runs to go in it, and two
+  // requests could leave the collection made and empty.
+  if (chooserIsBulk()) {
+    createCollectionForSelection(name, chooserRuns());
     return;
   }
-  // Filed straight away: naming a new collection from a run's own
-  // dialog is asking for that run to go in it.
-  if (chooserRunId !== null) {
-    setRunMembership(created.id, chooserRunId, true);
-  }
-  newCollectionName.value = "";
-  setCollectionsNote("");
-  afterCollectionsChanged();
-  renderCollectionChoices();
+  collectionsApi
+    .create(name, chooserRunId)
+    .then(function (list) {
+      adoptCollections(list);
+      newCollectionName.value = "";
+      setCollectionsNote("");
+      renderCollectionChoices();
+    })
+    .catch(function (error) {
+      setCollectionsNote(collectionRefusalText(error), true);
+    });
+}
+
+// Naming a collection while filing a selection closes the dialog,
+// for the same reason clicking a target does: the runs are in the
+// new collection and there is nothing left to choose.
+function createCollectionForSelection(name, runIds) {
+  collectionsApi
+    .createWithRuns(name, runIds)
+    .then(function (list) {
+      adoptCollections(list);
+      newCollectionName.value = "";
+      closeCollectionChooser();
+      var noun = runIds.length === 1 ? " run" : " runs";
+      showToast(
+        "Added " + runIds.length + noun + " to " + name + "."
+      );
+    })
+    .catch(function (error) {
+      setCollectionsNote(collectionRefusalText(error), true);
+    });
 }
 
 function setCollectionsNote(text, warn) {
@@ -1668,8 +1951,12 @@ function renderTable() {
   runsTbody.innerHTML = "";
 
   // Which "nothing here" message applies: no runs at all, or a
-  // collection that has none of them.
-  var inCollection = activeCollectionId !== null;
+  // collection that has none of them. Show all makes it the former
+  // even inside a collection, since nothing is being filtered out
+  // and the message would otherwise tell the reader to turn on a
+  // toggle that is already on.
+  var inCollection =
+    activeCollectionId !== null && !showAllInCollection;
   runsEmpty.hidden = shown.length > 0 || inCollection;
   if (runsEmptyCollection) {
     runsEmptyCollection.hidden =
@@ -1704,6 +1991,14 @@ function renderTable() {
       }
       if (checkedIds[run.run_id]) {
         tr.classList.add("row-checked");
+      }
+      // Under Show all, mark what is already filed here. Without it
+      // the table is a flat list with no way to see what the visit
+      // was for. The row's own star cannot carry this: it means "in
+      // any collection", and giving it a second meaning that depends
+      // on the active tab would make one glyph answer two questions.
+      if (showAllInCollection && runIsInActiveCollection(run.run_id)) {
+        tr.classList.add("row-already-filed");
       }
 
       // A run the server could not read. It is listed rather than
@@ -5434,7 +5729,7 @@ function onRowClick(e) {
       checkedRow.classList.toggle("row-checked", cb.checked);
     }
     updateCompareButton();
-    updateBulkDeleteButton();
+    updateBulkActions();
     return;
   }
 
@@ -5458,7 +5753,7 @@ function onSelectAll() {
   }
   renderTable();
   updateCompareButton();
-  updateBulkDeleteButton();
+  updateBulkActions();
 }
 
 // Selecting a tab. Clears the selection: a checkbox ticked under one
@@ -5469,10 +5764,15 @@ function selectCollection(id) {
     return;
   }
   activeCollectionId = id;
+  // Show all is per-visit, not a preference. A collection view that
+  // quietly showed non-members the next time you opened it would no
+  // longer be a collection view, and the tab would be lying about
+  // what it holds.
+  showAllInCollection = false;
   checkedIds = {};
   selectAllCb.checked = false;
   updateCompareButton();
-  updateBulkDeleteButton();
+  updateBulkActions();
   renderCollectionTabs();
   renderTable();
 }
@@ -5520,12 +5820,14 @@ function loadAndRender() {
     allRuns = runs;
     checkedIds = {};
     selectAllCb.checked = false;
-    // Re-read on every refresh, not just at boot: the server prunes
-    // ids for deleted runs on hydrate, and another window may have
-    // filed something since.
-    loadCollections();
+    // Ask the server, rather than re-reading this window's copy.
+    // Another window may have filed something since, and until this
+    // fetched it that only showed up on a full page load, which made
+    // Refresh a button that refreshed everything except the one
+    // thing two windows can disagree about.
+    refreshCollections();
     updateCompareButton();
-    updateBulkDeleteButton();
+    updateBulkActions();
     renderCollectionTabs();
     renderTable();
   });
@@ -5669,34 +5971,29 @@ function applyDeletions(deletedIds) {
     return !removed[run.run_id];
   });
   // A collection holding an id whose folder is gone would show a row
-  // that cannot be opened. The server prunes on the next hydrate, but
-  // that is a page load away, and this table is looking at it now.
-  dropDeletedFromCollections(removed);
+  // that cannot be opened. This page used to prune its own copy and
+  // write the result back; now it asks, because the server prunes
+  // against what is actually on disk and is the one that decides.
+  refreshCollections();
   selectAllCb.checked = false;
   updateCompareButton();
-  updateBulkDeleteButton();
+  updateBulkActions();
   renderCollectionTabs();
   renderTable();
 }
 
-function dropDeletedFromCollections(removed) {
-  var changed = false;
-  for (var i = 0; i < collections.length; i++) {
-    var runs = collections[i].runs;
-    var kept = runs.filter(function (runId) {
-      return !removed[runId];
-    });
-    if (kept.length !== runs.length) {
-      collections[i].runs = kept;
-      changed = true;
-    }
-  }
-  if (changed) {
-    // The one membership change that does not go through
-    // afterCollectionsChanged, because the caller repaints itself.
-    rebuildMembershipIndex();
-    saveCollections();
-  }
+// Take the server's current list. Used after deleting runs, and by
+// Refresh, so a window that has been sitting open while another
+// filed something has a way back without a reload.
+//
+// Quiet on failure: this is a read that nobody asked for by name,
+// and a toast for it would fire on every refresh of a page whose
+// server has gone away, which the rest of the page already says.
+function refreshCollections() {
+  return collectionsApi
+    .list()
+    .then(adoptCollections)
+    .catch(function () {});
 }
 
 function reportDeletion(deleted, failed) {
@@ -5877,6 +6174,15 @@ btnDeleteClose.addEventListener("click", closeDeleteModal);
 if (btnBulkDelete) {
   btnBulkDelete.addEventListener("click", openBulkDeleteModal);
 }
+if (btnBulkStar) {
+  btnBulkStar.addEventListener("click", onBulkStar);
+}
+if (btnBulkCollect) {
+  btnBulkCollect.addEventListener("click", onBulkCollect);
+}
+if (btnShowAll) {
+  btnShowAll.addEventListener("click", onShowAllToggle);
+}
 modalDelete.addEventListener("click", function (e) {
   if (e.target === modalDelete) {
     closeDeleteModal();
@@ -5889,9 +6195,17 @@ if (collectionTabs) {
     "click", onCollectionTabClick
   );
 }
+// Two listeners, one per rendering, rather than one that branches:
+// the two emit different events. A checkbox row reports "change";
+// a target row is a button, which only ever reports "click". Each
+// handler returns early in the mode it does not own, so the label
+// click that accompanies every checkbox change reaches nothing.
 if (collectionChoices) {
   collectionChoices.addEventListener(
     "change", onCollectionChoiceToggle
+  );
+  collectionChoices.addEventListener(
+    "click", onCollectionTargetClick
   );
 }
 if (btnNewCollection) {

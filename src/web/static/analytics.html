@@ -48,6 +48,14 @@
              rather than a collection, so it is not stored. -->
         <div id="collection-tabs" class="collection-tabs"
           role="tablist" aria-label="Collections"></div>
+        <!-- Relaxes the membership filter so runs can be filed into
+             the collection from inside it. Shown only while one is
+             active: All is already every run. -->
+        <button id="btn-show-all" class="show-all-btn" type="button"
+          hidden aria-pressed="false"
+          title="Show runs outside this collection so they can be added">
+          Show all runs
+        </button>
       </div>
       <div id="toolbar-right">
         <button id="btn-compare" disabled>
@@ -89,6 +97,34 @@
                   title="Edited runs have a saved original for a diff comparison">
                   Edited</th>
                 <th class="col-actions">
+                  <!-- Filing the selection, beside deleting it: the
+                       star files straight into Favorites the way a
+                       row's own star does, and the caret asks where
+                       to put them. Both appear only with a
+                       selection, like the delete beside them. -->
+                  <button id="btn-bulk-star"
+                    class="bulk-star-btn" type="button" hidden
+                    title="Add selected runs to Favorites"
+                    aria-label="Add selected runs to Favorites">
+                    <svg viewBox="0 0 24 24" width="14" height="14"
+                      fill="none" stroke="currentColor"
+                      stroke-width="2" stroke-linecap="round"
+                      stroke-linejoin="round" aria-hidden="true">
+                      <path d="M12 3l2.9 5.9 6.1.9-4.4 4.3 1 6.1-5.6-2.9-5.6 2.9 1-6.1L3 9.8l6.1-.9z" />
+                    </svg>
+                    <span id="bulk-star-count">(0)</span>
+                  </button>
+                  <button id="btn-bulk-collect"
+                    class="bulk-collect-btn" type="button" hidden
+                    title="Add selected runs to a collection"
+                    aria-label="Add selected runs to a collection">
+                    <svg viewBox="0 0 24 24" width="12" height="12"
+                      fill="none" stroke="currentColor"
+                      stroke-width="2" stroke-linecap="round"
+                      stroke-linejoin="round" aria-hidden="true">
+                      <polyline points="6 9 12 15 18 9" />
+                    </svg>
+                  </button>
                   <button id="btn-bulk-delete"
                     class="bulk-delete-btn" type="button" hidden
                     title="Delete selected runs"
@@ -118,9 +154,13 @@
         <!-- Separate from the message above because that one sends
              the user to the menu, wrong advice when runs exist and
              this collection simply has none in it yet. -->
+        <!-- Points at the toggle rather than sending the reader to
+             the All tab, which used to be the only way to file into
+             a collection and meant leaving the one you were in. -->
         <p id="runs-empty-collection" class="empty-msg" hidden>
-          Nothing in this collection yet. Star a run under
-          <strong>All</strong> to file it here.
+          Nothing in this collection yet. Turn on
+          <strong>Show all runs</strong>, tick the ones you want, then
+          use the star to file them here.
         </p>
       </section>
 
@@ -567,6 +607,7 @@
   <script src="/model_client.js"></script>
   <script src="/overlays.js"></script>
   <script src="/detail_requests.js"></script>
+  <script src="/collections_client.js"></script>
   <script src="/download_client.js"></script>
   <script src="/download_toast.js"></script>
   <script src="/analytics.js"></script>

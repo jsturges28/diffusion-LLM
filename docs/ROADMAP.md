@@ -840,15 +840,16 @@ Agreed with the maintainer (deliberate each in Ask mode before Plan). (The
    Analytics **Entropy by Position** chart read the final frame today, which for
    diffusion would show only each position's last value, so they would want a
    frame selector or a different shape entirely.
-3. **An elapsed readout that ticks on a clock.** Much smaller than the two
-   above and listed here because it was accepted on 2026-08-28, not because
-   it is their peer.
+3. **An elapsed readout that ticks on a clock.** Accepted on 2026-08-28
+   and **shipped the same day**, in `52b0968`. Kept here rather than
+   deleted because the wrinkle below is the reason it works the way it
+   does, and a future change to the footer needs to know it.
 
-   Today the readout advances only when a frame lands: `updateRunRateFooter`
-   has exactly one caller, inside `handleFrame`, and it prints
-   `runFrames.elapsed[last]`. Between frames the number is frozen, so a
-   wedged run and a merely slow one look identical, which is the case worth
-   fixing rather than the smoothness.
+   The readout used to advance only when a frame landed:
+   `updateRunRateFooter` had exactly one caller, inside `handleFrame`, and
+   it printed `runFrames.elapsed[last]`. Between frames the number was
+   frozen, so a wedged run and a merely slow one looked identical, which
+   was the case worth fixing rather than the smoothness.
 
    The wrinkle, and the reason this is not a one-liner: that value is the
    *worker's*, stamped as `time.monotonic() - start_time` in
@@ -859,24 +860,22 @@ Agreed with the maintainer (deliberate each in Ask mode before Plan). (The
    same class of defect as the live-versus-Analytics throughput disagreement
    `ANALYTICS-02` fixed.
 
-   So: interpolate, do not substitute. Stamp each frame's worker elapsed
-   alongside `Date.now()`, tick at roughly 100ms showing the worker value
-   plus the local delta since that stamp, and re-sync on every frame. Drift
-   is then bounded by one frame interval and the terminal frame lands on the
-   worker's exact figure. The ticker has to be cleared on the terminal
-   frame, on a disconnect, and on leaving the page, or it outlives the run
-   it describes.
+   So it interpolates rather than substituting. Each frame's worker
+   elapsed is stamped alongside `Date.now()`, the ticker shows that value
+   plus the local delta since the stamp, and every frame re-syncs. Drift is
+   bounded by one frame interval and the terminal frame lands on the
+   worker's exact figure. The ticker is cleared on the terminal frame, on a
+   disconnect, and on leaving the page, or it would outlive the run it
+   describes.
 
-   One open question to settle first, because it is a judgement call rather
-   than a consequence. Throughput never consults a clock: run-average sums
-   `runFrames.revealed` over the worker's elapsed, and last-step divides one
-   frame's reveals by the delta between two worker stamps. Both read the
-   array Analytics reads, which is exactly what makes the two pages agree.
-   Once elapsed ticks locally, run-average *could* decay during a stall for
-   the same reason the elapsed climb is informative. Decide whether it
-   should: a decaying rate is useful while a run is stuck and restless the
-   rest of the time, and the answer may be that only the elapsed line
-   moves between frames.
+   The open question was settled by leaving it alone: only the elapsed line
+   moves between frames. Throughput still never consults a clock, because
+   run-average sums `runFrames.revealed` over the worker's elapsed and
+   last-step divides one frame's reveals by the delta between two worker
+   stamps, and both read the array Analytics reads, which is exactly what
+   makes the two pages agree. A rate that decayed during a stall would be
+   useful for the few seconds a run is stuck and restless for the rest of
+   the time.
 
 4. **Stop making DiffusionGemma's confidence optional.** Accepted on
    2026-08-29 and **shipped on 2026-08-30**, kept here rather than moved
@@ -1136,6 +1135,48 @@ expensive to rediscover. These are not backlog items: each one is either a
 line drawn deliberately, or a trap a future change will otherwise walk into.
 They moved here from `docs/HANDOFF.md` when `META-01` reduced it to a cold-start
 page.
+
+**Source inspection cannot see event wiring, and a DOM harness is
+cheaper than assumed.** Recorded 2026-08-31, after bulk filing shipped
+with a dead dialog: the chooser's target rows rendered correctly,
+counted overlaps correctly, and could not be clicked, because the list
+listened only for `change` and a target row is a `<button>`, which
+never fires it.
+
+Two source-inspection tests bracketed the defect without touching it.
+One proved the rows are built by `buildCollectionTarget`; the other
+proved they carry no checkbox, which is the very property that breaks
+a `change` listener. Both were right, and the bug lived in the seam.
+That is the general shape of the limit: source inspection reads what
+the page *contains*, never what the browser *delivers to it*, so any
+defect that is purely about which event reaches which handler is
+invisible to every frontend test this repo currently has.
+
+The standing assumption was that closing that gap needs jsdom, a
+dependency plus a harness. It does not. `analytics.js` loads into a
+`vm` against a hand-rolled DOM shim of roughly ninety lines, in the
+page's real script order, and a synthetic click on a row's child
+element produces the actual `POST`. That was built and run during this
+session: it passes on the fix and fails on the bug, which is the only
+property that makes such a harness worth anything.
+
+Not built now, deliberately. Getting it to load took five rounds of
+stubbing (`overlaysLoadSettings`, Chart's nested config assignment,
+`querySelector` returning null, `getComputedStyle`, `getContext`), and
+each of those is a way it breaks later for reasons that have nothing to
+do with the behaviour under test. A harness that fails on unrelated
+changes is a tax paid every session, and one that quietly passes on
+broken code is worse: the first version of this one did exactly that,
+reporting success against the shipped bug because its request filter
+matched the boot's `GET /api/analytics/runs`.
+
+The trigger to build it is a **second** event-wiring bug. One is a
+mistake; two is a class, and at that point the tax is worth paying.
+Until then the cheap substitute is the pattern this bug produced,
+under `tests/web/` in the collections polish suite: grep for
+`test_the_chooser_hears_the_event_a_target_can_emit`. It pairs the two
+facts that bracket the seam, asserting a button row and a `click`
+listener together rather than separately.
 
 **What a flat entropy profile actually means: domain first, repetition
 second.** Settled by the project's first real experiment, on 2026-08-18,

@@ -1,12 +1,21 @@
 """Tests for collection storage and its reconciliation on hydrate.
 
 Strategy: collections live in ``ui_state.json`` under
-``diffusion_collections`` as the JSON the client keeps in
-localStorage, so the server is a bounded key/value mirror rather than
-a schema. These tests drive the store directly for the key's contract
-(accepted, and bounded), and then point the server's results dir at a
-tmp path to drive ``GET /api/ui-state`` for the pruning, seeding
-collections that reference one real run folder and one deleted.
+``diffusion_collections``. These tests drive the store directly for
+the key's contract (accepted, and bounded), and then point the
+server's results dir at a tmp path to drive ``GET /api/ui-state`` for
+the pruning, seeding collections that reference one real run folder
+and one deleted.
+
+This file predates the collections API and covers the storage half:
+the key exists, it round-trips, it is size-bounded, and a deleted run
+leaves no id behind on hydrate. Since ``DATA-02`` the server also owns
+the *shape*, through the operations in ``src/web/collections.py``, and
+the ui-state key is no longer writable by a client at all. Those live
+in ``test_collection_ops.py``, ``test_collection_endpoints.py`` and
+``test_collection_races.py``. The hydrate path tested here stayed, and
+matters more than before: it is the reconcile that runs even when
+Analytics is never opened.
 
 Passing proves two things. A collection survives a restart under any
 window origin, which is the reason it is stored server-side at all
@@ -226,8 +235,13 @@ def test_a_malformed_entry_passes_through(
     tmp_path: Path, client_with_results: TestClient
 ) -> None:
     """Removing ids for missing runs is this endpoint's whole job.
-    Repairing a shape the client wrote is not, and guessing at one
-    would risk discarding something the client could still read."""
+
+    Hydrate is a mirror of the stored string, so it hands back what
+    is on disk. The typed view is ``GET /api/collections``, which
+    decodes and therefore does drop an entry it cannot address; the
+    two differ on purpose, and only the second is what the page
+    reads.
+    """
     _seed(tmp_path, ["not a collection", {"name": "no runs"}])
 
     collections = _read(client_with_results)

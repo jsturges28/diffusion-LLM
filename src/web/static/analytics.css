@@ -40,6 +40,16 @@ html, body {
   gap: 8px;
 }
 
+/* Allowed to be narrower than its contents, which is what lets the
+   collection strip inside it scroll instead of growing. A flex item
+   defaults to min-width: auto and so refuses to shrink past its
+   content, and that default here was enough to push the whole page
+   sideways at 24 collections: the strip's own min-width: 0 never got
+   a chance to apply. */
+#toolbar-left {
+  min-width: 0;
+}
+
 #toolbar label {
   font-size: 10px;
   color: var(--text-secondary);
@@ -103,6 +113,11 @@ html, body {
 /* Separated from Group by with a rule rather than only spacing: the
    two controls look alike but do different things, one narrowing what
    the table shows and the other rearranging it. */
+/* Takes the width left over beside Group by and scrolls inside it,
+   rather than wrapping to a second row. Wrapping would make the
+   toolbar's height depend on how many collections exist, and a page
+   that shifts down when you make one is a worse trade than a strip
+   you have to scroll. */
 .collection-tabs {
   display: flex;
   align-items: center;
@@ -111,12 +126,67 @@ html, body {
   padding-left: 12px;
   border-left: 1px solid var(--border);
   min-width: 0;
+  flex: 1 1 auto;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.collection-tabs::-webkit-scrollbar {
+  height: 6px;
+}
+
+.collection-tabs::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+/* Sits after the strip and does not shrink with it: the strip
+   scrolls, and a toggle that narrowed as collections were added
+   would eventually be unreadable. */
+.show-all-btn {
+  flex: 0 0 auto;
+  margin-left: 8px;
+  padding: 4px 9px;
+  background: none;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.show-all-btn[hidden] {
+  display: none;
+}
+
+.show-all-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--text-dim);
+}
+
+/* Dashed while off and solid while on, because the border is doing
+   the work of saying whether the view is filtered: a dashed edge for
+   a filter that could be relaxed, a solid one for a view that has
+   been. */
+.show-all-btn.is-on {
+  border-style: solid;
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  color: var(--accent);
 }
 
 .collection-tab {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  /* Not squeezed by the tabs beside it. The strip scrolls, so there
+     is room, and a shrunk tab would ellipsize a name that had space
+     to be read. */
+  flex: 0 0 auto;
   max-width: 190px;
   padding: 4px 9px;
   background: var(--bg-surface);
@@ -230,6 +300,31 @@ html, body {
   margin-left: auto;
   color: var(--text-dim);
   font-size: 10px;
+}
+
+/* The same row as a button, for filing a selection. It is a target
+   rather than a toggle, so it carries no checkbox and needs the
+   button element's own styling stripped back to match the rows it
+   sits among. */
+.collection-target {
+  width: 100%;
+  background: none;
+  border: none;
+  text-align: left;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+/* A collection that already holds all of them has nothing to do, so
+   it reads as unavailable rather than offering a click that would
+   be a no-op. */
+.collection-target:disabled {
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.collection-target:disabled:hover {
+  background: none;
 }
 
 .collection-new-row {
@@ -552,6 +647,20 @@ html, body {
   background: rgba(0, 255, 65, 0.1);
 }
 
+/* Under Show all, a run already in the active collection. Dimmed
+   rather than badged: the point of the view is to spot what is not
+   filed yet, and receding is how a row says it is not the one you
+   came for. Text only, so the row stays clickable and readable. */
+#runs-table tbody tr.row-already-filed td {
+  color: var(--text-dim);
+}
+
+/* Hovering restores it. A dimmed row is still a run you may want to
+   open, and it should not feel disabled. */
+#runs-table tbody tr.row-already-filed:hover td {
+  color: var(--text-primary);
+}
+
 #runs-table tbody td {
   padding: 7px 8px;
   color: var(--text-primary);
@@ -810,6 +919,55 @@ html, body {
 .bulk-delete-btn:hover {
   color: #ff6b6b;
   background: rgba(255, 68, 68, 0.15);
+}
+
+/* Filing the selection. Same geometry as the delete beside it, in
+   the accent rather than the danger colour, because one of these
+   adds a label and the other removes runs from disk and they should
+   not look interchangeable. */
+.bulk-star-btn,
+.bulk-collect-btn {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  vertical-align: middle;
+  position: relative;
+  top: -1px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.bulk-star-btn svg,
+.bulk-collect-btn svg {
+  display: block;
+  flex-shrink: 0;
+}
+
+.bulk-star-btn[hidden],
+.bulk-collect-btn[hidden] {
+  display: none;
+}
+
+.bulk-star-btn:hover,
+.bulk-collect-btn:hover {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+/* The caret sits tight against the star: they are one control with
+   two targets, the way a row's star and caret are. */
+.bulk-collect-btn {
+  margin-left: -4px;
+  margin-right: 2px;
 }
 
 /* ---- Group headers ---- */

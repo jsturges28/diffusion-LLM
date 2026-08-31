@@ -1940,3 +1940,117 @@ remember.
     and the tokens you did not touch should not flash as newly born.
     Confirm and reopen the run in Analytics to check the branch
     saved intact.
+
+## Two windows filing at once (DATA-02)
+
+Collections are now the server's: the page sends one operation per
+gesture and takes back the list, instead of writing its own copy of
+the array. The sandbox races sixteen threads and eight forked
+processes through that path and proves nothing is lost, and it proves
+the old read-then-write shape fails the same test. What it cannot do
+is drive two real browsers, which is the case the finding was written
+about, so these are the ones only you can run.
+
+202. **Two windows, two different runs, both survive.** Open
+    Analytics in two browser windows side by side. In the first,
+    star run A. In the second, which has not been reloaded and so
+    still shows its older list, star a different run B.
+    Reload either window. **Both** stars should be filled. Under the
+    old write path the second window would have written a list
+    computed before A existed, and A would be gone with no error
+    anywhere.
+    Then the sharper version: with both windows still open and
+    neither reloaded, star two more runs in quick succession, one in
+    each. Both should survive too, since each request carries only
+    the gesture.
+203. **The browser and the desktop app, against one directory.** The
+    case a thread lock cannot cover, and the reason there is a file
+    lock: these are two supervisor processes.
+    Launch `desktop.py` and also open Analytics in a browser at the
+    same address. File a run into a collection in each. Reload both.
+    Neither filing should be missing.
+204. **Refresh catches a window up.** Two windows again. File a run
+    in the first. In the second, without reloading, press
+    **Refresh**: the new membership should appear.
+    This is the whole of the staleness fix, so it is worth knowing
+    what it does not do. A window that just sits there stays behind
+    until it acts; nothing polls or pushes.
+205. **A refusal says so, and changes nothing.** Make collections up
+    to the cap of 24, then try to make one more. The refusal should
+    name the limit rather than failing silently, and no empty
+    collection should appear.
+    Then the useful negative: stop the server, and with the page
+    still open click a star. It should report that the change could
+    not be saved, and the star should **not** appear filled. The old
+    path wrote the browser's copy first, so it looked saved and then
+    vanished the next time anything hydrated.
+206. **Filing from the caret still works in one step.** Hover a row,
+    open the caret, and type a name into the new-collection field.
+    The collection should be created with that run already in it,
+    and the checkbox list should show it ticked. Those are one
+    request now, so a half-made collection with nothing in it would
+    be the failure to look for.
+
+## Collections polish: overflow, copy, and filing in bulk
+
+Three fixes that fell out of verifying `DATA-02`, and the two
+conveniences they exposed. The fixes are cheap to check and the
+filing paths are the ones worth spending time on, since the whole
+point of doing them as one request is a failure mode that only shows
+up when something goes wrong partway.
+
+207. **The strip scrolls instead of taking the page with it.** Make
+    collections up to the cap of 24, or enough to overflow the
+    toolbar. The tab strip should scroll sideways inside the
+    toolbar, keeping **Group by** on its left and leaving the runs
+    table where it was. Before this it laid out to roughly 1,800px
+    and dragged the whole page sideways, so the table scrolled off
+    to the left. Check the toolbar's height does not change either:
+    wrapping to a second row was the alternative and was rejected
+    for exactly that.
+208. **A refusal reads like the app, not like the API.** At the cap,
+    try to make one more collection. The message should say the
+    limit is reached, not `at most 24 collections`, which is the
+    server's own wording and was leaking into the toast.
+    Try the other reachable one too: open a row's caret, leave the
+    name field blank, and press Enter. It should ask for a name.
+209. **An empty collection is deleted without asking.** Make a
+    collection and delete it straight away with the cross on its
+    tab. It should just go. Then file a run into another one and
+    delete that: it should still ask first, and still leave the run
+    in `results/` and under All. The confirmation was never the
+    point for a collection holding nothing, and one that always
+    fires is one people stop reading.
+210. **Filing several runs into Favorites.** Under **All**, tick
+    three or four rows. A star and a caret should appear beside the
+    bulk trashcan, with the selection count on the star. Click the
+    star: all of them should be filed into Favorites, a toast should
+    say how many, and the Favorites tab count should jump by that
+    many in one step, not tick up one at a time.
+    Then the case worth the trouble: with some of a selection
+    already in Favorites, star it again. It should add only the
+    rest, and say so.
+211. **Choosing a target for a selection.** Tick several rows and
+    click the caret beside the star. The dialog should list
+    collections as **targets** rather than checkboxes, each saying
+    how many of the selection it already holds, with one that holds
+    all of them greyed out. Click a target: the runs are filed and
+    the dialog closes. Naming a new collection there should create
+    it with the whole selection already in it.
+    The failure to look for is a partial file. It is one request, so
+    a collection that gained four of six runs would mean the
+    batching is not doing what it exists to do.
+212. **Filing from inside a collection.** Open a collection, then
+    turn on **Show all runs** beside the tab strip. Every run should
+    appear with the tab still selected, and the ones already in this
+    collection dimmed. Tick a few of the undimmed ones and click the
+    bulk star: they should be filed into **this** collection, not
+    into Favorites, and the star's tooltip should have said so
+    before you clicked.
+    Then switch to another tab and back. Show all should be off
+    again, and the collection should show only its members.
+213. **An empty collection points at the toggle.** Make a fresh
+    collection and open it. The message should tell you to turn on
+    Show all runs and file from there, rather than sending you to
+    the All tab, which used to be the only way in and meant leaving
+    the collection you were trying to fill.

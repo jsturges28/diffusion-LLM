@@ -129,30 +129,30 @@ def test_the_old_per_row_scans_are_gone() -> None:
     assert "collection.runs.indexOf" not in has_run
 
 
-def test_every_mutation_site_reindexes() -> None:
-    # Three places can change membership: the boot read, the shared
-    # after-change path, and the delete sweep that repaints itself
-    # and so does not go through the shared one.
+def test_one_place_changes_membership() -> None:
+    """The index cannot go stale if only one path can move it.
+
+    There used to be three: the boot read from localStorage, the
+    shared after-change path, and a delete sweep that repainted
+    itself and so bypassed the shared one. Each had to remember to
+    reindex. Since collections became server-authoritative there is
+    exactly one, `adoptCollections`, because the page no longer
+    computes a new list at all: it is handed one and takes it.
+    """
     source = _js()
     rebuilds = re.findall(r"rebuildMembershipIndex\(\)", source)
 
-    # One definition plus three call sites.
-    assert len(rebuilds) == 4, rebuilds
+    # One definition plus the single call site.
+    assert len(rebuilds) == 2, rebuilds
     assert "rebuildMembershipIndex();" in _region(
-        "function loadCollections()", 1400
-    )
-    assert "rebuildMembershipIndex();" in _region(
-        "function afterCollectionsChanged()", 400
-    )
-    assert "rebuildMembershipIndex();" in _region(
-        "function dropDeletedFromCollections(removed)", 700
+        "function adoptCollections(list)", 600
     )
 
 
 def test_the_reindex_precedes_the_repaint() -> None:
     # Both repaints read through the index, so rebuilding after them
     # would draw one render's worth of stale stars.
-    body = _region("function afterCollectionsChanged()", 400)
+    body = _region("function adoptCollections(list)", 600)
 
     assert body.index("rebuildMembershipIndex") < body.index(
         "renderTable"
