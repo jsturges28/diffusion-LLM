@@ -2245,9 +2245,15 @@ What that cannot show is a page drawing them, which is these items.
     overlay and both elapsed series. The pre-edit baseline is stored
     flat now as well, so a mistake in its recovery shows here and
     nowhere else.
-227. **An older build refuses a new run, politely.** Optional, and
-    only if convenient: `git stash` this work, open a run saved after
-    it, and the page should say the run was written by a newer
-    version rather than showing a broken one. The schema version
-    exists for exactly this, and it is the one claim that cannot be
-    checked without two builds.
+227. **An older build refuses a new run, politely.** Already checked
+    in the sandbox, and recorded here only so it can be re-run when
+    the version next moves. Two builds are needed, so the recipe is
+    a detached worktree at the last commit that read format 1
+    (`git worktree add --detach /tmp/oldbuild 7fc686b`) pointed at a
+    *copy* of a v2 run, never the live results directory. That build
+    marks the catalog row invalid with "Saved by a newer version of
+    this app (format 2). Update to open it.", and answers the
+    frames, metrics and metadata endpoints with 400 and
+    `unsupported_version` rather than rendering something broken.
+    Note that a stash no longer reproduces this now that the work is
+    committed.

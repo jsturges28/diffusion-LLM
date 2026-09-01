@@ -2250,6 +2250,13 @@ rather than "unreadable". The wording is the point: calling a good run
 corrupt invites deleting it. Nothing else is read from such a run, so
 no field written by an unknown build is interpreted.
 
+Until RUNTIME-01 bumped the version to 2 this path had never actually
+run, because no build had ever written a version this one did not
+know. It has now been exercised: the last format-1 build, checked out
+detached at `7fc686b`, was pointed at a copy of a v2 run and refused
+it at every entry point, catalog row and all three detail endpoints,
+with the intended wording rather than a traceback.
+
 **The transcript adds a trailing newline that was never in the
 frame.** Found by the golden fixtures, not suspected beforehand. The
 v0 writer puts a newline after each frame body and the next delimiter
