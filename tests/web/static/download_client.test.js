@@ -234,6 +234,176 @@ test("a terminal state keeps being reported", async () => {
   assert.equal(clock.booked(), 1);
 });
 
+// -- the idle cadence --
+
+function cadenceClient(script) {
+  const { downloadClientCreate } = load();
+  const clock = manualScheduler();
+  const client = downloadClientCreate({
+    fetchImpl: fakeFetch(script),
+    schedule: clock.schedule,
+    unschedule: clock.unschedule,
+    pollMs: 500,
+    idlePollMs: 5000,
+    retryMs: 1000,
+  });
+  client.subscribe(() => {});
+  return { client, clock };
+}
+
+test("nothing to report is asked about slowly", async () => {
+  // Every page loads the toast and the toast observes from boot to
+  // unload, so the fast rate used to run for the life of the window
+  // whether or not a download existed.
+  const { client, clock } = cadenceClient(statuses({ state: "idle" }));
+
+  client.observe();
+  await clock.flush();
+
+  assert.deepEqual(clock.delays(), [5000]);
+});
+
+test("a running download is still asked about quickly", async () => {
+  const { client, clock } = cadenceClient(statuses(downloading(0.25)));
+
+  client.observe();
+  await clock.flush();
+
+  assert.deepEqual(clock.delays(), [500]);
+});
+
+test("a finished download keeps the fast rate", async () => {
+  // Terminal is not idle. A finished download stays reportable until
+  // it is acknowledged, and slowing here would delay the toast that
+  // ends the story.
+  const { client, clock } = cadenceClient(statuses({ state: "done" }));
+
+  client.observe();
+  await clock.flush();
+
+  assert.deepEqual(clock.delays(), [500]);
+});
+
+test("an errored download keeps the fast rate", async () => {
+  const { client, clock } = cadenceClient(statuses({ state: "error" }));
+
+  client.observe();
+  await clock.flush();
+
+  assert.deepEqual(clock.delays(), [500]);
+});
+
+test("the rate follows the state in both directions", async () => {
+  // The half worth pinning. Speeding up on a download that started
+  // elsewhere is what makes a slow idle rate affordable, and slowing
+  // down again is what stops one download costing the rest of the
+  // session at two requests a second.
+  const { client, clock } = cadenceClient(
+    statuses({ state: "idle" }, downloading(0.5), { state: "idle" })
+  );
+
+  client.observe();
+  await clock.flush();
+  const first = clock.delays();
+  await clock.flush();
+  const during = clock.delays();
+  await clock.flush();
+
+  assert.deepEqual(first, [5000]);
+  assert.deepEqual(during, [500]);
+  assert.deepEqual(clock.delays(), [5000]);
+});
+
+test("a reading with no state at all stays quick", async () => {
+  // Only "idle" earns the slow rate. A malformed or truncated
+  // reading is not evidence that nothing is happening, and guessing
+  // that it is would stall the bar on the one page that can see it.
+  const { client, clock } = cadenceClient(statuses({}));
+
+  client.observe();
+  await clock.flush();
+
+  assert.deepEqual(clock.delays(), [500]);
+});
+
+test("the shipped defaults are two different rates", async () => {
+  // Every test above injects both intervals, which proves the
+  // machinery and nothing about what the app runs: the page calls
+  // downloadClientCreate() with no cadence options at all. With the
+  // defaults equal, the backoff would be dead on arrival and every
+  // other test here would still pass.
+  const { downloadClientCreate } = load();
+  const clock = manualScheduler();
+  const client = downloadClientCreate({
+    fetchImpl: fakeFetch(
+      statuses({ state: "idle" }, downloading(0.5))
+    ),
+    schedule: clock.schedule,
+    unschedule: clock.unschedule,
+  });
+  client.subscribe(() => {});
+
+  client.observe();
+  await clock.flush();
+  const idle = clock.delays()[0];
+  await clock.flush();
+  const active = clock.delays()[0];
+
+  assert.ok(
+    idle > active,
+    `idle default ${idle} should exceed active default ${active}`
+  );
+});
+
+// -- catching up without waiting out the interval --
+
+test("checkNow reads at once instead of waiting", async () => {
+  const { client, clock } = cadenceClient(statuses({ state: "idle" }));
+  client.observe();
+  await clock.flush();
+  assert.deepEqual(clock.delays(), [5000]);
+
+  client.checkNow();
+
+  assert.deepEqual(clock.delays(), [0]);
+});
+
+test("checkNow replaces the pending poll rather than adding one",
+  async () => {
+    // Two loops against one endpoint is the defect this whole module
+    // was written to remove, so a focus event must not start a
+    // second one.
+    const { client, clock } = cadenceClient(
+      statuses({ state: "idle" })
+    );
+    client.observe();
+    await clock.flush();
+
+    client.checkNow();
+    client.checkNow();
+
+    assert.equal(clock.booked(), 1);
+  });
+
+test("checkNow does nothing when nothing is being watched", async () => {
+  // A page that never observed has nothing to catch up on, and
+  // starting a loop from a focus event would make it poll anyway.
+  const { client, clock } = cadenceClient(statuses({ state: "idle" }));
+
+  assert.equal(client.checkNow(), false);
+  assert.equal(clock.booked(), 0);
+});
+
+test("checkNow does nothing after stopping", async () => {
+  const { client, clock } = cadenceClient(statuses({ state: "idle" }));
+  client.observe();
+  await clock.flush();
+  client.stop();
+
+  assert.equal(client.checkNow(), false);
+  assert.equal(clock.booked(), 0);
+});
+
 test("a failed poll backs off rather than hammering", async () => {
   const { downloadClientCreate } = load();
   const clock = manualScheduler();

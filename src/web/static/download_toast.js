@@ -275,6 +275,25 @@
     return client.ack();
   }
 
+  // Read again as soon as the window is worth looking at.
+  //
+  // With nothing downloading the client polls slowly, which is what
+  // keeps an idle app from asking twice a second all day. That rate
+  // is slow enough to be seen, so a window returning to the
+  // foreground catches up at once instead of waiting it out. The
+  // listeners live here rather than in the client because the client
+  // touches no DOM, which is what makes it testable off a browser.
+  function watchForeground() {
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible") {
+        client.checkNow();
+      }
+    });
+    window.addEventListener("focus", function () {
+      client.checkNow();
+    });
+  }
+
   function init() {
     ensureToast();
     client = downloadClientCreate();
@@ -283,6 +302,7 @@
     // them began the fetch. Claiming an operation here would let a
     // page that is only watching cancel somebody else's download.
     client.observe();
+    watchForeground();
   }
 
   // Public API (globals; classic scripts share one scope).

@@ -126,6 +126,62 @@ def test_a_watching_page_claims_no_operation() -> None:
     assert "client.observe()" in body
 
 
+# -- the idle cadence, and where its DOM half lives --
+
+
+def _code(source: str) -> str:
+    """The source with line comments stripped.
+
+    A comment saying "per window" is not a DOM reference, and a test
+    that cannot tell prose from code fails on an explanation. Safe
+    here because the client's URLs are all relative, so no `//`
+    appears inside a string literal.
+    """
+    return "\n".join(
+        re.sub(r"//.*$", "", line) for line in source.splitlines()
+    )
+
+
+def test_the_client_touches_no_dom_for_the_catch_up() -> None:
+    """The reason `checkNow` is a method and not a listener inside
+    the client. This module is loaded into a bare `vm` context by the
+    node test beside it, so a `document` reference here would end
+    that, and the cadence is the part most worth testing."""
+    code = _code(_read(CLIENT_JS))
+
+    assert "document." not in code
+    assert "window." not in code
+    assert "addEventListener" not in code
+
+
+def test_the_page_wires_the_foreground_to_the_client() -> None:
+    """With nothing downloading the poll is slow enough to be seen,
+    so a window returning to the front catches up rather than
+    waiting it out."""
+    body = _region(_read(TOAST_JS), "function watchForeground(", 600)
+
+    assert "visibilitychange" in body
+    assert "focus" in body
+    assert "client.checkNow()" in body
+
+
+def test_the_foreground_watch_is_installed_at_boot() -> None:
+    body = _region(_read(TOAST_JS), "function init()", 700)
+
+    assert "watchForeground()" in body
+
+
+def test_only_idle_earns_the_slow_rate() -> None:
+    """A terminal reading still wants the fast one: a finished
+    download stays reportable until acknowledged, and the page
+    showing the toast may not be the page that started it."""
+    body = _region(_read(CLIENT_JS), "function nextDelay(", 400)
+
+    assert 'state === "idle"' in body
+    assert "idlePollMs" in body
+    assert "pollMs" in body
+
+
 def test_the_client_forgets_its_claim_after_cancelling() -> None:
     body = _region(_read(CLIENT_JS), "function cancel()", 900)
 

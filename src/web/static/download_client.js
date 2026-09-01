@@ -29,6 +29,21 @@
 // two loops this replaces disagreed about this number.
 var DOWNLOAD_CLIENT_POLL_MS = 500;
 
+// What that rate costs when there is nothing to sample.
+//
+// Every page loads the toast, and the toast observes from boot to
+// unload, so the fast rate used to run for the life of the window
+// whether or not a download existed: two requests a second, forever,
+// per window. The endpoint is cheap enough that the server does not
+// care, but the access log fills at the same rate and buries
+// anything else being read there.
+//
+// The poll cannot simply stop, because it is also how a window
+// learns about a download another window started. So it slows down
+// instead, and a window coming back to the foreground calls
+// checkNow rather than waiting this out.
+var DOWNLOAD_CLIENT_IDLE_POLL_MS = 5000;
+
 // A failing poll backs off rather than hammering. The fetch is a
 // separate process and outlives a dropped request; only our view of
 // it is missing.
@@ -66,6 +81,9 @@ function downloadClientCreate(options) {
   var retryMs = typeof settings.retryMs === "number"
     ? settings.retryMs
     : DOWNLOAD_CLIENT_RETRY_MS;
+  var idlePollMs = typeof settings.idlePollMs === "number"
+    ? settings.idlePollMs
+    : DOWNLOAD_CLIENT_IDLE_POLL_MS;
 
   var timer = null;
   // The download this client started, as the server numbered it.
@@ -103,10 +121,24 @@ function downloadClientCreate(options) {
     );
   }
 
+  // How soon to look again, given what was just read.
+  //
+  // "idle" is the only state with nothing to follow. The two
+  // terminal states still want the fast rate: a finished download
+  // stays reportable until acknowledged, and the page that shows the
+  // completion toast may not be the page that started the fetch, so
+  // slowing down there would delay the toast that ends the story.
+  function nextDelay(status) {
+    var state = status ? status.state : null;
+    if (state === "idle") {
+      return idlePollMs;
+    }
+    return pollMs;
+  }
+
   // One poll, then book the next. Unlike an activation watch this
-  // does not stop on a terminal state: a finished download stays
-  // reportable until it is acknowledged, and the page that shows the
-  // completion toast may not be the page that started the fetch.
+  // does not stop on a terminal state, for the reason above; it only
+  // slows when the server says there is nothing at all to report.
   function tick() {
     read().then(
       function (status) {
@@ -114,7 +146,7 @@ function downloadClientCreate(options) {
           return; // stopped while the request was in flight
         }
         announce(status);
-        timer = schedule(tick, pollMs);
+        timer = schedule(tick, nextDelay(status));
       },
       function () {
         if (timer === null) {
@@ -128,6 +160,25 @@ function downloadClientCreate(options) {
   function watch() {
     stopTimer();
     timer = schedule(tick, 0);
+  }
+
+  // Read now instead of waiting out the current interval.
+  //
+  // The idle rate is slow enough to be noticed if a window came back
+  // to the foreground and sat there stale, so the page wires this to
+  // focus and visibility. Kept as a method rather than a listener
+  // inside this file because the client touches no DOM, which is
+  // what lets it be tested away from a browser.
+  //
+  // A no-op when not watching: a page that never called observe or
+  // start has nothing to catch up on, and starting a loop here would
+  // make a focus event begin polling on a page that opted out.
+  function checkNow() {
+    if (timer === null) {
+      return false;
+    }
+    watch();
+    return true;
   }
 
   // Ask for a model's weights and follow the fetch. Resolves once
@@ -234,6 +285,7 @@ function downloadClientCreate(options) {
     observe: observe,
     subscribe: subscribe,
     readOnce: readOnce,
+    checkNow: checkNow,
     cancel: cancel,
     ack: ack,
     stop: stop,
