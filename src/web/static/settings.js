@@ -599,23 +599,13 @@ function buildGlowClassSelect() {
 
 // Open on the class of the model that is currently resident, so the
 // sliders start on the one the user is about to see the effect from.
-// Best-effort: the picker defaults to diffusion and stays there if
-// the fetch fails or nothing is loaded.
-function selectGlowClassForActiveModel(info) {
-  var active = modelClientActiveModel(info);
-  if (active === null) {
-    return;
-  }
-  var caps = active.capabilities;
-  var type = caps ? caps.model_type : null;
-  // Only when it actually differs: this lands a moment after boot
-  // already played the default class, so re-running it for the same
-  // class would restart the sequence for no reason.
-  if (type && GLOW_KEYS[type] && type !== glowClass) {
+// Best-effort: the picker defaults to diffusion and stays there when
+// nothing is loaded. Called before the preview is built or played, so
+// unlike the fetch it replaced it only has to set the value; it no
+// longer has to undo a sequence that already started on the wrong one.
+function adoptGlowClassForActiveModel(type) {
+  if (type && GLOW_KEYS[type]) {
     glowClass = type;
-    buildGlowPreviewCopy();
-    syncGlowControls();
-    playGlowPreview();
   }
 }
 
@@ -661,32 +651,17 @@ function wireTabs() {
   }
 }
 
-// One /api/models read feeding the two things on this page that
-// depend on which model is resident. Shared rather than fetched
-// twice, since neither consumer needs it before the other.
-function hydrateFromActiveModel() {
-  modelClientLoad()
-    .then(function (info) {
-      revealGenerationLink(info);
-      selectGlowClassForActiveModel(info);
-    })
-    .catch(function () {
-      // Both fallbacks are honest: the link stays hidden (the menu is
-      // always reachable) and the glow picker stays on diffusion.
-    });
-}
-
-// Reveal the Generation nav link only when a model is resident (mirrors
-// analytics): the generator is gated on an active model, so the link is
-// honest only when there is one to generate with.
-function revealGenerationLink(info) {
-  var link = document.getElementById("link-generation");
-  if (!link) {
-    return;
+// Which model is resident, from the boot state the server inlined. It
+// used to be a /api/models fetch feeding two consumers: the Generation
+// nav link, now unhidden in the markup by the server, and the glow
+// class below. Reading it here rather than fetching is what lets the
+// preview open on the right class instead of correcting itself.
+function bootActiveModelType() {
+  var boot = window.__BOOT__;
+  if (!boot || typeof boot.active_model_type !== "string") {
+    return null;
   }
-  if (modelClientHasActive(info)) {
-    link.hidden = false;
-  }
+  return boot.active_model_type;
 }
 
 function bootSettings() {
@@ -694,6 +669,9 @@ function bootSettings() {
     localStorage.getItem(SETTINGS_KEY)
   );
   stagedSettings = cloneSettings(appliedSettings);
+  // Ahead of everything that reads glowClass: the picker, the preview
+  // copy and the preview itself all open on it.
+  adoptGlowClassForActiveModel(bootActiveModelType());
   buildModeSelect();
   buildGlowClassSelect();
   buildGlowPreviewCopy();
@@ -702,7 +680,6 @@ function bootSettings() {
   updateButtons();
   wireControls();
   wireTabs();
-  hydrateFromActiveModel();
 }
 
 // Hydrate durable UI state from the server first (so the synchronous

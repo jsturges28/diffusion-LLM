@@ -263,9 +263,25 @@ def _nvidia_smi_query(field: str) -> Optional[str]:
     return lines[0].strip()
 
 
+# The card cannot be swapped under a running process, so its name is
+# resolved once and kept. Free VRAM deliberately is not: it moves with
+# every load and evict, and a stale reading is what made the menu
+# promise headroom the activation then refused.
+#
+# Only a successful read is cached. A failure can be transient, and
+# remembering it would turn one bad answer into a permanent claim of
+# no GPU. An absent binary already costs nothing either way, since
+# _nvidia_smi_path caches that and returns before any subprocess.
+_gpu_name_cached: Optional[str] = None
+
+
 def _gpu_name() -> Optional[str]:
-    """Best-effort GPU name via nvidia-smi."""
-    return _nvidia_smi_query("name")
+    """Best-effort GPU name via nvidia-smi. Cached once it reads."""
+    global _gpu_name_cached
+    if _gpu_name_cached is not None:
+        return _gpu_name_cached
+    _gpu_name_cached = _nvidia_smi_query("name")
+    return _gpu_name_cached
 
 
 def _free_vram_gib() -> Optional[float]:
@@ -1402,6 +1418,20 @@ def _model_fits(
     return headroom_gib >= 0
 
 
+def _model_entry(model_id: str, info: Any) -> Dict[str, Any]:
+    """One model as the frontend sees it, before any probing.
+
+    Shared with the generator's inlined boot state, which needs the
+    registry half of a snapshot and none of the VRAM half, so that the
+    two cannot describe the same model differently.
+    """
+    data = info.model_dump()
+    data.pop("worker_module", None)
+    data.pop("venv_python", None)
+    data["status"] = manager.status(model_id)
+    return data
+
+
 def _models_snapshot() -> Dict[str, Any]:
     """Registry plus live GPU/VRAM info for the Main Menu.
 
@@ -1426,16 +1456,13 @@ def _models_snapshot() -> Dict[str, Any]:
 
     models: List[Dict[str, Any]] = []
     for model_id, info in REGISTRY.items():
-        data = info.model_dump()
-        data.pop("worker_module", None)
-        data.pop("venv_python", None)
-        status = manager.status(model_id)
+        data = _model_entry(model_id, info)
+        status = data["status"]
         headroom = _model_headroom_gib(
             info,
             free_vram_gib=free_vram_gib,
             resident_reclaimable_gib=resident_reclaimable_gib,
         )
-        data["status"] = status
         data["vram_headroom_gib"] = headroom
         data["fits"] = _model_fits(
             info, status=status, headroom_gib=headroom
@@ -3462,18 +3489,136 @@ def _stamp_asset_versions(html: str) -> str:
     return _ASSET_REF_RE.sub(_replace, html)
 
 
-def _serve_stamped_page(filename: str) -> HTMLResponse:
-    html = (STATIC_DIR / filename).read_text(encoding="utf-8")
-    return HTMLResponse(
-        _stamp_asset_versions(html),
-        headers=dict(_NO_STORE_HEADERS),
+# The Generation nav link ships hidden and is revealed only when a
+# worker is resident, because the generator is gated on one. Analytics
+# and Settings used to ask /api/models for that single boolean, which
+# cost two nvidia-smi subprocesses per page load and moved every link
+# to its right when the answer arrived. The supervisor already knows.
+_GENERATION_LINK_RE = re.compile(
+    r'<a\b[^>]*\bid="link-generation"[^>]*>'
+)
+_HIDDEN_ATTR_RE = re.compile(r"\s+hidden(?=[\s>])")
+
+
+def _active_model_is_serving() -> bool:
+    """Whether a worker is resident and answering requests."""
+    active_id = manager.active_id
+    if active_id is None:
+        return False
+    return manager.is_serving(active_id)
+
+
+def _reveal_generation_link(html: str, *, resident: bool) -> str:
+    """Unhide the Generation nav link when a model is serving.
+
+    Pages without the link are returned untouched, so this can run for
+    every page rather than being wired per route.
+    """
+    if not resident:
+        return html
+
+    def _replace(match: "re.Match[str]") -> str:
+        return _HIDDEN_ATTR_RE.sub("", match.group(0), count=1)
+
+    return _GENERATION_LINK_RE.sub(_replace, html)
+
+
+# State a page needs before its first paint, inlined ahead of the
+# scripts so they can read it synchronously instead of fetching it and
+# rebuilding the page around the answer. Every consumer falls back to
+# fetching when it is absent, which is what keeps the vm test harness
+# (and opening a file directly) working.
+_BOOT_GLOBAL = "window.__BOOT__"
+
+
+def _boot_script(state: Dict[str, Any]) -> str:
+    """Serialise boot state as an inline script tag.
+
+    ``<`` is escaped so a value containing ``</script>`` cannot close
+    the tag early. The escape is ordinary JSON, so what the browser
+    parses is unchanged.
+    """
+    payload = json.dumps(state, separators=(",", ":"))
+    payload = payload.replace("<", "\\u003c")
+    return f"<script>{_BOOT_GLOBAL}={payload};</script>"
+
+
+def _inject_boot_state(
+    html: str, state: Optional[Dict[str, Any]]
+) -> str:
+    """Inline boot state ahead of the page's scripts.
+
+    Placed before ``</head>`` so it is defined however the scripts are
+    ordered. A page with no state, or no head, is left alone.
+    """
+    if not state:
+        return html
+    head_end = html.find("</head>")
+    if head_end < 0:
+        return html
+    return (
+        html[:head_end] + _boot_script(state) + html[head_end:]
     )
+
+
+def _serve_stamped_page(
+    filename: str, boot: Optional[Dict[str, Any]] = None
+) -> HTMLResponse:
+    html = (STATIC_DIR / filename).read_text(encoding="utf-8")
+    html = _stamp_asset_versions(html)
+    html = _reveal_generation_link(
+        html, resident=_active_model_is_serving()
+    )
+    html = _inject_boot_state(html, boot)
+    return HTMLResponse(html, headers=dict(_NO_STORE_HEADERS))
 
 
 @app.get("/")
 async def serve_menu() -> HTMLResponse:
     """Landing page: the model-selection Main Menu."""
     return _serve_stamped_page("menu.html")
+
+
+def _models_boot_state() -> Dict[str, Any]:
+    """The `/api/models` answer minus everything a probe would cost.
+
+    Shaped exactly like the endpoint's payload so the page can feed it
+    to the same code, and deliberately missing the VRAM fields, which
+    would put an `nvidia-smi` call on every navigation. Those describe
+    a hover popover inside a closed dropdown, so they are fetched
+    after first paint instead; `buildOptionInfo` already draws the row
+    without them. The GPU name stays because it is cached, and because
+    whether a CPU/GPU pill is offered is first-paint state.
+    """
+    return {
+        "models": [
+            _model_entry(model_id, info)
+            for model_id, info in REGISTRY.items()
+        ],
+        "active": manager.active_id,
+        "active_device": manager.active_device,
+        "active_tokenizer": dict(manager.active_tokenizer),
+        "active_context_length": manager.active_context_length,
+        "default": DEFAULT_MODEL,
+        "gpu_name": _gpu_name(),
+    }
+
+
+def _generator_boot_state() -> Dict[str, Any]:
+    """Everything the generator used to chain two fetches to learn.
+
+    `/api/ui-state` then `/api/models`, in that order because the
+    second callback read what the first wrote, so the page could not
+    be correct until both had answered and it rebuilt itself around
+    them. Both are cheap to produce here.
+    """
+    ui_state = load_ui_state(RESULTS_DIR)
+    ui_state = _reconcile_new_runs(ui_state)
+    ui_state = _reconcile_collections(ui_state)
+    return {
+        "ui_state": ui_state,
+        "models": _models_boot_state(),
+    }
 
 
 @app.get("/generate")
@@ -3484,10 +3629,10 @@ async def serve_generate() -> Response:
     without an active model (e.g. a direct URL hit) redirects back to
     the menu to choose one, rather than silently booting a default.
     """
-    active_id = manager.active_id
-    if active_id is None or not manager.is_serving(active_id):
+    if not _active_model_is_serving():
         return RedirectResponse(url="/", status_code=307)
-    return _serve_stamped_page("index.html")
+    boot = await asyncio.to_thread(_generator_boot_state)
+    return _serve_stamped_page("index.html", boot=boot)
 
 
 @app.get("/index.html")
@@ -3496,15 +3641,59 @@ async def serve_index_html() -> RedirectResponse:
     return RedirectResponse(url="/generate", status_code=307)
 
 
+def _analytics_boot_state() -> Dict[str, Any]:
+    """The catalog, the collections and the data root, up front.
+
+    All three are cheap to produce: the catalog reads one metadata
+    file per run, around 25ms for 240 of them, and the reconciliation
+    the collections need has already walked the same directory. The
+    GPU name is deliberately not here even though it is now cached,
+    because it is only a fallback for a run that did not record its
+    own processor, in a detail view nobody has opened yet.
+    """
+    runs = list_runs(RESULTS_DIR)
+    ui_state = load_ui_state(RESULTS_DIR)
+    ui_state = _reconcile_new_runs(ui_state)
+    ui_state = _reconcile_collections(ui_state)
+    return {
+        # Read by persistHydrate, the same as on the generator, and
+        # for the same reason: it gates the first render, so fetching
+        # it puts a round trip in front of the table.
+        "ui_state": ui_state,
+        "runs": runs,
+        "collections": collection_ops.decode(
+            ui_state.get(COLLECTIONS_KEY)
+        ),
+        "results_dir": _display_run_path(RESULTS_DIR),
+    }
+
+
 @app.get("/analytics.html")
 async def serve_analytics_page() -> HTMLResponse:
-    return _serve_stamped_page("analytics.html")
+    boot = await asyncio.to_thread(_analytics_boot_state)
+    return _serve_stamped_page("analytics.html", boot=boot)
+
+
+def _active_model_type() -> Optional[str]:
+    """Generation paradigm of the resident model, or None.
+
+    Registry data, so this costs no GPU probe. Settings needs it to
+    open its glow preview on the right class instead of playing the
+    diffusion default and switching a moment later.
+    """
+    active_id = manager.active_id
+    if active_id is None or active_id not in REGISTRY:
+        return None
+    return REGISTRY[active_id].capabilities.model_type
 
 
 @app.get("/settings.html")
 async def serve_settings_page() -> HTMLResponse:
     """Shared, model-agnostic Settings page (always available)."""
-    return _serve_stamped_page("settings.html")
+    return _serve_stamped_page(
+        "settings.html",
+        boot={"active_model_type": _active_model_type()},
+    )
 
 
 class _NoCacheStaticFiles(StaticFiles):

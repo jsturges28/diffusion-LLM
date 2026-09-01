@@ -40,10 +40,10 @@ ready, plus `TRUST-04` behind `LIFE-04`.
 **Stage 5 has started, and its first half is verified.** Clearing the
 hardware queue on 2026-08-17 released `ORG-02`, whose state core landed in
 four commits, the aligned frame family, the pre-edit baseline, the phase
-table and the model API client, and cleared hardware on 2026-08-18. Three
-pieces of that finding remain: the download API client, the native ES
-module conversion its Direction asks for, and the server-rendered boot
-state that would retire the loading overlay.
+table and the model API client, and cleared hardware on 2026-08-18. The
+download API client went with `TRUST-04`, and the server-rendered boot
+state landed on 2026-09-01, retiring the loading overlay. One piece
+remains: the native ES module conversion its Direction asks for.
 
 Testing it turned up a save bug the audit had missed, fixed in three
 commits and recorded under Deviations. One item, 148, was reclassified as
@@ -318,7 +318,7 @@ on real hardware.
 | TRUST-04 | medium | L | done | LIFE-04 (done) | Download is a child process now; absorbed ORG-02's download client |
 | DATA-02 | high | L | done | none | Lost-update slice, then the semantics: collections are server-owned operations |
 | RUNTIME-01 | medium | L | done | none | Queue bound, then append frames on the wire, in the browser and on disk; 130 MiB to 1 MiB on a 2,048-token run |
-| ORG-02 | medium | L | partial | none | State core verified; ES modules and server-rendered boot remain (download client went with TRUST-04) |
+| ORG-02 | medium | L | partial | none | State core verified, boot state now server-rendered; only the ES module conversion remains |
 | RUNTIME-03 | medium | S | blocked | ORG-02, paired | |
 | ROADMAP-01 | high | M | blocked | stage 6 order | |
 | ROADMAP-05 | high | M | blocked | stage 6 order | |
@@ -387,9 +387,9 @@ and must not reuse model-operation state.
 **Stage 5, frontend state around the settled protocol. Started.** The
 aligned frame operations, the pre-edit baseline, the legal workflow phases
 and the model API client are extracted and tested (`ORG-02`, four commits),
-awaiting hardware. Three pieces of that finding remain: the download API
-client, the native ES module conversion the Direction asks for, and the
-server-rendered boot state that would retire the loading overlay. Then fix
+awaiting hardware. The download API client went with `TRUST-04` and the
+server-rendered boot state landed separately; the native ES module
+conversion the Direction asks for is the one piece left. Then fix
 the select lifecycle (`RUNTIME-03`) as shared controls gain module
 ownership, and compact append-only streams (`RUNTIME-01`) only once the
 reducer can reconstruct them and the run-store version can distinguish
@@ -793,6 +793,86 @@ can answer directly rather than one the client re-answers after a
 fetch. `ROADMAP-03` would bring entropy to the diffusion models and
 make the predicate itself wrong; it is a one-line change in
 `setEntropyProfileVisible`, flagged in the comment there.
+
+**The boot state is rendered now, and the curtain is down.** Done on
+2026-09-01, in three commits. Not a finding: the report's Direction
+asks for ES modules and a `RunSession` reducer and says nothing about
+this. It entered scope above, when removing the overlay showed what
+the overlay was for.
+
+*The measurements first, because they decided the shape.* On this
+host's 242 runs, the state a page needs costs 4.9ms and 14.1 KiB for
+the generator and 28.2ms and 87.5 KiB for Analytics. Neither is worth
+a round trip. What is expensive is `nvidia-smi`: `_models_snapshot`
+spawned two subprocesses per call and `modelClientLoad` cached
+nothing, so opening Analytics or Settings spawned two processes to
+decide whether one nav link was visible. Serving those two pages now
+spawns none.
+
+*The link was the cheapest fix and the most disproportionate.* It
+ships `hidden` and is revealed only when a worker is resident, which
+the supervisor knows from memory: `serve_generate` already asks
+exactly that to decide whether to redirect. Both now call
+`_active_model_is_serving`, so a page cannot offer a link to a route
+that turns it away, and a serve-time rewrite unhides it in the
+markup. That is the same bug `.analytics-new-dot` had, and it could
+not be fixed the same way: reserving the space unconditionally leaves
+a permanent gap when nothing is loaded, which is the entropy row's
+argument again. The server does not have that problem because it
+knows the answer.
+
+*Two mechanisms, deliberately.* A boolean is applied to the markup,
+so first paint needs no JavaScript at all. Richer state is inlined as
+`window.__BOOT__` and consumed synchronously, so `buildParamPanel`
+stays the only thing that knows how to draw a parameter column.
+Rendering that column in Python would have been a second renderer in
+a second language, kept in step by hand.
+
+*Every consumer falls back to fetching.* Not defensive habit: the
+`vm` harness loads these files with no server in front of them, and
+so does opening a file directly. The fallback has tests of its own,
+including malformed state, because a page that adopted a string as
+its model list would render nothing and never ask for the real one.
+
+*The overlay is down by class, not by the `hidden` attribute.* The
+rule is an opacity fade, so the attribute's `display: none` would
+leave every `classList.remove("hidden")` with nothing to reveal, and
+the page could never show a load again. Caught while writing it, and
+now a test, because it is one keystroke and the failure only appears
+during a model switch.
+
+*What the DOM stub was hiding.* Making boot synchronous broke three
+tests that had passed for the wrong reason: `buildParamPanel` and
+`renderTable` used to sit behind a fetch that resolved after the test
+had finished, so the stub never needed `style.setProperty`,
+`insertBefore` or `firstChild`. The tests were not exercising the
+render at all. Fixing the stub was the actual cost of this change
+and the clearest evidence it was worth making.
+
+*The entropy row got its improvement for free.* No template
+predicate was needed after all: `applyModelInfo` runs before first
+paint now, so the client answers it in time. Better than duplicating
+the rule server-side, which is what the paragraph above expected.
+
+`ORG-04`'s note that source-inspection anchors are the predictable
+cost of testing a classic script still stands, and this change paid
+it once more: two anchors in `test_loading_overlay.py` moved when
+boot came out of its `.then`. Both were re-anchored on function
+names rather than on indentation.
+
+*Caching was considered and deliberately declined.* `no-store` also
+means Analytics re-downloads 282 KiB of vendored Chart.js and font
+per navigation, and, more to the point, cannot use the V8 code
+cache, so 236 KB of JavaScript is recompiled each time. Serving it
+costs about 6ms over loopback, so the transfer is not the issue; the
+recompile might be, and could not be measured from the sandbox. The
+change would also be safer than it first looked, since
+`_stamp_asset_versions` already puts `?v=<mtime>` on every vendored
+CSS and JS reference, making those URLs self-busting; only the woff2
+is unstamped, because it is referenced from inside the CSS. Left
+alone on the maintainer's call: the visible symptom is fixed by
+`block` alone, and loosening a policy that exists to prevent stale
+assets during development wants a DevTools number behind it.
 
 ### LIFE-05
 

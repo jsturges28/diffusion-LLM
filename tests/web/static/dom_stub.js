@@ -82,7 +82,16 @@ function makeElement(id) {
     listeners: {},
     attributes: {},
     dataset: {},
-    style: {},
+    // A plain bag plus the two methods CSS custom properties need.
+    // Page code sets `--name` values through these, which a bare
+    // object silently is not able to accept.
+    style: {
+      setProperty(name, value) { this[name] = String(value); },
+      removeProperty(name) { delete this[name]; },
+      getPropertyValue(name) {
+        return name in this ? this[name] : "";
+      },
+    },
     value: "",
     checked: false,
     disabled: false,
@@ -150,6 +159,21 @@ function makeElement(id) {
   element.replaceChildren = (...kids) => {
     element.children = kids.slice();
   };
+  element.insertBefore = (child, before) => {
+    const at = element.children.indexOf(before);
+    element.children.splice(
+      at === -1 ? element.children.length : at, 0, child
+    );
+    child.parent = element;
+    return child;
+  };
+  Object.defineProperty(element, "firstChild", {
+    get: () => element.children[0] || null,
+  });
+  Object.defineProperty(element, "lastChild", {
+    get: () =>
+      element.children[element.children.length - 1] || null,
+  });
 
   element.setAttribute = (key, value) => {
     element.attributes[key] = String(value);
@@ -371,9 +395,14 @@ function makeStorage() {
  * Load a page script and everything it depends on into one context.
  *
  * `options.fetchImpl` replaces `fetch`; `options.scripts` replaces
- * the generator's script list. Returns the context plus the element
- * registry, so a test can reach a element by id and fire a listener
- * the page registered on it.
+ * the page's script list; `options.bootState` becomes
+ * `window.__BOOT__`, which is how the server hands a page its opening
+ * state. Omitting it is the meaningful other case, not merely the
+ * default: it is what a page served without that state sees, and the
+ * fetch fallback has to keep working for exactly that reason.
+ *
+ * Returns the context plus the element registry, so a test can reach
+ * an element by id and fire a listener the page registered on it.
  */
 function loadPage(options) {
   const settings = options || {};
@@ -439,6 +468,9 @@ function loadPage(options) {
   sandbox.globalThis = sandbox;
   sandbox.self = sandbox;
   sandbox.window.document = document;
+  if (settings.bootState !== undefined) {
+    sandbox.__BOOT__ = settings.bootState;
+  }
   sandbox.Chart = function () {
     return { destroy() {}, update() {}, resize() {} };
   };

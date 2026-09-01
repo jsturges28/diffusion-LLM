@@ -5900,6 +5900,37 @@ function onGroupChange() {
   renderTable();
 }
 
+// The catalog and collections the server inlined, or null. Shaped
+// like what `fetchRuns` and the collections client return, so both
+// paths below hand them to the same renderer.
+function bootAnalyticsState() {
+  var boot = window.__BOOT__;
+  if (!boot) {
+    return null;
+  }
+  if (!Array.isArray(boot.runs)) {
+    return null;
+  }
+  if (!Array.isArray(boot.collections)) {
+    return null;
+  }
+  return boot;
+}
+
+// First render from state we already have. Refresh still refetches:
+// two windows can disagree about what is filed where, and this page
+// is the one that shows it.
+function renderFromState(runs, collections) {
+  allRuns = runs;
+  checkedIds = {};
+  selectAllCb.checked = false;
+  adoptCollections(collections);
+  updateCompareButton();
+  updateBulkActions();
+  renderCollectionTabs();
+  renderTable();
+}
+
 function loadAndRender() {
   fetchRuns().then(function (runs) {
     allRuns = runs;
@@ -6385,43 +6416,48 @@ if (runBlendInput) {
   window.addEventListener("pointercancel", endBlendScrub);
 }
 
-// Reveal the "Generation" nav link only when a model is resident. The
-// generator is gated on an active model (see server.py), so surfacing
-// the link only when one is loaded keeps navigation honest: reached
-// from the menu with no model, the user has nowhere to "generate" yet.
-(function revealGenerationLink() {
-  var link = document.getElementById("link-generation");
-  if (!link) {
-    return;
-  }
-  modelClientLoad()
-    .then(function (info) {
-      if (modelClientHasActive(info)) {
-        link.hidden = false;
-      }
-    })
-    .catch(function () {
-      // Leave it hidden on failure; the menu is always reachable.
-    });
-})();
+// The "Generation" nav link is revealed by the server, which unhides it
+// in the markup when a worker is resident (_reveal_generation_link in
+// server.py). It used to be done here, from /api/models, which cost two
+// nvidia-smi subprocesses to learn one boolean and shifted every link
+// beside it when the answer landed.
 
-fetchSystemInfo().then(function (info) {
-  if (info.gpu_name) {
-    gpuName = info.gpu_name;
+// The data root, which the delete confirmation names. Inlined with
+// the rest when the server served this page; otherwise fetched, and
+// `resultsDirLabel` holds a sensible default until it lands.
+//
+// The GPU name is not inlined even though it is cheap now. It is only
+// a fallback for a run that did not record its own processor, read in
+// a detail view, so it has no business on the serve path.
+(function adoptResultsDir() {
+  var boot = window.__BOOT__;
+  if (boot && typeof boot.results_dir === "string") {
+    resultsDirLabel = boot.results_dir;
   }
-  if (info.results_dir) {
-    resultsDirLabel = info.results_dir;
-  }
-});
+  fetchSystemInfo().then(function (info) {
+    if (info.gpu_name) {
+      gpuName = info.gpu_name;
+    }
+    if (info.results_dir) {
+      resultsDirLabel = info.results_dir;
+    }
+  });
+})();
 
 // Hydrate durable UI state (the "new run" cue and the shared settings
 // blob) from the server before the first render, so per-row dots
 // reflect saved runs across restarts and the drawer's highlight
 // checkbox opens on the value the generator last wrote.
-// persistHydrate always runs its callback, even on failure.
+// persistHydrate is synchronous when that state was inlined, and
+// always runs its callback either way.
 overlaysBuildTokenMetrics(tokenMetricsStrip);
 
 persistHydrate(function () {
   updateOverlayHoverHighlight();
+  var inlined = bootAnalyticsState();
+  if (inlined !== null) {
+    renderFromState(inlined.runs, inlined.collections);
+    return;
+  }
   loadAndRender();
 });

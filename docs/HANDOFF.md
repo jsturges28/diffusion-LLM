@@ -149,9 +149,11 @@ frame family that has fallen out of step and a move between phases that no
 button can make, and `model_client.js` gives four pages one reading of
 `/api/models`. All three are classic scripts driven from a `vm` in
 `tests/web/static/`, like `activation_client.js` before them; the native ES
-module conversion the finding also asks for is deliberately a later step
-(`ORG-02`), along with the download client and the server-rendered boot
-state that would retire the loading overlay.
+module conversion it also asks for is a later step, and the only part of
+`ORG-02` outstanding. Pages no longer fetch their opening state either:
+`_serve_stamped_page` inlines it as `window.__BOOT__` and unhides the
+Generation nav link on the way out, each consumer still falling back to a
+fetch when it is absent. The loading overlay is down at boot as a result.
 
 **Saving is explicit now**, which is a behaviour change worth knowing
 before reading the generator. Opening Edit Frames or What If used to write

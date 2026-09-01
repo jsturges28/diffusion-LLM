@@ -1,41 +1,46 @@
-"""The generator is covered while it assembles itself.
+"""The generator waits for a model, and for nothing else.
 
 Strategy: read the shipped markup, CSS and `app.js`. Every property
 here is about which class an element carries at rest and which code
 paths take it off, so all of them are checkable without a browser.
 
-The overlay is deliberately up at boot, and the reason is not the one
-its name suggests. Since `LIFE-02` the `/generate` gate turns away any
-model that is not serving, so arriving at this page is proof no model
-load is pending. What the curtain is actually over is the page
-building itself: `buildParamPanel` empties a container and fills it
-from `param_specs` once `/api/models` answers, and around twenty
-elements sit `hidden` in the markup waiting on runtime state. First
-paint is a skeleton and the second is the real page.
+The overlay is down at boot, and this file has now asserted that
+twice for different reasons, which is worth being careful about.
 
-This file briefly asserted the opposite. The overlay was removed on
-the gate argument above, which was correct about model loading and
-missed everything else the curtain covered; the maintainer saw the
-page visibly reassemble and asked for it back. That is recorded under
-`ORG-02` in the ledger, along with the fix that would make the
-curtain unnecessary rather than merely opaque: rendering boot state
-into the HTML at serve time, which is `ORG-02`'s to do.
+The first time was wrong. The argument was that since `LIFE-02` the
+`/generate` gate turns away any model that is not serving, so nothing
+on this page waits for a model. True, and it accounted for the
+overlay's name while missing its job: the curtain was over the page
+assembling itself. `buildParamPanel` emptied a container and refilled
+it once `/api/models` answered, behind a second fetch that had to
+answer first, and around twenty elements sat `hidden` waiting on
+runtime state. The maintainer saw the page reassemble and asked for
+the curtain back.
 
-The reservations stay from that attempt, because they are worth
-having either way. They remove sources of movement rather than hiding
-them, which is what the whole page needs eventually, and the curtain
-does not cover all of them: it lifts before the first run ends and
-before a count of unopened runs arrives.
+It is down again now because that second paint is gone rather than
+hidden. The server inlines the state the page used to chain two
+fetches for (`_generator_boot_state`), so `boot` runs straight
+through and the parameter column, the device pills and the entropy
+row are settled before anything is drawn. The removal that failed
+before is the one that works once the cause is fixed.
 
-Reserving is not always right, though, and the entropy row is where
-that shows. A row held for a model that will never fill it is a
-permanent empty strip, which is worse than the shift it prevents, so
-that one is reserved only when the resident model reports entropy.
+What stays is the overlay's actual job: a model switch, a worker
+reporting a load, and another window swapping the resident model are
+all waits of tens of seconds, and a page that looked idle through
+them would read as broken.
 
-What passing proves, then, is narrow: the curtain is up when the page
-cannot yet be trusted to look right, it comes down when it can, and
-the elements that used to shove their neighbours around hold their
-places, each for as long as it is theirs to hold.
+The reservations stay too, from the first attempt, because they are
+worth having either way and the curtain never covered all of them: it
+lifts before the first run ends and before a count of unopened runs
+arrives. Reserving is not always right, though, and the entropy row
+is where that shows. A row held for a model that will never fill it
+is a permanent empty strip, worse than the shift it prevents, so that
+one is reserved only when the resident model reports entropy.
+
+What passing proves: the page opens without a curtain over it, the
+curtain still comes up for the three real waits, and the elements
+that used to shove their neighbours around hold their places, each
+for as long as it is theirs to hold.
 """
 
 from __future__ import annotations
@@ -73,11 +78,26 @@ def _region(anchor: str, chars: int) -> str:
 # -- at rest --
 
 
-def test_the_overlay_covers_the_page_being_built() -> None:
-    """Up at boot on purpose. Not for a model load, which the gate
-    already rules out, but for the two-phase render underneath: a
-    skeleton first, the real page once the fetch answers."""
-    assert "hidden" not in _overlay_tag()
+def test_the_overlay_is_down_at_boot() -> None:
+    """Nothing to cover: the gate rules out a pending model load, and
+    the second paint it used to hide is gone now that the server
+    inlines the state the page used to fetch."""
+    assert 'class="hidden"' in _overlay_tag()
+
+
+def test_it_is_lowered_by_class_not_by_the_attribute() -> None:
+    """The rule is an opacity fade, so the `hidden` attribute's
+    `display: none` would leave every `classList.remove("hidden")`
+    with nothing to reveal. This is one keystroke from being a page
+    that can never show its own loading state again."""
+    assert not _is_hidden(_overlay_tag())
+
+    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    start = css.find("#loading-overlay.hidden")
+    assert start != -1
+    rule = css[start : start + 120]
+    assert "opacity: 0" in rule
+    assert "display: none" not in rule
 
 
 def test_the_progress_track_starts_hidden_too() -> None:
@@ -292,8 +312,11 @@ def test_the_entropy_row_starts_absent_in_the_markup() -> None:
 
 def test_boot_settles_the_entropy_row_once_a_model_is_known() -> None:
     """Otherwise an autoregressive page keeps the markup's absent
-    reading until its first run, which is the shift this prevents."""
-    region = _region("      applyTokenBirthGlow();", 400)
+    reading until its first run, which is the shift this prevents.
+
+    Anchored on the function rather than on one indented line, since
+    the previous anchor broke when this moved out of a `.then`."""
+    region = _region("function applyModelInfo(info)", 1800)
 
     assert "setEntropyProfileVisible(false)" in region
 

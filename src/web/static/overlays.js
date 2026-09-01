@@ -1225,12 +1225,40 @@ function persistArmFlush() {
   window.addEventListener("pagehide", persistFlushPending);
 }
 
-// Fetch server state, mirror it into localStorage, then run `onReady`.
-// Always calls `onReady` exactly once (even on failure) so a page never
-// hangs on a persistence hiccup. Server values overwrite any stale
-// local copy left by a previous window origin.
+// Read the durable state the server inlined when it served the page,
+// or null when there is none. Pages that carry it skip a round trip
+// that everything after it was waiting on.
+function persistInlinedState() {
+  var boot = window.__BOOT__;
+  var state = boot ? boot.ui_state : null;
+  // The typeof is what matters: a string here would be treated as
+  // hydrated state, so the fetch that would have got the real thing
+  // never happens and every key silently keeps its stale local copy.
+  if (!state || typeof state !== "object") {
+    return null;
+  }
+  return state;
+}
+
+// Mirror server state into localStorage, then run `onReady`. Always
+// calls `onReady` exactly once (even on failure) so a page never hangs
+// on a persistence hiccup. Server values overwrite any stale local
+// copy left by a previous window origin.
+//
+// Synchronous when the state was inlined, which matters more than it
+// sounds: `onReady` is the page's boot, so a fetch here means the
+// whole page waits, and on the generator it meant a second fetch
+// waited behind this one before anything could be drawn correctly.
+// The fetch stays for pages served without the state, which is the vm
+// test harness and a file opened directly.
 function persistHydrate(onReady) {
   persistArmFlush();
+  var inlined = persistInlinedState();
+  if (inlined !== null) {
+    persistApplyHydrated(inlined);
+    onReady();
+    return;
+  }
   var done = false;
   function finish() {
     if (done) {

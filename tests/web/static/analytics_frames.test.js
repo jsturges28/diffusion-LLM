@@ -31,7 +31,6 @@ const { loadPage } = require("./dom_stub.js");
 
 const ANALYTICS_SCRIPTS = [
   "custom_select.js",
-  "model_client.js",
   "overlays.js",
   "detail_requests.js",
   "collections_client.js",

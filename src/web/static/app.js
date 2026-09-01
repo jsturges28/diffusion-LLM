@@ -8289,6 +8289,96 @@ function updateParamDefaultsButton() {
 
 // ---- Boot ----
 
+// The model snapshot the server inlined when it served this page, or
+// null when there is none. It is shaped exactly like the `/api/models`
+// body, so both paths below hand it to the same code.
+function bootModelInfo() {
+  var boot = window.__BOOT__;
+  var models = boot ? boot.models : null;
+  // The typeof is the load-bearing half. A string or a number here
+  // would otherwise be handed to `applyModelInfo`, which reads an
+  // empty list out of it and draws a page with no models on it,
+  // having already decided not to fetch the real ones.
+  if (!models || typeof models !== "object") {
+    return null;
+  }
+  return models;
+}
+
+// Everything that depends on which model is resident. Read in one
+// place because the order matters: the panel is built from the active
+// model, the saved run is restored over the panel, and the glow and
+// mask character are tuned per model class.
+function applyModelInfo(info) {
+  var list = modelClientList(info);
+  for (var i = 0; i < list.length; i++) {
+    models[list[i].id] = list[i];
+  }
+  activeModelId =
+    modelClientActiveId(info)
+    || info.default
+    || (list[0] && list[0].id);
+  activeModel =
+    models[activeModelId] || list[0] || null;
+  activeDevice = modelClientActiveDevice(info);
+  activeTokenizer = info.active_tokenizer || {};
+  activeContextLength =
+    typeof info.active_context_length === "number"
+      ? info.active_context_length
+      : null;
+  gpuPresent = modelClientGpuPresent(info);
+  renderModelSelector(list, activeModelId);
+  if (activeModel) {
+    buildParamPanel(activeModel);
+    applyUniformParamWidth(list);
+    // Before restoreSessionState, so a completed run's prompt
+    // still overwrites the draft with no special casing.
+    restoreParamState();
+    updateParamDefaultsButton();
+  }
+  // Needs the active model, since the glow is tuned per model
+  // class. Outside the guard above because it falls back to the
+  // diffusion pair, which is the right reading when the active
+  // model could not be identified at all.
+  applyTokenBirthGlow();
+  setMaskChar();
+  // Same reason: whether the entropy row is reserved or absent
+  // depends on the model, and the markup starts it absent.
+  setEntropyProfileVisible(false);
+}
+
+function finishBoot() {
+  var restored = false;
+  try {
+    restored = restoreSessionState();
+  } catch (_e) {
+    restored = false;
+  }
+  if (!restored) {
+    showOutputPlaceholder();
+  }
+  connect();
+}
+
+// Fill in the fields a GPU probe has to answer for. They feed the
+// hover popover on a model row, which is inside a dropdown that is
+// closed at first paint, so paying for them before drawing anything
+// would be putting an nvidia-smi call in front of the whole page.
+function refreshModelVram() {
+  fetchModels()
+    .then(function (info) {
+      var list = modelClientList(info);
+      for (var i = 0; i < list.length; i++) {
+        models[list[i].id] = list[i];
+      }
+      renderModelSelector(list, activeModelId);
+    })
+    .catch(function () {
+      // The rows already drew without headroom, which is the same
+      // reading `buildOptionInfo` gives an unknown value.
+    });
+}
+
 function boot() {
   loadSettings();
   loadPromptHistory();
@@ -8296,54 +8386,17 @@ function boot() {
   updateHoverHighlight();
   overlaysBuildTokenMetrics(tokenMetricsStrip);
   refreshAnalyticsCue();
+  var inlined = bootModelInfo();
+  if (inlined !== null) {
+    applyModelInfo(inlined);
+    finishBoot();
+    refreshModelVram();
+    return;
+  }
   fetchModels()
     .then(function (info) {
-      var list = modelClientList(info);
-      for (var i = 0; i < list.length; i++) {
-        models[list[i].id] = list[i];
-      }
-      activeModelId =
-        modelClientActiveId(info)
-        || info.default
-        || (list[0] && list[0].id);
-      activeModel =
-        models[activeModelId] || list[0] || null;
-      activeDevice = modelClientActiveDevice(info);
-      activeTokenizer = info.active_tokenizer || {};
-      activeContextLength =
-        typeof info.active_context_length === "number"
-          ? info.active_context_length
-          : null;
-      gpuPresent = modelClientGpuPresent(info);
-      renderModelSelector(list, activeModelId);
-      if (activeModel) {
-        buildParamPanel(activeModel);
-        applyUniformParamWidth(list);
-        // Before restoreSessionState, so a completed run's prompt
-        // still overwrites the draft with no special casing.
-        restoreParamState();
-        updateParamDefaultsButton();
-      }
-      // Needs the active model, since the glow is tuned per model
-      // class. Outside the guard above because it falls back to the
-      // diffusion pair, which is the right reading when the active
-      // model could not be identified at all.
-      applyTokenBirthGlow();
-      setMaskChar();
-      // Same reason: whether the entropy row is reserved or absent
-      // depends on the model, and the markup starts it absent, which
-      // is the safe reading before we know which model is resident.
-      setEntropyProfileVisible(false);
-      var restored = false;
-      try {
-        restored = restoreSessionState();
-      } catch (_e) {
-        restored = false;
-      }
-      if (!restored) {
-        showOutputPlaceholder();
-      }
-      connect();
+      applyModelInfo(info);
+      finishBoot();
     })
     .catch(function () {
       showOutputPlaceholder();
@@ -8351,7 +8404,9 @@ function boot() {
     });
 }
 
-// Hydrate durable UI state from the server first (so boot's synchronous
-// localStorage reads see the persisted values), then boot. persistHydrate
-// always runs its callback, even if the fetch fails.
+// Durable UI state has to be in localStorage before boot's synchronous
+// reads, which is why boot is a callback rather than a next statement.
+// The server inlines both that state and the model snapshot, so the
+// common path runs straight through with no fetch in front of it;
+// persistHydrate still always runs its callback either way.
 persistHydrate(boot);

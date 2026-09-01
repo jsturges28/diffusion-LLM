@@ -2257,3 +2257,71 @@ What that cannot show is a page drawing them, which is these items.
     `unsupported_version` rather than rendering something broken.
     Note that a stash no longer reproduces this now that the work is
     committed.
+
+## Rendering the opening state (2026-09-01)
+
+Every page used to paint a skeleton and then rebuild itself once a
+fetch answered. The server now inlines what each page opens with, so
+the first paint is the real one. The generator's loading overlay is
+down at boot as a result, which is the second time it has been
+removed; the first attempt failed because the second paint was still
+there behind it.
+
+These items are all about motion, which is the one thing the sandbox
+cannot see. Nothing about the pages' content should have changed, so
+anything that looks different is a bug rather than the feature.
+
+228. **The generator opens without a curtain, and without a flash.**
+    Load a model from the menu and land on the generator. There should be no "Loading model" overlay at all,
+    and nothing should move after the page appears: the
+    hyperparameter column is filled in the first paint rather than
+    built into an empty container. The failure mode to watch for is
+    the one from last time, a visible re-expansion as the column and
+    the rows below the prompt box settle. If that happens, say so,
+    because the fix is then incomplete rather than merely imperfect.
+229. **The overlay still comes up when something is genuinely
+    loading.** This is the half that must not have been removed with
+    the other. Switch models from the generator's dropdown: the
+    overlay should appear for the whole load, with the progress bar
+    if the checkpoint reports a measurable phase, and go away when
+    the worker is ready. Then let a switch fail (ask for a model
+    that will not fit) and check the overlay lifts rather than
+    leaving the page behind a curtain describing nothing.
+230. **The Generation link no longer pops in.** On Analytics and on
+    Settings, watch the header while the page loads. The link should
+    be there in the first frame, not appear a moment later and shove
+    the links to its right across. With no model resident, reached
+    from the menu, it should be absent the whole time rather than
+    appearing and then vanishing.
+231. **Settings opens on the resident model's glow class.** With
+    SmolLM3 loaded, open Settings and watch the glow preview. It
+    should start on the autoregressive class. Before this it played
+    the diffusion default first and switched a moment later, which
+    restarted the animation.
+232. **Analytics draws its table once.** Open Analytics with a few
+    hundred runs saved. The table, the collection tabs and the
+    starred state should all be there in the first paint rather than
+    filling in. Refresh should still work and should still pick up a
+    run filed from another window, because that button deliberately
+    refetches rather than reusing what the page opened with.
+233. **The VRAM readout still tells the truth.** The one field
+    deliberately left to arrive late. Open the generator's model
+    dropdown and hover a row: the "Required / Available / headroom"
+    popover should read correctly. It is fetched just after the page
+    draws, so the only way it could be wrong is if that refresh
+    never landed, which would show as a row with no popover at all.
+234. **What the probe caching bought, if you want a number.**
+    Entirely optional; nothing depends on the answer. Run
+
+    ```bash
+    for i in 1 2 3 4 5; do
+      /usr/bin/time -f "%e s" \
+        nvidia-smi --query-gpu=name --format=csv,noheader > /dev/null
+    done
+    ```
+
+    and take a typical figure. Opening Analytics or Settings used to
+    spawn two of those per page load and now spawns none, so double
+    it for what each navigation was paying to decide whether one nav
+    link was visible.
+

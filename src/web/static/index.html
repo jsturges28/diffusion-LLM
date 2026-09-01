@@ -607,21 +607,24 @@
        reports a measurable phase, so an unmeasurable checkpoint
        falls back to the spinner alone rather than an empty track.
 
-       Visible at boot, and that is doing more than its name says.
-       Since `LIFE-02` the /generate gate turns away any model that
-       is not serving, so nothing here is waiting for a *model*. What
-       it covers is the page assembling itself: the parameter column
-       is built from an empty container after /api/models answers,
-       and around twenty elements are hidden here and revealed by
-       runtime state, so first paint is a skeleton and the second is
-       the real thing.
+       Down at boot, and now for the reason its name suggests: it is
+       raised by a model switch, by a worker reporting a load, and by
+       another window swapping the resident model. It is no longer a
+       curtain over this page assembling itself, because the page no
+       longer assembles itself. The server inlines the boot state it
+       used to fetch (`_generator_boot_state` in server.py), so the
+       parameter column and the elements gated on runtime state are
+       right in the first paint.
 
-       It was briefly removed on the reasoning above, which was true
+       It was removed once before that was true, which was correct
        about model loading and wrong about everything else the
-       curtain was over. Rendering boot state into this HTML at serve
-       time is the fix that makes the curtain unnecessary rather than
-       merely opaque; that is `ORG-02`'s, and until then this stays. -->
-  <div id="loading-overlay">
+       curtain was over. Do not remove the raise/lower paths with
+       it: those cover real waits of tens of seconds.
+
+       Down by class, not by the `hidden` attribute: the rule is an
+       opacity fade, so the attribute's `display: none` would leave
+       `classList.remove("hidden")` with nothing to reveal. -->
+  <div id="loading-overlay" class="hidden">
     <div id="loading-content">
       <div class="spinner"></div>
       <p id="loading-text">Loading model…</p>
