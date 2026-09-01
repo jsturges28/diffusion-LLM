@@ -2054,3 +2054,52 @@ up when something goes wrong partway.
     Show all runs and file from there, rather than sending you to
     the All tab, which used to be the only way in and meant leaving
     the collection you were trying to fill.
+
+## The window that went white (desktop renderer recovery)
+
+Chromium runs the page in a process of its own, and when that process
+dies QtWebEngine leaves the view blank: no error, no event the page
+can see, nothing in any log. pywebview does not connect the signal
+that reports it, which is why the window sat white until the app was
+restarted.
+
+Reported after the machine idles and the screen blanks or locks,
+which fits a GPU context lost to suspend that the renderer does not
+survive. That cannot be staged in a test and the agent sandbox has no
+display and no GPU, so everything above the signal is covered by
+`tests/test_desktop_renderer_watch.py` and everything below it is
+here.
+
+214. **A crashed renderer brings itself back.** Launch
+    `.venv/bin/python desktop.py` from a terminal, so stderr is
+    visible. Find the renderer with
+    `pgrep -af QtWebEngineProcess` and kill the one whose command
+    line carries `--type=renderer`:
+
+    ```bash
+    pkill -f "QtWebEngineProcess.*--type=renderer"
+    ```
+
+    The window should blank for an instant and come back on its own,
+    and the terminal should print a `[desktop] renderer ...` line
+    naming the status and exit code. Before this it stayed white.
+    Do it four times in a row: the fourth should **not** reload, and
+    should say it is giving up. That cap is deliberate, so that a
+    renderer dying in a loop cannot spin forever unnoticed.
+215. **The crash is written where a desktop launch can be read.**
+    After the above, look at
+    `~/.local/share/llm-xai-visualizer/renderer-crashes.log`. There
+    should be one timestamped line per kill. This file is the point
+    of the whole exercise: launched from the app icon there is no
+    terminal, so without it the only evidence is a white window and
+    a memory of roughly when.
+216. **The original scenario, which is the real test.** Leave the
+    app open and let the machine idle until the screen blanks or
+    locks, at least twenty minutes. Come back and wake it. The
+    window should either be intact or have reloaded itself; if it is
+    white, the log will say whether the renderer died and how, which
+    is the evidence that was missing before.
+    If the log is **empty** and the window is still white, the
+    renderer did not die and the cause is elsewhere. That is a
+    genuinely useful negative: say so, because it rules out the
+    hypothesis this work was built on.

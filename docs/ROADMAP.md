@@ -1136,6 +1136,52 @@ line drawn deliberately, or a trap a future change will otherwise walk into.
 They moved here from `docs/HANDOFF.md` when `META-01` reduced it to a cold-start
 page.
 
+**The desktop window recovers from a dead renderer rather than
+preventing one.** Recorded 2026-08-31, after the window was reported
+turning white after fifteen or more minutes and needing a restart,
+which had been happening for a while.
+
+The page was not at fault, and it is worth writing down that this was
+checked: all six `new Chart(` calls in `analytics.js` route through
+`destroyChart` before recreating, and every `setInterval` is paired
+with a `clearInterval`, so the two usual suspects for a slow leak in
+this app are both clean.
+
+The mechanism is one level down. Chromium runs the page in its own
+process, and when that process dies QtWebEngine leaves the view
+blank: no error, no event the page can see, nothing in any log.
+pywebview does not connect `renderProcessTerminated` at all (checked
+against 6.2.1, the string does not appear in its Qt backend), so
+nothing notices and nothing recovers. That is the entire reason the
+symptom was a silent white window rather than an error.
+
+The reported trigger is the machine idling until the screen blanks or
+locks, which fits a GPU context lost to suspend that the renderer
+does not survive. If that is right, the app cannot prevent it: it is
+the compositor and the driver, one layer below anything this codebase
+owns. So the window recovers instead, bounded to three automatic
+reloads, because a death on resume is a fact of the host and reviving
+it is invisible, while a death that repeats is a bug and a window
+that reloads forever would hide it.
+
+Worth resisting the temptation to call this fixed. Recovery is a
+treatment for a cause still unconfirmed, which is why every
+termination is appended to `renderer-crashes.log` under the user data
+directory: the app is normally launched from a desktop entry, where
+stderr goes nowhere, and without that file the only evidence is a
+white window and a memory of when. The **negative result is the
+valuable one**: if the window still goes white and that log is empty,
+the renderer did not die, this diagnosis was wrong, and the
+investigation starts again somewhere else.
+
+Two things deliberately not done. `--no-sandbox`, which pywebview
+applies on arch, manjaro, nixos, rhel and pop but not here, is the
+standard fix for a window that is white *from launch*, a different
+failure from one that renders correctly and dies later; adding it
+would be cargo-culting a remedy for a symptom this is not. And
+software rendering would sidestep GPU suspend entirely at a cost to
+the smooth scrolling and compositing the Qt backend was chosen for.
+
 **Source inspection cannot see event wiring, and a DOM harness is
 cheaper than assumed.** Recorded 2026-08-31, after bulk filing shipped
 with a dead dialog: the chooser's target rows rendered correctly,
