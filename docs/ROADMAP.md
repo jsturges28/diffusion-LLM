@@ -1212,6 +1212,54 @@ line a user reads said
 whose shape is more convenient than the real type is a fake that
 tests the fake.
 
+**The desktop window's intermittent flicker is the least-bad GPU path,
+and the alternatives are worse.** Settled 2026-08-31 by testing them
+rather than reasoning about them, so nobody spends an evening on it
+again.
+
+The symptom: on the desktop app only, never the browser, the menu
+flickers out at irregular intervals of roughly fifteen seconds,
+noticeably more when the machine is busy. The cause is one layer
+below this codebase. On NVIDIA with X11 and Chromium 140, Chromium
+reports `GBM is not supported with the current configuration` and
+falls back to Vulkan, whose compositing is the less travelled road.
+
+Not a missing package, which was the first guess and is worth
+recording as ruled out: `nvidia_drm modeset=1` is set,
+`/dev/dri/renderD128` and `renderD129` exist, `libnvidia-egl-gbm.so.1`
+is installed, and `nvidia-drm_gbm.so` is in the GBM backends
+directory. Everything GBM needs is present and Chromium declines it
+anyway.
+
+Three alternatives were tried on the hardware:
+
+- `--disable-gpu`: flicker gone, and the whole app sluggish. Hover
+  response and animations degrade because everything rasterizes and
+  composites on the CPU. A diagnostic, not a setting.
+- `--use-gl=desktop`: **aborts at launch.** The value was removed
+  from Chromium years ago and this is Chromium 140. Mathpix on the
+  same machine passes it happily, which is what suggested it, but it
+  bundles an older Qt. Evidence from another app only transfers if
+  the versions do.
+- `--disable-features=Vulkan`: a **black window** with a live page
+  underneath. Hit-testing still worked, the cursor turned to a finger
+  over the model rows, and the log filled with thousands of
+  `Failed to get native pixmap due to dma_buf acquisition failure`
+  and `Compositor returned null texture`. Without Vulkan the
+  remaining path cannot acquire native buffers at all.
+
+So Vulkan is the best available path here and the flicker is its
+price. The default is correct, and no flag belongs in `desktop.py`.
+
+One thing worth keeping from the black-window result, because it
+applies to the *white* window this campaign built a watchdog for:
+**the colour is diagnostic.** Black means the document is alive and
+the compositor produced no texture. White means there is no document,
+which is a renderer that died. They are different failures with
+different fixes, and `renderProcessTerminated` only fires for the
+second. If item 216 ever shows a white window with an empty crash
+log, this contrast is the reason to suspect the compositor instead.
+
 **Source inspection cannot see event wiring, and a DOM harness is
 cheaper than assumed.** Recorded 2026-08-31, after bulk filing shipped
 with a dead dialog: the chooser's target rows rendered correctly,

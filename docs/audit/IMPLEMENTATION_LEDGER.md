@@ -202,22 +202,21 @@ were cleared on 2026-08-11 in the same sitting: the maintainer confirmed items
 could say least about, the amber invalid row's alignment against its
 neighbours and the two-window model switch.
 
-**As of 2026-08-28 three entries remain**, and none blocks anything.
+**As of 2026-08-31 two entries remain**, and neither blocks anything.
 The stage 4 findings cleared on 2026-08-17, which released `XAI-01`,
 `LIFE-04` and `ORG-02`; `ORG-02`'s own state core and the save work that
 came out of testing it cleared on 2026-08-18, items 162 to 166, and
 `XAI-01` cleared on 2026-08-28, items 180 to 184. What is left is
-`TRUST-04`, newly queued, `TRUST-03`'s offline retest, and `LIFE-02`'s
-two staged-failure items, 143 and 144, which are awkward to arrange
-rather than pending.
+`TRUST-03`'s offline retest and `LIFE-02`'s two staged-failure items,
+143 and 144, which are awkward to arrange rather than pending.
 
-- **TRUST-04**: queued on 2026-08-28 and cleared the same day, over
-  two passes. The first cleared 186, 187 and 189 and turned up the
-  frozen-row bug in 185. The second cleared 185 and 188 and turned
-  up the stale-flag inconsistency between windows, both written up
-  below. What is left is a look at the two items those fixes
-  changed: 185 without its bar, and 188's new cross-window prompt
-  check.
+- **TRUST-04**: **cleared on 2026-08-31.** Queued on 2026-08-28 and
+  worked through in three passes. The first cleared 186, 187 and 189
+  and turned up the frozen-row bug in 185. The second cleared 185 and
+  188 and turned up the stale-flag inconsistency between windows,
+  both written up below. The third re-ran the two items those fixes
+  changed, 185 without its bar and 188's cross-window prompt check,
+  and both hold. Nothing outstanding.
 
 `XAI-01` cleared with more than a tick. Item 183 asked a question rather
 than confirming a fix, and the prediction held: a DiffusionGemma canvas
@@ -316,7 +315,7 @@ on real hardware.
 | XAI-01 | high | M | done | LIFE-01 (done) | Bounded checkpoints for both diffusion backends; carried the capture change |
 | LIFE-04 | high | L | done | LIFE-03 (done) | Carried RUNTIME-01's queue bound, as its own Direction asks |
 | LIFE-05 | high | M | partial | none | Single-instance the desktop launcher; host lease deferred, see Deviations |
-| TRUST-04 | medium | L | needs hardware | LIFE-04 (done) | Download is a child process now; absorbed ORG-02's download client |
+| TRUST-04 | medium | L | done | LIFE-04 (done) | Download is a child process now; absorbed ORG-02's download client |
 | DATA-02 | high | L | done | none | Lost-update slice, then the semantics: collections are server-owned operations |
 | RUNTIME-01 | medium | L | partial | ORG-02 + DATA-05 | Queue bound landed with LIFE-04; append-only frames remain |
 | ORG-02 | medium | L | partial | none | State core verified; ES modules and server-rendered boot remain (download client went with TRUST-04) |
