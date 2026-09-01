@@ -2200,3 +2200,54 @@ first place.
     commit order. The point of expanding server-side is that
     Analytics cannot tell which is which, and this is the only place
     that claim is checked against a run that predates the change.
+
+## Flat frames on disk (RUNTIME-01, stage two)
+
+Stage one made the wire and the browser linear and left disk alone.
+Stage two stops expanding: an autoregressive `tokens.json` is one
+flat list, and it goes out flat to Analytics too. On the ablation
+runs the `/frames` payload went from about 130 MiB to about 1 MiB,
+measured through the real endpoint.
+
+Nothing should look different. Every one of these items is a way of
+asking whether it does, because the whole design of the change is
+that only the cost moves.
+
+The corpus was read end to end through the new reader in the sandbox:
+236 runs, no failures, 87 recovered as append and 140 left per-frame.
+What that cannot show is a page drawing them, which is these items.
+
+222. **An old long run opens noticeably faster.** Open one of the
+    2,048-token SmolLM3 ablation runs in Analytics, the ones from
+    2026-08-18. It used to take around ten seconds to paint. It
+    should be much quicker now even though the file on disk has not
+    changed: the parse still happens, the 130 MiB download does not.
+    Scrub across it and check the text grows one token per frame.
+223. **A new long run is faster still, and smaller.** Generate 2,048
+    tokens with SmolLM3, save, and open it in Analytics. Compare
+    `du -h` on its folder against one of the old ablation runs:
+    `tokens.json` should be roughly a megabyte rather than 131.
+    Saving should also be quicker than the twenty seconds item 218
+    reported, since that figure was mostly writing this file.
+224. **Every overlay reads the same on both.** With an old run and a
+    new one open in turn, step through Heatmap, Commit Order and the
+    entropy chart. Commit Order on an autoregressive run is
+    uniformly "settled immediately", which is correct and was true
+    before; what would be wrong is one run showing it and the other
+    not.
+225. **A diffusion run is untouched.** Open a LLaDA or DiffusionGemma
+    run. Its positions genuinely change between frames, so it keeps
+    the per-frame form and must look exactly as it did. This is the
+    item that catches a flattening applied too eagerly, which would
+    show as a canvas that stops changing between frames.
+226. **An edited run still compares.** Open an edited run saved after
+    this change and check the Original/Edited crossfade, the diff
+    overlay and both elapsed series. The pre-edit baseline is stored
+    flat now as well, so a mistake in its recovery shows here and
+    nowhere else.
+227. **An older build refuses a new run, politely.** Optional, and
+    only if convenient: `git stash` this work, open a run saved after
+    it, and the page should say the run was written by a newer
+    version rather than showing a broken one. The schema version
+    exists for exactly this, and it is the one claim that cannot be
+    checked without two builds.

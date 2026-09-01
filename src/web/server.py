@@ -2761,10 +2761,27 @@ def _compute_run_frames(run_id: str) -> Dict[str, Any]:
     run_dir = run_store.resolve_run_dir(RESULTS_DIR, run_id)
     meta = load_run_metadata(run_dir)
     data = load_run_frames(run_dir)
+    # A run that only grows goes out flat and the page rebuilds each
+    # frame as a prefix, which is the same slice the generator does
+    # live. At 2,048 tokens that is the difference between a 123 MiB
+    # download and under a megabyte, and it is the download rather
+    # than the file that the reader waits on.
+    #
+    # Old runs get it too when their frames turn out to be prefixes,
+    # though only for the wire: the file still has to be parsed to
+    # discover that, so an old long run is quicker to draw and no
+    # quicker to open.
+    positions = data["positions"]
     return {
         "run_id": run_id,
-        "frames": data["frames"],
-        "original_frames": data["original_frames"],
+        "frames": None if positions is not None else data["frames"],
+        "positions": positions,
+        "original_frames": (
+            None
+            if data["original_positions"] is not None
+            else data["original_frames"]
+        ),
+        "original_positions": data["original_positions"],
         "records_available": data["records_available"],
         "alternatives": data["alternatives"],
         "alternatives_available": data[

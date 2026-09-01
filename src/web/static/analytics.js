@@ -3209,32 +3209,73 @@ function renderRunCharts(data, run) {
 function overlayDiffAvailable(data) {
   return !!(
     data.records_available
-    && data.original_frames
+    && overlaySeriesPresent(overlaySeriesOf(data, true))
     && data.remask_edits
     && data.remask_edits.length > 0
   );
 }
 
-// Last frame that actually carries token records.
-function overlayFinalFrame(frames) {
-  if (!frames) {
-    return null;
-  }
-  for (var i = frames.length - 1; i >= 0; i--) {
-    if (frames[i] && frames[i].length > 0) {
-      return frames[i];
-    }
-  }
-  return null;
+// ---- A run's frames, whichever way the server sent them ----
+//
+// Two arrangements reach this page. A run whose positions change
+// arrives as one array per frame, because there is no smaller
+// truthful description of it. A run that only grows arrives as one
+// flat list, because frame N is its first N+1 entries and sending
+// them all again N times is what made a 2,048-token run a 123 MiB
+// download.
+//
+// Everything below asks a series for a frame rather than indexing
+// an array, so the two shapes are one thing to the rest of the page.
+
+function overlaySeries(positions, frames) {
+  return {
+    positions: Array.isArray(positions) ? positions : null,
+    frames: Array.isArray(frames) ? frames : null,
+  };
 }
 
-// Index of the last frame carrying token records (mirrors
-// overlayFinalFrame). Used as the scrubber's default position so the
-// viewer opens on the resolved output. Returns 0 when none qualify.
-function overlayFinalFrameIndex(frames) {
-  if (!frames) {
+function overlaySeriesLength(series) {
+  if (!series) {
     return 0;
   }
+  if (series.positions) {
+    return series.positions.length;
+  }
+  return series.frames ? series.frames.length : 0;
+}
+
+function overlaySeriesPresent(series) {
+  return overlaySeriesLength(series) > 0;
+}
+
+// The token array at ``index``, or null when there is no such frame.
+// Null renders as a blank canvas, which is what an early all-masked
+// frame with no records looks like.
+function overlaySeriesAt(series, index) {
+  if (!series || index < 0 || index >= overlaySeriesLength(series)) {
+    return null;
+  }
+  if (series.positions) {
+    return series.positions.slice(0, index + 1);
+  }
+  var frame = series.frames[index];
+  return frame === undefined ? null : frame;
+}
+
+// Index of the last frame carrying records. The scrubber opens here,
+// so the viewer shows the resolved output rather than a blank early
+// canvas. Zero when none qualify.
+function overlaySeriesFinalIndex(series) {
+  if (!series) {
+    return 0;
+  }
+  if (series.positions) {
+    // Every position is a record, so the last frame is the last one.
+    return series.positions.length > 0
+      ? series.positions.length - 1
+      : 0;
+  }
+  var frames = series.frames || [];
   for (var i = frames.length - 1; i >= 0; i--) {
     if (frames[i] && frames[i].length > 0) {
       return i;
@@ -3243,18 +3284,65 @@ function overlayFinalFrameIndex(frames) {
   return 0;
 }
 
-// The token array at scrubber frame ``index`` (guarded). An empty or
-// out-of-range frame yields null, which renders as a blank canvas
-// (e.g. an all-masked early frame with no records).
+function overlaySeriesFinal(series) {
+  if (!series) {
+    return null;
+  }
+  if (series.positions) {
+    return series.positions.length > 0 ? series.positions : null;
+  }
+  var frames = series.frames || [];
+  for (var i = frames.length - 1; i >= 0; i--) {
+    if (frames[i] && frames[i].length > 0) {
+      return frames[i];
+    }
+  }
+  return null;
+}
+
+// A series built straight from a payload, for the handful of callers
+// that are handed the response rather than the open run.
+function overlaySeriesOf(data, baseline) {
+  if (!data) {
+    return overlaySeries(null, null);
+  }
+  if (baseline) {
+    return overlaySeries(
+      data.original_positions, data.original_frames
+    );
+  }
+  return overlaySeries(data.positions, data.frames);
+}
+
+// The run the viewer is showing, and the run it branched from.
+function overlayPrimary() {
+  return overlayData ? overlayData.series : null;
+}
+
+function overlayBaseline() {
+  return overlayData ? overlayData.baseline : null;
+}
+
+// The token array at scrubber frame ``index`` (guarded).
 function overlayFrameAt(index) {
-  if (!overlayData || !overlayData.frames) {
-    return null;
+  return overlaySeriesAt(overlayPrimary(), index);
+}
+
+// Commit steps for a series, without assembling frames it does not
+// have. A run that only grows settles every position the moment it
+// appears, so the general walk over its prefixes would rebuild the
+// whole quadratic to arrive at a column of zeros.
+function overlaySeriesCommitSteps(series) {
+  if (!series) {
+    return [];
   }
-  var frames = overlayData.frames;
-  if (index < 0 || index >= frames.length) {
-    return null;
+  if (series.positions) {
+    return overlaysAppendCommitSteps(series.positions);
   }
-  return frames[index];
+  return overlaysComputeCommitSteps(
+    overlaysFrameReader(series.frames || []),
+    overlaySeriesLength(series)
+  );
 }
 
 // Whether a frame series carries per-token entropy. Checked on the
@@ -3262,9 +3350,8 @@ function overlayFrameAt(index) {
 // overlayEntropyAvailable so the pre-edit snapshot can be tested the
 // same way: it was saved by the same code path but predates the
 // signal on older runs.
-function framesHaveEntropy(frames) {
-  var list = frames || [];
-  var final = list[overlayFinalFrameIndex(list)];
+function framesHaveEntropy(series) {
+  var final = overlaySeriesFinal(series);
   if (!final) {
     return false;
   }
@@ -3278,7 +3365,7 @@ function framesHaveEntropy(frames) {
 
 // Whether the saved run carries per-token entropy.
 function overlayEntropyAvailable(data) {
-  return framesHaveEntropy(data && data.frames);
+  return framesHaveEntropy(overlaySeriesOf(data, false));
 }
 
 // Per-position candidate sets for the open run, or an empty list.
@@ -3377,10 +3464,9 @@ function renderAltsPopover(pos, span) {
   }
   // Each page marks the token its own run drew, so the Original page
   // does not mark the branch's substitution as chosen.
-  var frames = original
-    ? (overlayData.original_frames || [])
-    : (overlayData.frames || []);
-  var frame = overlayClampedFrame(frames);
+  var frame = overlayClampedFrame(
+    original ? overlayBaseline() : overlayPrimary()
+  );
   var chosen = frame && frame[pos] ? frame[pos].id : null;
 
   // Discarding the rows discards their pending mouseleave: a removed
@@ -3421,12 +3507,17 @@ function renderAltsPopover(pos, span) {
 
 // A frame series at the scrubber's index, clamped to its end. The two
 // runs can differ in length, so the snapshot may stop short.
-function overlayClampedFrame(frames) {
-  if (!frames || frames.length === 0) {
+// A series at the scrub position, clamped to its own end. The two
+// runs can differ in length, so a branch that outlives the one it
+// forked from must not read past the baseline's last frame.
+function overlayClampedFrame(series) {
+  var count = overlaySeriesLength(series);
+  if (count === 0) {
     return null;
   }
-  var index = Math.min(overlayFrameIndex, frames.length - 1);
-  return frames[index] || null;
+  return overlaySeriesAt(
+    series, Math.min(overlayFrameIndex, count - 1)
+  );
 }
 
 // Candidate rows are built by overlaysBuildAltRow in overlays.js;
@@ -3464,6 +3555,11 @@ function renderRunOverlays(data) {
     return;
   }
   overlayData = data;
+  // Built once here rather than at every read, so the shape the
+  // server chose is resolved in one place and the rest of the page
+  // only ever asks a series for a frame.
+  overlayData.series = overlaySeriesOf(data, false);
+  overlayData.baseline = overlaySeriesOf(data, true);
   overlayViewer.hidden = false;
   overlayEmpty.hidden = true;
   overlayOutput.hidden = false;
@@ -3483,13 +3579,14 @@ function renderRunOverlays(data) {
 // final frame carrying records (the viewer's prior behavior); a run
 // with a single usable frame keeps the scrubber hidden and disabled.
 function setupOverlayScrubber(data) {
-  var frames = data.frames || [];
-  var maxIndex = frames.length > 0 ? frames.length - 1 : 0;
-  overlayFrameIndex = overlayFinalFrameIndex(frames);
+  var series = overlaySeriesOf(data, false);
+  var count = overlaySeriesLength(series);
+  var maxIndex = count > 0 ? count - 1 : 0;
+  overlayFrameIndex = overlaySeriesFinalIndex(series);
   if (!overlayScrubber) {
     return;
   }
-  var hasMultiple = frames.length > 1;
+  var hasMultiple = count > 1;
   overlayScrubber.hidden = !hasMultiple;
   overlayScrubSlider.min = "0";
   overlayScrubSlider.max = String(maxIndex);
@@ -3501,12 +3598,11 @@ function setupOverlayScrubber(data) {
 // Clamp to range, sync the slider + label, and re-render the active
 // overlay at the new frame.
 function setOverlayFrame(index) {
-  if (!overlayData || !overlayData.frames) {
+  if (!overlayData) {
     return;
   }
-  var maxIndex = overlayData.frames.length > 0
-    ? overlayData.frames.length - 1
-    : 0;
+  var count = overlaySeriesLength(overlayPrimary());
+  var maxIndex = count > 0 ? count - 1 : 0;
   var clamped = Math.max(0, Math.min(index, maxIndex));
   overlayFrameIndex = clamped;
   if (overlayScrubSlider) {
@@ -3540,10 +3636,8 @@ function updateOverlayScrubLabel() {
   if (!overlayScrubLabel) {
     return;
   }
-  var maxIndex = overlayData && overlayData.frames
-    && overlayData.frames.length > 0
-    ? overlayData.frames.length - 1
-    : 0;
+  var count = overlaySeriesLength(overlayPrimary());
+  var maxIndex = count > 0 ? count - 1 : 0;
   overlayScrubLabel.textContent =
     "Frame " + overlayFrameIndex + " / " + maxIndex;
 }
@@ -3742,18 +3836,17 @@ function renderEntropyOverlay() {
 function renderCommitOverlay() {
   overlayReadout.hidden = true;
   overlayReadout.textContent = "";
-  var frames = overlayData.frames;
   // Commit steps come from the full frame stream (final frame is
   // ground truth), so they are memoized per run and applied to
   // whichever frame the scrubber shows (mirrors the generator).
   if (overlayCommitSteps === null) {
-    overlayCommitSteps = overlaysComputeCommitSteps(frames);
+    overlayCommitSteps = overlaySeriesCommitSteps(overlayPrimary());
   }
-  var original = overlayData.original_frames || [];
+  var baseline = overlayBaseline();
   if (overlayOriginalCommitSteps === null
-    && original.length > 0) {
+    && overlaySeriesPresent(baseline)) {
     overlayOriginalCommitSteps =
-      overlaysComputeCommitSteps(original);
+      overlaySeriesCommitSteps(baseline);
   }
   renderOverlayTokens({
     frame: overlayFrameAt(overlayFrameIndex),
@@ -3971,7 +4064,7 @@ function overlayComparisonFrame() {
   if (!overlayData || !overlayDiffAvailable(overlayData)) {
     return null;
   }
-  return overlayClampedFrame(overlayData.original_frames);
+  return overlayClampedFrame(overlayBaseline());
 }
 
 // Spare every mode from repeating the masked-position check: a mask
@@ -4091,9 +4184,7 @@ function metricsLayered() {
 // them.
 function metricsFrameTokens() {
   if (metricsHoverOriginal) {
-    return overlayClampedFrame(
-      overlayData ? overlayData.original_frames : null
-    );
+    return overlayClampedFrame(overlayBaseline());
   }
   return overlayFrameAt(overlayFrameIndex);
 }
@@ -4182,10 +4273,8 @@ function renderDiffOverlay() {
   // is stable across the scrub) and memoized; only the rendered layers
   // vary per frame.
   if (overlayDiffData === null) {
-    var curFinal = overlayFinalFrame(overlayData.frames);
-    var origFinal = overlayFinalFrame(
-      overlayData.original_frames
-    );
+    var curFinal = overlaySeriesFinal(overlayPrimary());
+    var origFinal = overlaySeriesFinal(overlayBaseline());
     overlayDiffData = overlaysComputeDiff(
       curFinal, origFinal, overlayData.remask_edits
     );
@@ -4200,11 +4289,7 @@ function renderDiffOverlay() {
   // final frame once it ends (the runs can differ in length / resume
   // boundaries), matching the generator (app.js renderDiffOverlay).
   var editedTokens = overlayFrameAt(overlayFrameIndex) || [];
-  var origFrames = overlayData.original_frames || [];
-  var oIdx = Math.min(
-    overlayFrameIndex, origFrames.length - 1
-  );
-  var origTokens = (oIdx >= 0 ? origFrames[oIdx] : null) || [];
+  var origTokens = overlayClampedFrame(overlayBaseline()) || [];
 
   overlayOutput.textContent = "";
   tokenHighlightPos = null;
@@ -5099,9 +5184,8 @@ function clearEntropyChart() {
 // Mirrors the generator's entropyProfileValues. Runs over both the
 // open run and its pre-edit snapshot, which is why it takes frames
 // rather than the payload.
-function entropySeriesFrom(frames) {
-  var list = frames || [];
-  var final = list[overlayFinalFrameIndex(list)] || [];
+function entropySeriesFrom(series) {
+  var final = overlaySeriesFinal(series) || [];
   var values = [];
   var texts = [];
   for (var i = 0; i < final.length; i++) {
@@ -5226,13 +5310,14 @@ function entropyOriginalSeries(data, divergence) {
   if (divergence === null) {
     return null;
   }
-  if (!data.original_frames) {
+  var baseline = overlaySeriesOf(data, true);
+  if (!overlaySeriesPresent(baseline)) {
     return null;
   }
-  if (!framesHaveEntropy(data.original_frames)) {
+  if (!framesHaveEntropy(baseline)) {
     return null;
   }
-  return entropySeriesFrom(data.original_frames);
+  return entropySeriesFrom(baseline);
 }
 
 // One bar per generated position, tall and hot where the model was
@@ -5251,7 +5336,7 @@ function renderEntropyChart(data) {
   }
 
   var divergence = divergencePosition(data);
-  var edited = entropySeriesFrom(data.frames);
+  var edited = entropySeriesFrom(overlaySeriesOf(data, false));
   var original = entropyOriginalSeries(data, divergence);
 
   // Labels span the longer run: a branch can outlive or fall short

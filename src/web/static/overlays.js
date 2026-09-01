@@ -684,14 +684,21 @@ function overlaysMetricEntropyBar(value) {
 // token stream (the final frame is ground truth), so it is exact for
 // LLaDA (resolved tokens are frozen) and a "settle" proxy for
 // DiffusionGemma. Positions still unresolved at the last frame get
-// -1 (left uncolored). ``frames`` is an array of per-frame token
-// arrays; each token is ``{t, m, id, c?}`` or a masked placeholder.
-function overlaysComputeCommitSteps(frames) {
-  var frameCount = frames.length;
+// -1 (left uncolored).
+//
+// Takes a reader and a count rather than an array, because the two
+// pages no longer agree on what a run is stored as. A diffusion run
+// really is a list of per-frame arrays; a run that only grows is one
+// flat list whose frames are prefixes, and materialising those to
+// walk them here would rebuild the exact N(N+1)/2 the storage change
+// removed. Asking for frame f leaves that decision where it belongs.
+//
+// ``readFrame(f)`` returns that frame's token array, or null.
+function overlaysComputeCommitSteps(readFrame, frameCount) {
   if (frameCount === 0) {
     return [];
   }
-  var finalTokens = frames[frameCount - 1];
+  var finalTokens = readFrame(frameCount - 1);
   if (!finalTokens) {
     return [];
   }
@@ -706,7 +713,7 @@ function overlaysComputeCommitSteps(frames) {
     var finalId = finalTok.id;
     var settle = 0;
     for (var f = 0; f < frameCount; f++) {
-      var ft = frames[f];
+      var ft = readFrame(f);
       if (!ft || i >= ft.length) {
         continue;
       }
@@ -718,6 +725,31 @@ function overlaysComputeCommitSteps(frames) {
     steps[i] = settle;
   }
   return steps;
+}
+
+// The commit steps of a run that only grows, without reading it.
+//
+// A position appears at its final value and nothing behind it moves,
+// so every one of them settles at step 0. That is what the general
+// walk above computes for such a run, checked against real saved
+// runs rather than reasoned about; this returns it directly instead
+// of assembling N prefixes to rediscover it.
+function overlaysAppendCommitSteps(positions) {
+  var steps = new Array(positions.length);
+  for (var i = 0; i < positions.length; i++) {
+    var token = positions[i];
+    steps[i] = !token || token.m ? -1 : 0;
+  }
+  return steps;
+}
+
+// One array of per-frame token arrays, read the way the folder above
+// wants. For the pages that still hold their run that way.
+function overlaysFrameReader(frames) {
+  return function (index) {
+    var frame = frames[index];
+    return frame === undefined ? null : frame;
+  };
 }
 
 // Per-token color for one layer of the counterfactual diff overlay.

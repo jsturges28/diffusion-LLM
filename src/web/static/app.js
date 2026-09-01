@@ -2348,7 +2348,12 @@ function renderFinalText(text) {
 // at the last frame get -1 (left uncolored). Result is memoized
 // in commitSteps and invalidated whenever runFrames.tokens changes.
 function computeCommitSteps() {
-  return overlaysComputeCommitSteps(runFrames.tokens);
+  if (runFramesIsAppend(runFrames)) {
+    return overlaysAppendCommitSteps(runFrames.positions);
+  }
+  return overlaysComputeCommitSteps(
+    overlaysFrameReader(runFrames.tokens), runFrames.tokens.length
+  );
 }
 
 // Drop every memo derived from the frame arrays. Called wherever
@@ -2442,8 +2447,12 @@ function currentDiffData() {
 function commitStepsFor(isOriginal) {
   if (isOriginal) {
     if (originalCommitSteps === null) {
-      originalCommitSteps =
-        overlaysComputeCommitSteps(originalRun.tokens);
+      originalCommitSteps = originalRunIsAppend(originalRun)
+        ? overlaysAppendCommitSteps(originalRun.positions)
+        : overlaysComputeCommitSteps(
+          overlaysFrameReader(originalRun.tokens),
+          originalRun.tokens.length
+        );
     }
     return originalCommitSteps;
   }

@@ -334,6 +334,21 @@ class FakeSocket {
 }
 FakeSocket.opened = [];
 
+// Answers every request with an empty success. Enough for a boot
+// sequence to finish without the test having to describe endpoints
+// it is not testing.
+function inertFetch(calls) {
+  return function (url, init) {
+    calls.push({ url: String(url), init: init || {} });
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({}),
+      text: () => Promise.resolve("{}"),
+    });
+  };
+}
+
 function unref(handle) {
   if (handle && typeof handle.unref === "function") {
     handle.unref();
@@ -363,6 +378,7 @@ function makeStorage() {
 function loadPage(options) {
   const settings = options || {};
   const registry = new Map();
+  const fetched = [];
   const document = makeDocument(registry);
   const sandbox = {
     console,
@@ -388,8 +404,12 @@ function loadPage(options) {
     cancelAnimationFrame: (handle) => clearTimeout(handle),
     localStorage: makeStorage(),
     sessionStorage: makeStorage(),
-    fetch: settings.fetchImpl
-      || (() => Promise.reject(new Error("no fetch in this test"))),
+    // Inert by default, for the same reason the socket is: a page
+    // fetches during boot, and a default that rejected would fail
+    // every test over a request none of them made. Records what was
+    // asked for, so a test that does care can read it back or pass
+    // its own `fetchImpl`.
+    fetch: settings.fetchImpl || inertFetch(fetched),
     // Inert by default, and inert rather than absent on purpose: a
     // page opens its socket during boot, so throwing here would fail
     // every test for a connection none of them drive. Records what
@@ -452,6 +472,8 @@ function loadPage(options) {
     registry,
     document,
     sandbox,
+    // Every request the page made, in order.
+    fetched,
     // Fire a window-level listener, for the handful of page
     // behaviours that hang off focus or visibility rather than off
     // an element.

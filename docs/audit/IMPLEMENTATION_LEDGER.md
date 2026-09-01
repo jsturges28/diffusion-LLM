@@ -317,7 +317,7 @@ on real hardware.
 | LIFE-05 | high | M | partial | none | Single-instance the desktop launcher; host lease deferred, see Deviations |
 | TRUST-04 | medium | L | done | LIFE-04 (done) | Download is a child process now; absorbed ORG-02's download client |
 | DATA-02 | high | L | done | none | Lost-update slice, then the semantics: collections are server-owned operations |
-| RUNTIME-01 | medium | L | partial | none (reducer and store version both done) | Queue bound, then append frames on the wire and in the browser; stored size is stage two |
+| RUNTIME-01 | medium | L | done | none | Queue bound, then append frames on the wire, in the browser and on disk; 130 MiB to 1 MiB on a 2,048-token run |
 | ORG-02 | medium | L | partial | none | State core verified; ES modules and server-rendered boot remain (download client went with TRUST-04) |
 | RUNTIME-03 | medium | S | blocked | ORG-02, paired | |
 | ROADMAP-01 | high | M | blocked | stage 6 order | |
@@ -1877,13 +1877,61 @@ frame carries its arrival number, the client checks it against what
 it holds, and a mismatch stops the run through the `PROTOCOL-01`
 scoped-error path rather than being absorbed.
 
-Disk is deliberately untouched. `tokens.json`, `frames.jsonl` and
-`history.txt` come out byte-identical, pinned by
-`tests/web/test_append_expansion.py`, which saves the same run in
-both shapes and compares the files. That keeps the schema version,
-Analytics, and 238 existing runs entirely outside this change.
-**Stage two is where stored size changes**, and it is the one that
-turns that 123.66 MiB column into single digits.
+Disk is deliberately untouched in stage one. `tokens.json`,
+`frames.jsonl` and `history.txt` come out byte-identical, which kept
+the schema version, Analytics, and 238 existing runs entirely outside
+that change.
+
+**Stage two landed on 2026-09-01 and closes the finding.** The server
+stops expanding: `tokens.json` holds one flat list, schema version 2
+says so, and the file goes out flat to Analytics as well. Measured
+through the real endpoint on the maintainer's own ablation runs:
+
+| run | wire before | wire after |
+| --- | ----------- | ---------- |
+| 00-51-25 | 130.32 MiB | 1.04 MiB |
+| 01-31-42 | 131.99 MiB | 0.55 MiB |
+| 01-28-35 | 128.96 MiB | 0.52 MiB |
+
+The bigger prize was not the file. Only one function reads it, but
+`/api/analytics/runs/{id}/frames` then shipped the whole nested array
+to the browser, which is what the ten-second Analytics paint was.
+
+**Three things were checked against the real corpus rather than
+assumed**, and two of them changed the plan.
+
+Stored autoregressive frames are exact prefixes: every frame is the
+previous plus one, lengths exactly 1 to N. So the last frame already
+*is* the flat run, and a v0 or v1 run can be read flat with nothing
+rewritten. All 238 runs stay exactly as they are on disk; 87 of them
+now read as append and 140 as snapshot, with no failures.
+
+An append run's convergence has a closed form. Every record carries
+`m: False`, so the series is `mask_count: 0`, `resolved_ratio: 1.0`,
+`total_tokens` counting 1 to N. Generating that from a position count
+reproduces `convergence_from_records` **exactly on all 87 real
+append runs**, so the server never materializes frames to count masks
+in them.
+
+Commit order is the same story: an append position settles the moment
+it appears, so the column is zeros and the general fold is skipped.
+
+**The recovery is guarded rather than trusted.** A run whose
+positions genuinely change has no last frame that is the whole run,
+so the prefix property is verified before it is used and a run that
+fails it stays per-frame. Two ways to fail it are covered: frames
+that are not 1..N long, and a repeated final frame, which the prefix
+comparison alone would accept while handing back a run one position
+short.
+
+**A version bump reaches further than it looks.** `SCHEMA_VERSION`
+going to 2 silently broke two gates written as `>= LATEST` back when
+latest and "the version that introduced this" were the same number:
+the capture manifest, and the choice between `frames.jsonl` and
+`history.txt`. Both would have sent every v1 run back to v0
+behaviour. They now compare against `SCHEMA_VERSION_FRAMED`, and both
+have a test that only a run where the two answers differ can pass.
+Worth remembering at version 3.
 
 ### Found while verifying and fixed: saving one run twice
 
