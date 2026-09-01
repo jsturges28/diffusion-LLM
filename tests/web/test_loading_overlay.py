@@ -233,6 +233,26 @@ def test_an_empty_context_row_is_invisible_not_absent() -> None:
     assert "display: none" not in rule
 
 
+def test_the_reserved_line_is_the_line_it_reserves() -> None:
+    """Holding a place is only worth anything if the place is the
+    right size. This reserved 13px against an unpinned line box,
+    which was about two pixels short, so the column still settled
+    when the count arrived: a smaller version of the shift the
+    reservation exists to prevent, and harder to see.
+
+    Asserted as one variable used twice rather than as two numbers
+    that happen to match, because two numbers drift the next time
+    someone changes the font size."""
+    rule = _rule(".prompt-context {", chars=900)
+
+    line = re.search(r"line-height:\s*([^;]+);", rule)
+    reserved = re.search(r"min-height:\s*([^;]+);", rule)
+    assert line is not None
+    assert reserved is not None
+    assert line.group(1).strip() == reserved.group(1).strip()
+    assert line.group(1).strip().startswith("var(")
+
+
 def test_the_analytics_badge_holds_a_slot_on_both_pages() -> None:
     """It lives inside a header link with more links to its right, so
     a badge that appears from nothing slides all of them across. The

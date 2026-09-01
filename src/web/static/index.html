@@ -4,6 +4,14 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LLM Visualizer</title>
+  <!-- Ahead of the stylesheet that names it, so the fetch starts at
+       parse rather than during layout. The faces are font-display:
+       block, so first paint waits on this file; preloading is what
+       keeps that wait to a frame. crossorigin is required even
+       same-origin, because font requests are always CORS-mode and
+       without it the browser fetches the file a second time. -->
+  <link rel="preload" href="/vendor/fonts/jetbrains-mono-latin.woff2"
+    as="font" type="font/woff2" crossorigin />
   <link rel="stylesheet" href="/vendor/fonts/jetbrains-mono.css" />
   <link rel="stylesheet" href="/style.css" />
 </head>

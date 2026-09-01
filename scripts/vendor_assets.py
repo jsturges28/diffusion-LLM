@@ -223,6 +223,15 @@ _FONT_CSS_HEADER = """\
  * font is variable, so every weight points at the same file per
  * subset and the weight descriptor pins the axis.
  *
+ * font-display is "block", where Google sends "swap". Swap paints in
+ * a fallback first and re-lays-out when the real font arrives, and
+ * the fallback stack here is not metric-matched, so that re-layout
+ * moved the header links and the hyperparameter column by a few
+ * pixels on every navigation. Google's default assumes a font coming
+ * over the network, where a wait would be worse; this one is on
+ * local disk, behind a preload in every page head, so the block
+ * period is a frame or two and nothing moves afterwards.
+ *
  * SIL Open Font License 1.1; see OFL.txt beside this file.
  */
 """
@@ -241,7 +250,9 @@ def _font_face_rule(
         "  font-family: 'JetBrains Mono';\n"
         "  font-style: normal;\n"
         f"  font-weight: {weight};\n"
-        "  font-display: swap;\n"
+        # Google writes "swap" here, which is right for their case
+        # and wrong for ours. See the CSS header for why.
+        "  font-display: block;\n"
         f"  src: url(./{filename}) format('woff2');\n"
         f"  unicode-range: {unicode_range};\n"
         "}\n"

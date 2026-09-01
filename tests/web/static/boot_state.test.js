@@ -211,6 +211,58 @@ const MALFORMED = [
   ["absent", undefined],
 ];
 
+// -- measuring text before the font exists --
+
+test("the field width is measured again once the font lands", async () => {
+  // Canvas measureText answers with whatever font is available, so a
+  // measurement taken before the webfont arrives is the fallback's.
+  // `--param-width` decides where the hyperparameter row wraps, so a
+  // few pixels out moves a field to a second line and drops the whole
+  // column below it. This used to be safe by accident: the
+  // measurement sat inside the /api/models callback, and a network
+  // round trip outlasted the font every time. Synchronous boot put it
+  // in front.
+  const page = loadPage({
+    bootState: bootState(),
+    fetchImpl: recordingFetch([]),
+  });
+  const root = page.document.documentElement;
+
+  const measured = [];
+  const inner = root.style.setProperty.bind(root.style);
+  root.style.setProperty = function (name, value) {
+    measured.push(name);
+    return inner(name, value);
+  };
+
+  assert.equal(
+    measured.length, 0,
+    "nothing should have measured before the font is announced"
+  );
+
+  await page.announceFontsLoaded();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.ok(
+    measured.includes("--param-width"),
+    "the width was never re-measured, so it keeps the fallback's"
+  );
+});
+
+test("a page with no font API still sizes its fields", () => {
+  // The guard matters: `document.fonts` is not universal, and a page
+  // that only measured in the callback would ship an unsized column
+  // to anything lacking it.
+  const page = loadPage({
+    bootState: bootState(),
+    fetchImpl: recordingFetch([]),
+  });
+
+  const width = page.document.documentElement.style["--param-width"];
+  assert.ok(width, "no width was set on the synchronous path");
+  assert.match(String(width), /^\d+px$/);
+});
+
 // -- and the same bargain on Analytics --
 
 // The page's real script order, minus nothing: `model_client.js` came

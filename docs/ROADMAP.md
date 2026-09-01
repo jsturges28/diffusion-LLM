@@ -1136,6 +1136,67 @@ line drawn deliberately, or a trap a future change will otherwise walk into.
 They moved here from `docs/HANDOFF.md` when `META-01` reduced it to a cold-start
 page.
 
+**The cross-document transition is deliberately unnamed, and that is
+what makes the header appear to slide.** Recorded 2026-09-01, because
+it was reported as a layout bug and is not one.
+
+`style.css` turns on `@view-transition { navigation: auto; }` with no
+`view-transition-name` on any element. That is a whole-page cross-fade:
+the browser snapshots the outgoing document, snapshots the incoming
+one, and fades between them. Nothing is laid out twice.
+
+It reads as movement only where the two snapshots genuinely differ. The
+generator's header carries About and Help, which the other pages do
+not, so the gap between Analytics and the settings icon is occupied on
+one side of the fade and empty on the other, and fading across it looks
+like links sliding in from the right. Settings looks cleanest because
+its header is nearly identical to the one it usually replaces.
+
+This surfaced only after the server-rendered boot state and the
+`font-display` fix removed the real reflows that were drowning it out,
+which is the usual order: fix the loud thing, hear the quiet one.
+
+The fix is to give the persistent chrome a `view-transition-name` so
+the header morphs in place instead of cross-fading. That is real UI
+work, not a one-liner: names must be unique per document or the
+transition is skipped outright, and naming one element while the rest
+cross-fades can look worse than naming none. The comment above the rule
+has reserved that pass since it was written, and it is still the right
+call to take it as its own piece of work rather than as a patch to a
+session about boot state.
+
+**It also swallows the first click, which is confirmed and not yet
+fixed.** Also 2026-09-01: navigating quickly between pages reaches a
+state where the first click does nothing and the second works, seen on
+the Generation nav link from Analytics and on the model dropdown on the
+generator. Disabling the `@view-transition` rule makes it stop, which
+was run as a controlled experiment rather than inferred, so the cause
+is settled even though the mechanism is not.
+
+Everything else was eliminated first. Every full-viewport layer (the
+loading overlay, both modal overlays, the background grid and floaters)
+carries `pointer-events: none` when it is not up, so none of them is
+sitting invisibly over the page. The page scripts are parser-blocking at
+the end of `<body>`, so listeners exist before first render, which rules
+out clicking before a handler was attached.
+
+Worth writing down that the obvious mechanism does not explain it. An
+unnamed transition animates opacity only, with no transform, so the live
+DOM should be under the pointer exactly where it appears to be, and a
+click ought to land. That it does not suggests input is suppressed for
+the duration of the transition rather than misdirected by it. The UA
+cross-fade runs about 250ms, which matches how easy this is to provoke
+by clicking as soon as a page appears.
+
+This raises the value of the naming pass considerably. It was cosmetic
+when the only symptom was a header that appeared to slide; a transition
+that eats interactions is a usability bug, and one that gets worse the
+more responsive the pages become, which the boot work just made them.
+The two candidate fixes are naming the persistent chrome so the
+transition is shorter and more local, or shortening the animation so the
+window closes faster. Turning transitions off would work and would be
+the wrong trade, since the fade is worth keeping.
+
 **The desktop window recovers from a dead renderer rather than
 preventing one.** Recorded 2026-08-31, after the window was reported
 turning white after fifteen or more minutes and needing a restart,

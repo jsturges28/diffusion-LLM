@@ -2272,7 +2272,9 @@ cannot see. Nothing about the pages' content should have changed, so
 anything that looks different is a bug rather than the feature.
 
 228. **The generator opens without a curtain, and without a flash.**
-    Load a model from the menu and land on the generator. There should be no "Loading model" overlay at all,
+    Confirmed 2026-09-01, with a residual couple of pixels that item
+    235 then addressed. Load a model from the menu and land on the
+    generator. There should be no "Loading model" overlay at all,
     and nothing should move after the page appears: the
     hyperparameter column is filled in the first paint rather than
     built into an empty container. The failure mode to watch for is
@@ -2325,3 +2327,102 @@ anything that looks different is a bug rather than the feature.
     it for what each navigation was paying to decide whether one nav
     link was visible.
 
+## The font stops moving the page (2026-09-01)
+
+Item 228 landed with a couple of pixels of movement left in it, and
+230 with the header links still shifting on the way to the generator.
+Both were the same thing, and neither was caused by the boot work:
+the vendored JetBrains Mono shipped `font-display: swap`, so every
+page painted in a fallback and re-laid-out when the real font
+arrived. The fallback stack is not metric-matched, and the font is
+served `no-store`, so it happened on every navigation. Removing the
+larger reflow is what made the small one visible.
+
+The faces are now `font-display: block` and every page preloads the
+latin subset, so first paint waits a frame for a file already on
+local disk and nothing moves afterwards.
+
+235. **Nothing shifts after the page appears.** Open the generator
+    and watch the hyperparameter row, then go Analytics to
+    Generation and watch the header links. Both used to settle by a
+    few pixels a moment after the page drew. Neither should now.
+    Worth doing on each of the four pages, since the cause was
+    common to all of them.
+
+    Partly confirmed 2026-09-01: the font fix removed most of it,
+    and left two separate remainders, which items 238 and 239 cover.
+236. **Nothing flashes blank first, either.** The trade `block`
+    makes: text is invisible until the font is ready rather than
+    drawn in a fallback. From local disk behind a preload that
+    should be imperceptible. If you can see a blank beat before text
+    appears, say so, because the answer is then to preload more
+    subsets or reconsider the caching we deliberately left alone.
+237. **The font is still the right one.** Cheap sanity check that
+    `block` did not quietly leave a page on the fallback: the text
+    should be JetBrains Mono, not the system monospace. Compare a
+    lowercase l and a digit 1 against a page you know renders it, or
+    check DevTools' Computed panel for a rendered font name.
+
+## The last two pixels (2026-09-01)
+
+Item 235 came back with two remainders that looked like one symptom
+and were not. Both are recorded separately because only one of them
+is a bug.
+
+238. **The prompt count no longer nudges the column.** Confirmed
+    2026-09-01 on a fresh load. The generator reserves a line under
+    the prompt box for a token count only a ready worker can
+    produce, so that the column does not drop a step when the count
+    lands. It reserved `13px` against a line box that was not pinned
+    to any particular height, which is why everything from the
+    Experimental toggle down to the canvas still settled by about
+    two pixels, and why nothing below the canvas moved: the output
+    area is a flex child and absorbed it. The reserved height and
+    the line height are now one variable used twice. Load the
+    generator and watch the Experimental row as the count appears
+    beside the prompt box. It should not move.
+240. **A model switch lands on the right column width.** The other
+    half of 238, and a different bug with the same symptom. Switch
+    from LLaDA, whose hyperparameters take two rows, to SmolLM3 or
+    DiffusionGemma, which take one. The row count changes, which is
+    expected and not the thing to watch: watch for a second, smaller
+    settle just after the page comes back. Repeat it a few times,
+    because the cause was a race and lost it only sometimes.
+
+    Mostly confirmed 2026-09-01, and stopped there on purpose. Some
+    movement remains, small enough that the maintainer judged it not
+    worth more chasing, and this is the third round of the same
+    diminishing hunt: each fix has removed the loudest remaining
+    source and revealed a quieter one. A future session should treat
+    a report here as new evidence rather than as this item failing,
+    and should want a measurement (DevTools layout-shift entries)
+    before spending time, because eyeballing single pixels is how
+    this stops being worth it.
+241. **Does the page transition eat the first click?** Answered
+    2026-09-01: yes. Disabling the rule made the first click land
+    reliably, which settles the cause even though the mechanism
+    stays odd (an unnamed transition animates opacity only, so the
+    live DOM should be under the pointer where it appears). The rule
+    is back in; the fix belongs with the chrome-naming pass recorded
+    in `docs/ROADMAP.md`, not with turning transitions off.
+
+    Kept as a recipe, because it is the way to re-test that pass
+    when it lands. In `src/web/static/style.css`, comment out the
+    four-line `@view-transition` rule near the top, reload, and
+    navigate quickly between Menu, Analytics, Settings and
+    Generation, clicking as soon as each page appears. Put the rule
+    back afterwards; this is a diagnosis, not a change.
+239. **The header links crossing pages are not a shift, and are not
+    fixed.** Reported as links "sliding in from the right" on the
+    way to the generator. This is `@view-transition` doing exactly
+    what it was set up to do: `style.css` enables it with no
+    `view-transition-name` on anything, so the browser cross-fades a
+    snapshot of the whole old page into the whole new one. The
+    generator's header carries two links the others do not, About
+    and Help, so the two snapshots genuinely disagree about what
+    sits between Analytics and the settings icon, and the fade
+    across that gap reads as sliding. Nothing is being laid out
+    twice. It is worth knowing what it is rather than chasing it as
+    a reflow, and the fix, naming the persistent chrome so it morphs
+    in place, is the pass the comment above that rule already
+    reserves.

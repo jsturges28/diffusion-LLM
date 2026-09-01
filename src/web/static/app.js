@@ -1200,6 +1200,36 @@ function updateRangeLabels() {
 // Uniform width for every hyperparameter box, sized to the
 // widest label / select across ALL models so the row spacing is
 // consistent within and across model views.
+// Measure again once the webfont has actually loaded.
+//
+// Canvas measureText answers with whatever font the system can give
+// it now, so a measurement taken before JetBrains Mono arrives is the
+// fallback's. That was harmless while this ran inside the /api/models
+// callback, which a network round trip meant the font had always
+// beaten. Boot is synchronous now, so the measurement moved in front
+// of the font and started losing the race.
+//
+// It matters because --param-width decides where #param-row wraps.
+// A few pixels out moves one field onto a second line, and the whole
+// column below it with it, which is the shift that came back when
+// switching from a two-row model to a one-row one.
+//
+// A microtask, so when the font is already loaded (the common case,
+// given the preload) this lands before the browser paints. When it is
+// not, font-display: block means no text has been painted yet either.
+// Idempotent: if the metrics agree, nothing moves.
+function remeasureWhenFontReady(allModels) {
+  var fonts = document.fonts;
+  if (!fonts || !fonts.ready || !fonts.ready.then) {
+    return;
+  }
+  function remeasure() {
+    applyUniformParamWidth(allModels);
+    sizeModelSelect(allModels);
+  }
+  fonts.ready.then(remeasure).catch(remeasure);
+}
+
 function applyUniformParamWidth(allModels) {
   var refLabel = paramFields.querySelector("label");
   if (!refLabel) {
@@ -8331,6 +8361,7 @@ function applyModelInfo(info) {
   if (activeModel) {
     buildParamPanel(activeModel);
     applyUniformParamWidth(list);
+    remeasureWhenFontReady(list);
     // Before restoreSessionState, so a completed run's prompt
     // still overwrites the draft with no special casing.
     restoreParamState();

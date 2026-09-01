@@ -860,6 +860,52 @@ it once more: two anchors in `test_loading_overlay.py` moved when
 boot came out of its `.then`. Both were re-anchored on function
 names rather than on indentation.
 
+**Fixing the big reflow exposed a small one, which was the webfont.**
+The maintainer confirmed all seven items and reported two or three
+pixels of movement left: the hyperparameter column settling, and the
+header links shifting on the way to the generator. Same cause, and
+not this work's: the vendored JetBrains Mono carried Google's
+`font-display: swap`, so every page painted in a fallback and
+re-laid-out when the real font landed. The fallback stack
+(`"Fira Code", "Cascadia Code", "Consolas", monospace`) is not
+metric-matched and the faces carry no `size-adjust`, so the swap
+genuinely moves things, and `_NoCacheStaticFiles` serves the woff2
+`no-store`, so it recurred on every navigation rather than once.
+
+The faces are `block` now and every page preloads the latin subset.
+Worth recording that **the fix had to go in the generator**:
+`scripts/vendor_assets.py` writes that stylesheet and the file says
+not to edit it by hand, so changing only the CSS would have lasted
+until the next run. A test now asserts the emitter and the file
+agree, which is the failure that would otherwise return silently.
+
+**Making boot synchronous moved a measurement in front of the font.**
+The clearest self-inflicted wound of the three rounds, and worth
+recording because the mechanism is not obvious. `applyUniformParamWidth`
+sizes every hyperparameter field by measuring label text on a canvas,
+and canvas `measureText` answers with whatever font the system can
+supply at that instant. It used to run inside the `/api/models`
+callback, where a network round trip meant the webfont had always
+arrived first. Inlining the boot state removed the round trip, so the
+measurement started racing the font and sometimes lost, sizing the
+fields to the fallback's metrics.
+
+That shows up as a vertical shift rather than a horizontal one,
+because the measured value becomes `--param-width` and `#param-row`
+wraps. A few pixels moves one field onto a second line and the whole
+column below it with it, which is why the maintainer saw it switching
+from LLaDA's two rows of parameters to a one-row model and not on a
+first load. The fix re-measures on `document.fonts.ready`, which is a
+microtask, so where the font is already loaded it lands before the
+browser paints, and where it is not, `font-display: block` means no
+text has been painted to move.
+
+The DOM stub was complicit again, the same way it was over
+`style.setProperty`: `element.querySelector` returned null
+unconditionally, and `applyUniformParamWidth` returns early without a
+reference element to measure against. A test could watch the whole
+sizing path do nothing and still pass. It now searches its children.
+
 *Caching was considered and deliberately declined.* `no-store` also
 means Analytics re-downloads 282 KiB of vendored Chart.js and font
 per navigation, and, more to the point, cannot use the V8 code

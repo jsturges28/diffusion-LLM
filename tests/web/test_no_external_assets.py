@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from typing import List
+from urllib.parse import urljoin
 
 import pytest
 from starlette.testclient import TestClient
@@ -176,6 +177,109 @@ def test_the_font_css_points_at_local_files() -> None:
 
     assert "fonts.gstatic.com" not in css
     assert "url(./jetbrains-mono-" in css
+
+
+# -- and it renders without moving --
+#
+# Not an offline property, but it lives here because it is about the
+# same generated file and would otherwise have nowhere to go.
+
+
+def _font_css() -> str:
+    return (
+        STATIC_DIR / "vendor" / "fonts" / "jetbrains-mono.css"
+    ).read_text(encoding="utf-8")
+
+
+def test_no_face_swaps_the_font_in_after_first_paint() -> None:
+    """`swap` paints in a fallback and re-lays-out when the real
+    font lands. The fallback stack is not metric-matched, so that
+    moved the header links and the hyperparameter column by a few
+    pixels, on every navigation, because the font is served
+    `no-store` and refetched each time.
+
+    Checked across every face rather than by counting: one subset
+    left on `swap` still shifts the page for anyone whose text
+    reaches it."""
+    css = _font_css()
+
+    assert "font-display: swap" not in css
+    assert css.count("font-display: block") == css.count(
+        "@font-face"
+    )
+
+
+def test_the_generator_emits_what_the_file_carries() -> None:
+    """The file says not to edit it by hand, so a fix applied only
+    to the file lasts until the next `vendor_assets.py` run. This is
+    the test that would have caught that."""
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "scripts"
+        / "vendor_assets.py"
+    ).read_text(encoding="utf-8")
+
+    assert '"  font-display: block;\\n"' in source
+    assert '"  font-display: swap;\\n"' not in source
+
+
+@pytest.mark.parametrize(
+    "page",
+    ["index.html", "analytics.html", "settings.html", "menu.html"],
+)
+def test_every_page_preloads_the_font_it_blocks_on(
+    page: str,
+) -> None:
+    """With `block`, first paint waits for the font, and without a
+    preload that fetch does not start until layout asks for a glyph.
+    The preload moves it to parse time, which is what keeps the wait
+    to a frame instead of a visible pause."""
+    html = (STATIC_DIR / page).read_text(encoding="utf-8")
+
+    match = re.search(
+        r'<link rel="preload"[^>]*jetbrains-mono-latin\.woff2[^>]*>',
+        html,
+        re.DOTALL,
+    )
+    assert match is not None, f"{page} blocks on an unpreloaded font"
+    tag = match.group(0)
+    assert 'as="font"' in tag, page
+    # Required even same-origin: font requests are always CORS-mode,
+    # and a preload without it is a second, separate download.
+    assert "crossorigin" in tag, page
+
+
+@pytest.mark.parametrize(
+    "route", ["/", "/analytics.html", "/settings.html"]
+)
+def test_the_preload_names_the_url_the_css_asks_for(
+    route: str,
+) -> None:
+    """A preload one character off the real URL is worse than none:
+    the browser fetches the file twice and still waits for the
+    second. The stamper is the thing that could introduce that, so
+    this goes through the server rather than reading the file."""
+    client = TestClient(server.app)
+
+    html = client.get(route).text
+
+    preload = re.search(
+        r'<link rel="preload" href="([^"]+)"', html
+    )
+    assert preload is not None, route
+    css_ref = re.search(
+        r'href="(/vendor/fonts/jetbrains-mono\.css[^"]*)"', html
+    )
+    assert css_ref is not None, route
+
+    css = client.get(css_ref.group(1)).text
+    relative = re.search(r"url\((\./[^)]*latin\.woff2)\)", css)
+    assert relative is not None, route
+    resolved = urljoin(
+        css_ref.group(1).split("?")[0], relative.group(1)
+    )
+
+    assert preload.group(1) == resolved, route
 
 
 # -- through the server, not just on disk --

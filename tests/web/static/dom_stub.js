@@ -199,8 +199,26 @@ function makeElement(id) {
     return null;
   };
   element.matches = (selector) => matches(element, selector);
-  element.querySelector = () => null;
-  element.querySelectorAll = () => [];
+  // A real depth-first search over children, because returning null
+  // unconditionally is not neutral: page code reads `querySelector`
+  // to find a reference element to measure against, and a null makes
+  // it skip the measuring entirely. A test then proves nothing about
+  // sizing while looking like it does.
+  element.querySelector = (selector) =>
+    element.querySelectorAll(selector)[0] || null;
+  element.querySelectorAll = (selector) => {
+    const found = [];
+    const walk = (node) => {
+      for (const child of node.children) {
+        if (matches(child, selector)) {
+          found.push(child);
+        }
+        walk(child);
+      }
+    };
+    walk(element);
+    return found;
+  };
   element.focus = () => {};
   element.blur = () => {};
   element.scrollIntoView = () => {};
@@ -282,7 +300,7 @@ function matches(node, selector) {
   return node.tag === selector;
 }
 
-function makeDocument(registry) {
+function makeDocument(registry, fontsReady) {
   const document = {
     getElementById(id) {
       if (!registry.has(id)) {
@@ -311,6 +329,12 @@ function makeDocument(registry) {
     hidden: false,
     visibilityState: "visible",
   };
+  // Held open rather than pre-resolved, so a test can decide when
+  // the webfont "arrives" and observe what the page does then. A
+  // test that never resolves it is looking at the page as it is
+  // before the font lands, which is a real state and the one that
+  // mismeasures text.
+  document.fonts = { ready: fontsReady };
   document.body = makeElement("body");
   document.documentElement = makeElement("html");
   document.head = makeElement("head");
@@ -395,7 +419,7 @@ function makeStorage() {
  * Load a page script and everything it depends on into one context.
  *
  * `options.fetchImpl` replaces `fetch`; `options.scripts` replaces
- * the page's script list; `options.bootState` becomes
+ * the generator's script list; `options.bootState` becomes
  * `window.__BOOT__`, which is how the server hands a page its opening
  * state. Omitting it is the meaningful other case, not merely the
  * default: it is what a page served without that state sees, and the
@@ -408,7 +432,11 @@ function loadPage(options) {
   const settings = options || {};
   const registry = new Map();
   const fetched = [];
-  const document = makeDocument(registry);
+  let announceFontsLoaded = () => {};
+  const fontsReady = new Promise((resolve) => {
+    announceFontsLoaded = resolve;
+  });
+  const document = makeDocument(registry, fontsReady);
   const sandbox = {
     console,
     document,
@@ -506,6 +534,12 @@ function loadPage(options) {
     sandbox,
     // Every request the page made, in order.
     fetched,
+    // Settle `document.fonts.ready`. Anything the page defers until
+    // its webfont has loaded runs on the microtask after this.
+    announceFontsLoaded() {
+      announceFontsLoaded();
+      return Promise.resolve();
+    },
     // Fire a window-level listener, for the handful of page
     // behaviours that hang off focus or visibility rather than off
     // an element.
