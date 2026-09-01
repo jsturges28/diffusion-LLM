@@ -108,10 +108,43 @@ kept when these were written:
   settlement, and a canvas reading 90% resolved can have a mean model
   confidence of 0.165.
 
+- **176 to 206**: confirmed by the maintainer as each landed, across the
+  sessions that shipped them, but never written into this list at the time.
+  The dates are recoverable from the commits that added each item and are
+  not reconstructed here rather than guessed at. Treat them as checked; if
+  one of them matters enough to want a date, the commit that added the item
+  is the record.
+- **207 to 213**: confirmed on 2026-08-31, the collections polish queue.
+  211 took two passes: the target rows rendered and counted correctly and
+  could not be clicked, because the list listened for `change` and a target
+  row is a button. The fix and what it says about source-inspection tests
+  are in `docs/ROADMAP.md`.
+- **214 and 215**: confirmed on 2026-08-31. Four kills, three reloads, then
+  the cap, and a readable line per kill in the log. Note that 214 was
+  written against a first attempt that aborted the app at launch, so its
+  first instruction is to check the window opens at all.
+- **216**: **outstanding**, and deliberately not scheduled. It needs the
+  machine left idle until the screen blanks, so it costs twenty minutes of
+  waiting to force and nothing to catch in passing. The maintainer will run
+  it the next time the app happens to sit idle. It blocks nothing.
+
+  When it fires, the question is not only whether the window recovered. If
+  the window is white and
+  `~/.local/share/llm-xai-visualizer/renderer-crashes.log` has **no new
+  line**, the renderer did not die, the diagnosis behind that whole change
+  was wrong, and the investigation restarts elsewhere. That negative is the
+  more informative result and is the reason the log exists.
+
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
 matches the app is worse than no scenario, because it costs a session to
 discover that a correct result looks like a regression.
+
+The gap at 176 to 206 is the failure mode this paragraph warns about,
+arriving from the other direction: the items were run and the list was
+not updated, so a later session cannot tell a checked item from an
+unchecked one without reading the transcripts. Update the range in the
+same pass as the confirmation.
 
 ## How these relate to the audit campaign
 
