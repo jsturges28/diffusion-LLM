@@ -1836,6 +1836,49 @@ class TokenAlternative(BaseModel):
 # emitted no token detail for it.
 FrameTokens = List[Optional[List[TokenRecord]]]
 
+# The same run, flat: one record per position rather than one array
+# per frame. Sent by a model whose output only grows, where frame N
+# is the first N+1 positions and the per-frame arrays above are that
+# same information written out N times.
+RunPositions = List[TokenRecord]
+
+
+def expand_positions(
+    positions: List[TokenRecord],
+) -> FrameTokens:
+    """Rebuild the per-frame token arrays from a flat run.
+
+    The browser sends positions because holding N(N+1)/2 records is
+    what made a long run degrade there. Disk has no such pressure and
+    every reader downstream, Analytics included, already understands
+    the per-frame form, so the expansion happens here and the saved
+    run is byte-for-byte what a snapshot client would have written.
+
+    Prefixes share nothing on purpose. A frame's list is its own, so
+    a later mutation of one cannot reach into another, and the cost
+    is a shallow list of references rather than copies of the
+    records.
+    """
+    frames: FrameTokens = []
+    for count in range(1, len(positions) + 1):
+        frames.append(list(positions[:count]))
+    return frames
+
+
+def expand_position_text(positions: List[TokenRecord]) -> List[str]:
+    """The per-frame rendered text, for the same reason.
+
+    Accumulated rather than re-joined per frame: joining each prefix
+    separately is the quadratic again, in the one place that has the
+    whole run in hand at once.
+    """
+    texts: List[str] = []
+    running: List[str] = []
+    for token in positions:
+        running.append(token.t)
+        texts.append("".join(running))
+    return texts
+
 
 class RunProvenance(BaseModel):
     """What the worker attested when it finished the run.
@@ -1870,7 +1913,14 @@ class SaveRunRequest(BaseModel):
     model: str = DEFAULT_MODEL
     prompt: str
     params: Dict[str, Any] = Field(default_factory=dict)
-    frames: List[str] = Field(min_length=1)
+    # One of two ways to describe the same frames. ``frames`` plus
+    # ``frame_tokens`` is the per-frame form a snapshot model sends;
+    # ``frame_positions`` is the flat form an append model sends,
+    # which ``normalized`` below expands into the first. Exactly one
+    # arrives, and everything past this model sees only the first.
+    frames: Optional[List[str]] = None
+    frame_positions: Optional[RunPositions] = None
+    original_frame_positions: Optional[RunPositions] = None
     final_text: str
     elapsed_seconds: Optional[float] = None
     per_frame_elapsed: Optional[List[float]] = None
@@ -1932,6 +1982,63 @@ class SaveRunRequest(BaseModel):
     # Defaulted rather than optional because absent and false mean
     # the same thing here: only a run that says it was stopped was.
     partial: bool = False
+
+    def normalized(self) -> "SaveRunRequest":
+        """This request with its frames in per-frame form.
+
+        The one place the two wire shapes meet. Everything past here,
+        the bundle, the store, the files, and Analytics, sees only
+        the per-frame arrays, which is what keeps a change to how a
+        run is *streamed* from becoming a change to how it is
+        *stored*.
+
+        Returns self untouched for a request that already sent them,
+        so a diffusion save costs nothing.
+        """
+        # Emptiness is checked before shape, and deliberately: an
+        # empty list is not a description of a run in either form.
+        # `frames` used to carry `min_length=1`, which stopped being
+        # expressible as a field constraint when there were two ways
+        # to send the same thing, so the guarantee moved here rather
+        # than lapsing. Without it a save with no frames reached the
+        # store and failed later, in the GIF renderer, as an
+        # assertion about something else.
+        if not self.frames and not self.frame_positions:
+            raise ValueError(
+                "a run must carry frames or frame_positions"
+            )
+        if self.frames and self.frame_positions:
+            # Both would be two descriptions of one run with nothing
+            # deciding which is true, and quietly preferring either
+            # is worse than refusing.
+            raise ValueError(
+                "a run carries frames or frame_positions, not both"
+            )
+        if not self.frame_positions:
+            return self
+        expanded = self.model_copy(
+            update={
+                "frames": expand_position_text(self.frame_positions),
+                "frame_tokens": expand_positions(
+                    self.frame_positions
+                ),
+                "frame_positions": None,
+            }
+        )
+        if self.original_frame_positions:
+            expanded = expanded.model_copy(
+                update={
+                    "original_frame_tokens": expand_positions(
+                        self.original_frame_positions
+                    ),
+                    "original_frame_positions": None,
+                }
+            )
+        assert expanded.frames, "expansion produced no frames"
+        assert len(expanded.frames) == len(self.frame_positions), (
+            "one frame per position, or the run is not the run"
+        )
+        return expanded
 
 
 def _display_run_path(run_dir: Path) -> str:
@@ -2228,7 +2335,11 @@ def _save_run_blocking(body: SaveRunRequest) -> Dict[str, Any]:
     Which run is written is the store's decision, not this one: it
     resolves the run token first and falls back to the id below. All
     that happens here is the older fallback's own check.
+
+    Expanded first, on this thread, because rebuilding a long run's
+    frames is real work and the event loop is not where it belongs.
     """
+    body = body.normalized()
     replacing: Optional[str] = None
     if body.run_id:
         # Replace the pre-edit run; if it is gone (deleted from

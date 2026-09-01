@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import math
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 import torch
@@ -26,7 +26,9 @@ from src.inference import ar_sampler
 from src.inference.ar_sampler import (
     AR_CACHE_BYTES_MAX,
     TOP_K_ALTERNATIVES,
-    _build_frame,
+    _build_append_frame,
+    _StepPick,
+    _Trace,
     _cache_record,
     _candidates_hold,
     _entropy_nats,
@@ -436,68 +438,134 @@ def test_sample_next_omits_alternatives_when_disabled() -> None:
     assert pick.alternatives is None
 
 
-def test_build_frame_carries_entropy_per_token() -> None:
-    frame = _build_frame(
+def _traced(
+    picks: List[Tuple[int, float, float]],
+    alts: Optional[List[Optional[List[Dict[str, Any]]]]] = None,
+) -> _Trace:
+    """A trace of (id, confidence, entropy) triples."""
+    trace = _Trace()
+    for index, (token_id, conf, entropy) in enumerate(picks):
+        trace.append(
+            _StepPick(
+                token_id=token_id,
+                confidence=conf,
+                entropy=entropy,
+                alternatives=alts[index] if alts else None,
+            )
+        )
+    return trace
+
+
+def _append_frame(trace: _Trace, index: int) -> Dict[str, Any]:
+    return _build_append_frame(
         StubTokenizer(),
-        [4, 5],
-        [0.9, 0.5],
-        [0.25, 1.5],
-        frame_index=1,
+        trace,
+        frame_index=index,
         total_steps=8,
+        conf_sum=sum(trace.confs[: index + 1]),
     )
-    assert [t["e"] for t in frame["tokens"]] == [0.25, 1.5]
+
+
+def test_a_frame_carries_only_the_position_it_added() -> None:
+    """The whole finding in one assertion. A frame used to carry
+    every position decoded so far, which is what made an N-token run
+    cost N(N+1)/2 token records."""
+    trace = _traced([(4, 0.9, 0.25), (5, 0.5, 1.5), (6, 0.7, 0.8)])
+
+    frame = _append_frame(trace, 2)
+
+    assert "tokens" not in frame
+    assert frame["token"]["id"] == 6
+
+
+def test_a_frame_names_its_own_shape() -> None:
+    """So a reader can understand a frame without also holding the
+    registry entry for the model that sent it."""
+    frame = _append_frame(_traced([(4, 0.9, 0.25)]), 0)
+
+    assert frame["shape"] == "append"
+
+
+def test_a_frame_carries_the_position_s_entropy() -> None:
+    trace = _traced([(4, 0.9, 0.25), (5, 0.5, 1.5)])
+
+    frame = _append_frame(trace, 1)
+
+    assert frame["token"]["e"] == 1.5
     # 1-based to match the diffusion step convention.
     assert frame["index"] == 2
 
 
-def test_build_frame_reveals_only_the_newest_position() -> None:
+def test_a_frame_reveals_only_the_position_it_added() -> None:
     # Decoding is left to right, so growing the sequence to n tokens
     # births position n-1 and cannot disturb anything before it.
-    frame = _build_frame(
-        StubTokenizer(),
-        [4, 5, 6],
-        [0.9, 0.5, 0.7],
-        [0.25, 1.5, 0.8],
-        frame_index=2,
-        total_steps=8,
-    )
+    trace = _traced([(4, 0.9, 0.25), (5, 0.5, 1.5), (6, 0.7, 0.8)])
+
+    frame = _append_frame(trace, 2)
+
     assert frame["revealed"] == [2]
 
 
-def test_build_frame_reveals_nothing_on_an_empty_sequence() -> None:
-    frame = _build_frame(
-        StubTokenizer(),
-        [],
-        [],
-        [],
-        frame_index=0,
-        total_steps=8,
-    )
-    assert frame["revealed"] == []
+def test_the_mean_is_over_the_run_so_far() -> None:
+    """Not over the one token. The client shows a running mean and
+    the append shape must not quietly change what it means."""
+    trace = _traced([(4, 1.0, 0.25), (5, 0.0, 1.5)])
+
+    assert _append_frame(trace, 0)["mean_conf"] == 1.0
+    assert _append_frame(trace, 1)["mean_conf"] == 0.5
 
 
-def test_build_frame_omits_alternatives_by_default() -> None:
-    frame = _build_frame(
-        StubTokenizer(),
-        [4],
-        [0.9],
-        [0.25],
-        frame_index=0,
-        total_steps=8,
-    )
+def test_a_frame_omits_alternatives_by_default() -> None:
+    frame = _append_frame(_traced([(4, 0.9, 0.25)]), 0)
+
     assert "alts" not in frame
 
 
-def test_build_frame_rejects_misaligned_signals() -> None:
+def test_alternatives_ride_the_frame_that_introduces_them() -> None:
+    rows = [{"id": 7, "t": "x", "p": 0.3}]
+    trace = _traced([(4, 0.9, 0.25), (5, 0.5, 1.5)], [None, rows])
+
+    assert "alts" not in _append_frame(trace, 0)
+    assert _append_frame(trace, 1)["alts"] == rows
+
+
+def test_a_frame_off_the_end_of_the_trace_is_refused() -> None:
     with pytest.raises(AssertionError):
-        _build_frame(
-            StubTokenizer(),
-            [4, 5],
-            [0.9, 0.5],
-            [0.25],
-            frame_index=1,
-            total_steps=8,
-        )
+        _append_frame(_traced([(4, 0.9, 0.25)]), 3)
+
+
+# -- the running confidence sum --
+
+
+def test_the_trace_keeps_its_sum_as_it_grows() -> None:
+    """Summing the whole trace per token would put the quadratic
+    back as work rather than bytes."""
+    trace = _traced([(4, 0.25, 0.1), (5, 0.75, 0.2)])
+
+    assert trace.conf_sum == pytest.approx(1.0)
+    trace.check()
+
+
+def test_a_seeded_trace_rebuilds_its_sum() -> None:
+    """A substitution starts from a kept prefix. A sum left at zero
+    there would report a mean over positions the branch discarded."""
+    trace = _Trace()
+
+    trace.seed([1, 2], [0.4, 0.6], [0.1, 0.2], [None, None])
+
+    assert trace.conf_sum == pytest.approx(1.0)
+    trace.check()
+
+
+def test_a_drifted_sum_is_caught() -> None:
+    """The check exists because the sum is maintained by hand, and
+    a missed update is off by a whole confidence rather than by a
+    rounding bit."""
+    trace = _traced([(4, 0.25, 0.1)])
+    trace.conf_sum = 0.0
+
+    with pytest.raises(AssertionError):
+        trace.check()
 
 
 # -- streaming: capture placement and substitution splice --
@@ -531,8 +599,24 @@ def test_generate_emits_one_frame_per_token() -> None:
     frames = [f for f in out["frames"] if f["type"] == "frame"]
     assert len(frames) == 5
     assert [f["index"] for f in frames] == [1, 2, 3, 4, 5]
-    assert [len(f["tokens"]) for f in frames] == [1, 2, 3, 4, 5]
+    # One position each, where this used to read [1, 2, 3, 4, 5] and
+    # the sum of that column was the quadratic.
+    assert all("token" in f for f in frames)
+    assert all("tokens" not in f for f in frames)
     assert out["frames"][-1]["type"] == "done"
+
+
+def test_the_stream_spells_out_the_sequence_in_order() -> None:
+    """What the receiver assembles has to be the run. Appending the
+    positions in arrival order is the whole reconstruction, so a
+    stream that delivered them out of order or skipped one would
+    show up here rather than as wrong text on a page."""
+    out = _run_generate(alternatives=False, budget=5)
+    frames = [f for f in out["frames"] if f["type"] == "frame"]
+
+    assembled = [f["token"]["id"] for f in frames]
+
+    assert assembled == out["state"]["ids"]
 
 
 def test_the_done_frame_reports_the_prompts_length() -> None:
@@ -746,7 +830,11 @@ def test_the_seed_frame_carries_the_appended_row() -> None:
     )
     seed = result["frames"][0]
 
-    assert len(seed["tokens"]) == 3
+    # The seed adds the forced position and nothing else: the client
+    # has already cut its own run back to the splice point, so
+    # resending the kept prefix would be resending what it holds.
+    assert seed["index"] == 3
+    assert seed["token"]["id"] == outsider
     assert seed["alts"] is not None
     assert seed["alts"][-1]["id"] == outsider
     assert seed["alts"] == result["branch"]["alternatives"][2]
@@ -792,10 +880,12 @@ def test_substitute_emits_a_seed_frame_then_continues() -> None:
     frames = [
         f for f in result["frames"] if f["type"] == "frame"
     ]
-    # Seed frame covers positions 0..2 (index is 1-based), then one
-    # frame per regenerated token.
+    # The seed splices position 2 (index is 1-based), then one frame
+    # per regenerated token. The numbering is what the receiver
+    # checks itself against: it holds two positions after cutting to
+    # the splice point, so the next frame must be index 3.
     assert [f["index"] for f in frames] == [3, 4, 5, 6]
-    assert [len(f["tokens"]) for f in frames] == [3, 4, 5, 6]
+    assert all("token" in f for f in frames)
 
 
 def test_substitute_stays_within_the_token_budget() -> None:

@@ -77,10 +77,24 @@ def test_both_shapes_live_in_the_formatter() -> None:
 
 
 def test_the_live_path_uses_it() -> None:
-    body = _region("function handleFrame(data)", 3000)
+    body = _region("function updateLiveFrameStatus(data)", 900)
 
     assert "statusStep.textContent = stepReadout(" in body
     assert '"Resuming "' in body
+
+
+def test_both_frame_shapes_reach_the_live_path() -> None:
+    """A snapshot frame and an append frame put the same reading on
+    screen, because they call the same writer. Two copies of it
+    would be two chances for one shape's live line to drift from the
+    other's."""
+    for handler in (
+        "function handleFrame(data)",
+        "function handleAppendFrame(data)",
+    ):
+        assert "updateLiveFrameStatus(data);" in _region(
+            handler, 2000
+        ), handler
 
 
 def test_the_scrubber_uses_it() -> None:
@@ -98,10 +112,14 @@ def test_navigating_repaints_the_readout() -> None:
 
 
 def test_nothing_else_formats_the_reading() -> None:
-    # Two writers of the finished string, the formatter's callers.
-    # A third would be the drift this consolidation prevents. The
-    # session restore and the idle reset assign literals, which is
-    # not the same thing.
+    # Two writers of the finished string, the formatter's callers:
+    # the live line and the scrubbed one. A third would be the drift
+    # this consolidation prevents. The session restore and the idle
+    # reset assign literals, which is not the same thing.
+    #
+    # Both frame shapes go through the live writer rather than each
+    # bringing its own, which is the reason this still reads two
+    # after a second delivery shape arrived.
     source = _app()
     built = re.findall(
         r"statusStep\.textContent = stepReadout\(", source
@@ -120,7 +138,7 @@ def test_the_step_total_is_captured() -> None:
 
     assert "var lastRunTotalSteps = null;" in source
     assert "lastRunTotalSteps =" in _region(
-        "function handleFrame(data)", 3000
+        "function updateLiveFrameStatus(data)", 900
     )
 
 
@@ -131,7 +149,7 @@ def test_a_resume_does_not_claim_the_run_total() -> None:
     is the right figure for the live line and the wrong one for a
     scrubber counting the whole run.
     """
-    body = _region("function handleFrame(data)", 3000)
+    body = _region("function updateLiveFrameStatus(data)", 900)
     guarded = body.find("if (!isResuming) {")
     written = body.find("lastRunTotalSteps = frameSteps;")
 
@@ -144,7 +162,7 @@ def test_the_live_line_reads_the_frame_not_the_run() -> None:
     """Otherwise the guard above would freeze the live readout at
     the generation's total and "Resuming 12/64" would read
     "Resuming 12/128"."""
-    body = _region("function handleFrame(data)", 3000)
+    body = _region("function updateLiveFrameStatus(data)", 900)
     start = body.find("statusStep.textContent = stepReadout(")
     call = body[start : start + 220]
 

@@ -2149,3 +2149,54 @@ should restore a plain working window.
     renderer did not die and the cause is elsewhere. That is a
     genuinely useful negative: say so, because it rules out the
     hypothesis this work was built on.
+
+## Autoregressive frames that append (RUNTIME-01, stage one)
+
+SmolLM3 frames now carry the one position they added rather than the
+whole sequence so far, the browser keeps one flat list, and the
+server rebuilds the per-frame arrays on save. The stored files are
+byte-identical either way, pinned by
+`tests/web/test_append_expansion.py`, so **nothing about a saved run
+should look different**. That is what these items check: the change
+is supposed to be invisible except in how much it costs.
+
+The automated half covers reconstruction, the desync guard and the
+byte identity. What it cannot cover is a real model at a real length
+on real hardware, which is where the quota failure showed up in the
+first place.
+
+217. **A short run reads as it always did.** Generate 128 tokens with
+    SmolLM3. Scrub across the whole run: the text should grow by one
+    token per frame with no gaps or repeats, hover should give
+    candidates, and the entropy profile should be populated. This is
+    the boring one and it is the one most likely to catch a
+    reconstruction that is off by one.
+218. **The failure that started this.** Generate 2,048 tokens with
+    SmolLM3, let it finish, then navigate to Analytics and back.
+    Before this change the run came back with no hover, no
+    candidates and no entropy profile, because the session snapshot
+    exceeded the storage quota and fell back to a light payload. It
+    should now come back whole.
+    Worth timing while you are there: saving used to take 30 to 45
+    seconds with visible stutter and Analytics took about 10 seconds
+    to paint. Both should be markedly faster, though the stored file
+    is still the same size, so Analytics will not be *fast* until
+    stage two.
+219. **An edited run still compares.** Take a finished SmolLM3 run,
+    use What If to substitute a token partway through, let the
+    branch run out, and save. The Original/Edited crossfade, the
+    diff overlay and both elapsed series should read as before. The
+    baseline is stored flat now too, so this is where a mistake in
+    the pre-edit copy would show.
+220. **The substitution splice lands where it should.** During that
+    edit, watch the canvas at the moment the branch starts. The
+    forced token should appear at the position you chose, with the
+    text before it unchanged. The worker now sends only the forced
+    position rather than restating the kept prefix, so an off-by-one
+    here would show as the branch starting one token early or late.
+221. **A saved run opens unchanged in Analytics.** Open a run saved
+    before this change and one saved after, side by side. Both
+    should render identically: same token overlay, same charts, same
+    commit order. The point of expanding server-side is that
+    Analytics cannot tell which is which, and this is the only place
+    that claim is checked against a run that predates the change.

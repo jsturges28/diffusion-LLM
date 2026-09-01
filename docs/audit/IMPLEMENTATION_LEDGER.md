@@ -317,7 +317,7 @@ on real hardware.
 | LIFE-05 | high | M | partial | none | Single-instance the desktop launcher; host lease deferred, see Deviations |
 | TRUST-04 | medium | L | done | LIFE-04 (done) | Download is a child process now; absorbed ORG-02's download client |
 | DATA-02 | high | L | done | none | Lost-update slice, then the semantics: collections are server-owned operations |
-| RUNTIME-01 | medium | L | partial | ORG-02 + DATA-05 | Queue bound landed with LIFE-04; append-only frames remain |
+| RUNTIME-01 | medium | L | partial | none (reducer and store version both done) | Queue bound, then append frames on the wire and in the browser; stored size is stage two |
 | ORG-02 | medium | L | partial | none | State core verified; ES modules and server-rendered boot remain (download client went with TRUST-04) |
 | RUNTIME-03 | medium | S | blocked | ORG-02, paired | |
 | ROADMAP-01 | high | M | blocked | stage 6 order | |
@@ -1830,12 +1830,60 @@ slow reader can no longer turn the quadratic payload into unbounded
 worker memory, and a producer whose consumer has gone stops rather
 than parking forever.
 
-What remains is the finding proper, and the bound does not touch it:
-the append-only frame variant for monotonic AR and SSM streams, with
-client-side reconstruction and periodic checkpoints if random
-scrubbing needs bounded seek time. Diffusion keeps full snapshots,
-where prior positions genuinely change. Until then the payload is
-still quadratic; it is merely quadratic in a bounded pipe.
+**Stage one of the finding proper landed on 2026-09-01.** Frames now
+carry the one position they added, the browser keeps one flat list
+instead of a snapshot per frame, and the server rebuilds the
+per-frame arrays on save so nothing downstream can tell. Measured by
+`scripts/measure_frame_payload.py`, committed for the purpose:
+
+| tokens | wire, append | wire, before | post, append | post, before |
+| ------ | ------------ | ------------ | ------------ | ------------ |
+| 128    | 0.02 MiB     | 0.54 MiB     | 0.01 MiB     | 0.49 MiB     |
+| 256    | 0.05 MiB     | 2.13 MiB     | 0.02 MiB     | 1.94 MiB     |
+| 1,024  | 0.20 MiB     | 33.56 MiB    | 0.06 MiB     | 30.93 MiB    |
+| 2,048  | 0.39 MiB     | 133.93 MiB   | 0.12 MiB     | 123.66 MiB   |
+
+Per doubling of run length the append stream grows by 2.01 and the
+snapshot stream by 3.99, which is the linear-against-quadratic claim
+stated as a ratio rather than as a hope.
+
+**Two things the report expected did not survive contact.**
+
+The Direction hedges: "using periodic checkpoints if random scrubbing
+needs bounded seek time." That condition does not hold, and the
+reason is worth keeping. Checkpoints are for a stream of *mutations*,
+where reaching frame N means replaying from the last known-good
+state. An autoregressive frame is a **prefix**, so frame N is the
+first N+1 entries of one array and reaching it is a slice. Seek was
+already bounded, and an entire subsystem the plan had budgeted for
+was deleted before it was written.
+
+The report also frames this as a wire and queue problem, and its
+evidence is mostly sampler and registry lines. The failure the
+maintainer actually hit was in the browser, at the sessionStorage
+quota. A fix that only compacted the wire would have left the symptom
+exactly where it was, so the client's store is where most of the work
+went. `runFramesLackDetail` is now unreachable for an append run
+rather than merely untriggered: there is no lighter form of a linear
+store to fall back to.
+
+**What an append protocol costs, and how it is paid.** A snapshot
+stream is self-healing, because every frame restates everything: a
+dropped frame is one bad render and the next one repairs it. An
+append stream is not. A gap shifts every later position by one and
+the page reads as fluent text the model never produced, which is the
+worst available failure, being both silent and plausible. So each
+frame carries its arrival number, the client checks it against what
+it holds, and a mismatch stops the run through the `PROTOCOL-01`
+scoped-error path rather than being absorbed.
+
+Disk is deliberately untouched. `tokens.json`, `frames.jsonl` and
+`history.txt` come out byte-identical, pinned by
+`tests/web/test_append_expansion.py`, which saves the same run in
+both shapes and compares the files. That keeps the schema version,
+Analytics, and 238 existing runs entirely outside this change.
+**Stage two is where stored size changes**, and it is the one that
+turns that 123.66 MiB column into single digits.
 
 ### Found while verifying and fixed: saving one run twice
 

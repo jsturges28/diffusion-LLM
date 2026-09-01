@@ -1711,7 +1711,19 @@ function stepReadout(step, canvasIndex, totalSteps, prefix) {
   return prefix + step + ", Canvas " + (canvas + 1);
 }
 
+// A frame that carries the one position it added rather than the
+// whole sequence. Sent by models that only ever grow their output,
+// where a settled position never moves and the receiver holding the
+// prefix already holds everything the old snapshot restated.
+function frameIsAppend(data) {
+  return data.shape === "append";
+}
+
 function handleFrame(data) {
+  if (frameIsAppend(data)) {
+    handleAppendFrame(data);
+    return;
+  }
   // Candidate sets ride only the frame that introduces their
   // position (the frame's last token), so accumulate by position.
   if (data.alts && data.tokens && data.tokens.length > 0) {
@@ -1752,15 +1764,67 @@ function handleFrame(data) {
     renderFrame(data.text);
   }
 
-  // Two numbers wearing one name until they were told apart. A
-  // frame carries its own segment's budget, which is what makes
-  // "Resuming 12/64" mean something while a branch runs. The
-  // scrubber wants the whole run's total, so only a generation
-  // writes that one down: a resume reports the steps it has left,
-  // and letting that through left a finished run measured against
-  // its last branch. An edit at frame 64 of 128 then scrubbed to
-  // "Step 128/64", and a branch abandoned with Retry left the
-  // denominator of a run that no longer existed on screen.
+  updateLiveFrameStatus(data);
+}
+
+// One position arrives; the run grows by one frame.
+//
+// The rendering half is deliberately unchanged: `renderLiveFrame`
+// still gets the whole sequence, because that is what drawing a
+// canvas needs, and assembling it from the store is a slice. What
+// changed is that the slice happens here instead of arriving over
+// the wire N times.
+function handleAppendFrame(data) {
+  var position = data.index - 1;
+  if (data.alts) {
+    positionAlts[position] = data.alts;
+  }
+  try {
+    runFramesAppendPosition(runFrames, {
+      index: data.index,
+      token: data.token,
+      canvasIndex:
+        typeof data.canvas_index === "number"
+          ? data.canvas_index
+          : 0,
+      meanConf:
+        typeof data.mean_conf === "number" ? data.mean_conf : null,
+      elapsed:
+        typeof data.elapsed === "number"
+          ? +(data.elapsed + resumeElapsedOffset).toFixed(2)
+          : lastElapsedOr(resumeElapsedOffset),
+      revealed: data.revealed ? data.revealed.length : 0,
+    });
+  } catch (error) {
+    // A gap in an append stream is not survivable the way a gap in
+    // a snapshot stream was. Every later position would shift by
+    // one and the page would show fluent text the model never
+    // produced, which is the failure worth refusing outright: it
+    // looks like a result.
+    reportRunDesync(error);
+    return;
+  }
+
+  var assembled = runFramesTokensLast(runFrames);
+  renderLiveFrame(assembled, data.revealed);
+  updateLiveFrameStatus(data);
+}
+
+// The step reading and the footer, for whichever shape delivered the
+// frame. Shared rather than written twice: the two numbers below
+// were told apart once already, and a second copy of that reasoning
+// is a second place for them to drift back together.
+//
+// Two numbers wearing one name until they were told apart. A frame
+// carries its own segment's budget, which is what makes
+// "Resuming 12/64" mean something while a branch runs. The scrubber
+// wants the whole run's total, so only a generation writes that one
+// down: a resume reports the steps it has left, and letting that
+// through left a finished run measured against its last branch. An
+// edit at frame 64 of 128 then scrubbed to "Step 128/64", and a
+// branch abandoned with Retry left the denominator of a run that no
+// longer existed on screen.
+function updateLiveFrameStatus(data) {
   var frameSteps =
     typeof data.total_steps === "number"
       ? data.total_steps
@@ -1775,6 +1839,22 @@ function handleFrame(data) {
     isResuming ? "Resuming " : "Step "
   );
   updateRunRateFooter();
+}
+
+// Stop the run and say why, rather than carrying on with a canvas
+// that no longer describes the generation. Routed through the same
+// scoped-error path a worker error takes, so it ends the run and
+// leaves the page usable instead of tearing down the session.
+function reportRunDesync(error) {
+  var detail = error && error.message ? error.message : "unknown";
+  handleError({
+    type: "error",
+    scope: "run",
+    code: "frame_desync",
+    message:
+      "The run's frames arrived out of order, so it was stopped"
+      + " rather than shown incorrectly (" + detail + ").",
+  });
 }
 
 // Rebuild the step reading for a frame the user scrubbed to. The
@@ -6576,6 +6656,44 @@ function cleanCanvasIndex(arr, frameCount) {
   return arr.slice();
 }
 
+// How a run's frames go on the wire at save time.
+//
+// A snapshot run sends what it holds. An append run sends its
+// positions, and the server rebuilds the per-frame text and token
+// arrays before anything is written, so what lands on disk is
+// byte-for-byte what a snapshot run would have written. That keeps
+// the saved format, its version, and everything in Analytics out of
+// this change entirely.
+//
+// Sending the expanded form from here instead would mean building
+// the quadratic in the browser at the exact moment the run is
+// largest, which is the cost this exists to avoid: it is not the
+// storing that hurt, it is the holding.
+function addRunFrameFields(payload, frames) {
+  if (!runFramesIsAppend(frames)) {
+    payload.frames = frames.history;
+    payload.frame_tokens = tokenRecordsFrom(frames.tokens);
+    return;
+  }
+  payload.frame_positions = positionRecordsFrom(frames.positions);
+}
+
+// The same projection `tokenRecordsFrom` does, over the flat run.
+// Kept separate rather than folded in, because one takes frames of
+// tokens and the other takes tokens, and a function that accepted
+// either would have to guess which it was given.
+function positionRecordsFrom(positions) {
+  var out = [];
+  for (var i = 0; i < positions.length; i++) {
+    var token = positions[i];
+    var record = { t: token.t, m: !!token.m, id: token.id };
+    if (typeof token.c === "number") { record.c = token.c; }
+    if (typeof token.e === "number") { record.e = token.e; }
+    out.push(record);
+  }
+  return out;
+}
+
 function tokenRecordsFrom(frames) {
   var out = [];
   for (var fi = 0; fi < frames.length; fi++) {
@@ -6778,13 +6896,12 @@ function saveRun() {
     model: activeModelId,
     prompt: promptInput.value.trim(),
     params: lastRunParams || getParamValues(),
-    frames: runFrames.history,
     final_text: lastFinalText,
     elapsed_seconds: totalElapsed,
     per_frame_elapsed: runFrames.elapsed.slice(),
-    frame_tokens: tokenRecordsFrom(runFrames.tokens),
     mean_conf: runFrames.meanConf.slice(),
   };
+  addRunFrameFields(payload, runFrames);
 
   // The sampler's own figure, not the readout's. Omitted rather than
   // guessed when the run reported none, so the saved run either
@@ -6839,7 +6956,16 @@ function saveRun() {
     payload.remask_edits = remaskEdits;
     // Persist the pre-edit snapshot so the counterfactual diff is
     // reviewable post-hoc (only meaningful for edited runs).
-    if (originalRun.tokens.length > 0) {
+    if (originalRunIsAppend(originalRun)) {
+      // An edited run used to pay the quadratic twice: the baseline
+      // is a frozen copy of the same frames, and on disk
+      // original_tokens.json came out nearly as large as
+      // tokens.json. It is one flat run here too.
+      if (originalRun.positions.length > 0) {
+        payload.original_frame_positions =
+          positionRecordsFrom(originalRun.positions);
+      }
+    } else if (originalRun.tokens.length > 0) {
       payload.original_frame_tokens =
         tokenRecordsFrom(originalRun.tokens);
     }

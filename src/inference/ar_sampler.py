@@ -18,14 +18,19 @@ undecided the model was over the whole vocabulary, not how likely
 the token it chose was. Per-position **top-k alternatives** are
 opt-in, mirroring DiffusionGemma's entropy-signal toggle.
 
-Note on payload size: full-snapshot frames make the streamed
-payload O(n^2) in the token count. This is fine for the few-hundred
-token budgets used here (see the registry's recommended cap) and is
-revisited only if long AR runs are added. Alternatives deliberately
-do NOT ride every snapshot (see ``_build_frame``), which would
-multiply that by k. The producer queue is bounded so that slope
-cannot become unbounded worker memory when a client reads slowly;
-see ``src/inference/frame_queue.py``.
+Note on payload size: frames carry the one position they added, not
+the whole sequence, so the streamed payload is linear in the token
+count rather than O(n^2). Decoding runs strictly left to right and
+never revisits a settled position, which is what makes that sound
+here and what makes it wrong for diffusion, where a denoising step
+does revise positions behind the newest one.
+
+The snapshot the client assembles from those frames is identical to
+the one this file used to send; the server rebuilds it again on save
+so nothing downstream can tell. Alternatives ride only the frame
+that introduces their position, for the same reason. The producer
+queue is bounded so a slow reader cannot turn the stream into
+unbounded worker memory; see ``src/inference/frame_queue.py``.
 """
 
 from __future__ import annotations
@@ -385,66 +390,72 @@ def _sample_next(
     )
 
 
-def _build_frame(
+# Frame shapes, named on the frame itself.
+#
+# A snapshot frame carries every position; an append frame carries
+# the one position it added. Which a model sends is a property of how
+# it generates, not of the message, but putting the name in the
+# message is what lets a reader understand a frame without also
+# holding the registry entry that produced it.
+#
+# Absent means snapshot. Diffusion sends no shape and keeps sending
+# whole canvases, because a denoising step really does revise
+# positions behind the newest one.
+FRAME_SHAPE_KEY = "shape"
+FRAME_SHAPE_APPEND = "append"
+
+
+def _build_append_frame(
     tokenizer: Any,
-    ids: List[int],
-    confs: List[float],
-    entropies: List[float],
+    trace: "_Trace",
     *,
     frame_index: int,
     total_steps: int,
-    newest_alternatives: Optional[List[Dict[str, Any]]] = None,
+    conf_sum: float,
 ) -> Dict[str, Any]:
-    """Build one full-snapshot protocol frame for the growing sequence."""
-    assert len(ids) == len(confs), "ids/confs length mismatch"
-    assert len(ids) == len(entropies), "ids/entropy mismatch"
-    tokens: List[Dict[str, Any]] = []
-    text_parts: List[str] = []
-    conf_sum = 0.0
-    for i, token_id in enumerate(ids):
-        display = _sanitize(
-            tokenizer.decode(
-                [token_id], skip_special_tokens=False
-            )
-        )
-        confidence = confs[i]
-        conf_sum += confidence
-        tokens.append(
-            {
-                "t": display,
-                "m": False,
-                "id": int(token_id),
-                "c": round(confidence, 4),
-                "e": round(entropies[i], 4),
-            }
-        )
-        text_parts.append(display)
-    count = len(ids)
+    """Build the frame that adds one position to the sequence.
+
+    The same information as the snapshot the client can already
+    assemble, minus everything it already has. Decoding runs strictly
+    left to right and nothing revisits a settled position, so the
+    receiver holding positions 0..n-1 plus this one holds exactly
+    what the snapshot would have said.
+
+    ``conf_sum`` is passed in rather than summed here because summing
+    the trace on every token is the same O(n^2) this exists to
+    remove, in work instead of bytes.
+    """
+    assert 0 <= frame_index < len(trace.ids), "index off the trace"
+    assert conf_sum >= 0.0, "confidence sum cannot be negative"
+    token_id = trace.ids[frame_index]
+    display = _sanitize(
+        tokenizer.decode([token_id], skip_special_tokens=False)
+    )
+    count = frame_index + 1
     frame: Dict[str, Any] = {
         "type": "frame",
-        # 1-based to match the diffusion step convention (the frontend
-        # prints ``index`` verbatim): the first token reads "Step 1" and
-        # a full run of N tokens ends at "Step N/N", not "N-1/N".
-        "index": frame_index + 1,
+        FRAME_SHAPE_KEY: FRAME_SHAPE_APPEND,
+        # 1-based, as the snapshot shape is, and doing double duty
+        # here: the client checks it against how many positions it
+        # holds. A snapshot protocol repairs itself on the next
+        # frame, an append protocol does not, so a gap has to be
+        # caught rather than absorbed.
+        "index": count,
         "total_steps": total_steps,
         "canvas_index": 0,
-        "mean_conf": (
-            round(conf_sum / count, 4) if count else 0.0
-        ),
-        "text": "".join(text_parts),
-        "tokens": tokens,
-        # Decoding is strictly left to right, so the frame that grows
-        # the sequence to n tokens is the one that just produced
-        # position n-1, and no earlier position can change.
-        "revealed": [count - 1] if count else [],
+        "mean_conf": round(conf_sum / count, 4),
+        "token": {
+            "t": display,
+            "m": False,
+            "id": int(token_id),
+            "c": round(trace.confs[frame_index], 4),
+            "e": round(trace.entropies[frame_index], 4),
+        },
+        "revealed": [frame_index],
     }
-    if newest_alternatives is not None:
-        # A position's candidate set is fixed the moment it is
-        # sampled and never revised, so it rides only the frame that
-        # introduces that position (always the last token here) and
-        # the client accumulates. Repeating it on every snapshot
-        # would multiply an already O(n^2) payload by k.
-        frame["alts"] = newest_alternatives
+    alternatives = trace.alts[frame_index]
+    if alternatives is not None:
+        frame["alts"] = alternatives
     return frame
 
 
@@ -486,12 +497,41 @@ class _Trace:
         self.confs: List[float] = []
         self.entropies: List[float] = []
         self.alts: List[Optional[List[Dict[str, Any]]]] = []
+        # Running, so a frame can report the mean without walking
+        # every position it already reported. Summing per token is
+        # the same quadratic the append shape exists to remove, paid
+        # in work rather than in bytes.
+        self.conf_sum: float = 0.0
 
     def append(self, pick: _StepPick) -> None:
         self.ids.append(pick.token_id)
         self.confs.append(pick.confidence)
         self.entropies.append(pick.entropy)
         self.alts.append(pick.alternatives)
+        self.conf_sum += pick.confidence
+
+    def seed(
+        self,
+        ids: List[int],
+        confs: List[float],
+        entropies: List[float],
+        alts: List[Optional[List[Dict[str, Any]]]],
+    ) -> None:
+        """Start from a kept prefix rather than from nothing.
+
+        A method rather than four assignments at the call site,
+        because the running sum has to be rebuilt alongside them and
+        a caller that set the lists directly would leave it reading
+        zero for a prefix of real confidences.
+        """
+        assert len(ids) == len(confs), "seed conf misalign"
+        assert len(ids) == len(entropies), "seed entropy misalign"
+        assert len(ids) == len(alts), "seed alts misalign"
+        self.ids = list(ids)
+        self.confs = list(confs)
+        self.entropies = list(entropies)
+        self.alts = list(alts)
+        self.conf_sum = sum(self.confs)
 
     def check(self) -> None:
         assert len(self.ids) == len(self.confs), "conf misalign"
@@ -499,6 +539,14 @@ class _Trace:
             "entropy misalign"
         )
         assert len(self.ids) == len(self.alts), "alts misalign"
+        # Tolerant, because the running total adds in decode order
+        # while this adds in list order and float addition is not
+        # associative. The check is for a missed update, which is off
+        # by a whole confidence, not for the last bits.
+        drift = abs(self.conf_sum - sum(self.confs))
+        assert drift < 1e-6, (
+            f"running confidence sum drifted by {drift}"
+        )
 
 
 def _stream_tokens(
@@ -570,14 +618,12 @@ def _stream_tokens(
             trace.append(pick)
             delivered = frame_queue_put(
                 out_queue,
-                _build_frame(
+                _build_append_frame(
                     tokenizer,
-                    trace.ids,
-                    trace.confs,
-                    trace.entropies,
+                    trace,
                     frame_index=frame_index,
                     total_steps=total_steps,
-                    newest_alternatives=pick.alternatives,
+                    conf_sum=trace.conf_sum,
                 ),
                 stop_event=cancel_event,
             )
@@ -806,14 +852,12 @@ def _emit_seed_frame(
     """
     frame_queue_put(
         out_queue,
-        _build_frame(
+        _build_append_frame(
             tokenizer,
-            trace.ids,
-            trace.confs,
-            trace.entropies,
+            trace,
             frame_index=position,
             total_steps=total_steps,
-            newest_alternatives=trace.alts[position],
+            conf_sum=trace.conf_sum,
         ),
         stop_event=cancel_event,
     )
@@ -848,22 +892,26 @@ def _forced_trace(
     land on a captured candidate by coincidence.
     """
     trace = _Trace()
-    trace.ids = list(prefix_ids)
-    trace.confs = list(prefix_confs)
-    trace.entropies = list(prefix_entropies)
-    trace.alts = list(prefix_alts)
-    trace.ids.append(forced_id)
-    trace.confs.append(
-        true_conf if forced_conf is None else forced_conf
+    trace.seed(
+        list(prefix_ids),
+        list(prefix_confs),
+        list(prefix_entropies),
+        list(prefix_alts),
     )
-    trace.entropies.append(forced_entropy)
-    trace.alts.append(
-        _forced_candidates(
-            forced_alts,
-            forced_id=forced_id,
-            true_conf=true_conf,
-            forced_rank=forced_rank,
-            tokenizer=tokenizer,
+    trace.append(
+        _StepPick(
+            token_id=forced_id,
+            confidence=(
+                true_conf if forced_conf is None else forced_conf
+            ),
+            entropy=forced_entropy,
+            alternatives=_forced_candidates(
+                forced_alts,
+                forced_id=forced_id,
+                true_conf=true_conf,
+                forced_rank=forced_rank,
+                tokenizer=tokenizer,
+            ),
         )
     )
     trace.check()

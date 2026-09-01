@@ -56,8 +56,43 @@ var RUN_FRAME_JSON_KEYS = {
 // its timings; the other three are per-token detail.
 var RUN_FRAME_LIGHT_FIELDS = ["history", "elapsed", "revealed"];
 
+// One value per frame whichever way the run is stored. The other two,
+// `history` and `tokens`, describe a frame's whole contents and so
+// exist only for a snapshot run.
+var RUN_FRAME_SCALAR_FIELDS = [
+  "canvasIndex",
+  "meanConf",
+  "elapsed",
+  "revealed",
+];
+
+// How a run's frames are kept.
+//
+// SNAPSHOT is the original: `history` and `tokens` carry one entry
+// per frame, each holding the whole sequence as it stood. Diffusion
+// needs it, because a denoising step revises positions behind the
+// newest one, so there is no smaller truthful description of a
+// frame than the frame.
+//
+// APPEND is for a run that only ever grows. Decoding left to right
+// never disturbs a settled position, so the run is one flat list of
+// positions and frame N is its first N+1 entries. `history` and
+// `tokens` stay empty and the readers assemble what they need. The
+// difference is N records against N(N+1)/2: at 2,048 tokens, 2,048
+// against 2,098,176.
+var RUN_FRAME_SHAPE_SNAPSHOT = "snapshot";
+var RUN_FRAME_SHAPE_APPEND = "append";
+
 function runFramesCreate() {
   return {
+    shape: RUN_FRAME_SHAPE_SNAPSHOT,
+    // How many frames the run has. Its own field rather than a
+    // length read off `history`, which stopped being the frame count
+    // the moment a shape existed that does not store one text per
+    // frame.
+    count: 0,
+    // APPEND only: one entry per token, in decode order.
+    positions: [],
     history: [],
     tokens: [],
     canvasIndex: [],
@@ -68,17 +103,31 @@ function runFramesCreate() {
 }
 
 function runFramesLength(frames) {
-  return frames.history.length;
+  return frames.count;
+}
+
+function runFramesIsAppend(frames) {
+  return frames.shape === RUN_FRAME_SHAPE_APPEND;
 }
 
 // Every array is either empty or as long as `history`. Empty is
 // allowed because a snapshot that hit the storage quota carries only
 // three of the six, and the page still renders from those.
 function runFramesAligned(frames) {
-  var count = frames.history.length;
+  var count = frames.count;
   for (var i = 0; i < RUN_FRAME_FIELDS.length; i++) {
     var arr = frames[RUN_FRAME_FIELDS[i]];
     if (arr.length !== 0 && arr.length !== count) {
+      return false;
+    }
+  }
+  // An append run's positions are the frames: one is added per
+  // frame, so a run holding a different number of them has lost or
+  // gained one and every frame after that point would assemble
+  // wrong.
+  if (runFramesIsAppend(frames)) {
+    if (frames.positions.length !== 0
+      && frames.positions.length !== count) {
       return false;
     }
   }
@@ -95,9 +144,14 @@ function runFramesAligned(frames) {
 // frame, so its array is as long as the rest. Only a restore leaves
 // the array empty beside a populated history.
 function runFramesLackDetail(frames) {
-  return (
-    frames.history.length > 0 && frames.tokens.length === 0
-  );
+  if (runFramesIsAppend(frames)) {
+    // An append run's detail is its positions, and they are the
+    // whole run: there is no lighter form of it to fall back to,
+    // which is the point. The full store is small enough to keep,
+    // so a restore either has the run or has nothing.
+    return frames.count > 0 && frames.positions.length === 0;
+  }
+  return frames.count > 0 && frames.tokens.length === 0;
 }
 
 // ---- Reading one frame ----
@@ -106,20 +160,30 @@ function runFramesLackDetail(frames) {
 // indexing the arrays, so how a frame is *stored* stops being
 // something the page knows.
 //
-// Today they are the indexing they replace, and that is the point:
-// the seam has to exist before anything can move behind it. What
-// moves is the cost. A frame here carries the whole sequence as it
-// stood, so an N-token autoregressive run keeps N(N+1)/2 token
-// records, which at 2,048 tokens is 2,098,176 of them. A run that
-// only ever grows does not need that, because a settled position
-// never moves and frame N is the first N+1 positions of one flat
-// list. Diffusion does need it, because a denoising step revises
-// positions behind the newest one.
+// That distinction is the point. An autoregressive frame is a prefix
+// of the next one, never a rewrite, so the same run can be kept as
+// one flat list of positions instead of a snapshot per frame: the
+// difference between N records and N(N+1)/2 of them, which at 2,048
+// tokens is 2,048 against 2,098,176. Diffusion cannot be kept that
+// way, because a denoising step really does change positions behind
+// the newest one, so it keeps its snapshots. Two storage shapes, one
+// way to read them.
 //
 // Callers ask for a frame and get an array; whether that array was
 // stored or assembled is not their business.
 
 function runFramesTokensAt(frames, index) {
+  if (runFramesIsAppend(frames)) {
+    if (index < 0 || index >= frames.positions.length) {
+      return null;
+    }
+    // The reconstruction, and all of it. Frame N is the run's first
+    // N+1 positions, so this is a slice rather than a replay, which
+    // is why the audit's "periodic checkpoints if random scrubbing
+    // needs bounded seek time" does not apply: seek is already one
+    // copy of what the caller was going to read anyway.
+    return frames.positions.slice(0, index + 1);
+  }
   var stored = frames.tokens[index];
   return stored === undefined ? null : stored;
 }
@@ -132,10 +196,23 @@ function runFramesTokensAt(frames, index) {
 // arrives with fewer token arrays than frames. Asking for the last
 // one there is answerable; asking for index `length - 1` is not.
 function runFramesTokensLast(frames) {
+  if (runFramesIsAppend(frames)) {
+    return runFramesTokensAt(frames, frames.positions.length - 1);
+  }
   return runFramesTokensAt(frames, frames.tokens.length - 1);
 }
 
 function runFramesTextAt(frames, index) {
+  if (runFramesIsAppend(frames)) {
+    if (index < 0 || index >= frames.positions.length) {
+      return null;
+    }
+    var parts = [];
+    for (var i = 0; i <= index; i++) {
+      parts.push(frames.positions[i].t);
+    }
+    return parts.join("");
+  }
   var stored = frames.history[index];
   return stored === undefined ? null : stored;
 }
@@ -144,16 +221,41 @@ function runFramesTextAt(frames, index) {
 // and crossfade overlays put a live frame and a baseline frame side
 // by side, so a difference in how they are reached would show up as
 // a difference in what they mean.
+function originalRunIsAppend(original) {
+  return original.shape === RUN_FRAME_SHAPE_APPEND;
+}
+
 function originalRunTokensAt(original, index) {
+  if (originalRunIsAppend(original)) {
+    if (index < 0 || index >= original.positions.length) {
+      return null;
+    }
+    return original.positions.slice(0, index + 1);
+  }
   var stored = original.tokens[index];
   return stored === undefined ? null : stored;
 }
 
 function originalRunTokensLast(original) {
+  if (originalRunIsAppend(original)) {
+    return originalRunTokensAt(
+      original, original.positions.length - 1
+    );
+  }
   return originalRunTokensAt(original, original.tokens.length - 1);
 }
 
 function originalRunTextAt(original, index) {
+  if (originalRunIsAppend(original)) {
+    if (index < 0 || index >= original.positions.length) {
+      return null;
+    }
+    var parts = [];
+    for (var i = 0; i <= index; i++) {
+      parts.push(original.positions[i].t);
+    }
+    return parts.join("");
+  }
   var stored = original.history[index];
   return stored === undefined ? null : stored;
 }
@@ -205,7 +307,44 @@ function runFramesAppend(frames, entry) {
   frames.meanConf.push(entry.meanConf);
   frames.elapsed.push(entry.elapsed);
   frames.revealed.push(entry.revealed);
+  frames.count += 1;
   runFramesAssertAligned(frames, "append");
+}
+
+// One position, which for an append run is also one frame.
+//
+// The frame's own arrival number is checked against what the run
+// already holds, and a disagreement throws. A snapshot protocol
+// repairs itself: a frame that went missing costs one bad render and
+// the next one puts it right, because every frame restates
+// everything. An append protocol has no such property. A gap here
+// would shift every later position by one and the run would read as
+// fluent text the model never produced, which is the worst way for
+// this to fail: silently, and plausibly.
+function runFramesAppendPosition(frames, entry) {
+  runFramesAssertAligned(frames, "append position entry");
+  if (frames.count === 0 && frames.positions.length === 0) {
+    frames.shape = RUN_FRAME_SHAPE_APPEND;
+  }
+  if (!runFramesIsAppend(frames)) {
+    throw new Error(
+      "cannot append a position to a snapshot run"
+    );
+  }
+  var expected = frames.positions.length + 1;
+  if (entry.index !== expected) {
+    throw new Error(
+      "run frames arrived out of order: expected position "
+      + expected + ", got " + entry.index
+    );
+  }
+  frames.positions.push(entry.token);
+  frames.canvasIndex.push(entry.canvasIndex);
+  frames.meanConf.push(entry.meanConf);
+  frames.elapsed.push(entry.elapsed);
+  frames.revealed.push(entry.revealed);
+  frames.count += 1;
+  runFramesAssertAligned(frames, "append position");
 }
 
 // Cut back to `count` frames so a branch appends cleanly at that
@@ -216,9 +355,26 @@ function runFramesAppend(frames, entry) {
 // own length check.
 function runFramesTruncate(frames, count) {
   runFramesAssertAligned(frames, "truncate entry");
-  for (var i = 0; i < RUN_FRAME_FIELDS.length; i++) {
-    frames[RUN_FRAME_FIELDS[i]].length = count;
+  if (runFramesIsAppend(frames)) {
+    // `history` and `tokens` are empty for an append run and have to
+    // stay that way. The hole extension below is a repair for a
+    // light restore, where those arrays were dropped and the rest
+    // were kept; applying it to a run that never had them
+    // manufactures a frame count out of nothing, and the next append
+    // then finds five arrays saying one thing and positions saying
+    // another. That is what broke What If: the truncate before a
+    // substitution left two holes beside two real positions, and the
+    // seed frame landed on a family already out of step.
+    frames.positions.length = count;
+    for (var s = 0; s < RUN_FRAME_SCALAR_FIELDS.length; s++) {
+      frames[RUN_FRAME_SCALAR_FIELDS[s]].length = count;
+    }
+  } else {
+    for (var i = 0; i < RUN_FRAME_FIELDS.length; i++) {
+      frames[RUN_FRAME_FIELDS[i]].length = count;
+    }
   }
+  frames.count = count;
   runFramesAssertAligned(frames, "truncate");
 }
 
@@ -226,15 +382,21 @@ function runFramesClear(frames) {
   for (var i = 0; i < RUN_FRAME_FIELDS.length; i++) {
     frames[RUN_FRAME_FIELDS[i]] = [];
   }
+  frames.positions = [];
+  frames.count = 0;
+  // Back to snapshot, because the next run decides its own shape and
+  // a family that stayed append would refuse a diffusion frame.
+  frames.shape = RUN_FRAME_SHAPE_SNAPSHOT;
 }
 
 function runFramesSnapshot(frames) {
   runFramesAssertAligned(frames, "snapshot");
-  var copy = {};
+  var copy = { shape: frames.shape, count: frames.count };
   for (var i = 0; i < RUN_FRAME_FIELDS.length; i++) {
     var name = RUN_FRAME_FIELDS[i];
     copy[name] = frames[name].slice();
   }
+  copy.positions = frames.positions.slice();
   return copy;
 }
 
@@ -247,6 +409,13 @@ function runFramesRestore(frames, snapshot) {
     var name = RUN_FRAME_FIELDS[i];
     frames[name] = (snapshot[name] || []).slice();
   }
+  frames.positions = (snapshot.positions || []).slice();
+  frames.shape = snapshot.shape || RUN_FRAME_SHAPE_SNAPSHOT;
+  frames.count = typeof snapshot.count === "number"
+    ? snapshot.count
+    // Older snapshots predate the count and are all snapshot-shaped,
+    // where the number of texts was the number of frames.
+    : (snapshot.history || []).length;
   runFramesAssertAligned(frames, "restore");
 }
 
@@ -257,6 +426,16 @@ function runFramesToJson(frames, fields) {
   var out = {};
   for (var i = 0; i < names.length; i++) {
     out[RUN_FRAME_JSON_KEYS[names[i]]] = frames[names[i]];
+  }
+  out.frameShape = frames.shape;
+  out.frameCount = frames.count;
+  if (runFramesIsAppend(frames)) {
+    // Written even for the light field set. On an append run the
+    // positions *are* the light payload: the whole store is linear,
+    // so there is nothing to drop and no reason to drop it. That is
+    // what retires the degraded restore rather than merely making
+    // it rarer.
+    out.framePositions = frames.positions;
   }
   return out;
 }
@@ -271,6 +450,17 @@ function runFramesFromJson(source) {
     var stored = source[RUN_FRAME_JSON_KEYS[name]];
     frames[name] = Array.isArray(stored) ? stored : [];
   }
+  frames.positions = Array.isArray(source.framePositions)
+    ? source.framePositions
+    : [];
+  frames.shape = source.frameShape === RUN_FRAME_SHAPE_APPEND
+    ? RUN_FRAME_SHAPE_APPEND
+    : RUN_FRAME_SHAPE_SNAPSHOT;
+  frames.count = typeof source.frameCount === "number"
+    ? source.frameCount
+    // A snapshot written before shapes existed, where one text per
+    // frame was the only arrangement there was.
+    : frames.history.length;
   return frames;
 }
 
@@ -312,6 +502,12 @@ function originalRunCreate() {
     // nothing has been captured, which is also the gate every
     // comparison checks before reading the arrays below.
     totalFrames: 0,
+    // Carried from the live run it was frozen from. Without it the
+    // baseline would keep snapshots for a run the live side keeps as
+    // positions, and an edited run would pay the quadratic on the
+    // copy after paying nothing on the original.
+    shape: RUN_FRAME_SHAPE_SNAPSHOT,
+    positions: [],
     history: [],
     tokens: [],
     elapsed: [],
@@ -332,7 +528,9 @@ function originalRunCapture(original, frames, positionAlts) {
   if (originalRunCaptured(original)) {
     return;
   }
-  original.totalFrames = frames.history.length;
+  original.totalFrames = frames.count;
+  original.shape = frames.shape;
+  original.positions = frames.positions.slice();
   original.history = frames.history.slice();
   original.tokens = frames.tokens.slice();
   original.elapsed = frames.elapsed.slice();
@@ -342,13 +540,21 @@ function originalRunCapture(original, frames, positionAlts) {
 
 function originalRunClear(original) {
   original.totalFrames = 0;
+  original.shape = RUN_FRAME_SHAPE_SNAPSHOT;
+  original.positions = [];
   for (var i = 0; i < ORIGINAL_RUN_FIELDS.length; i++) {
     original[ORIGINAL_RUN_FIELDS[i]] = [];
   }
 }
 
 function originalRunToJson(original) {
-  var out = { originalTotalFrames: original.totalFrames };
+  var out = {
+    originalTotalFrames: original.totalFrames,
+    originalFrameShape: original.shape,
+  };
+  if (original.shape === RUN_FRAME_SHAPE_APPEND) {
+    out.originalFramePositions = original.positions;
+  }
   for (var i = 0; i < ORIGINAL_RUN_FIELDS.length; i++) {
     var name = ORIGINAL_RUN_FIELDS[i];
     out[ORIGINAL_RUN_JSON_KEYS[name]] = original[name];
@@ -362,6 +568,14 @@ function originalRunToJson(original) {
 function originalRunFromJson(source, fallbackTotal) {
   var original = originalRunCreate();
   original.totalFrames = source.originalTotalFrames || fallbackTotal;
+  original.shape =
+    source.originalFrameShape === RUN_FRAME_SHAPE_APPEND
+      ? RUN_FRAME_SHAPE_APPEND
+      : RUN_FRAME_SHAPE_SNAPSHOT;
+  original.positions =
+    Array.isArray(source.originalFramePositions)
+      ? source.originalFramePositions
+      : [];
   for (var i = 0; i < ORIGINAL_RUN_FIELDS.length; i++) {
     var name = ORIGINAL_RUN_FIELDS[i];
     var stored = source[ORIGINAL_RUN_JSON_KEYS[name]];
@@ -376,6 +590,8 @@ function originalRunFromJson(source, fallbackTotal) {
 function originalRunRestore(original, source, fallbackTotal) {
   var parsed = originalRunFromJson(source, fallbackTotal);
   original.totalFrames = parsed.totalFrames;
+  original.shape = parsed.shape;
+  original.positions = parsed.positions;
   for (var i = 0; i < ORIGINAL_RUN_FIELDS.length; i++) {
     var name = ORIGINAL_RUN_FIELDS[i];
     original[name] = parsed[name];

@@ -389,6 +389,29 @@ def test_a_committed_canvas_still_carries_confidence() -> None:
     assert all(tok["c"] == 1.0 for tok in tokens)
 
 
+def test_a_canvas_frame_still_carries_every_position() -> None:
+    """Diffusion keeps snapshots, and this says why rather than
+    only that.
+
+    The autoregressive stream now sends one position per frame,
+    because decoding runs left to right and a settled position never
+    moves, so a receiver holding the prefix holds the truth. A
+    denoising step has no such guarantee: it revises positions
+    behind the newest one, and a frame naming only what changed
+    would still have to name most of the canvas. Snapshots here are
+    the cheaper honest answer, not an oversight waiting to be
+    converted.
+    """
+    streamer, out_queue = _bare_streamer(takes_logits=True)
+    streamer.put_draft(logits=_logits())
+
+    frame = out_queue.get()
+
+    assert len(frame["tokens"]) == CANVAS_LENGTH
+    assert "token" not in frame
+    assert "shape" not in frame
+
+
 def test_mean_conf_is_a_mean_of_measured_probabilities() -> None:
     """A frame's mean_conf reaches the saved run and the Analytics
     confidence chart. It used to average whichever quantity the
