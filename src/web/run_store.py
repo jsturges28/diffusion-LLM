@@ -80,8 +80,31 @@ REVISION_KEY = "revision"
 # The format this code writes. Absent means version 0, which is every
 # run saved before this existed; readers dispatch on it rather than
 # guessing a run's shape from which files happen to be present.
-SCHEMA_VERSION = 1
+#
+# Version 2 added the flat arrangement below. It is a version rather
+# than another optional field because a v1 reader handed a flat
+# `tokens.json` would see one frame per token record and draw a run
+# that never happened, which is exactly the confidently-wrong answer
+# `UnsupportedRunVersionError` exists to refuse.
+SCHEMA_VERSION = 2
 SCHEMA_VERSION_KEY = "schema_version"
+
+# How `tokens.json` is arranged.
+#
+# APPEND is one record per position, in order, for a run that only
+# ever grows: frame N is the first N+1 of them. SNAPSHOT, the default
+# and the only arrangement before version 2, is one array per frame,
+# each holding every position as it stood.
+#
+# The difference is N records against N(N+1)/2. The 2,048-token runs
+# in this archive are 131 MiB of `tokens.json` for 2,048 tokens of
+# text, and three such runs are half of everything saved here.
+#
+# Absent means SNAPSHOT, which is what every run written before
+# version 2 is.
+FRAME_SHAPE_KEY = "frame_shape"
+FRAME_SHAPE_APPEND = "append"
+FRAME_SHAPE_SNAPSHOT = "snapshot"
 
 # Names the signals a run actually captured, so a reader is told
 # rather than left to infer it from file presence and the type of the

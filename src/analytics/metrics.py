@@ -45,14 +45,25 @@ CAPTURE_KEY = "capture"
 # than the one that follows it, so the unmarked case has to be a
 # supported era rather than an error.
 SCHEMA_VERSION_LEGACY = 0
-SCHEMA_VERSION_LATEST = 1
+SCHEMA_VERSION_FRAMED = 1
+SCHEMA_VERSION_LATEST = 2
 SUPPORTED_SCHEMA_VERSIONS = (
     SCHEMA_VERSION_LEGACY,
+    SCHEMA_VERSION_FRAMED,
     SCHEMA_VERSION_LATEST,
 )
 
 assert SCHEMA_VERSION_LATEST in SUPPORTED_SCHEMA_VERSIONS
+assert SCHEMA_VERSION_FRAMED in SUPPORTED_SCHEMA_VERSIONS
 assert SCHEMA_VERSION_LEGACY in SUPPORTED_SCHEMA_VERSIONS
+
+# Mirrors `run_store.FRAME_SHAPE_*`. Named here rather than imported
+# because this module reads runs and that one writes them, and a
+# reader that imported the writer would make the analytics package
+# depend on the web package to open a file.
+FRAME_SHAPE_KEY = "frame_shape"
+FRAME_SHAPE_APPEND = "append"
+FRAME_SHAPE_SNAPSHOT = "snapshot"
 
 
 class UnsupportedRunVersionError(ValueError):
@@ -114,7 +125,13 @@ def read_frame_texts(
         metadata = load_run_metadata(run_dir)
     version = run_schema_version(metadata)
 
-    if version >= SCHEMA_VERSION_LATEST:
+    # Gated on the version that introduced `frames.jsonl`, not on the
+    # latest one. Those were the same number until version 2 arrived,
+    # and comparing against the latest would send every v1 run back
+    # to parsing `history.txt`, which is the transcript the frame
+    # stream was written to replace precisely because a frame
+    # boundary in it can be forged by the text.
+    if version >= SCHEMA_VERSION_FRAMED:
         frames_path = run_dir / FRAMES_NAME
     else:
         frames_path = run_dir / HISTORY_NAME
@@ -123,7 +140,7 @@ def read_frame_texts(
             f"{frames_path.name} missing for run {run_dir.name}"
         )
 
-    if version >= SCHEMA_VERSION_LATEST:
+    if version >= SCHEMA_VERSION_FRAMED:
         return parse_frames_jsonl(frames_path)
     return parse_history(frames_path)
 
@@ -614,6 +631,100 @@ def _frames_have_records(frames: List[Any]) -> bool:
     return False
 
 
+def expand_positions(positions: List[Any]) -> List[Any]:
+    """The per-frame arrays a flat run describes.
+
+    Frame N is the first N+1 positions, so this is a list of
+    prefixes. Prefixes share nothing: each frame's list is its own,
+    so a caller that mutates one cannot reach into another, and the
+    cost is references rather than copies of the records.
+    """
+    return [list(positions[:count])
+            for count in range(1, len(positions) + 1)]
+
+
+def convergence_from_positions(
+    position_count: int,
+) -> List[Dict[str, Any]]:
+    """A growing run's convergence, without building its frames.
+
+    Every position of a run that only grows is resolved the moment it
+    exists: it carries no mask flag and nothing behind it moves. So
+    frame N has N+1 positions, none masked, and a resolved ratio of
+    1. The count is the only input, which is the point: this is the
+    same series `convergence_from_records` computes, from one integer
+    instead of from N(N+1)/2 records.
+
+    Verified as equality rather than asserted. The test beside this
+    builds the frames and compares element by element, so a future
+    change to either has to move both.
+    """
+    assert position_count > 0, "a run has at least one position"
+    return [
+        {
+            "frame": index,
+            "mask_count": 0,
+            "total_tokens": index + 1,
+            "resolved_ratio": 1.0,
+        }
+        for index in range(position_count)
+    ]
+
+
+def _is_prefix_series(frames: List[Any]) -> bool:
+    """Whether these frames are one growing run.
+
+    True when frame N is frame N-1 plus exactly one position. That is
+    the property that makes the last frame the whole run, and it is
+    checked rather than assumed: a run that fails it has positions
+    that changed, and reading it flat would silently discard them.
+    """
+    if not frames:
+        return False
+    for index, frame in enumerate(frames):
+        if not isinstance(frame, list) or len(frame) != index + 1:
+            return False
+    for index in range(1, len(frames)):
+        if frames[index][:index] != frames[index - 1]:
+            return False
+    return True
+
+
+def _positions_of(
+    stored: List[Any],
+    run_dir: Path,
+    metadata: Optional[Dict[str, Any]],
+) -> Optional[List[Any]]:
+    """The flat run inside ``tokens.json``, or None if there is none.
+
+    Two ways to arrive at one. A version 2 run says so in its
+    metadata and the file is already flat. Everything written before
+    that is per-frame, but an autoregressive run's frames are
+    prefixes, so the last one *is* the flat run and can be recovered
+    without rewriting anything on disk.
+
+    The recovery is an optimisation and is treated like one: the
+    prefix property is verified, and a run that fails it stays
+    per-frame. Only the declared case is a contract.
+    """
+    declared = (metadata or {}).get(FRAME_SHAPE_KEY)
+    if declared == FRAME_SHAPE_APPEND:
+        for record in stored:
+            if not isinstance(record, dict):
+                raise ValueError(
+                    "tokens.json declares the flat shape but holds"
+                    f" per-frame arrays in {run_dir}"
+                )
+        return stored
+    if declared is not None and declared != FRAME_SHAPE_SNAPSHOT:
+        raise ValueError(
+            f"unknown frame shape {declared!r} in {run_dir}"
+        )
+    if _is_prefix_series(stored):
+        return stored[-1]
+    return None
+
+
 def load_run_frames(
     run_dir: Path,
 ) -> Dict[str, Any]:
@@ -639,11 +750,21 @@ def load_run_frames(
     """
     assert run_dir.is_dir(), f"run dir not found: {run_dir}"
 
-    manifest = _capture_manifest(run_dir)
+    # Read once and used twice: the capture list and the frame shape
+    # both live here, and opening the file per question would make
+    # the loader's cost depend on how many things it wants to know.
+    metadata = _load_metadata_if_present(run_dir)
+    manifest = _manifest_of(metadata)
 
     result: Dict[str, Any] = {
         "frames": None,
         "original_frames": None,
+        # The flat run, when there is one: either read that way or
+        # recovered from per-frame arrays that turned out to be
+        # prefixes. None for a run whose positions genuinely change.
+        "positions": None,
+        "original_positions": None,
+        "shape": FRAME_SHAPE_SNAPSHOT,
         "records_available": False,
         "alternatives": None,
         "alternatives_available": False,
@@ -653,14 +774,25 @@ def load_run_frames(
     tokens_path = run_dir / "tokens.json"
     if not tokens_path.is_file():
         return result
-    frames = json.loads(tokens_path.read_text(encoding="utf-8"))
-    if not isinstance(frames, list):
+    stored = json.loads(tokens_path.read_text(encoding="utf-8"))
+    if not isinstance(stored, list):
         raise ValueError(
             f"tokens.json is malformed in {run_dir}"
         )
-    result["frames"] = frames
+    positions = _positions_of(stored, run_dir, metadata)
+    if positions is None:
+        result["frames"] = stored
+    else:
+        result["positions"] = positions
+        result["shape"] = FRAME_SHAPE_APPEND
+        # Callers that want frames still get frames. Stage two moves
+        # them off this one at a time; until then the expansion is
+        # here rather than in each of them.
+        result["frames"] = expand_positions(positions)
     if manifest is None:
-        result["records_available"] = _frames_have_records(frames)
+        result["records_available"] = _frames_have_records(
+            result["frames"]
+        )
     else:
         # Every v1 run writes rich records, so the manifest saying
         # tokens were captured settles it. Sniffing would agree, but
@@ -679,7 +811,20 @@ def load_run_frames(
                 "original_tokens.json is malformed in"
                 f" {run_dir}"
             )
-        result["original_frames"] = original
+        # The baseline is a frozen copy of the same run, so it has
+        # the same shape and pays the same cost: on the long runs
+        # here `original_tokens.json` came out within a megabyte of
+        # `tokens.json`.
+        original_positions = _positions_of(
+            original, run_dir, metadata
+        )
+        if original_positions is None:
+            result["original_frames"] = original
+        else:
+            result["original_positions"] = original_positions
+            result["original_frames"] = expand_positions(
+                original_positions
+            )
 
     # Position-indexed, not per-frame: a position's candidate set is
     # fixed when it is sampled, so one entry per position covers the
@@ -731,8 +876,20 @@ def _capture_manifest(
     a directory holding those without metadata is not a run the
     catalog would list anyway.
     """
-    metadata = _load_metadata_if_present(run_dir)
-    if run_schema_version(metadata) < SCHEMA_VERSION_LATEST:
+    return _manifest_of(_load_metadata_if_present(run_dir))
+
+
+def _manifest_of(
+    metadata: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """The capture list in already-loaded metadata.
+
+    Gated on the version that introduced the manifest, not on the
+    latest one. Those were the same number until version 2 arrived,
+    and comparing against the latest would have quietly dropped every
+    v1 run back to inferring what it captured.
+    """
+    if run_schema_version(metadata) < SCHEMA_VERSION_FRAMED:
         return None
     manifest = metadata.get(CAPTURE_KEY)
     if not isinstance(manifest, dict):

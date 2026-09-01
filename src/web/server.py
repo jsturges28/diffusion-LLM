@@ -61,6 +61,7 @@ from src.analytics.metrics import (
     UnsupportedRunVersionError,
     canvas_boundaries,
     compute_convergence,
+    convergence_from_positions,
     convergence_from_records,
     convergence_from_settlement,
     list_runs,
@@ -1984,16 +1985,20 @@ class SaveRunRequest(BaseModel):
     partial: bool = False
 
     def normalized(self) -> "SaveRunRequest":
-        """This request with its frames in per-frame form.
+        """This request with its per-frame text filled in.
 
-        The one place the two wire shapes meet. Everything past here,
-        the bundle, the store, the files, and Analytics, sees only
-        the per-frame arrays, which is what keeps a change to how a
-        run is *streamed* from becoming a change to how it is
-        *stored*.
+        Only the text. The positions stay flat all the way to disk
+        now, which is the whole of stage two: the per-frame token
+        arrays this used to build were 93% of a long run's bytes and
+        every one of them was a prefix of the next.
 
-        Returns self untouched for a request that already sent them,
-        so a diffusion save costs nothing.
+        The text is still expanded because `history.txt` and
+        `frames.jsonl` are read by things that have nothing to do
+        with tokens, and 21 MiB of a 282 MiB run is not where the
+        problem was.
+
+        Returns self untouched for a request that sent per-frame
+        arrays, so a diffusion save costs nothing.
         """
         # Emptiness is checked before shape, and deliberately: an
         # empty list is not a description of a run in either form.
@@ -2019,21 +2024,8 @@ class SaveRunRequest(BaseModel):
         expanded = self.model_copy(
             update={
                 "frames": expand_position_text(self.frame_positions),
-                "frame_tokens": expand_positions(
-                    self.frame_positions
-                ),
-                "frame_positions": None,
             }
         )
-        if self.original_frame_positions:
-            expanded = expanded.model_copy(
-                update={
-                    "original_frame_tokens": expand_positions(
-                        self.original_frame_positions
-                    ),
-                    "original_frame_positions": None,
-                }
-            )
         assert expanded.frames, "expansion produced no frames"
         assert len(expanded.frames) == len(self.frame_positions), (
             "one frame per position, or the run is not the run"
@@ -2044,6 +2036,20 @@ class SaveRunRequest(BaseModel):
 def _display_run_path(run_dir: Path) -> str:
     """Run folder as written in the repo, for the UI's status line."""
     return run_store.display_path(run_dir, REPO_ROOT)
+
+
+def _dump_positions(
+    positions: Optional[RunPositions],
+) -> List[Dict[str, Any]]:
+    """Serialize a flat run, dropping absent confidence.
+
+    The same projection ``_dump_frame_tokens`` applies per frame,
+    over the one list an append run has.
+    """
+    assert positions, "a flat run has at least one position"
+    return [
+        record.model_dump(exclude_none=True) for record in positions
+    ]
 
 
 def _dump_frame_tokens(
@@ -2247,6 +2253,14 @@ def _build_metadata(body: SaveRunRequest) -> Dict[str, Any]:
     # either way, and nothing else in the record says which.
     if body.partial:
         metadata["partial"] = True
+    # How `tokens.json` is arranged, written down rather than left to
+    # be inferred from whether the file's entries happen to be lists.
+    # A reader that guessed would be one legitimately empty frame away
+    # from reading a per-frame run as a flat one.
+    if body.frame_positions:
+        metadata[run_store.FRAME_SHAPE_KEY] = (
+            run_store.FRAME_SHAPE_APPEND
+        )
     # The run token is deliberately not set here. The store stamps it
     # beside the revision, so the identity a run is published under
     # and the identity recorded in its metadata cannot disagree.
@@ -2297,20 +2311,35 @@ def _reproducibility_block(
 
 
 def _build_bundle(body: SaveRunRequest) -> run_store.RunBundle:
-    """Turn a save request into the content of a run directory."""
+    """Turn a save request into the content of a run directory.
+
+    ``tokens.json`` holds whichever shape the run has: a flat list of
+    positions for a run that only grows, one array per frame for one
+    whose positions change. Which it is, is recorded in metadata by
+    ``_build_metadata`` rather than left for a reader to infer from
+    the nesting.
+    """
     return run_store.RunBundle(
         metadata=_build_metadata(body),
         final_text=body.final_text,
         frames=list(body.frames),
         frame_tokens=(
-            None
-            if body.frame_tokens is None
-            else _dump_frame_tokens(body.frame_tokens)
+            _dump_positions(body.frame_positions)
+            if body.frame_positions
+            else (
+                None
+                if body.frame_tokens is None
+                else _dump_frame_tokens(body.frame_tokens)
+            )
         ),
         original_frame_tokens=(
-            None
-            if body.original_frame_tokens is None
-            else _dump_frame_tokens(body.original_frame_tokens)
+            _dump_positions(body.original_frame_positions)
+            if body.original_frame_positions
+            else (
+                None
+                if body.original_frame_tokens is None
+                else _dump_frame_tokens(body.original_frame_tokens)
+            )
         ),
         alternatives=(
             None
@@ -2606,6 +2635,17 @@ def _run_convergence(
         loaded = None
 
     if loaded is not None and loaded.get("records_available"):
+        positions = loaded.get("positions")
+        if positions is not None and len(positions) == len(frames):
+            # A run that only grows has no masked position and
+            # nothing behind the newest one moves, so its curve
+            # follows from the count alone. Taken before the branches
+            # below because those exist to tell apart two ways a
+            # position can change, and here none of them do.
+            by_count = convergence_from_positions(len(positions))
+            return (
+                by_count, CONVERGENCE_BASIS_TOKENS, by_count
+            )
         token_frames = loaded.get("frames")
         if records_match_frames(token_frames, len(frames)):
             by_mask = convergence_from_records(token_frames)
