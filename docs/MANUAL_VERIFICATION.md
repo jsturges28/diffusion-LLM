@@ -2070,11 +2070,24 @@ display and no GPU, so everything above the signal is covered by
 `tests/test_desktop_renderer_watch.py` and everything below it is
 here.
 
+The first attempt at this **aborted the app at launch**, which is why
+214 starts by checking that it opens at all. The watch was being
+installed from pywebview's post-start worker thread, and Qt objects
+belong to the thread that made them, so reaching for the view's page
+from another one killed the process with "Cannot create children for
+a parent that is in a different thread". It is now installed inside a
+wrapper around the backend's constructor, which runs on the GUI
+thread. If anything like that recurs, launching with
+`LLM_VISUALIZER_NO_RENDERER_WATCH=1` skips the watch entirely and
+should restore a plain working window.
+
 214. **A crashed renderer brings itself back.** Launch
     `.venv/bin/python desktop.py` from a terminal, so stderr is
-    visible. Find the renderer with
-    `pgrep -af QtWebEngineProcess` and kill the one whose command
-    line carries `--type=renderer`:
+    visible. **The window should open normally**, which is the first
+    thing to confirm: the previous attempt aborted here with a
+    `Trace/breakpoint trap (core dumped)` before showing anything.
+    Then find the renderer with `pgrep -af QtWebEngineProcess` and
+    kill the one whose command line carries `--type=renderer`:
 
     ```bash
     pkill -f "QtWebEngineProcess.*--type=renderer"

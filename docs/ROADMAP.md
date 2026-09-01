@@ -1182,6 +1182,36 @@ would be cargo-culting a remedy for a symptom this is not. And
 software rendering would sidestep GPU suspend entirely at a cost to
 the smooth scrolling and compositing the Qt backend was chosen for.
 
+**Where the watch is installed is not a detail, and reasoning about
+Qt threading is not a substitute for running it.** The first version
+of this shipped broken: it installed the watch from pywebview's
+documented post-start callback, on the stated theory that connecting
+a signal across threads is harmless. It is not. Qt objects belong to
+the thread that created them, and `view.page()` from another thread
+parents a `QWebEnginePage` to a view the GUI thread owns, which Qt
+refuses with "Cannot create children for a parent that is in a
+different thread" and the process does not survive. The app aborted
+at launch with a core dump, so a rare white window had been traded
+for one that never opened. The watch now goes on inside a wrapper
+around `BrowserView.__init__`, which pywebview builds on the GUI
+thread and which has set its page by the time it returns, and
+`LLM_VISUALIZER_NO_RENDERER_WATCH` exists so a future pywebview that
+breaks the hook cannot make the app unstartable.
+
+Two things made that avoidable in hindsight, both now available.
+`QT_QPA_PLATFORM=offscreen` runs the whole desktop app headlessly in
+the agent sandbox: the launcher comes up, QtWebEngine loads the real
+pages, and the renderer even crashes on its own for lack of a GPU,
+which exercised the recovery path end to end without hardware. The
+belief that GUI work here is unverifiable was too broad; it is the
+*display* that cannot be checked, not the process. And the status
+decoder was tested only with plain ints while PyQt6 sends an enum
+member that `int()` raises on, so every test passed while the one
+line a user reads said
+`RenderProcessTerminationStatus.CrashedTerminationStatus`. A fake
+whose shape is more convenient than the real type is a fake that
+tests the fake.
+
 **Source inspection cannot see event wiring, and a DOM harness is
 cheaper than assumed.** Recorded 2026-08-31, after bulk filing shipped
 with a dead dialog: the chooser's target rows rendered correctly,

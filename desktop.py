@@ -322,8 +322,12 @@ def _window_start_kwargs() -> dict:
 # does not survive. Nothing the page does can prevent that, so the
 # window recovers from it instead.
 RENDERER_RELOAD_MAX = 3
-RENDERER_ATTACH_TIMEOUT_S = 5.0
 RENDERER_LOG_NAME = "renderer-crashes.log"
+# Set this to anything to launch without the watch. An escape hatch,
+# because this hooks a private part of pywebview: if a future version
+# moves what it hooks, the app must still be startable without an
+# edit to this file.
+RENDERER_WATCH_OFF_ENV = "LLM_VISUALIZER_NO_RENDERER_WATCH"
 
 # QWebEnginePage.RenderProcessTerminationStatus. Spelled out rather
 # than imported so this file stays free of a Qt import on the GTK
@@ -337,9 +341,17 @@ _TERMINATION_NAMES = {
 
 
 def _termination_reason(status: Any, exit_code: int) -> str:
-    """A readable phrase for QtWebEngine's termination enum."""
+    """A readable phrase for QtWebEngine's termination enum.
+
+    The value is read off the member before falling back to the
+    object itself, because PyQt6 hands over an enum member and
+    ``int()`` on one raises rather than converting. Reading it wrong
+    is only cosmetic, but a log nobody can read is the failure mode
+    this whole file exists to avoid: the first version wrote
+    "RenderProcessTerminationStatus.CrashedTerminationStatus".
+    """
     try:
-        code = int(status)
+        code = int(getattr(status, "value", status))
     except (TypeError, ValueError):
         return f"ended ({status}, exit code {exit_code})"
     name = _TERMINATION_NAMES.get(code, f"ended with status {code}")
@@ -373,53 +385,28 @@ def record_renderer_death(reason: str, action: str) -> str:
     return line
 
 
-def _renderer_view(window: Any) -> Optional[Any]:
-    """The Qt web view behind ``window``, or None.
+def watch_renderer(browser: Any) -> bool:
+    """Reload the view when Chromium's renderer dies under it.
 
-    Reaches into pywebview's Qt backend, which has no public accessor
-    for this, so every step is guarded: a recovery path must never
-    become the reason the app fails to start. None is also the honest
-    answer on the GTK backend, where there is no such signal at all.
+    Takes pywebview's Qt ``BrowserView`` and returns whether the
+    watch went on, which is false for any backend that cannot report
+    this.
+
+    **Must run on the GUI thread.** Qt objects belong to the thread
+    that created them, and the caller below arranges for this to run
+    where the view was made. An earlier version ran it on
+    pywebview's post-start worker thread on the theory that
+    connecting a signal across threads is harmless. It is not: the
+    ``page()`` call alone parents a QWebEnginePage to a view owned by
+    another thread, and Qt aborts the process over it, which turned
+    a rare white window into a launch that never came up at all.
     """
-    try:
-        from webview.platforms.qt import BrowserView
-    except ImportError:
-        return None
-    instance = BrowserView.instances.get(getattr(window, "uid", None))
-    return getattr(instance, "webview", None)
-
-
-def _renderer_page(window: Any) -> Optional[Any]:
-    """The view's page once the window exists, or None if it never
-    does. Polled because this runs as soon as the GUI loop starts,
-    which is not quite the same moment the view is registered.
-    """
-    deadline = time.monotonic() + RENDERER_ATTACH_TIMEOUT_S
-    while time.monotonic() < deadline:
-        view = _renderer_view(window)
-        page = view.page() if view is not None else None
-        if page is not None:
-            if hasattr(page, "renderProcessTerminated"):
-                return page
-            return None  # QtWebKit, which has no such signal.
-        time.sleep(0.1)
-    return None
-
-
-def watch_renderer(window: Any) -> bool:
-    """Reload the window when Chromium's renderer dies under it.
-
-    Returns whether the watch was installed, which is false on any
-    backend that cannot report this.
-
-    Runs on pywebview's post-start thread. Connecting a Qt signal
-    from another thread is safe, and the handler then runs on the GUI
-    thread because that is where the signal is emitted, which is what
-    makes calling reload() from inside it legal.
-    """
-    page = _renderer_page(window)
+    view = getattr(browser, "webview", None)
+    page = view.page() if view is not None else None
     if page is None:
         return False
+    if not hasattr(page, "renderProcessTerminated"):
+        return False  # QtWebKit, which cannot report this.
     reloads = 0
 
     def on_terminated(status: Any, exit_code: int) -> None:
@@ -439,29 +426,47 @@ def watch_renderer(window: Any) -> bool:
             reason,
             f"reloading ({reloads} of {RENDERER_RELOAD_MAX})",
         )
-        view = _renderer_view(window)
-        if view is not None:
-            view.reload()
+        view.reload()
 
     page.renderProcessTerminated.connect(on_terminated)
     return True
 
 
-def _renderer_watch_kwargs(window: Any) -> dict:
-    """``webview.start`` kwargs that install the renderer watch.
+def install_renderer_watch() -> bool:
+    """Arrange for the watch to go on where Qt allows it.
 
-    pywebview runs ``func`` on its own thread once the GUI loop is
-    up, which is the earliest moment the view exists to connect to.
-    Wrapped so that a failure in the recovery path cannot stop the
-    window from opening, which would trade a rare white screen for
-    an app that never starts.
+    Wraps the Qt backend's own constructor, which is a private part
+    of pywebview and hooked deliberately: ``BrowserView`` is built on
+    the GUI thread and has set its page by the time ``__init__``
+    returns, so a wrapper around it runs at the one moment that is
+    both late enough to have a page and on the right thread to touch
+    it. pywebview's documented post-start callback satisfies only the
+    first of those, which is what made the first attempt abort at
+    launch.
+
+    Returns whether the wrap went on. Called before ``webview.start``
+    and never after, since it only takes effect for windows built
+    afterwards.
     """
-    if window is None:
-        return {}
+    if os.environ.get(RENDERER_WATCH_OFF_ENV):
+        print(
+            "[desktop] renderer watch disabled by "
+            + RENDERER_WATCH_OFF_ENV,
+            file=sys.stderr,
+        )
+        return False
+    try:
+        from webview.platforms.qt import BrowserView
+    except ImportError:
+        return False  # GTK backend: no such signal to watch.
+    if getattr(BrowserView, "_renderer_watch_installed", False):
+        return True
+    original = BrowserView.__init__
 
-    def install() -> None:
+    def __init__(self: Any, window: Any) -> None:
+        original(self, window)
         try:
-            watch_renderer(window)
+            watch_renderer(self)
         except Exception as exc:  # noqa: BLE001 - never block launch
             print(
                 f"[desktop] renderer watch unavailable ({exc});"
@@ -469,17 +474,18 @@ def _renderer_watch_kwargs(window: Any) -> dict:
                 file=sys.stderr,
             )
 
-    return {"func": install}
+    BrowserView.__init__ = __init__
+    BrowserView._renderer_watch_installed = True
+    return True
 
 
-def _start_window(gui: Optional[str], window: Any = None) -> None:
+def _start_window(gui: Optional[str]) -> None:
     """Open the window with the given backend preference, gracefully
     falling back to GTK/auto if Qt is unavailable at runtime (e.g. a
     Qt binding is installed but QtWebEngine or its system libs are
     missing). Blocks on the main thread until the window closes.
     """
     start_kwargs = _window_start_kwargs()
-    start_kwargs.update(_renderer_watch_kwargs(window))
     if gui is None:
         webview.start(**start_kwargs)
         return
@@ -533,14 +539,18 @@ def main() -> None:
     thread.start()
     try:
         _wait_until_started(server, STARTUP_TIMEOUT_SECONDS)
-        window = webview.create_window(
+        # Before create_window, because the wrap only reaches windows
+        # built after it goes on.
+        if gui == "qt":
+            install_renderer_watch()
+        webview.create_window(
             WINDOW_TITLE,
             f"http://{HOST}:{port}/",
             width=WINDOW_WIDTH,
             height=WINDOW_HEIGHT,
         )
         # Blocks on the main thread until the window is closed.
-        _start_window(gui, window)
+        _start_window(gui)
     finally:
         # Graceful stop -> supervisor shutdown hook -> workers freed.
         server.should_exit = True
