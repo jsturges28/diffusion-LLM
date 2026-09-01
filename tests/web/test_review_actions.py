@@ -68,7 +68,7 @@ def test_neither_reveal_is_behind_the_frame_check() -> None:
     the branch, not inside it. Both orders contain both lines, so
     position is the only thing that distinguishes them."""
     body = _review_case()
-    gate = body.find("currentScrubFrame === runFrames.history")
+    gate = body.find("currentScrubFrame === runFramesLength(")
     confirm = body.find("btnConfirmEdit.hidden = false")
     retry = body.find("btnRetryEdit.hidden = false")
 
@@ -107,7 +107,7 @@ def test_confirm_lands_on_the_last_frame_by_itself() -> None:
     body = _region("function activateScrubber()", 300)
 
     assert (
-        "currentScrubFrame = runFrames.history.length - 1" in body
+        "currentScrubFrame = runFramesLength(runFrames) - 1" in body
     )
 
 

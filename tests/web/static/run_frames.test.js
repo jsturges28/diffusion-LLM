@@ -177,6 +177,91 @@ test("a null value is a value, not a missing field", () => {
   assert.equal(frames.tokens[0], null);
 });
 
+// -- reading one frame --
+//
+// The seam that lets storage change underneath. Everything that draws
+// a frame asks through these, so what a frame costs to keep stops
+// being something the page knows.
+
+test("a frame reads back the tokens it was given", () => {
+  const { api, frames } = loadWith(3);
+
+  const at = api.runFramesTokensAt(frames, 1);
+
+  assert.equal(at[0].text, "t1");
+});
+
+test("a frame reads back its own text", () => {
+  const { api, frames } = loadWith(3);
+
+  assert.equal(api.runFramesTextAt(frames, 2), "frame 2");
+});
+
+test("reading past the end is null, not undefined", () => {
+  // Callers branch on falsiness, and a reader that answered
+  // `undefined` for "no such frame" and `null` for "this model sends
+  // no tokens" would be inviting a distinction nobody wants to make.
+  const { api, frames } = loadWith(2);
+
+  assert.equal(api.runFramesTokensAt(frames, 7), null);
+  assert.equal(api.runFramesTextAt(frames, 7), null);
+});
+
+test("a negative index is null rather than a wrap", () => {
+  const { api, frames } = loadWith(2);
+
+  assert.equal(api.runFramesTokensAt(frames, -1), null);
+});
+
+test("the last frame is asked for, not calculated", () => {
+  const { api, frames } = loadWith(4);
+
+  assert.equal(api.runFramesTokensLast(frames)[0].text, "t3");
+});
+
+test("the last frame of an empty run is null", () => {
+  const api = load();
+
+  assert.equal(api.runFramesTokensLast(api.runFramesCreate()), null);
+});
+
+test("the last frame of a light restore is null", () => {
+  // The case that makes `runFramesTokensLast` worth having rather
+  // than indexing at `length - 1`: a restore that dropped the token
+  // detail still has frames, so `length - 1` names a frame whose
+  // tokens were never stored.
+  const api = load();
+  const frames = api.runFramesFromJson({
+    frameHistory: ["a", "b"],
+    perFrameElapsed: [0.1, 0.2],
+    frameRevealed: [1, 1],
+  });
+
+  assert.equal(api.runFramesLength(frames), 2);
+  assert.equal(api.runFramesTokensLast(frames), null);
+});
+
+test("the baseline reads a frame the same way", () => {
+  // Diff and crossfade put a live frame beside a baseline frame, so
+  // a difference in how they are reached would read as a difference
+  // in what they mean.
+  const { api, frames } = loadWith(3);
+  const original = api.originalRunCreate();
+  api.originalRunCapture(original, frames, []);
+
+  assert.equal(api.originalRunTokensAt(original, 1)[0].text, "t1");
+  assert.equal(api.originalRunTextAt(original, 1), "frame 1");
+  assert.equal(api.originalRunTokensLast(original)[0].text, "t2");
+});
+
+test("an uncaptured baseline reads as null", () => {
+  const api = load();
+  const original = api.originalRunCreate();
+
+  assert.equal(api.originalRunTokensAt(original, 0), null);
+  assert.equal(api.originalRunTokensLast(original), null);
+});
+
 // -- snapshot and restore --
 
 test("a snapshot survives later appends", () => {

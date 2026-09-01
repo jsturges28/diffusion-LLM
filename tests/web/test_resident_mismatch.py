@@ -130,7 +130,7 @@ def test_a_saved_run_reloads_without_saving_again() -> None:
         APP_JS, "function rescueRunThenReload()", 1200
     )
 
-    guard = region.find("if (runSaved")
+    guard = region.find("runSaved")
     save = region.find("saveRun()")
 
     assert guard != -1

@@ -100,6 +100,64 @@ function runFramesLackDetail(frames) {
   );
 }
 
+// ---- Reading one frame ----
+//
+// Everything that draws a frame goes through these rather than
+// indexing the arrays, so how a frame is *stored* stops being
+// something the page knows.
+//
+// Today they are the indexing they replace, and that is the point:
+// the seam has to exist before anything can move behind it. What
+// moves is the cost. A frame here carries the whole sequence as it
+// stood, so an N-token autoregressive run keeps N(N+1)/2 token
+// records, which at 2,048 tokens is 2,098,176 of them. A run that
+// only ever grows does not need that, because a settled position
+// never moves and frame N is the first N+1 positions of one flat
+// list. Diffusion does need it, because a denoising step revises
+// positions behind the newest one.
+//
+// Callers ask for a frame and get an array; whether that array was
+// stored or assembled is not their business.
+
+function runFramesTokensAt(frames, index) {
+  var stored = frames.tokens[index];
+  return stored === undefined ? null : stored;
+}
+
+// The finished run, which several readers want without caring where
+// it ended: the diff, the entropy profile, the candidate popover.
+//
+// Its own function rather than `runFramesTokensAt(frames, length-1)`
+// because those two stop meaning the same thing the moment a restore
+// arrives with fewer token arrays than frames. Asking for the last
+// one there is answerable; asking for index `length - 1` is not.
+function runFramesTokensLast(frames) {
+  return runFramesTokensAt(frames, frames.tokens.length - 1);
+}
+
+function runFramesTextAt(frames, index) {
+  var stored = frames.history[index];
+  return stored === undefined ? null : stored;
+}
+
+// The pre-edit baseline reads the same way, and needs to: the diff
+// and crossfade overlays put a live frame and a baseline frame side
+// by side, so a difference in how they are reached would show up as
+// a difference in what they mean.
+function originalRunTokensAt(original, index) {
+  var stored = original.tokens[index];
+  return stored === undefined ? null : stored;
+}
+
+function originalRunTokensLast(original) {
+  return originalRunTokensAt(original, original.tokens.length - 1);
+}
+
+function originalRunTextAt(original, index) {
+  var stored = original.history[index];
+  return stored === undefined ? null : stored;
+}
+
 // Thrown rather than logged. A run whose arrays disagree produces a
 // saved record whose charts contradict each other, and that is worth
 // stopping at the point of corruption instead of discovering later

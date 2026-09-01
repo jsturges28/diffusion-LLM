@@ -1668,7 +1668,11 @@ var RESCUE_SAVE_TIMEOUT_MS = 8000;
 // already does with an unsaved run. An unwanted run can be deleted
 // from Analytics; a lost one cannot be recovered.
 function rescueRunThenReload() {
-  if (runSaved || runFrames.history.length === 0 || !lastFinalText) {
+  if (
+    runSaved
+    || runFramesLength(runFrames) === 0
+    || !lastFinalText
+  ) {
     location.reload();
     return;
   }
@@ -2034,7 +2038,7 @@ function handleError(data) {
   }, 5000);
   // Said either way: an auxiliary failure is still worth reading, and
   // the change here is what gets undone, not what gets shown.
-  if (routed.unwindsRun && runFrames.history.length > 1) {
+  if (routed.unwindsRun && runFramesLength(runFrames) > 1) {
     activateScrubber();
   }
 }
@@ -2285,10 +2289,10 @@ function invalidateRunMemos() {
 // summary.
 function computeDiff() {
   var cur = runFrames.tokens.length
-    ? runFrames.tokens[runFrames.tokens.length - 1]
+    ? runFramesTokensLast(runFrames)
     : null;
   var orig = originalRun.tokens.length
-    ? originalRun.tokens[originalRun.tokens.length - 1]
+    ? originalRunTokensLast(originalRun)
     : null;
   return overlaysComputeDiff(cur, orig, remaskEdits);
 }
@@ -2303,12 +2307,12 @@ function computeDiff() {
 // resolves the per-frame tokens and owns the output container.
 function renderDiffOverlay(frameIndex) {
   var diff = currentDiffData();
-  var editedTokens = runFrames.tokens[frameIndex] || [];
+  var editedTokens = runFramesTokensAt(runFrames, frameIndex) || [];
   var oIdx = Math.min(
     frameIndex, originalRun.tokens.length - 1
   );
   var origTokens =
-    (oIdx >= 0 ? originalRun.tokens[oIdx] : null) || [];
+    (oIdx >= 0 ? originalRunTokensAt(originalRun, oIdx) : null) || [];
 
   outputArea.textContent = "";
   tokenHighlightPos = null;
@@ -2580,7 +2584,7 @@ function diffAvailable() {
 // rather than on model_type, so the overlay appears for any model
 // that starts emitting `e` (autoregressive runs are just the first).
 function entropyAvailable() {
-  var tokens = runFrames.tokens[runFrames.tokens.length - 1];
+  var tokens = runFramesTokensLast(runFrames);
   if (!tokens) {
     return false;
   }
@@ -2755,8 +2759,8 @@ function renderAltsPopover(pos, span) {
   // Each page marks the token its own run drew, so the Original page
   // does not mark the branch's substitution as chosen.
   var tokens = original
-    ? originalRun.tokens[originalRun.tokens.length - 1]
-    : runFrames.tokens[currentScrubFrame];
+    ? originalRunTokensLast(originalRun)
+    : runFramesTokensAt(runFrames, currentScrubFrame);
   var chosen = tokens && tokens[pos] ? tokens[pos].id : null;
 
   // Discarding the rows discards their pending mouseleave: a removed
@@ -2840,7 +2844,7 @@ function buildTypedEntry(pos) {
 // exact where a "looks mid-sentence" rule would only be usually
 // right, and a single backspace overrides it.
 function typedEntrySeedText(pos) {
-  var tokens = runFrames.tokens[currentScrubFrame];
+  var tokens = runFramesTokensAt(runFrames, currentScrubFrame);
   var token = tokens && tokens[pos] ? tokens[pos] : null;
   var text = token && typeof token.t === "string" ? token.t : "";
   return text.charAt(0) === " " ? " " : "";
@@ -3410,7 +3414,7 @@ function entropyValuesFrom(tokens) {
 // (each position is sampled once, so its entropy never changes).
 function entropyProfileValues() {
   return entropyValuesFrom(
-    runFrames.tokens[runFrames.tokens.length - 1]
+    runFramesTokensLast(runFrames)
   );
 }
 
@@ -3422,7 +3426,7 @@ function originalEntropyProfileValues() {
     return [];
   }
   return entropyValuesFrom(
-    originalRun.tokens[originalRun.tokens.length - 1]
+    originalRunTokensLast(originalRun)
   );
 }
 
@@ -3898,16 +3902,16 @@ function metricsLayered() {
 function metricsFrameTokens() {
   if (!scrubberActive) {
     return runFrames.tokens.length
-      ? runFrames.tokens[runFrames.tokens.length - 1]
+      ? runFramesTokensLast(runFrames)
       : null;
   }
   if (!metricsHoverOriginal) {
-    return runFrames.tokens[currentScrubFrame] || null;
+    return runFramesTokensAt(runFrames, currentScrubFrame) || null;
   }
   var index = Math.min(
     currentScrubFrame, originalRun.tokens.length - 1
   );
-  return index >= 0 ? originalRun.tokens[index] : null;
+  return index >= 0 ? originalRunTokensAt(originalRun, index) : null;
 }
 
 // Assemble one reading, or null when the held position no longer
@@ -4720,9 +4724,9 @@ function renderFrameWithTokensDraw(frameIndex) {
   // Leaving the live view: the mask glow this class restores is for
   // streaming only, and every branch below owns the container now.
   outputArea.classList.remove("live-tokens");
-  var tokens = runFrames.tokens[frameIndex];
+  var tokens = runFramesTokensAt(runFrames, frameIndex);
   if (!tokens) {
-    renderFrame(runFrames.history[frameIndex]);
+    renderFrame(runFramesTextAt(runFrames, frameIndex));
     return;
   }
 
@@ -4763,7 +4767,7 @@ function buildCrossfadedLayers(frameIndex, editedTokens) {
     frameIndex, originalRun.tokens.length - 1
   );
   var origTokens =
-    (oIdx >= 0 ? originalRun.tokens[oIdx] : null) || [];
+    (oIdx >= 0 ? originalRunTokensAt(originalRun, oIdx) : null) || [];
   var editedTakes = overlaysEditedOwnsPointer(
     1 - runBlend, runBlend
   );
@@ -4845,8 +4849,8 @@ function renderTargetPlaceholder(frameIndex) {
   );
   outputArea.appendChild(notice);
 
-  var origTokens = originalRun.tokens[frameIndex];
-  var origText = originalRun.history[frameIndex];
+  var origTokens = originalRunTokensAt(originalRun, frameIndex);
+  var origText = originalRunTextAt(originalRun, frameIndex);
 
   if (origTokens || origText) {
     var wrapper = document.createElement("div");
@@ -5079,15 +5083,15 @@ function updateGenerateIdleEffect() {
 }
 
 function activateScrubber() {
-  if (runFrames.history.length < 2) {
+  if (runFramesLength(runFrames) < 2) {
     return;
   }
   scrubberActive = true;
-  currentScrubFrame = runFrames.history.length - 1;
+  currentScrubFrame = runFramesLength(runFrames) - 1;
 
   scrubberSlider.min = "0";
   scrubberSlider.max =
-    String(runFrames.history.length - 1);
+    String(runFramesLength(runFrames) - 1);
   scrubberSlider.value =
     String(currentScrubFrame);
   scrubberSlider.disabled = false;
@@ -5156,7 +5160,7 @@ function updateScrubberLabel() {
     runPhase.mode === "select_target"
     && originalRun.totalFrames > 0
   ) ? originalRun.totalFrames - 1
-    : runFrames.history.length - 1;
+    : runFramesLength(runFrames) - 1;
   scrubberLabel.textContent =
     "Frame " + currentScrubFrame
     + " / " + maxLabel;
@@ -5173,7 +5177,7 @@ function navigateToFrame(index) {
     runPhase.mode === "select_target"
     && originalRun.totalFrames > 0
   ) ? originalRun.totalFrames - 1
-    : runFrames.history.length - 1;
+    : runFramesLength(runFrames) - 1;
   index = Math.max(
     minFrame,
     Math.min(index, maxFrame)
@@ -5187,7 +5191,7 @@ function navigateToFrame(index) {
 
   if (runPhase.mode === "select_target") {
     renderTargetPlaceholder(index);
-  } else if (index < runFrames.history.length) {
+  } else if (index < runFramesLength(runFrames)) {
     renderFrameWithTokens(index);
   } else {
     renderTargetPlaceholder(index);
@@ -5268,7 +5272,7 @@ function clampInt(value, low, high) {
 // Frame-array indices of resolved (non-mask) tokens: the candidates
 // that can be remasked. Masked positions are never remaskable.
 function resolvedPositions(frameIndex) {
-  var tokens = runFrames.tokens[frameIndex];
+  var tokens = runFramesTokensAt(runFrames, frameIndex);
   var out = [];
   if (!tokens) {
     return out;
@@ -5545,7 +5549,7 @@ function beginSubstitutionSession() {
   clearRemaskedPositions();
 
   scrubberSlider.min = "0";
-  scrubberSlider.max = String(runFrames.history.length - 1);
+  scrubberSlider.max = String(runFramesLength(runFrames) - 1);
   btnEditFrames.hidden = true;
   if (btnWhatIf) {
     btnWhatIf.hidden = true;
@@ -5555,7 +5559,7 @@ function beginSubstitutionSession() {
     overlaySelectGroup.hidden = true;
   }
 
-  navigateToFrame(runFrames.history.length - 1);
+  navigateToFrame(runFramesLength(runFrames) - 1);
   updateGuidedUI();
 }
 
@@ -5571,7 +5575,7 @@ function doSubstitute(position, tokenId, typedText) {
   if (!runPhase.substituting || runPhase.mode !== "substitute") {
     return;
   }
-  if (position < 0 || position >= runFrames.history.length) {
+  if (position < 0 || position >= runFramesLength(runFrames)) {
     return;
   }
   hideAltsPopover();
@@ -5645,14 +5649,14 @@ function beginEditSession() {
   // Start at frame 1: frame 0 is the fully-masked canvas with nothing
   // to remask, so it is never a useful selection. (Guarded for the
   // degenerate single-frame case.)
-  var startFrame = runFrames.history.length > 1 ? 1 : 0;
+  var startFrame = runFramesLength(runFrames) > 1 ? 1 : 0;
   scrubberMinFrame = startFrame;
   runPhase.lockedEdits = [];
   runPhase.guidedAction = null;
   clearRemaskedPositions();
 
   scrubberSlider.min = String(startFrame);
-  scrubberSlider.max = String(runFrames.history.length - 1);
+  scrubberSlider.max = String(runFramesLength(runFrames) - 1);
   btnEditFrames.hidden = true;
   guidedEditControls.hidden = false;
   if (overlaySelectGroup) {
@@ -5773,7 +5777,7 @@ function updateGuidedUI() {
       scrubberSlider.max = String(
         (originalRun.totalFrames > 0)
           ? originalRun.totalFrames - 1
-          : runFrames.history.length - 1
+          : runFramesLength(runFrames) - 1
       );
       unlockScrubberNav();
       break;
@@ -5797,7 +5801,7 @@ function updateGuidedUI() {
       scrubberSlider.disabled = false;
       scrubberSlider.min = "0";
       scrubberSlider.max =
-        String(runFrames.history.length - 1);
+        String(runFramesLength(runFrames) - 1);
       unlockScrubberNav();
       // Both actions stay reachable from any frame. Neither reads the
       // scrubber: Confirm saves the whole run and then jumps to the
@@ -5806,7 +5810,7 @@ function updateGuidedUI() {
       // only made scrubbing back look like it had cancelled the edit.
       btnConfirmEdit.hidden = false;
       btnRetryEdit.hidden = false;
-      if (currentScrubFrame === runFrames.history.length - 1) {
+      if (currentScrubFrame === runFramesLength(runFrames) - 1) {
         guidedEditStatus.textContent =
           "Edit complete. Confirm to save, or"
           + " retry from the start.";
@@ -5906,7 +5910,7 @@ function handleGuidedDone() {
   if (runPhase.guidedAction === "another") {
     var target = Math.min(
       runPhase.targetFrame,
-      runFrames.history.length - 1
+      runFramesLength(runFrames) - 1
     );
 
     scrubberActive = true;
@@ -5919,7 +5923,7 @@ function handleGuidedDone() {
 
     scrubberSlider.min = String(target);
     scrubberSlider.max =
-      String(runFrames.history.length - 1);
+      String(runFramesLength(runFrames) - 1);
     scrubberSlider.value = String(target);
 
     currentScrubFrame = target;
@@ -5955,9 +5959,9 @@ function enterReviewMode() {
   if (overlaySelectGroup) {
     overlaySelectGroup.hidden = true;
   }
-  currentScrubFrame = runFrames.history.length - 1;
+  currentScrubFrame = runFramesLength(runFrames) - 1;
   scrubberSlider.min = "0";
-  scrubberSlider.max = String(runFrames.history.length - 1);
+  scrubberSlider.max = String(runFramesLength(runFrames) - 1);
   scrubberSlider.value = String(currentScrubFrame);
   scrubberSlider.disabled = false;
   unlockScrubberNav();
@@ -6399,7 +6403,7 @@ function statusChipDismiss(chip) {
 
 function setSaveAvailable(available) {
   // Always visible; greyed out when there is nothing to save.
-  btnSave.disabled = !(available && runFrames.history.length > 0);
+  btnSave.disabled = !(available && runFramesLength(runFrames) > 0);
 }
 
 // Clears the footer readouts only, never the stack. doSubstitute and
@@ -6717,7 +6721,7 @@ function saveRun() {
     return Promise.resolve();
   }
   if (
-    runFrames.history.length === 0
+    runFramesLength(runFrames) === 0
     || !lastFinalText
   ) {
     return Promise.resolve();
@@ -6820,7 +6824,7 @@ function saveRun() {
   // indices were not restored), omit it rather than send nulls that
   // would fail server validation and break the whole save.
   var canvasIndexClean = cleanCanvasIndex(
-    runFrames.canvasIndex, runFrames.history.length
+    runFrames.canvasIndex, runFramesLength(runFrames)
   );
   if (canvasIndexClean !== null) {
     payload.canvas_index = canvasIndexClean;
@@ -7159,7 +7163,7 @@ btnScrubEnd.addEventListener(
       runPhase.mode === "select_target"
       && originalRun.totalFrames > 0
     ) ? originalRun.totalFrames - 1
-      : runFrames.history.length - 1;
+      : runFramesLength(runFrames) - 1;
     navigateToFrame(endFrame);
   }
 );
@@ -7316,7 +7320,7 @@ btnEditAnother.addEventListener(
     runPhasesEnter(runPhase, RUN_PHASE_SELECT_TARGET);
     var maxFrame = (originalRun.totalFrames > 0)
       ? originalRun.totalFrames - 1
-      : runFrames.history.length - 1;
+      : runFramesLength(runFrames) - 1;
     scrubberSlider.min =
       String(scrubberMinFrame);
     scrubberSlider.max = String(maxFrame);
@@ -7621,7 +7625,7 @@ document.addEventListener(
         runPhase.mode === "select_target"
         && originalRun.totalFrames > 0
       ) ? originalRun.totalFrames - 1
-        : runFrames.history.length - 1;
+        : runFramesLength(runFrames) - 1;
       navigateToFrame(endFrame);
     }
   }
@@ -7731,7 +7735,7 @@ var SESSION_KEY = OVERLAYS_LAST_RUN_KEY;
 function saveSessionState() {
   if (
     !activeModelId
-    || runFrames.history.length < 2
+    || runFramesLength(runFrames) < 2
     || !lastFinalText
   ) {
     return;
@@ -7866,7 +7870,7 @@ function restoreSessionState() {
       ? s.provenance
       : null;
   remaskEdits = s.remaskEdits || [];
-  originalRunRestore(originalRun, s, runFrames.history.length);
+  originalRunRestore(originalRun, s, runFramesLength(runFrames));
   positionAlts = s.positionAlts || [];
   editedRunSaved = !!s.editedRunSaved;
   // Restored with the rest, or a stopped run would come back from
