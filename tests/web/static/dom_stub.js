@@ -268,6 +268,39 @@ function makeElement(id) {
   element.pause = () => {};
   element.load = () => {};
 
+  // Enough <dialog> for the modals. `open` is a property in the real
+  // thing too, so page code reads it the same way. `close` fires its
+  // event synchronously here where a browser queues a task: tests
+  // asserting cleanup would otherwise need a tick, and the ordering
+  // that difference could hide is called out where it matters in
+  // analytics.js rather than being something a test can catch.
+  element.open = false;
+  // Not a real DOM property. It records which of the two open methods
+  // was used, because they differ in exactly the way this migration
+  // is about: only `showModal` traps focus, makes the rest of the
+  // page inert and answers Escape. Without recording it, swapping one
+  // for the other is invisible to a test and removes the whole point.
+  element.openedModally = false;
+  element.showModal = () => {
+    if (element.open) {
+      throw new Error("showModal on an already-open dialog");
+    }
+    element.open = true;
+    element.openedModally = true;
+  };
+  element.show = () => {
+    element.open = true;
+    element.openedModally = false;
+  };
+  element.close = (returnValue) => {
+    if (!element.open) {
+      return;
+    }
+    element.open = false;
+    element.openedModally = false;
+    element.returnValue = returnValue || "";
+    element.dispatch("close");
+  };
   element.getBoundingClientRect = () => ({
     top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0,
   });

@@ -1566,11 +1566,16 @@ button {
   transition: opacity 0.4s;
 }
 
-/* No `visibility: hidden` here, unlike .modal-overlay.hidden, and
-   checked rather than overlooked: this overlay holds a spinner, a
-   line of text and a progress bar, so there is nothing inside it for
-   the keyboard to land on. Add a control here (a cancel button, say)
-   and it wants the same treatment the modals got. */
+/* Still a plain div hidden with opacity, where the modals became
+   dialogs. Checked rather than overlooked: this overlay holds a
+   spinner, a line of text and a progress bar, so there is nothing
+   inside it for the keyboard to land on and nothing to trap focus
+   for. Add a control here, a cancel button say, and it wants to be
+   a dialog like the others.
+
+   Note it is no longer above them. A dialog sits in the top layer,
+   which outranks any z-index, so `raiseLoadingOverlay` in app.js
+   closes the open modals first. */
 #loading-overlay.hidden {
   opacity: 0;
   pointer-events: none;
@@ -1678,32 +1683,93 @@ button {
 
 /* ---- Modals (About / Help) ---- */
 
-/* The overlay hides with opacity rather than display so it can fade,
-   and `visibility` is the load-bearing part of that: `pointer-events:
-   none` stops the mouse and does nothing whatever to the keyboard, so
-   every control inside a closed modal stayed focusable and in the
-   accessibility tree. Nine invisible tab stops on the generator and
-   forty-eight on Analytics, most of them in the run detail modal.
+/* A native <dialog>, opened with showModal(). That is what traps the
+   focus, makes the rest of the page inert, and answers Escape, none
+   of which the hand-rolled version did: focus never entered the
+   modal, so Tab went on walking the page behind it.
 
-   The delay is what keeps the fade: visibility is not interpolable,
-   so it flips at the end of its transition, which has to be after the
-   opacity has finished or the modal vanishes instead of fading. */
+   The element stays a full-viewport flex container rather than
+   letting the UA centre it, so every rule below (the box, the
+   absolutely positioned close button, .modal-box-lg's 90vh column)
+   keeps working untouched. The UA's own border, padding, background
+   and max-width would otherwise draw a second box around the first. */
 .modal-overlay {
   position: fixed;
   inset: 0;
   z-index: 90;
-  display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.86);
-  transition: opacity 0.25s;
+  /* The UA gives a dialog its own border, padding, background,
+     width and max-width, which would draw a second box around
+     .modal-box. Cleared so this element is only the centring
+     container the old wrapper was. */
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  max-height: 100%;
+  margin: 0;
+  padding: 0;
+  border: none;
+  overflow: visible;
+  background: transparent;
+  color: inherit;
+  opacity: 1;
+  /* `display` is what opens and closes a dialog and it does not
+     interpolate, so without `allow-discrete` the element is gone
+     before any opacity can animate. `overlay` is the top-layer
+     membership, which needs the same treatment or the dialog leaves
+     the top layer at once and the fade happens underneath the page.
+     Closed state supplies the opacity to animate to; @starting-style
+     below supplies the one to animate from, since an element
+     entering the top layer has no previous state to use. */
+  transition:
+    opacity 0.25s,
+    display 0.25s allow-discrete,
+    overlay 0.25s allow-discrete;
 }
 
-.modal-overlay.hidden {
+/* `display` belongs here and nowhere else, and getting that wrong
+   broke the entire mouse.
+
+   The UA sheet closes a dialog with `dialog:not([open])
+   { display: none }`. An author rule beats the UA sheet whatever its
+   specificity, so a bare `display: flex` on .modal-overlay overrode
+   it and left all seven closed dialogs laid out: full-viewport,
+   position: fixed, z-index 90, and invisible only because their
+   opacity was zero. Opacity does not stop a pointer, so every click
+   on either page hit a stack of invisible modals instead of the
+   page, and their contents were back in the tab order too.
+
+   Scoping it to [open] leaves the UA's rule unopposed, which is what
+   keeps a closed modal both unclickable and out of the tab order. */
+.modal-overlay[open] {
+  display: flex;
+}
+
+/* Closed is `display: none` from the UA sheet, which is what keeps a
+   closed modal out of the tab order. The previous markup stayed in
+   it while invisible: nine reachable-but-unseen controls on the
+   generator and forty-eight on Analytics. */
+.modal-overlay:not([open]) {
   opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition: opacity 0.25s, visibility 0s linear 0.25s;
+}
+
+@starting-style {
+  .modal-overlay[open] {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-overlay {
+    transition: none;
+  }
+}
+
+/* The dim moves to the backdrop, since the element itself is now the
+   centring container rather than the thing covering the page. */
+.modal-overlay::backdrop {
+  background: rgba(0, 0, 0, 0.86);
 }
 
 .modal-box {
@@ -1753,6 +1819,25 @@ button {
   background: rgba(255, 255, 255, 0.06);
 }
 
+/* Its own ring rather than the platform's. This is a 22px glyph in a
+   2px-by-6px pad, so a default outline hugs a box much wider than it
+   is tall and reads as lopsided against the X. Matched to the hover
+   background so tabbing and pointing look the same. */
+.modal-close:focus-visible {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.06);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The box is the dialog's initial focus target (tabindex="-1" and
+   autofocus in the markup), which is what makes the arrow keys scroll
+   a long modal and what stops the close button taking a stray ring
+   the moment the modal opens. It is a container, not a control, so it
+   shows no ring of its own; the elements inside it do. */
+.modal-box:focus {
+  outline: none;
+}
 
 .modal-box h2 {
   font-size: 15px;

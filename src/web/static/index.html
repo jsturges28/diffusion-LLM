@@ -320,8 +320,8 @@
   <div id="token-alts-popover" hidden></div>
 
   <!-- Import-replaces-prompt confirmation modal -->
-  <div id="modal-import" class="modal-overlay hidden">
-    <div class="modal-box modal-box-confirm">
+  <dialog id="modal-import" class="modal-overlay">
+    <div class="modal-box modal-box-confirm" tabindex="-1" autofocus>
       <button class="modal-close" id="btn-import-close"
         aria-label="Close">&times;</button>
       <h2>Replace the current prompt?</h2>
@@ -335,11 +335,11 @@
         <button id="btn-import-confirm" class="btn-accent">Replace</button>
       </div>
     </div>
-  </div>
+  </dialog>
 
   <!-- About modal -->
-  <div id="modal-about" class="modal-overlay hidden">
-    <div class="modal-box">
+  <dialog id="modal-about" class="modal-overlay">
+    <div class="modal-box" tabindex="-1" autofocus>
       <button class="modal-close" aria-label="Close">&times;</button>
       <h2><span class="title-accent">LLM</span> Visualizer</h2>
       <div class="modal-body">
@@ -362,11 +362,11 @@
         </p>
       </div>
     </div>
-  </div>
+  </dialog>
 
   <!-- Help modal -->
-  <div id="modal-help" class="modal-overlay hidden">
-    <div class="modal-box">
+  <dialog id="modal-help" class="modal-overlay">
+    <div class="modal-box" tabindex="-1" autofocus>
       <button class="modal-close" aria-label="Close">&times;</button>
       <h2>Help</h2>
       <div class="modal-body">
@@ -610,7 +610,7 @@
         <p><strong>Reset</strong>, at the right of the Experimental row, puts every hyperparameter and the Experimental toggle back to their defaults for the current model and device. It is greyed out whenever nothing has been changed, so it doubles as a readout of whether you are on defaults. Your prompt is left alone, and the button is unavailable while a generation is running.</p>
       </div>
     </div>
-  </div>
+  </dialog>
 
   <!-- Model loading overlay. The bar stays hidden until a poll
        reports a measurable phase, so an unmeasurable checkpoint

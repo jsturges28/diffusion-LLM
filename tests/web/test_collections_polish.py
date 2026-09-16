@@ -132,7 +132,7 @@ def test_a_populated_collection_still_asks() -> None:
         "analytics.js", "function openCollectionDeleteModal(", 700
     )
 
-    assert "modalCollectionDelete.classList.remove" in body
+    assert "openModal(modalCollectionDelete)" in body
     assert "pendingCollectionDelete = collection.id" in body
 
 

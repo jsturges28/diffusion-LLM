@@ -1581,6 +1581,33 @@ function applyCollectionName(collection, raw) {
 }
 
 
+// ---- Modal open/close ----
+//
+// These are native <dialog> elements. showModal is what traps focus,
+// makes the rest of the page inert and answers Escape; the previous
+// class toggle did none of that, so Tab kept walking the table behind
+// an open modal. Guarded because opening an open dialog throws.
+function openModal(modal) {
+  if (modal && !modal.open) {
+    modal.showModal();
+  }
+}
+
+function closeModal(modal) {
+  if (modal && modal.open) {
+    modal.close();
+  }
+}
+
+// Ask before deleting a collection, unless there is nothing to ask
+// about.
+//
+// The confirmation exists because deleting a populated collection
+// throws away filing done by hand, which nothing on disk can rebuild.
+// An empty one throws away a name. Confirming that too made clearing
+// up twice the clicks and, worse, taught the dialog to be dismissed
+// without reading, which is exactly the habit it needs the user not
+// to have when the collection does hold something.
 function openCollectionDeleteModal(collection) {
   if (collectionPresentCount(collection) === 0) {
     deleteCollection(collection.id);
@@ -1593,13 +1620,16 @@ function openCollectionDeleteModal(collection) {
       + collectionPresentCount(collection)
       + " runs)";
   }
-  modalCollectionDelete.classList.remove("hidden");
+  openModal(modalCollectionDelete);
 }
 
 function closeCollectionDeleteModal() {
-  pendingCollectionDelete = null;
-  modalCollectionDelete.classList.add("hidden");
+  closeModal(modalCollectionDelete);
 }
+
+modalCollectionDelete.addEventListener("close", function () {
+  pendingCollectionDelete = null;
+});
 
 function confirmCollectionDelete() {
   var id = pendingCollectionDelete;
@@ -1636,7 +1666,7 @@ function openCollectionChooser(runId) {
     newCollectionName.value = "";
   }
   setCollectionsNote("");
-  modalCollections.classList.remove("hidden");
+  openModal(modalCollections);
 }
 
 // The same dialog, opened for a selection rather than one row. The
@@ -1656,14 +1686,17 @@ function openCollectionBulkChooser(runIds) {
     newCollectionName.value = "";
   }
   setCollectionsNote("");
-  modalCollections.classList.remove("hidden");
+  openModal(modalCollections);
 }
 
 function closeCollectionChooser() {
+  closeModal(modalCollections);
+}
+
+modalCollections.addEventListener("close", function () {
   chooserRunId = null;
   chooserRunIds = null;
-  modalCollections.classList.add("hidden");
-}
+});
 
 // Whether the dialog is filing a selection rather than one row.
 function chooserIsBulk() {
@@ -1915,10 +1948,7 @@ function setCollectionsNote(text, warn) {
 }
 
 function aCollectionDialogIsOpen() {
-  if (!modalCollections.classList.contains("hidden")) {
-    return true;
-  }
-  return !modalCollectionDelete.classList.contains("hidden");
+  return !!(modalCollections.open || modalCollectionDelete.open);
 }
 
 // ---- Render table ----
@@ -2183,7 +2213,7 @@ function showInvalidDetail(run) {
   // panel cannot be repainted by a fetch the user has moved on from.
   detailRequests.begin(run.run_id);
   comparePanel.hidden = true;
-  detailPanel.classList.remove("hidden");
+  openModal(detailPanel);
   detailTitle.textContent = "Run: " + run.run_id;
 
   var reason = run.error || "This run could not be read.";
@@ -2226,7 +2256,7 @@ function showDetail(runId) {
   // pair either paints together or not at all.
   var token = detailRequests.begin(runId);
   comparePanel.hidden = true;
-  detailPanel.classList.remove("hidden");
+  openModal(detailPanel);
   detailPanel.classList.remove("detail-unreadable");
 
   // Opening a run clears its "new" dot (and decrements the generator's
@@ -2493,16 +2523,29 @@ function metaRowHtml(label, value) {
 }
 
 function hideDetail() {
+  closeModal(detailPanel);
+}
+
+// The tidying that used to live in hideDetail now rides the dialog's
+// own close event, so it runs however the panel was dismissed:
+// the close button, a backdrop click, or the native Escape, which
+// does not pass through any of this file's code at all.
+//
+// Nulling activeRunId used to be the whole of it, which stopped
+// nothing: both fetches stayed in flight and repopulated a panel the
+// user had already dismissed.
+//
+// Worth knowing that `close()` queues this rather than running it
+// inline, so anything needing the panel retired before its next
+// statement has to do that itself. `showComparison` is the one such
+// caller and already does.
+detailPanel.addEventListener("close", function () {
   activeRunId = null;
-  // Nulling activeRunId used to be the whole of this, which stopped
-  // nothing: both fetches stayed in flight and repopulated a panel
-  // the user had already dismissed.
   detailRequests.cancel();
   hideChartsError();
-  detailPanel.classList.add("hidden");
   clearOverlay();
   renderTable();
-}
+});
 
 function escHtml(s) {
   var d = document.createElement("div");
@@ -5551,7 +5594,7 @@ function entropyTooltipLabel(ctx, texts, divergence) {
 // ---- Comparison mode ----
 
 function showComparison(ids) {
-  detailPanel.classList.add("hidden");
+  closeModal(detailPanel);
   comparePanel.hidden = false;
   activeRunId = null;
   // Leaving the detail view by any route has to retire its
@@ -5975,7 +6018,7 @@ function showDeleteModal() {
       + "/</code>. This cannot be undone.";
   }
   btnDeleteConfirm.disabled = false;
-  modalDelete.classList.remove("hidden");
+  openModal(modalDelete);
 }
 
 function openDeleteModal(runId) {
@@ -6034,10 +6077,17 @@ function showToast(message) {
 }
 
 function closeDeleteModal() {
+  closeModal(modalDelete);
+}
+
+// Safe to defer: `confirmDelete` copies the ids before it closes.
+// This one gains Escape by the migration, having had no handler for
+// it at all, so the reset has to happen on close rather than only on
+// the routes that used to exist.
+modalDelete.addEventListener("close", function () {
   pendingDeleteIds = [];
   btnDeleteConfirm.disabled = false;
-  modalDelete.classList.add("hidden");
-}
+});
 
 // Delete a single run, resolving to a {runId, success} record so a
 // batch can report partial failures without one rejection aborting the
@@ -6272,19 +6322,12 @@ detailPanel.addEventListener("click", function (e) {
   }
 });
 
-// Escape closes the detail modal (matches the generator's modals),
-// unless a shallower dialog is open over it and gets the key first.
-document.addEventListener("keydown", function (e) {
-  if (e.key !== "Escape") {
-    return;
-  }
-  if (aCollectionDialogIsOpen()) {
-    return;
-  }
-  if (!detailPanel.classList.contains("hidden")) {
-    hideDetail();
-  }
-});
+// Escape is the dialog's own now, and the top layer already orders
+// the stack: the most recently opened dialog gets the key, so a
+// collection dialog sitting over the detail panel closes first
+// without anyone arbitrating it. The hand-rolled version of this had
+// to check for that case explicitly, and still left `modal-delete`
+// with no Escape at all.
 
 btnCloseCompare.addEventListener(
   "click", hideComparison
@@ -6381,22 +6424,6 @@ btnColDeleteClose.addEventListener(
 modalCollectionDelete.addEventListener("click", function (e) {
   if (e.target === modalCollectionDelete) {
     closeCollectionDeleteModal();
-  }
-});
-
-// Escape closes whichever collection dialog is open. Separate from
-// the detail modal's handler above because these two are shallow
-// dialogs that can sit over it, so the innermost closes first.
-document.addEventListener("keydown", function (e) {
-  if (e.key !== "Escape") {
-    return;
-  }
-  if (!modalCollectionDelete.classList.contains("hidden")) {
-    closeCollectionDeleteModal();
-    return;
-  }
-  if (!modalCollections.classList.contains("hidden")) {
-    closeCollectionChooser();
   }
 });
 

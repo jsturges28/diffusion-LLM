@@ -2304,21 +2304,94 @@ behind `getDevice()`, which the activation request reads: moving only
 the `is-active` class would have loaded a different device than the
 row displayed. One `setDevice` now serves the pointer and the keys.
 
-**Focus indicators had nowhere to land, for the same reason twice.**
-Each is a control whose visible part is not the element that takes
-focus, so a style written against the obvious class lands on the wrong
-one.
+**The modals are native `<dialog>` elements, which retires the
+`visibility: hidden` fix from earlier the same day.** Worth stating
+plainly rather than leaving as a puzzle for whoever reads the two
+commits together. That fix was correct and insufficient: it removed
+closed modals from the tab order and could not trap focus in an open
+one, so Tab still walked the page behind. `showModal()` gives the
+trap, the inertness and Escape, and a closed dialog is `display:
+none`, so the rule it replaces is not merely redundant but would now
+fight the element.
+
+The outer wrapper became the dialog with `.modal-box` left inside it,
+so every inner rule survives untouched, `::backdrop` takes the dim,
+and backdrop-click detection still works because `e.target === dialog`
+only matches outside the box. Making `.modal-box` the dialog would
+have rewritten the centring, the absolutely positioned close button
+and `.modal-box-lg`'s `90vh` column.
+
+*Close became one funnel, which fixed a bug nobody had reported.*
+Every dismissal now fires `close`, so cleanup hangs off that instead
+of being repeated per route: `pendingImportFile`, and `hideDetail`'s
+request cancellation, overlay clear and table re-render. Analytics'
+`modal-delete` had no Escape handler at all and simply could not be
+dismissed that way; it gets one from the platform. Two hand-rolled
+document Escape listeners came out, including one that existed only
+to arbitrate which of two stacked dialogs should close, which the top
+layer now does by itself.
+
+*One interaction had to be resolved rather than discovered.* The top
+layer outranks every `z-index`, so `#loading-overlay` at 100 no
+longer covers an open modal. That is reachable: `handleResident`
+raises the curtain when another window swaps the model, which can
+happen with About open. `raiseLoadingOverlay` closes the dialogs
+first, since a swap invalidates the page underneath anyway.
+
+Fading needed `transition-behavior: allow-discrete` on both `display`
+and `overlay` plus `@starting-style`, because `display` is what opens
+a dialog and does not interpolate: an opacity transition alone
+animates nothing, the element is already gone.
+
+**The dialog migration disabled the mouse, and no test caught it.**
+The worst regression of the campaign, worth the space.
+
+`.modal-overlay` carried a bare `display: flex` so the element would
+centre its box the way the old wrapper did. An author declaration
+beats the user-agent sheet whatever its specificity, so
+`dialog:not([open]) { display: none }` never applied, and all seven
+closed dialogs stayed laid out: `position: fixed`, `inset: 0`,
+`z-index: 90`, invisible only because their opacity was zero. Opacity
+does not stop a pointer. Every click on either page landed on a stack
+of invisible modals, and their contents were back in the tab order,
+which is the exact defect the previous round had removed.
+
+The maintainer navigated the entire application by keyboard for a
+session and verified four items that way before mentioning it, which
+is the only reason it was found at all rather than shipped.
+
+Two things about how it got through. The `display: none` was in the
+first draft and was removed while consolidating two overlapping
+rules, on the reasoning that the UA already provides it, which is
+true and irrelevant. And every test written for the migration
+inspects CSS text or drives the stub, and neither evaluates the
+cascade, so a rule that is present and overridden looks identical to
+one that works. The guard added now asserts that `display` appears
+only under `[open]`, which is the shape of the mistake rather than
+the mistake itself, and is the most a text-level test can do.
+
+**Three focus indicators had nowhere to land, all for the same
+reason.** Found on 2026-09-15 once the mouse worked again and the rest
+of the app was reachable. Each is a control whose visible part is not
+the element that takes focus.
 
 A `.toggle-switch` hides its real checkbox with `opacity: 0` and no
 width or height, so the platform's ring drew around an invisible
-zero-sized box; the visible `.toggle-slider` wears it now. And the
+zero-sized box; the visible `.toggle-slider` wears it now. The
 Analytics table's rows are not focusable at all, only their checkbox,
-star and caret are, so `:focus-within` lights the row rather than
-trying to make the row a focus target.
+star and caret are, so `:focus-within` lights the row instead of
+trying to make the row a focus target. And `showModal` focuses the
+first focusable descendant, which was the close X, so it took a ring
+the moment any modal opened; the box is the initial target now, which
+also gives the arrow keys something scrollable to act on, answering a
+complaint from two rounds earlier about not being able to scroll a
+long modal by keyboard.
 
-Worth naming the pattern, since it recurred: a styled control usually
-means a hidden input plus a visible proxy, and the fix is to style the
-proxy from the input's state rather than styling the input.
+Worth naming the pattern, since it recurred three times in one
+sitting: a styled control usually means a hidden input plus a visible
+proxy, and a focus style written against the control's class lands on
+whichever of the two the CSS happens to name. The general fix is to
+style the proxy from the input's state, not the input.
 
 **A run detail had no keyboard route, and Enter was free.** Clicking
 a row opens it; the keyboard could reach the row's three controls and
@@ -2347,6 +2420,21 @@ an element built with `className = "a b"` reported no classes at all
 to a test asking `classList.contains("b")`. That last one is the
 worrying kind: it would silently weaken any future test about a class
 set on construction, which is most of this widget.
+
+**And it carries one deliberate fiction, which is worth flagging as
+such.** The stub's `<dialog>` records whether `showModal` or `show`
+opened it, under a property no real DOM has. The two differ in
+exactly what this work is about, since only `showModal` traps focus
+and makes the page inert, and without recording it a swap between
+them is invisible to a test while removing the entire point. A stub
+inventing API is normally a smell; here it is the only way to assert
+the distinction at all, because the behaviour it stands for is
+precisely what a stub cannot implement.
+
+Its `close` also fires synchronously where a browser queues a task.
+That difference is real and the code depends on it in one place, so
+`analytics.js` says so at the call site rather than relying on a test
+to catch it.
 
 ### ORG-04
 

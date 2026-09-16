@@ -2578,3 +2578,68 @@ shape: a control whose visible part is not the element focus lands on.
     checkbox, star and caret are, and none of those opens a run.
     Space still selects the row, since that is the checkbox's key,
     and Enter now opens it.
+259. **A focused row is visible on Analytics.** Belongs with 257 and
+    258 and landed a commit later, which is worth admitting rather
+    than renumbering around. Tab into the runs table: the row holding
+    focus should be highlighted the way a hovered row is, and the
+    checkbox itself should have a ring. The rows are not focusable,
+    only their three controls are, so this is `:focus-within` rather
+    than anything deciding where focus went.
+
+## The modals became dialogs (2026-09-15)
+
+All seven are native `<dialog>` elements opened with `showModal()`,
+which gives the focus trap, the inertness of everything behind, and
+Escape. None of those existed: `openModal` was one line that removed a
+class, so focus never entered a modal and Tab kept walking the page
+underneath.
+
+This supersedes item 249's `visibility` fix. A closed dialog is
+`display: none`, so it holds no tab stops without anyone arranging it,
+and an open one traps focus, which no CSS could do.
+
+It also broke the mouse for a session, so read 262 before the rest.
+
+260. **An open modal keeps the keyboard.** Open About on the
+    generator and press Tab repeatedly. Focus should cycle within the
+    modal and never reach the page behind it. Escape should close it.
+261. **The modal opens focused on its own box.** Nothing inside it
+    should have a ring when it opens, and the arrow keys should
+    scroll a long modal, which they could not before. Then Tab once:
+    the close X should take a ring that fits it.
+
+    `showModal` focuses the first focusable descendant, which was the
+    X, so it wore a ring the instant a modal opened and nothing
+    scrollable held focus. The box takes the focus instead.
+262. **Click something.** Anything: the prompt box, a hyperparameter
+    field, a run row. This is here because the migration disabled the
+    mouse everywhere for a session. `.modal-overlay` carried a bare
+    `display: flex`, an author rule beats the user-agent sheet
+    whatever its specificity, and so `dialog:not([open])
+    { display: none }` never applied: all seven closed dialogs stayed
+    laid out at `position: fixed; inset: 0; z-index: 90`, invisible
+    only because their opacity was zero. Opacity does not stop a
+    pointer.
+263. **And no tab stop lands on nothing.** The same bug put those
+    dialogs' contents back in the tab order, undoing item 248. Tab
+    across the generator and count the presses between the throughput
+    switch and the Menu link.
+264. **Escape closes the innermost dialog.** On Analytics, open the
+    collections chooser from a row's caret, then the delete
+    confirmation over it. Escape should close the confirmation and
+    leave the chooser. The delete confirmation had no Escape handler
+    at all before this and could only be dismissed by mouse.
+
+    Note there is no route from an open run detail to the collections
+    chooser, so that particular stacking cannot be reached; the top
+    layer orders the stack either way, with no code of ours deciding.
+265. **The modals still fade.** Closing one should fade over about a
+    quarter second rather than vanishing. The likeliest thing to be
+    wrong: a dialog leaves the top layer the moment it closes unless
+    the transition holds it, so a mistake shows as the box
+    disappearing instantly or the backdrop lingering after it.
+266. **Loading still covers everything.** With About open on the
+    generator, have another window switch the model. The curtain
+    should come up and the modal should be gone rather than floating
+    over it. A dialog is in the top layer, above every stacking order
+    the app can set, so the only way to stay covered is to close.

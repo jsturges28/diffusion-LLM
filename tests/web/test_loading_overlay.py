@@ -122,7 +122,7 @@ def test_a_switch_raises_it() -> None:
     broken."""
     region = _region("function switchModel(id, device)", 1200)
 
-    assert 'loadingOverlay.classList.remove("hidden")' in region
+    assert "raiseLoadingOverlay()" in region
 
 
 def test_a_worker_reporting_loading_raises_it() -> None:
@@ -131,12 +131,23 @@ def test_a_worker_reporting_loading_raises_it() -> None:
     socket opened."""
     region = _region("function handleModelStatus(data)", 1400)
 
-    assert 'loadingOverlay.classList.remove("hidden")' in region
+    assert "raiseLoadingOverlay()" in region
 
 
 def test_a_model_swapped_from_another_window_raises_it() -> None:
     region = _region("function handleResident(data)", 1500)
 
+    assert "raiseLoadingOverlay()" in region
+
+
+def test_raising_it_clears_the_modals_first() -> None:
+    """The modals are dialogs now, so an open one is in the top layer
+    and outranks this overlay's z-index however high it goes. That is
+    reachable rather than theoretical: another window swapping the
+    model raises the curtain, and About could be open over it."""
+    region = _region("function raiseLoadingOverlay()", 500)
+
+    assert "closeModal(" in region
     assert 'loadingOverlay.classList.remove("hidden")' in region
 
 

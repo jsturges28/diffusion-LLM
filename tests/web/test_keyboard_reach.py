@@ -1,10 +1,9 @@
 """What a keyboard can reach, and what it must not.
 
 Strategy: read the shipped markup and CSS. Every claim here is about
-which elements a browser puts in the tab order, or about whether a
-focused control shows anything, and both are decided by static rules
-and attributes, so none of it needs a browser. What it cannot check is
-how the traversal feels, and that stays in
+which elements a browser puts in the tab order, which is decided by
+static rules and attributes, so none of it needs a browser to check.
+What it cannot check is how the traversal feels, and that stays in
 `docs/MANUAL_VERIFICATION.md`.
 
 The bug that prompted this file: the maintainer counted eleven tab
@@ -15,16 +14,15 @@ times and were hidden with `opacity: 0` and `pointer-events: none`.
 Neither of those touches the keyboard. Analytics was far worse, with
 forty-eight, most of them inside the run detail modal.
 
-`visibility: hidden` is what actually removes a subtree from the tab
-order, from hit testing and from the accessibility tree, so that is
-what the rule carries now. The tests below pin the rule, pin the fade
-it must not break, and pin the reason it is load-bearing, because a
-rule whose purpose is invisible is a rule someone simplifies away.
+That was first fixed with `visibility: hidden`, and then fixed
+properly: the modals are native `<dialog>` elements now, opened with
+`showModal()`. A closed dialog is `display: none`, so it holds no tab
+stops without anyone arranging it, and an open one traps focus and
+makes the rest of the page inert, which the CSS fix could not do.
 
-The rest of the file is about controls whose visible part is not the
-element that takes focus, which turned out to be a recurring shape:
-a toggle hides its real checkbox, and a table row is not focusable at
-all while three things inside it are.
+So the tests below moved from "the rule that hides them is present"
+to "these are dialogs and nothing hides them by hand", which is a
+weaker-looking claim about a stronger mechanism.
 """
 
 from __future__ import annotations
@@ -49,7 +47,7 @@ _FOCUSABLE = re.compile(
     re.IGNORECASE,
 )
 _MODAL_OPEN = re.compile(
-    r'<div id="(?P<id>[a-z-]+)" class="modal-overlay hidden">'
+    r'<dialog id="(?P<id>[a-z-]+)" class="modal-overlay">'
 )
 
 
@@ -64,94 +62,147 @@ def _rule(selector: str, chars: int = 1600) -> str:
     return body[: body.find("}")]
 
 
-def _block(html: str, start: int) -> str:
-    """The element beginning at `start`, by counting div tags."""
+def _block(html: str, start: int, tag_name: str = "div") -> str:
+    """The element beginning at `start`, by counting its own tags."""
     depth = 0
-    for tag in re.finditer(r"<(/?)div\b", html[start:]):
+    pattern = r"<(/?)" + tag_name + r"\b"
+    for tag in re.finditer(pattern, html[start:]):
         depth += -1 if tag.group(1) else 1
         if depth == 0:
             return html[start : start + tag.end()]
-    raise AssertionError("unclosed div; the markup changed shape")
+    raise AssertionError(
+        f"unclosed {tag_name}; the markup changed shape"
+    )
 
 
-def _hidden_modals(page: str) -> Dict[str, int]:
-    """Focusable descendants per closed modal on a page."""
+def _modals(page: str) -> Dict[str, int]:
+    """Focusable descendants per modal on a page."""
     html = (STATIC / page).read_text(encoding="utf-8")
     found: Dict[str, int] = {}
     for match in _MODAL_OPEN.finditer(html):
-        block = _block(html, match.start())
+        block = _block(html, match.start(), "dialog")
         found[match.group("id")] = len(_FOCUSABLE.findall(block))
     return found
 
 
-# -- the rule --
+# -- they are dialogs, which is what does the work --
 
 
-def test_a_closed_modal_is_hidden_from_the_keyboard() -> None:
-    """The whole point. Without this the controls inside are
-    invisible and still focusable, which is worse than either."""
-    rule = _rule(".modal-overlay.hidden {")
+@pytest.mark.parametrize("page", MODAL_PAGES)
+def test_every_modal_is_a_dialog(page: str) -> None:
+    """A plain div can be hidden but cannot trap focus or make the
+    rest of the page inert, which is why the CSS-only fix that came
+    before this one was only half of it."""
+    html = (STATIC / page).read_text(encoding="utf-8")
 
-    assert "visibility: hidden" in rule
+    for match in re.finditer(r'class="[^"]*modal-overlay', html):
+        line_start = html.rfind("<", 0, match.start())
+        assert html.startswith("<dialog", line_start), (
+            f"{page} has a modal-overlay that is not a dialog"
+        )
+
+
+@pytest.mark.parametrize("page", MODAL_PAGES)
+def test_no_modal_ships_open(page: str) -> None:
+    """`open` in the markup would put it on screen at load, and would
+    also be the non-modal kind that traps nothing."""
+    html = (STATIC / page).read_text(encoding="utf-8")
+
+    for match in _MODAL_OPEN.finditer(html):
+        assert " open" not in match.group(0), match.group("id")
+
+
+def test_a_closed_modal_is_not_laid_out() -> None:
+    """The one that got away, and it broke the whole mouse.
+
+    The UA closes a dialog with `dialog:not([open])
+    { display: none }`, and an author rule beats the UA sheet whatever
+    its specificity. So an unconditional `display: flex` on
+    .modal-overlay left all seven closed dialogs laid out at
+    `position: fixed; inset: 0; z-index: 90`, invisible only because
+    their opacity was zero. Opacity does not stop a pointer: every
+    click on either page hit a stack of invisible modals, and the
+    maintainer navigated the whole app by keyboard for a session
+    before mentioning it.
+
+    Asserted as "display is scoped to [open]" rather than as a
+    computed style, which nothing here can evaluate."""
+    css = (STATIC / "style.css").read_text(encoding="utf-8")
+
+    base = _rule(".modal-overlay {")
+    assert "display:" not in base, (
+        "display on the unconditional rule overrides the UA's"
+        " display:none and lays out every closed modal"
+    )
+
+    start = css.find(".modal-overlay[open] {")
+    assert start != -1, "nothing gives an open modal a display"
+    assert "display: flex" in css[start : start + 120]
+
+
+def test_nothing_hides_a_modal_by_hand_any_more() -> None:
+    """The `hidden` class and the `visibility` rule that went with it
+    are both gone: closed is `display: none` from the UA sheet now.
+    A leftover rule would fight the dialog rather than help it."""
+    css = (STATIC / "style.css").read_text(encoding="utf-8")
+
+    assert ".modal-overlay.hidden" not in css
+
+
+def test_the_backdrop_carries_the_dim() -> None:
+    """It moved off the element, which is now only the box that
+    centres the modal. Without this the page behind is undimmed."""
+    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    start = css.find(".modal-overlay::backdrop")
+
+    assert start != -1, "the backdrop lost its background"
+    assert "rgba(0, 0, 0" in css[start : start + 120]
 
 
 def test_it_still_fades_rather_than_vanishing() -> None:
-    """`visibility` does not interpolate, so it flips at the end of
-    its own transition. Given no delay it flips immediately and takes
-    the modal with it, losing the fade the opacity is there for."""
-    rule = _rule(".modal-overlay.hidden {")
+    """`display` is what opens and closes a dialog and it does not
+    interpolate, so an opacity transition alone animates nothing: the
+    element is already gone. `allow-discrete` holds it through the
+    fade and `@starting-style` gives the entry something to animate
+    from."""
+    rule = _rule(".modal-overlay {")
+    css = (STATIC / "style.css").read_text(encoding="utf-8")
 
-    match = re.search(
-        r"transition:[^;]*visibility\s+0s\s+\w+\s+([\d.]+)s", rule
-    )
-    assert match is not None, (
-        "visibility flips with no delay, so the fade-out is gone"
-    )
-    opacity = re.search(r"transition:\s*opacity\s+([\d.]+)s", rule)
-    assert opacity is not None
-    assert float(match.group(1)) >= float(opacity.group(1))
+    assert "display 0.25s allow-discrete" in rule
+    assert "overlay 0.25s allow-discrete" in rule
+    assert "@starting-style" in css
 
 
-def test_showing_a_modal_is_not_delayed_too() -> None:
-    """The delay belongs to the hidden state only. On the base rule
-    it would postpone every open by a quarter second."""
-    base = _rule(".modal-overlay {")
+def test_the_fade_yields_to_reduced_motion() -> None:
+    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    start = css.find("@media (prefers-reduced-motion: reduce)")
+    found = False
+    while start != -1 and not found:
+        block = css[start : start + 260]
+        found = ".modal-overlay" in block
+        start = css.find(
+            "@media (prefers-reduced-motion: reduce)", start + 1
+        )
 
-    assert "visibility" not in base
+    assert found, "the modal fade ignores reduced motion"
 
 
 # -- and why it is load-bearing --
 
 
 @pytest.mark.parametrize("page", MODAL_PAGES)
-def test_closed_modals_really_do_hold_controls(page: str) -> None:
-    """The stakes, asserted so the rule above cannot be read as
-    defensive tidying and simplified away. These are real buttons and
-    links that were in the tab order while invisible."""
-    counts = _hidden_modals(page)
+def test_modals_really_do_hold_controls(page: str) -> None:
+    """The stakes, so none of the above reads as defensive tidying.
+    These are real buttons and links, and every one of them was in
+    the tab order while its modal was invisible: nine on the
+    generator, forty-eight on Analytics."""
+    counts = _modals(page)
 
-    assert counts, f"no closed modals found in {page}"
+    assert counts, f"no modals found in {page}"
     assert sum(counts.values()) >= 1, (
-        f"{page} has closed modals with nothing focusable inside;"
-        " if that is now true of all of them, this test is stale"
+        f"{page} has modals with nothing focusable inside; if that is"
+        " now true of all of them, this test is stale"
     )
-
-
-@pytest.mark.parametrize("page", MODAL_PAGES)
-def test_every_modal_ships_closed(page: str) -> None:
-    """The rule only applies at rest if the markup starts at rest. A
-    modal shipped without the class is visible on load, which is a
-    louder bug, but it also silently opts out of the fix above."""
-    html = (STATIC / page).read_text(encoding="utf-8")
-
-    tagged = re.finditer(
-        r'<div id="[a-z-]+" class="([^"]*)"', html
-    )
-    for match in tagged:
-        classes = match.group(1).split()
-        if "modal-overlay" not in classes:
-            continue
-        assert "hidden" in classes, match.group(0)
 
 
 # -- controls whose focus ring had nowhere to land --
@@ -181,25 +232,36 @@ def test_the_hidden_input_is_still_the_focus_target() -> None:
     assert css.count(".toggle-slider") > 1
 
 
-def test_a_checkbox_shows_its_own_ring() -> None:
-    """`appearance: none` takes the native control away, and with it
-    the platform's ring on some engines, so the Analytics row
-    checkboxes have to draw their own."""
-    css = (STATIC / "style.css").read_text(encoding="utf-8")
+@pytest.mark.parametrize("page", MODAL_PAGES)
+def test_a_modal_opens_focused_on_its_box(page: str) -> None:
+    """`showModal` focuses the first focusable descendant, which was
+    the close button: it took a ring the moment a modal opened, and
+    the arrow keys could not scroll a long modal because nothing
+    scrollable held focus. The box takes the focus instead, which
+    fixes both."""
+    html = (STATIC / page).read_text(encoding="utf-8")
 
-    assert (
-        'input[type="checkbox"].app-checkbox:focus-visible' in css
-    )
+    for match in re.finditer(r'<div class="modal-box[^>]*>', html):
+        tag = match.group(0)
+        assert 'tabindex="-1"' in tag, tag
+        assert "autofocus" in tag, tag
 
 
-def test_a_focused_row_is_visible_on_analytics() -> None:
-    """The rows themselves are not focusable, only their checkbox,
-    star and caret are, so there is nothing to give a focus style to.
-    `:focus-within` lights the row instead, whichever of the three
-    Tab landed on."""
-    css = (STATIC / "analytics.css").read_text(encoding="utf-8")
+def test_the_box_shows_no_ring_of_its_own() -> None:
+    """It is a container that happens to hold focus, not a control.
+    A ring around the whole modal would be noise."""
+    rule = _rule(".modal-box:focus {", chars=120)
 
-    assert "#runs-table tbody tr:focus-within" in css
+    assert "outline: none" in rule
+
+
+def test_the_close_button_rings_when_tabbed_to() -> None:
+    """Not on open any more, but it still has to show something when
+    Tab reaches it, and the platform's default hugs a box far wider
+    than the glyph inside it."""
+    rule = _rule(".modal-close:focus-visible {", chars=220)
+
+    assert "outline:" in rule
 
 
 # -- the model picker's resting semantics --

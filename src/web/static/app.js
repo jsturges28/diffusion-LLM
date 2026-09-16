@@ -1616,7 +1616,7 @@ function switchModel(id, device) {
   // correcting itself to "Starting worker".
   stopLoadProgressPoll();
   setLoadingProgress("starting", null);
-  loadingOverlay.classList.remove("hidden");
+  raiseLoadingOverlay();
   setModelSelectDisabled(true);
 
   switchWatch = activationClientCreate({
@@ -1782,7 +1782,7 @@ function handleModelStatus(data) {
         : "model")
       + "\u2026"
     );
-    loadingOverlay.classList.remove("hidden");
+    raiseLoadingOverlay();
     startLoadProgressPoll();
     updateGenerateButton();
   } else if (data.status === "ready") {
@@ -1840,7 +1840,7 @@ function handleResident(data) {
   setBadge("loading");
   setLoadingText("Model changed to " + name + "\u2026");
   setLoadingProgress("idle", null);
-  loadingOverlay.classList.remove("hidden");
+  raiseLoadingOverlay();
   statusMessage.textContent =
     "The model was changed to " + name + " in another window.";
   rescueRunThenReload();
@@ -8025,21 +8025,43 @@ var allModals = [
   modalAbout, modalHelp, modalImport,
 ];
 
+// Raising the loading curtain has to clear the modals first. They are
+// native dialogs now, so an open one is in the top layer, which sits
+// above every z-index including this overlay's 100. That is reachable
+// rather than theoretical: another window swapping the model raises
+// the curtain with About open, and the About box would float over it.
+// A swap invalidates the page underneath anyway, so the dialog goes.
+function raiseLoadingOverlay() {
+  for (var mi = 0; mi < allModals.length; mi++) {
+    closeModal(allModals[mi]);
+  }
+  loadingOverlay.classList.remove("hidden");
+}
+
 function openModal(modal) {
-  modal.classList.remove("hidden");
+  // showModal, not show: it is the modal form that traps focus, makes
+  // the rest of the document inert, and answers Escape. Guarded
+  // because opening an already-open dialog throws.
+  if (!modal.open) {
+    modal.showModal();
+  }
 }
 
 function closeModal(modal) {
-  modal.classList.add("hidden");
-  // Every route out of the import dialog is a decision not to
-  // replace: the close button, the backdrop, Escape, and Cancel. They
-  // all pass through here, so dropping the pending file here is what
-  // keeps a later import from acting on a file the user walked away
-  // from.
-  if (modal === modalImport) {
-    pendingImportFile = null;
+  if (modal.open) {
+    modal.close();
   }
 }
+
+// Every route out of the import dialog is a decision not to replace:
+// the close button, the backdrop, Escape and Cancel. They all end in
+// the dialog's own `close` event now, which is the only funnel that
+// catches the native Escape as well, so dropping the pending file
+// here is what keeps a later import from acting on a file the user
+// walked away from.
+modalImport.addEventListener("close", function () {
+  pendingImportFile = null;
+});
 
 linkAbout.addEventListener(
   "click",
@@ -8071,6 +8093,10 @@ for (var ci = 0; ci < closeButtons.length; ci++) {
   })(closeButtons[ci]);
 }
 
+// The dialog fills the viewport and centres .modal-box inside it, so
+// a click landing on the dialog itself is a click beside the box.
+// The ::backdrop cannot be hit directly, which is why this tests the
+// element rather than the pseudo.
 allModals.forEach(function (modal) {
   modal.addEventListener(
     "click",
@@ -8082,26 +8108,10 @@ allModals.forEach(function (modal) {
   );
 });
 
-document.addEventListener(
-  "keydown",
-  function (e) {
-    if (e.key === "Escape") {
-      for (
-        var i = 0;
-        i < allModals.length;
-        i++
-      ) {
-        if (
-          !allModals[i].classList.contains(
-            "hidden"
-          )
-        ) {
-          closeModal(allModals[i]);
-        }
-      }
-    }
-  }
-);
+// Escape is the dialog's own now. The hand-rolled listener that used
+// to do this closed every open modal at once and, being on the
+// document, fired for any Escape anywhere; the native one closes the
+// topmost dialog and nothing else.
 
 // ---- Session persistence (survives Analytics navigation) ----
 
