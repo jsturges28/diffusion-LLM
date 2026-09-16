@@ -2426,3 +2426,155 @@ is a bug.
     a reflow, and the fix, naming the persistent chrome so it morphs
     in place, is the pass the comment above that rule already
     reserves.
+
+## Dropdowns answer to a keyboard (2026-09-01)
+
+`RUNTIME-03`. Every themed dropdown in the app is one shared widget,
+and it had two unrelated problems: it installed a document listener
+per instance and removed none, so a long Analytics session
+accumulated dead handlers that every later click ran; and it could be
+opened and closed from the keyboard but offered no way to choose
+anything, while announcing a list of options that could not be
+reached.
+
+The listener count and the key handling both have tests. What those
+cannot show is a real screen reader, a real focus ring, or the feel
+of arrowing through a list, which is what these items are for.
+
+242. **Choose a hyperparameter without touching the mouse.** On the
+    generator, Tab to a dropdown in the hyperparameter column. Press
+    Down to open it, arrow through the options, and press Enter. The
+    value should change, the list should close, and focus should
+    stay on the control. Then Tab to another and press Escape
+    part-way through a browse: the value it had should survive.
+    Before this, arrow keys did nothing at all and Enter only
+    toggled the list, so there was no keyboard route to a value.
+
+    Confirmed 2026-09-01, and it turned up two things this item does
+    not cover: the model picker is a different widget and was still
+    mouse-only, and Tab was landing on invisible controls. Items 248
+    to 252 are those.
+243. **The highlight and the selection are distinguishable.** While
+    arrowing, the option under the keyboard should be visibly marked
+    and the currently selected one should still read as selected.
+    They are different states and are styled differently on purpose;
+    if they look the same, arrowing appears to change the value
+    before Enter is pressed.
+244. **Every dropdown in the app, not just that one.** The same
+    keys on the overlay picker on both the generator and Analytics,
+    the Group By picker in Analytics, and the two pickers in
+    Settings. One widget serves all of them, so a difference between
+    them is a wiring bug rather than a widget bug.
+245. **Disabled options cannot be reached.** Open a run with no
+    edited branch and arrow through the overlay picker: "Diff vs
+    Original" is disabled there and should be stepped over rather
+    than landed on and refused.
+246. **A long Analytics session stays responsive.** The leak, from
+    the user's side. Open twenty or thirty run details in one
+    sitting, closing each, then click around the page. It should
+    feel the same as it did on the first one. Previously each
+    opened run left a dead click handler behind and every click ran
+    all of them.
+247. **The overlay picker still tracks the run it is showing.** The
+    generator used to rebuild that picker only when its option set
+    changed, as a way of limiting the leak; it now rebuilds every
+    time. Run a diffusion generation, use Edit Frames to produce a
+    branch, and check "Diff vs Original" becomes available and the
+    current selection is not lost across the rebuild. Then run an
+    autoregressive model and confirm Commit Order stays absent.
+
+## Tab goes where you can see (2026-09-01)
+
+Two follow-ups from verifying the above, neither an audit finding.
+
+Tabbing across the generator spent eleven presses on nothing. Those
+were the controls inside the three modals, which live in the document
+permanently and were hidden with opacity alone: invisible, and still
+in the tab order. Nine on the generator, and forty-eight on Analytics,
+thirty-eight of them in the run detail modal.
+
+And the model picker turned out to be a second dropdown that
+`RUNTIME-03` never covered, so it was still mouse-only. Its rows carry
+a device control, so the only parts a keyboard could reach were the
+GPU and CPU buttons inside them, which is why Tab moved between
+devices instead of between models.
+
+248. **Tab reaches only what is on screen.** On the generator, Tab
+    from the throughput switch and count how many presses reach the
+    Menu link. It was eleven with nine of them landing on nothing.
+    Do the same on Analytics, where the improvement should be much
+    larger. Nothing visible should have stopped being reachable,
+    which is the failure worth watching for.
+249. **The modals still work, and still fade.** Open About, Tab
+    through it, and close it. Its links should be reachable while it
+    is open and unreachable the moment it is not. Watch the close
+    itself: it should fade out over about a quarter second rather
+    than disappearing, because the fix has to wait for the fade and
+    a wrong delay would cut it short.
+250. **Pick a model with the keyboard.** Tab to the model picker,
+    press Down to open it, and arrow between models. The whole
+    picker should be one tab stop now, not one per device button.
+    Enter switches; Escape closes without switching.
+251. **Pick a device with the keyboard.** On the SmolLM3 row, the
+    only one offering a choice, press Right and Left. The targeted
+    pill should move without anything loading, and Enter should then
+    switch to it. This is the item that matters most here: the
+    device buttons left the tab order, so if Left and Right do not
+    work, keyboard users lost the only route they had.
+252. **The headroom readout follows the keyboard.** Arrowing onto a
+    model row should show the same "Required / Available" popover a
+    mouse hover shows. Without it a keyboard user picks a model with
+    no idea whether it fits.
+
+## The keyboard reaches the rest of it (2026-09-01)
+
+Verifying the above found three more things.
+
+Enter did not work on the Confirm or Cancel buttons of either
+confirmation popover: both sit inside an element whose key handler
+cancelled Enter, which cancels the click a browser synthesises on a
+focused button. The Main Menu turned out to be a third dropdown that
+had never been touched, so Tab there moved between a model's GPU and
+CPU buttons rather than between models. And the keyboard highlight
+teleported rather than travelled.
+
+253. **Confirm a model switch without the mouse.** The one that was
+    broken. On the generator, open the model picker with Down, arrow
+    to another model, press Enter to raise the confirmation, then Tab
+    to the green check and press Enter. It should switch. Escape from
+    the confirmation should dismiss it and leave the list as it was.
+    Repeat the whole thing on the Main Menu, where the same bug had
+    the same cause.
+254. **Pick a device from the Main Menu with the keyboard.** Tab to
+    the SmolLM3 row and press Right and Left. The GPU/CPU selection
+    should move without anything loading, and Enter should then
+    confirm on the device shown. Watch which device actually loads:
+    the row keeps that choice separately from the highlight, so a
+    mismatch would load the wrong one silently.
+255. **Up and Down move between models on the menu.** With focus on
+    a row, arrow up and down. It should wrap, and it should skip any
+    model greyed out for insufficient VRAM, which was never
+    keyboard-reachable and should stay that way.
+256. **The highlight travels.** Arrow through the generator's
+    hyperparameter dropdown and through the model picker. The
+    highlight should slide between rows rather than appear and
+    disappear. If your system is set to reduce motion it should jump
+    instead, which is correct rather than broken.
+## Two things focus could not be seen on (2026-09-15)
+
+Small gaps found once everything else was reachable, both the same
+shape: a control whose visible part is not the element focus lands on.
+
+257. **The toggles show where focus is.** Tab onto Experimental,
+    Thinking or Alternatives on the generator, and onto any toggle in
+    Settings. Each should show a ring. They showed nothing before: a
+    `.toggle-switch` hides its real checkbox with `opacity: 0` and no
+    width or height, so the platform's ring landed on an invisible
+    zero-sized box while the GPU/CPU pills beside them, being real
+    buttons, looked fine. Space toggles them, as with any checkbox.
+258. **Open a run from the keyboard.** On Analytics, Tab into the
+    runs table and press Enter on a row. The detail should open. This
+    had no keyboard route at all: the row is not focusable, only its
+    checkbox, star and caret are, and none of those opens a run.
+    Space still selects the row, since that is the checkbox's key,
+    and Enter now opens it.

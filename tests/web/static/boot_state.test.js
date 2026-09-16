@@ -351,6 +351,56 @@ test("the data root is known before a delete can be confirmed", () => {
   assert.equal(page.sandbox.resultsDirLabel, "/tmp/isolated");
 });
 
+test("Enter on a row opens that run's detail", () => {
+  // The keyboard had no route to a run at all: the row is not
+  // focusable, only its checkbox, star and caret are, and none of
+  // them opens anything. Enter is free on a checkbox, since Space is
+  // what toggles one, so Space selects and Enter opens.
+  const page = analyticsPage({
+    bootState: analyticsBoot(),
+    fetchImpl: analyticsFetch([]),
+  });
+  const opened = [];
+  page.context.showDetail = (runId) => { opened.push(runId); };
+
+  // Dispatched on the element holding the listener with an explicit
+  // target, because the stub does not bubble. That is the convention
+  // throughout this suite, not a fact about the page.
+  const tbody = page.registry.get("runs-tbody");
+  const row = tbody.children[0];
+  assert.ok(row, "no row was rendered");
+  tbody.dispatch("keydown", {
+    key: "Enter",
+    target: row,
+    preventDefault() {},
+  });
+
+  assert.deepEqual(opened, [RUN_ROW.run_id]);
+});
+
+test("Enter on a row's button is left to the button", () => {
+  // The star and the collect caret are real buttons, and Enter is
+  // how a button is pressed. Taking it would break both.
+  const page = analyticsPage({
+    bootState: analyticsBoot(),
+    fetchImpl: analyticsFetch([]),
+  });
+  const opened = [];
+  page.context.showDetail = (runId) => { opened.push(runId); };
+
+  const tbody = page.registry.get("runs-tbody");
+  const row = tbody.children[0];
+  const button = page.document.createElement("button");
+  row.appendChild(button);
+  tbody.dispatch("keydown", {
+    key: "Enter",
+    target: button,
+    preventDefault() {},
+  });
+
+  assert.deepEqual(opened, []);
+});
+
 test("collections arrive with the table, not after it", () => {
   const page = analyticsPage({
     bootState: analyticsBoot(),

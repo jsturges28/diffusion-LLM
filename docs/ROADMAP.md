@@ -1136,6 +1136,29 @@ line drawn deliberately, or a trap a future change will otherwise walk into.
 They moved here from `docs/HANDOFF.md` when `META-01` reduced it to a cold-start
 page.
 
+**The Analytics table wants roving tabindex, and has not got it.**
+Recorded 2026-09-02, after the keyboard work made everything else on
+the page reachable and left this as the conspicuous gap.
+
+Each row's checkbox, star and collect caret are separate tab stops,
+so crossing the table by keyboard costs three presses per run and
+there is no notion of "the row I am on" beyond whichever control
+happens to hold focus. `:focus-within` now lights the row, which
+makes the position visible, but it does not reduce the stops or let
+arrows move between rows.
+
+The pattern is the one already applied twice in this app: the
+container becomes a single tab stop and arrows move within it, as the
+shared dropdown and the model picker now do. Applying it here is
+larger than either, because a table row holds several controls rather
+than one value, so it needs a two-axis model (rows with Up and Down,
+controls within a row with Left and Right) and a decision about what
+Enter means on a row that already has three things to press.
+
+Worth doing after there is a reason to cross the table often, and
+worth pairing with a skip link, which is the canonical answer to a
+long list of stops and is two lines of markup.
+
 **The cross-document transition is deliberately unnamed, and that is
 what makes the header appear to slide.** Recorded 2026-09-01, because
 it was reported as a layout bug and is not one.

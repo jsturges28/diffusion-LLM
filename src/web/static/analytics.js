@@ -1581,15 +1581,6 @@ function applyCollectionName(collection, raw) {
 }
 
 
-// Ask before deleting a collection, unless there is nothing to ask
-// about.
-//
-// The confirmation exists because deleting a populated collection
-// throws away filing done by hand, which nothing on disk can rebuild.
-// An empty one throws away a name. Confirming that too made clearing
-// up twice the clicks and, worse, taught the dialog to be dismissed
-// without reading, which is exactly the habit it needs the user not
-// to have when the collection does hold something.
 function openCollectionDeleteModal(collection) {
   if (collectionPresentCount(collection) === 0) {
     deleteCollection(collection.id);
@@ -6211,6 +6202,30 @@ document.querySelector("#runs-table thead")
   .addEventListener("click", onSortClick);
 
 runsTbody.addEventListener("click", onRowClick);
+
+// Enter opens the focused row's detail, which is what clicking the
+// row does and what the keyboard had no way to reach: the row itself
+// is not focusable, only its checkbox, star and caret are, and none
+// of them opens a run.
+//
+// Enter is free to take. A checkbox toggles with Space, so Enter on
+// one does nothing otherwise, which leaves Space for selecting and
+// Enter for opening. Buttons keep it, since Enter is how a button is
+// pressed and the star and caret have their own jobs.
+runsTbody.addEventListener("keydown", function (e) {
+  if (e.key !== "Enter") {
+    return;
+  }
+  if (e.target.closest && e.target.closest("button")) {
+    return;
+  }
+  var tr = e.target.closest("tr[data-run-id]");
+  if (!tr) {
+    return;
+  }
+  e.preventDefault();
+  showDetail(tr.getAttribute("data-run-id"));
+});
 
 selectAllCb.addEventListener(
   "change", onSelectAll

@@ -152,12 +152,6 @@ var overlaySelectMount =
 var overlayHighlightCheckbox =
   document.getElementById("overlay-highlight-tokens");
 var overlaySelect = null;
-// Track how the picker was last built so it is only rebuilt when
-// the option set actually changes (the Diff option appearing after
-// a resume), avoiding leaked listeners from createCustomSelect.
-var overlaySelectBuilt = false;
-var overlaySelectHasDiff = false;
-var overlaySelectHasEntropy = false;
 var diffSummary =
   document.getElementById("diff-summary");
 var commitLegend =
@@ -768,6 +762,13 @@ function buildOptionDevice(model, activeId) {
     (function (dev) {
       var btn = document.createElement("button");
       btn.type = "button";
+      // Out of the tab order, and reachable with Left and Right on
+      // the row instead. As tab stops these were the only rows in
+      // the list a keyboard could reach at all, so SmolLM3 had two
+      // stops and every diffusion model had none, and Tab walked
+      // between devices rather than between models.
+      btn.tabIndex = -1;
+      btn.setAttribute("data-device", dev.value);
       // The loaded model's current device is redundant to re-select, so
       // it is locked (is-current); the other device stays switchable.
       var isCurrent = isActiveModel && dev.value === activeDevice;
@@ -806,6 +807,163 @@ function setModelSelectDisabled(disabled) {
   }
 }
 
+// ---- Model picker keyboard traversal ----
+//
+// The same composite-widget shape `custom_select.js` uses, but the
+// rows are richer: each carries a name, a device control and a VRAM
+// popover, so Up and Down move between models while Left and Right
+// move between that model's devices. One tab stop for the whole
+// picker, which is what the device buttons leaving the tab order in
+// `buildOptionDevice` buys.
+//
+// Which row the keyboard is on lives here; which device is targeted
+// lives in the DOM, on the pill carrying `is-active`, because that is
+// where a mouse leaves it too and two copies would disagree.
+var MODEL_OPTION_ID_PREFIX = "model-select-option-";
+var modelActiveRow = -1;
+
+function modelRows() {
+  if (!modelSelectList) {
+    return [];
+  }
+  return Array.prototype.slice.call(modelSelectList.children);
+}
+
+// Only the pills that can actually be chosen: the GPU pill is
+// disabled outright on a host without one.
+function modelRowPills(row) {
+  var found = row.querySelectorAll(".device-pill-btn");
+  var usable = [];
+  for (var i = 0; i < found.length; i++) {
+    if (!found[i].disabled) {
+      usable.push(found[i]);
+    }
+  }
+  return usable;
+}
+
+function modelRowIndexOf(id) {
+  var rows = modelRows();
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i].getAttribute("data-id") === id) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function renderModelActive() {
+  var rows = modelRows();
+  for (var i = 0; i < rows.length; i++) {
+    var on = i === modelActiveRow;
+    rows[i].classList.toggle("is-focused", on);
+    // The headroom popover is otherwise mouse-only, which would
+    // leave a keyboard user choosing a model with no idea whether
+    // it fits.
+    var info = rows[i].querySelector(".option-info");
+    if (info) {
+      info.classList.toggle("is-visible", on);
+    }
+  }
+  if (modelActiveRow < 0 || modelSelectList.hidden) {
+    modelSelect.removeAttribute("aria-activedescendant");
+    selectCursorMove(modelSelectList, null);
+    return;
+  }
+  modelSelect.setAttribute(
+    "aria-activedescendant", rows[modelActiveRow].id
+  );
+  selectCursorMove(modelSelectList, rows[modelActiveRow]);
+}
+
+function moveModelActive(step) {
+  var rows = modelRows();
+  if (!rows.length) {
+    return;
+  }
+  // Start from the resident model, so the first Down goes to the one
+  // after it rather than back to the top of a list it is already in.
+  var from = modelActiveRow;
+  if (from < 0) {
+    from = modelRowIndexOf(activeModelId);
+  }
+  var next;
+  if (from < 0) {
+    next = step > 0 ? 0 : rows.length - 1;
+  } else {
+    next = from + step;
+    if (next < 0) {
+      next = rows.length - 1;
+    } else if (next >= rows.length) {
+      next = 0;
+    }
+  }
+  modelActiveRow = next;
+  renderModelActive();
+  if (rows[next].scrollIntoView) {
+    rows[next].scrollIntoView({ block: "nearest" });
+  }
+}
+
+// Move the targeted device within the focused row. Unlike a click on
+// a pill, which switches immediately, this only moves the target and
+// leaves Enter to commit, because a keyboard needs somewhere to stand
+// between choosing and doing.
+function moveModelDevice(step) {
+  var rows = modelRows();
+  if (modelActiveRow < 0 || !rows[modelActiveRow]) {
+    return;
+  }
+  var pills = modelRowPills(rows[modelActiveRow]);
+  if (pills.length < 2) {
+    return;
+  }
+  var at = 0;
+  for (var i = 0; i < pills.length; i++) {
+    if (pills[i].classList.contains("is-active")) {
+      at = i;
+    }
+  }
+  var next = at + step;
+  if (next < 0) {
+    next = pills.length - 1;
+  } else if (next >= pills.length) {
+    next = 0;
+  }
+  for (var j = 0; j < pills.length; j++) {
+    pills[j].classList.toggle("is-active", j === next);
+  }
+}
+
+function activateModelActive() {
+  var rows = modelRows();
+  if (modelActiveRow < 0 || !rows[modelActiveRow]) {
+    return false;
+  }
+  var row = rows[modelActiveRow];
+  var id = row.getAttribute("data-id");
+  if (!id) {
+    return false;
+  }
+  var device = null;
+  var pills = modelRowPills(row);
+  for (var i = 0; i < pills.length; i++) {
+    if (pills[i].classList.contains("is-active")) {
+      device = pills[i].getAttribute("data-device");
+    }
+  }
+  if (device === null) {
+    device = defaultDeviceFor(models[id]);
+  }
+  // Mirrors the mouse: re-selecting exactly what is loaded does
+  // nothing, but the same row at its other device is a real switch.
+  if (id === activeModelId && device === activeDevice) {
+    return false;
+  }
+  requestSwitch(id, device);
+  return true;
+}
+
 function openModelList() {
   if (modelSelectDisabled || !modelSelectList) {
     return;
@@ -813,6 +971,8 @@ function openModelList() {
   closeSwitchConfirm();
   modelSelectList.hidden = false;
   modelSelect.classList.add("open");
+  modelSelect.setAttribute("aria-expanded", "true");
+  renderModelActive();
 }
 
 function closeModelList() {
@@ -821,6 +981,11 @@ function closeModelList() {
   }
   modelSelectList.hidden = true;
   modelSelect.classList.remove("open");
+  modelSelect.setAttribute("aria-expanded", "false");
+  // Reopening starts from the resident model again rather than from
+  // wherever the last browse stopped.
+  modelActiveRow = -1;
+  renderModelActive();
 }
 
 function toggleModelList() {
@@ -842,7 +1007,11 @@ function renderModelSelector(list, activeId) {
     li.className =
       "model-select-option"
       + (m.id === activeId ? " is-active" : "");
+    li.id = MODEL_OPTION_ID_PREFIX + i;
     li.setAttribute("role", "option");
+    li.setAttribute(
+      "aria-selected", m.id === activeId ? "true" : "false"
+    );
     li.setAttribute("data-id", m.id);
     var nameEl = document.createElement("span");
     nameEl.className = "model-select-name";
@@ -4214,17 +4383,11 @@ function buildOverlaySelect() {
   // Keep the commit legend in sync with the (possibly reset) mode on
   // every (re)build or reuse, not just on an explicit picker change.
   updateCommitLegend();
-  // Option set unchanged: just reset the collapsed selection.
-  if (
-    overlaySelectBuilt
-    && hasDiff === overlaySelectHasDiff
-    && hasEntropy === overlaySelectHasEntropy
-  ) {
-    if (overlaySelect) {
-      overlaySelect.value = overlayMode;
-    }
-    return;
-  }
+  // Rebuilt unconditionally. This used to be skipped when the option
+  // set was unchanged, not as an optimisation but because every
+  // createCustomSelect leaked a document listener; the widget owns
+  // one listener for the page now, so a rebuild costs nothing to
+  // remember.
   var options = [
     { value: "none", label: "None" },
     { value: "conf", label: "Heatmap" },
@@ -4263,9 +4426,6 @@ function buildOverlaySelect() {
   overlaySelect.addEventListener("change", function () {
     setOverlayMode(overlaySelect.value);
   });
-  overlaySelectBuilt = true;
-  overlaySelectHasDiff = hasDiff;
-  overlaySelectHasEntropy = hasEntropy;
 }
 
 // ---- Prompt history (localStorage) ----
@@ -7244,6 +7404,11 @@ promptInput.addEventListener("input", onParamFormChanged);
 promptInput.addEventListener("input", promptTextChanged);
 
 if (modelSelect && modelSelectList) {
+  // Start from a known state rather than trusting the markup to
+  // agree with it. The list ships `hidden` and the control ships
+  // `aria-expanded="false"`, and this makes the JS the one thing
+  // that decides, so the two cannot drift apart.
+  closeModelList();
   modelSelect.addEventListener("click", function (e) {
     if (e.target.closest(".model-select-option")) {
       return;
@@ -7271,10 +7436,57 @@ if (modelSelect && modelSelectList) {
     requestSwitch(id, defaultDeviceFor(models[id]));
   });
   modelSelect.addEventListener("keydown", function (e) {
+    if (modelSelectDisabled) {
+      return;
+    }
+    // The confirm popover is a child of this element, so its keys
+    // bubble here. Answering them would be worse than useless: the
+    // Enter branch below calls preventDefault, which cancels the
+    // click the browser was about to synthesise on the focused
+    // Confirm or Cancel button, so the popover could be reached by
+    // Tab and then not operated at all.
+    if (switchConfirmEl && switchConfirmEl.contains(e.target)) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeSwitchConfirm();
+      }
+      return;
+    }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (modelSelectList.hidden) {
+        openModelList();
+      }
+      moveModelActive(e.key === "ArrowDown" ? 1 : -1);
+      return;
+    }
+    // Across a row rather than down the list: which device this
+    // model would load onto. Silent on a row offering only one.
+    if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+      if (modelSelectList.hidden) {
+        return;
+      }
+      e.preventDefault();
+      moveModelDevice(e.key === "ArrowRight" ? 1 : -1);
+      return;
+    }
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      toggleModelList();
-    } else if (e.key === "Escape") {
+      if (modelSelectList.hidden) {
+        openModelList();
+      } else if (!activateModelActive()) {
+        // Open with nothing traversed, or the resident model at the
+        // device it is already on: close rather than pick something
+        // the user did not point at.
+        closeModelList();
+      }
+      return;
+    }
+    if (e.key === "Escape") {
+      closeModelList();
+      return;
+    }
+    if (e.key === "Tab") {
       closeModelList();
     }
   });

@@ -633,6 +633,17 @@ html, body {
   background: var(--bg-surface-hover);
 }
 
+/* The keyboard's equivalent of the hover above. A row's checkbox,
+   star and collect caret are all real focusable controls, so
+   :focus-within lights the row whichever of them Tab lands on,
+   without any JS deciding where focus is. Reaching a row by keyboard
+   used to give no indication of which one you were on. */
+#runs-table tbody tr:focus-within {
+  background: var(--bg-surface-hover);
+  outline: 1px solid var(--border-focus);
+  outline-offset: -1px;
+}
+
 #runs-table tbody tr.row-selected {
   background: var(--accent-dim);
 }

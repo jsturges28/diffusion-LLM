@@ -319,7 +319,7 @@ on real hardware.
 | DATA-02 | high | L | done | none | Lost-update slice, then the semantics: collections are server-owned operations |
 | RUNTIME-01 | medium | L | done | none | Queue bound, then append frames on the wire, in the browser and on disk; 130 MiB to 1 MiB on a 2,048-token run |
 | ORG-02 | medium | L | partial | none | State core verified, boot state now server-rendered; only the ES module conversion remains |
-| RUNTIME-03 | medium | S | blocked | ORG-02, paired | |
+| RUNTIME-03 | medium | S | done | none | Taken as unblocked against this table; see Deviations |
 | ROADMAP-01 | high | M | blocked | stage 6 order | |
 | ROADMAP-05 | high | M | blocked | stage 6 order | |
 | ROADMAP-02 | medium | M | blocked | stage 6 order | |
@@ -389,11 +389,11 @@ aligned frame operations, the pre-edit baseline, the legal workflow phases
 and the model API client are extracted and tested (`ORG-02`, four commits),
 awaiting hardware. The download API client went with `TRUST-04` and the
 server-rendered boot state landed separately; the native ES module
-conversion the Direction asks for is the one piece left. Then fix
-the select lifecycle (`RUNTIME-03`) as shared controls gain module
-ownership, and compact append-only streams (`RUNTIME-01`) only once the
-reducer can reconstruct them and the run-store version can distinguish
-them.
+conversion the Direction asks for is the one piece left. The select
+lifecycle (`RUNTIME-03`) was taken ahead of that rather than after it,
+since nothing it asks for needs modules; see its entry. Compact
+append-only streams (`RUNTIME-01`) landed once the reducer could
+reconstruct them and the run-store version could distinguish them.
 
 **Stage 6, prepare the existing models before adding Mamba.** Split family,
 stream shape, device support, and resource requirements (`ROADMAP-01`),
@@ -2169,6 +2169,184 @@ report's own measurement programme has the terminate-to-VRAM-release
 timings for every model, and that measurement is what should decide
 whether this reading needs a wait, whether the existing eight seconds
 is right, and whether the two checks should share one number.
+
+### RUNTIME-03
+
+**Taken as unblocked, against this ledger's own status table.** The
+table had it blocked on `ORG-02`, and stage 5 reads "fix the select
+lifecycle as shared controls gain module ownership". Reading the
+Direction, that is a sequencing preference rather than a dependency:
+it asks for a delegated outside-click listener or an
+`AbortController`-backed `destroy()`, plus keyboard traversal and
+option semantics, and none of that needs ES modules. Recorded here
+rather than done quietly, because disagreeing with the plan of record
+is exactly the kind of thing a later reader should be able to find.
+
+Doing it before stage 6 was deliberate on two grounds. `ROADMAP-01`
+changes device controls and `ROADMAP-02` changes parameter UI
+reporting, so both add callers to this widget; fixing the lifecycle
+first is cheaper than fixing it under more of them. And it is an S
+next to a long stage, which is the shape of thing that gets deferred
+indefinitely without anyone deciding to.
+
+**The leak was real and the workaround for it was in the callers.**
+Every `createCustomSelect` installed its own document click listener
+closing over its own DOM, and nothing removed it. Analytics rebuilds
+its overlay picker per run detail opened, so a session accumulated
+one dead listener and one retained tree per run, and every subsequent
+click ran all of them. The generator had `overlaySelectBuilt` and two
+companion flags whose comment said outright they existed to avoid
+"leaked listeners from createCustomSelect": a shared widget asking
+its callers to remember a rule it should have owned. All three are
+gone and the picker rebuilds unconditionally.
+
+**One open widget in a variable, not a query.** The obvious
+implementation is one document listener that closes
+`document.querySelectorAll(".custom-select.open")`. That works and
+retains nothing, but the Verification asks for constant work per
+outside click and a query is proportional to the document. At most
+one select is open at a time anyway, so the open one is held in a
+module variable. What that costs is a bounded retention of exactly
+one widget, cleared on the next open or close, which has its own
+test; what it replaces is unbounded growth.
+
+**The role was not merely incomplete, it was wrong.** The collapsed
+control carried `role="listbox"`, announcing a list of options where
+there was one value and no way to reach them. A thing that expands is
+a combobox and the listbox is the popup it controls, so the trigger
+is now `combobox` with `aria-expanded` and `aria-controls`, the `ul`
+is the `listbox`, and options carry `role="option"` and
+`aria-selected`. Traversal is tracked with `aria-activedescendant`,
+which keeps focus on the trigger, preserves the existing `tabIndex`
+and `:focus` styling, and leaves one Tab stop per control.
+
+Selection needed a pointer before this: Enter and Space opened and
+closed, and nothing chose anything. Up, Down, Home, End, Enter,
+Escape and Tab now behave as a native select does, minus typeahead,
+which was left out deliberately and can be added if it is missed.
+
+*`is-focused` is a separate class from `is-active` on purpose.* The
+latter already means selected, and the two differ for the whole of a
+browse; collapsing them would make arrowing down look like it had
+already changed the value.
+
+**Verifying it turned up two more keyboard problems, neither a
+finding.** Both came from the maintainer navigating by keyboard once
+there was a keyboard to navigate with, which is the usual shape:
+fixing the thing that was reported makes the next thing audible.
+
+*Fifty-seven invisible tab stops.* Eleven mystery stops were counted
+on the generator between the last visible control and the first
+header link. They were the contents of the modals, which sit in the
+document at all times and were hidden with `opacity: 0` and
+`pointer-events: none`. Neither touches the keyboard, so every button
+and link inside stayed focusable and in the accessibility tree.
+Counted properly: nine on the generator, and forty-eight on
+Analytics, thirty-eight of those in the run detail modal.
+
+Fixed in CSS with `visibility: hidden` rather than with the `inert`
+attribute. `inert` is the better-targeted tool and was rejected on
+leverage: one rule covers all seven modals across both pages and
+every modal added later, where `inert` needs remembering at each of
+ten open and close sites. The wrinkle is that `visibility` does not
+interpolate, so it flips at the end of its transition and needs a
+delay matching the opacity fade, or the modal vanishes instead of
+fading. Both halves have tests, including one asserting the delay is
+not shorter than the fade.
+
+*The model picker is a second dropdown this finding never covered.*
+Its evidence list names `custom_select.js`, and `renderModelSelector`
+builds its own control with the same keyboard handling the shared
+widget had before: Enter, Space, Escape, no arrows. Its rows are
+richer, carrying a name, a device control and a headroom popover, so
+the device pills were real buttons and therefore the only part of the
+list a keyboard could reach: two tab stops on the one autoregressive
+model, none on the others, and Tab moving between devices rather than
+between models.
+
+It now uses the same composite shape, with Up and Down across models
+and Left and Right across a model's devices. Taking the pills out of
+the tab order is the risky half, since it removes the only keyboard
+route that existed, so the test that matters is the one making a CPU
+switch with keys alone. Unlike a pointer, Left and Right only move
+the target and leave Enter to commit, because a keyboard needs
+somewhere to stand between pointing at a device and choosing it.
+
+Worth recording that the picker now closes its own list at setup
+rather than trusting the markup to have shipped it closed. That was
+prompted by a test passing vacuously: the stub creates elements with
+`hidden` false, so the list read as already open and the open path
+never ran.
+
+**A third round of keyboard work, and one of its fixes replaced the
+last round's.** Verifying items 248 to 252 turned up four more
+problems. None is an audit finding; all came from actually driving
+the app with a keyboard, which nothing had done before this campaign.
+
+*Enter did not reach the Confirm and Cancel buttons, on either page.*
+The blocking one. Both confirmation popovers are appended inside an
+element whose keydown handler calls `preventDefault` on Enter, which
+cancels the click the browser synthesises on the focused button, so
+the popover could be tabbed to and then not operated. `app.js` put
+its box inside `#model-select`; `menu.js` put its inside the row.
+Both handlers now return early for events from inside the popover.
+Predates the session, but making the picker one tab stop is what put
+a keyboard user in front of it.
+
+*The Main Menu was a third dropdown nobody had touched.* Its rows
+carry the same device buttons, so Tab moved between a model's GPU and
+CPU rather than between models. Simpler to fix than the generator's,
+because these rows are real focus targets and
+`.menu-model-row:focus-visible` was already styled, so Up and Down
+move focus itself and no `aria-activedescendant` was needed. The trap
+was that `buildDeviceToggle` keeps the chosen device in a closure
+behind `getDevice()`, which the activation request reads: moving only
+the `is-active` class would have loaded a different device than the
+row displayed. One `setDevice` now serves the pointer and the keys.
+
+**Focus indicators had nowhere to land, for the same reason twice.**
+Each is a control whose visible part is not the element that takes
+focus, so a style written against the obvious class lands on the wrong
+one.
+
+A `.toggle-switch` hides its real checkbox with `opacity: 0` and no
+width or height, so the platform's ring drew around an invisible
+zero-sized box; the visible `.toggle-slider` wears it now. And the
+Analytics table's rows are not focusable at all, only their checkbox,
+star and caret are, so `:focus-within` lights the row rather than
+trying to make the row a focus target.
+
+Worth naming the pattern, since it recurred: a styled control usually
+means a hidden input plus a visible proxy, and the fix is to style the
+proxy from the input's state rather than styling the input.
+
+**A run detail had no keyboard route, and Enter was free.** Clicking
+a row opens it; the keyboard could reach the row's three controls and
+none of them opened anything. Enter turned out to be unclaimed: a
+checkbox toggles with Space, so Enter on one does nothing, which
+leaves Space for selecting and Enter for opening with no new tab stops
+and no ambiguity. Buttons keep Enter, since that is how a button is
+pressed.
+
+**The travelling highlight is a pseudo-element, not a child.** The
+keyboard highlight used to appear and disappear, which is hard to
+follow. It is now one thing that moves. Drawn as `::before` on the
+list and driven by custom properties specifically so it adds no
+children: both lists index their own (`list.children[i]`,
+`modelRows()`), and a stray element would have to be filtered out at
+every one of those sites. Disabled under `prefers-reduced-motion`,
+since a highlight sliding across a list is a vestibular trigger.
+
+**The DOM stub was wrong in a way that hid the defect.** Three gaps,
+all found by writing tests that should have passed and did not.
+`document.addEventListener` discarded its argument, so the listener
+count, which is the entire claim of the first half, was unobservable.
+`element.contains` did not exist, which is what an outside-click
+handler asks. And `className` and `classList` were separate state, so
+an element built with `className = "a b"` reported no classes at all
+to a test asking `classList.contains("b")`. That last one is the
+worrying kind: it would silently weaken any future test about a class
+set on construction, which is most of this widget.
 
 ### ORG-04
 

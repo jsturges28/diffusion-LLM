@@ -97,13 +97,32 @@ function makeElement(id) {
     disabled: false,
     hidden: false,
     textContent: "",
-    className: "",
     classes: new Set(),
     scrollTop: 0,
     scrollHeight: 0,
     offsetWidth: 0,
     clientWidth: 0,
   };
+
+  // Backed by the same set as `classList`, because the two are one
+  // thing in a real DOM and code freely mixes them: a widget that
+  // builds a row with `className = "a b"` and a test that asks
+  // `classList.contains("b")` must agree, and when they did not, the
+  // test saw an element with no classes at all.
+  Object.defineProperty(element, "className", {
+    get: () => Array.from(element.classes).join(" "),
+    set: (value) => {
+      // Mutated rather than replaced, so nothing holding the set
+      // ends up looking at an orphan.
+      element.classes.clear();
+      for (const name of String(value).split(/\s+/)) {
+        if (name) {
+          element.classes.add(name);
+        }
+      }
+    },
+    enumerable: true,
+  });
 
   element.classList = {
     add: (...names) => names.forEach((n) => element.classes.add(n)),
@@ -137,6 +156,13 @@ function makeElement(id) {
     for (const fn of (element.listeners[type] || []).slice()) {
       fn(Object.assign({ target: element }, event || {}));
     }
+  };
+  // The name the page code uses, for a widget telling its caller
+  // something changed. `dispatch` above is the test-facing spelling
+  // that takes a type and a plain object; this takes an Event.
+  element.dispatchEvent = (event) => {
+    element.dispatch(event && event.type, event);
+    return true;
   };
 
   element.appendChild = (child) => {
@@ -199,6 +225,18 @@ function makeElement(id) {
     return null;
   };
   element.matches = (selector) => matches(element, selector);
+  // Self or descendant, which is how outside-click handlers ask
+  // "did this land on me".
+  element.contains = (node) => {
+    let walk = node;
+    while (walk) {
+      if (walk === element) {
+        return true;
+      }
+      walk = walk.parent;
+    }
+    return false;
+  };
   // A real depth-first search over children, because returning null
   // unconditionally is not neutral: page code reads `querySelector`
   // to find a reference element to measure against, and a null makes
@@ -222,6 +260,14 @@ function makeElement(id) {
   element.focus = () => {};
   element.blur = () => {};
   element.scrollIntoView = () => {};
+  element.click = () => { element.dispatch("click"); };
+  // The menu's background video is autoplayed and paused from script.
+  // A resolved promise rather than a bare function because `play`
+  // returns one and callers may attach a catch for autoplay refusal.
+  element.play = () => Promise.resolve();
+  element.pause = () => {};
+  element.load = () => {};
+
   element.getBoundingClientRect = () => ({
     top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0,
   });
@@ -292,15 +338,34 @@ function matches(node, selector) {
     return attribute[2] === undefined
       || node.attributes[key] === attribute[2];
   }
-  const typed = selector.match(/^(\w+)\[type="([^"]+)"\]$/);
+  // A tag with an attribute filter, with or without a value:
+  // `input[type="checkbox"]` and `tr[data-run-id]` both land here.
+  // The value used to be mandatory, so a bare presence filter fell
+  // through to the tag comparison below and matched nothing, which is
+  // silent: `closest` returns null and the caller looks like it chose
+  // not to act.
+  const typed = selector.match(
+    /^(\w+)\[([\w-]+)(?:="([^"]*)")?\]$/
+  );
   if (typed) {
-    return node.tag === typed[1]
-      && node.attributes.type === typed[2];
+    if (node.tag !== typed[1]) {
+      return false;
+    }
+    if (!(typed[2] in node.attributes)) {
+      return false;
+    }
+    return typed[3] === undefined
+      || node.attributes[typed[2]] === typed[3];
   }
   return node.tag === selector;
 }
 
 function makeDocument(registry, fontsReady) {
+  // Recorded, not discarded. A widget that installs one document
+  // listener per instance and removes none is a leak whose only
+  // observable symptom is this count, so a stub that throws the
+  // argument away cannot see the defect it is meant to catch.
+  const documentListeners = {};
   const document = {
     getElementById(id) {
       if (!registry.has(id)) {
@@ -324,10 +389,29 @@ function makeDocument(registry, fontsReady) {
     // for a selector that has nothing to do with the test.
     querySelector: (selector) => makeElement(selector),
     querySelectorAll: () => [],
-    addEventListener: () => {},
-    removeEventListener: () => {},
+    addEventListener: (type, fn) => {
+      (documentListeners[type] = documentListeners[type] || [])
+        .push(fn);
+    },
+    removeEventListener: (type, fn) => {
+      const list = documentListeners[type] || [];
+      const at = list.indexOf(fn);
+      if (at !== -1) {
+        list.splice(at, 1);
+      }
+    },
     hidden: false,
     visibilityState: "visible",
+  };
+  document.listenerCount = (type) =>
+    (documentListeners[type] || []).length;
+  // Fire a document-level event the way a click outside every widget
+  // would. `target` is whatever the click landed on, which is what
+  // an outside-click handler tests against.
+  document.dispatch = (type, event) => {
+    for (const fn of (documentListeners[type] || []).slice()) {
+      fn(Object.assign({ target: document.body }, event || {}));
+    }
   };
   // Held open rather than pre-resolved, so a test can decide when
   // the webfont "arrives" and observe what the page does then. A
@@ -472,6 +556,13 @@ function loadPage(options) {
     // every test for a connection none of them drive. Records what
     // was sent, so a test that does care can read it back.
     WebSocket: settings.WebSocket || FakeSocket,
+    // Enough of Event for `dispatchEvent(new Event("change"))`,
+    // which is how the widgets tell their callers something changed.
+    Event: class {
+      constructor(type) {
+        this.type = type;
+      }
+    },
     getComputedStyle: () => ({ getPropertyValue: () => "" }),
     matchMedia: () => ({ matches: false, addEventListener() {} }),
     location: { search: "", href: "", pathname: "/", reload() {} },

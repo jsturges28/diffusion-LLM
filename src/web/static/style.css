@@ -737,6 +737,17 @@ body {
   height: 0;
 }
 
+/* The input is the focus target but is transparent and has no size,
+   so its ring lands on nothing. The visible slider wears it instead.
+   Without this, tabbing onto Experimental, Thinking or Alternatives
+   gave no indication at all, while the GPU/CPU pills beside them are
+   real buttons and looked fine, which is what made it read as those
+   three toggles being skipped rather than unmarked. */
+.toggle-switch input:focus-visible + .toggle-slider {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .toggle-slider {
   position: absolute;
   inset: 0;
@@ -1555,6 +1566,11 @@ button {
   transition: opacity 0.4s;
 }
 
+/* No `visibility: hidden` here, unlike .modal-overlay.hidden, and
+   checked rather than overlooked: this overlay holds a spinner, a
+   line of text and a progress bar, so there is nothing inside it for
+   the keyboard to land on. Add a control here (a cancel button, say)
+   and it wants the same treatment the modals got. */
 #loading-overlay.hidden {
   opacity: 0;
   pointer-events: none;
@@ -1662,6 +1678,16 @@ button {
 
 /* ---- Modals (About / Help) ---- */
 
+/* The overlay hides with opacity rather than display so it can fade,
+   and `visibility` is the load-bearing part of that: `pointer-events:
+   none` stops the mouse and does nothing whatever to the keyboard, so
+   every control inside a closed modal stayed focusable and in the
+   accessibility tree. Nine invisible tab stops on the generator and
+   forty-eight on Analytics, most of them in the run detail modal.
+
+   The delay is what keeps the fade: visibility is not interpolable,
+   so it flips at the end of its transition, which has to be after the
+   opacity has finished or the modal vanishes instead of fading. */
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -1675,7 +1701,9 @@ button {
 
 .modal-overlay.hidden {
   opacity: 0;
+  visibility: hidden;
   pointer-events: none;
+  transition: opacity 0.25s, visibility 0s linear 0.25s;
 }
 
 .modal-box {
@@ -1724,6 +1752,7 @@ button {
   color: var(--text-primary);
   background: rgba(255, 255, 255, 0.06);
 }
+
 
 .modal-box h2 {
   font-size: 15px;
@@ -2253,6 +2282,16 @@ input[type="checkbox"].app-checkbox:hover {
   border-color: var(--text-dim);
 }
 
+/* `appearance: none` takes the native control away, and with it the
+   platform's focus ring on some engines, so the box has to draw its
+   own or a keyboard user cannot see which one they are on. Note the
+   key here is Space, as it is for every checkbox; Enter does
+   nothing, which is the platform's rule rather than this app's. */
+input[type="checkbox"].app-checkbox:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 input[type="checkbox"].app-checkbox:checked {
   border-color: var(--accent);
   background: var(--accent-dim);
@@ -2619,6 +2658,60 @@ input[type="checkbox"].app-checkbox:checked::after {
 .model-select-option.is-active,
 .custom-select-option.is-active {
   color: var(--accent, #00ff41);
+}
+
+/* Where the keyboard is, which is not where the selection is: those
+   differ for the whole of a browse, and collapsing them would mean
+   arrowing down appeared to change the value before Enter.
+
+   The outline only. The background belongs to the cursor below,
+   which is one element that travels rather than a fill that appears
+   on one row as it vanishes from another. */
+.custom-select-option.is-focused,
+.model-select-option.is-focused {
+  outline: 1px solid var(--border-focus);
+  outline-offset: -1px;
+}
+
+/* The travelling highlight. A pseudo-element rather than a real one
+   so the lists keep indexing their own children; JS supplies the
+   offset and height of whichever option the keyboard is on. Inset by
+   the list's own 4px padding so it lines up with the rows. */
+.custom-select-list::before,
+.model-select-list::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  /* Zero, not the list's 4px padding. An absolutely positioned child
+     is placed against the padding box, and the offset JS supplies is
+     already measured from inside it, so a padding here counted it
+     twice and left the fill sitting low behind its own outline. */
+  top: 0;
+  height: var(--cursor-height, 0);
+  transform: translateY(var(--cursor-top, 0));
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform 120ms ease-out,
+    height 120ms ease-out,
+    opacity 120ms ease-out;
+}
+
+.custom-select-list.has-cursor::before,
+.model-select-list.has-cursor::before {
+  opacity: 1;
+}
+
+/* Travelling is the point, but a highlight sliding across a list is
+   a vestibular trigger, so it arrives instantly instead. */
+@media (prefers-reduced-motion: reduce) {
+  .custom-select-list::before,
+  .model-select-list::before {
+    transition: none;
+  }
 }
 
 /* The loaded model is tinted like the Generate button to read as

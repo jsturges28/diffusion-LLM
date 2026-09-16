@@ -294,9 +294,31 @@
     var current = gpuOk ? "cuda" : "cpu";
     var btns = {};
 
+    // One place that moves the choice, so the pointer and the arrow
+    // keys cannot disagree. `current` is what the activation request
+    // reads through getDevice, and the classes are only what the row
+    // looks like, so setting one without the other would load a
+    // different device than the row is showing.
+    function setDevice(value) {
+      if (value === current) {
+        return;
+      }
+      if (btns[value] && btns[value].disabled) {
+        return;
+      }
+      current = value;
+      btns.cuda.classList.toggle("is-active", current === "cuda");
+      btns.cpu.classList.toggle("is-active", current === "cpu");
+    }
+
     function makeButton(value, label) {
       var btn = document.createElement("button");
       btn.type = "button";
+      // Reachable with Left and Right on the row instead of with
+      // Tab. As tab stops these were the only part of a row a
+      // keyboard could get to, so Tab moved between a model's two
+      // devices rather than between models.
+      btn.tabIndex = -1;
       btn.className =
         "menu-device-btn"
         + (value === current ? " is-active" : "");
@@ -314,13 +336,7 @@
         if (btn.disabled) {
           return;
         }
-        current = value;
-        btns.cuda.classList.toggle(
-          "is-active", current === "cuda"
-        );
-        btns.cpu.classList.toggle(
-          "is-active", current === "cpu"
-        );
+        setDevice(value);
       });
       return btn;
     }
@@ -331,6 +347,11 @@
     wrap.appendChild(btns.cpu);
     wrap.getDevice = function () {
       return current;
+    };
+    // Step to the other device, skipping it when it cannot be used,
+    // which is the same thing a click on a disabled pill does.
+    wrap.moveDevice = function () {
+      setDevice(current === "cuda" ? "cpu" : "cuda");
     };
     return wrap;
   }
@@ -397,6 +418,7 @@
     if (ar) {
       var toggle = buildDeviceToggle(model, gpuPresent, fits);
       li._getDevice = toggle.getDevice;
+      li._moveDevice = toggle.moveDevice;
       li.appendChild(toggle);
     } else {
       li.appendChild(buildStaticDeviceTag(model, "GPU"));
@@ -531,11 +553,77 @@
     };
     li.addEventListener("click", handler);
     li.addEventListener("keydown", function (event) {
+      // The confirm popover and the download veneer are children of
+      // this row, so their keys bubble here. Answering them cancels
+      // the click the browser was about to synthesise on whichever
+      // button has focus, which left Confirm and Cancel reachable by
+      // Tab and impossible to press.
+      if (keyBelongsToAButton(event.target)) {
+        return;
+      }
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         handler();
+        return;
+      }
+      // Down the list. These rows are real focus targets, unlike the
+      // generator's popup options, so this moves focus itself rather
+      // than tracking a position with aria-activedescendant, and
+      // `.menu-model-row:focus-visible` already styles the result.
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        focusSiblingRow(li, event.key === "ArrowDown" ? 1 : -1);
+        return;
+      }
+      // Across the row: which device this model would load onto.
+      // Silent on a diffusion row, which gets a static tag instead of
+      // a toggle and so has no choice to move.
+      if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
+        if (!li._moveDevice) {
+          return;
+        }
+        event.preventDefault();
+        li._moveDevice();
       }
     });
+  }
+
+  // Move focus to the next focusable row, wrapping. Bounded to the
+  // rendered page: `renderCurrentPage` rebuilds these on a page
+  // change, so crossing one would mean restoring focus into DOM that
+  // does not exist yet, for a list that fits on one page today.
+  function focusSiblingRow(li, step) {
+    var rows = [];
+    var all = modelList.children;
+    for (var i = 0; i < all.length; i++) {
+      // Rows that were never wired (a diffusion model that does not
+      // fit) have no tabIndex and must stay unreachable here too.
+      if (all[i].tabIndex === 0) {
+        rows.push(all[i]);
+      }
+    }
+    if (rows.length < 2) {
+      return;
+    }
+    var at = rows.indexOf(li);
+    if (at === -1) {
+      return;
+    }
+    var next = at + step;
+    if (next < 0) {
+      next = rows.length - 1;
+    } else if (next >= rows.length) {
+      next = 0;
+    }
+    rows[next].focus();
+  }
+
+  // Whether a key is the row's to answer or a descendant button's.
+  // Buttons are the whole of it: everything else in a row is inert
+  // text. The row itself needs no special case, since a row is not
+  // inside a button and so answers for itself here.
+  function keyBelongsToAButton(target) {
+    return !!(target && target.closest && target.closest("button"));
   }
 
   function renderModels(list, gpuPresent) {
