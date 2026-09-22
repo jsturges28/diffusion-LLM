@@ -62,7 +62,7 @@ per-device memory, and `ROADMAP-02`'s context half. The rest of the
 stage is unblocked.
 
 Baselines: 1,496 tests passing (from 265 at the campaign's start), 372
-browser tests under `node --test`, and Ruff at 123 in `src tests`, gated
+browser tests under `node --test`, and Ruff at 120 in `src tests`, gated
 per file and per rule by `scripts/lint_ratchet.py` rather than
 remembered.
 
@@ -410,13 +410,14 @@ reconstruct them and the run-store version could distinguish them.
 **Stage 6, prepare the existing models before adding Mamba. Started.**
 The family, stream shape and device split (`ROADMAP-01`) and the
 registry-driven parameter validator (`ROADMAP-02`, its parameter half)
-landed together, against the map's order, which puts `ROADMAP-05`
-between them. They were paired because both restructure the same two
-files and doing them apart meant migrating `ModelCapabilities` and
-`ParamSpec` handling in separate passes over the same call sites.
-Resource requirements stayed as the single `min_vram_gib`; see
-Deviations. What remains is to extract model-specific text adapters
-(`ROADMAP-05`), migrating and testing the three existing models first. Pin and attest artifacts (`TRUST-03`) and
+landed together in three commits, against the map's order, which puts
+`ROADMAP-05` between them. They were paired because both restructure
+the same two files and doing them apart meant migrating
+`ModelCapabilities` and `ParamSpec` handling in separate passes over the
+same call sites. Resource requirements stayed as the single
+`min_vram_gib`; see Deviations. What remains is to extract
+model-specific text adapters (`ROADMAP-05`), migrating and testing the
+three existing models first. Pin and attest artifacts (`TRUST-03`) and
 consolidate environment intent (`DEPS-01`) before `.venv-ssm` exists. The
 Mamba baseline comes only after those are validated. The axis-aware signal
 manifest (`ROADMAP-03`) precedes its native XAI phase and diffusion entropy

@@ -222,8 +222,10 @@ SMOLLM3 = ModelInfo(
         " Decoder-only, streamed token-by-token with"
         " per-token sampling confidence. Runs on GPU or CPU."
     ),
-    # 3.08B params in bf16 (~6 GiB weights) plus KV cache/activations.
-    # Only consulted for the GPU pre-flight; a CPU activation skips it.
+    # 3.08B params in bf16 (~6 GiB weights) plus KV cache and
+    # activations. Only consulted for the GPU pre-flight; a CPU
+    # activation skips it, which is why this model needs no host
+    # memory figure to be loadable on a GPU-less machine.
     min_vram_gib=8.0,
     worker_module="src.backends.smollm3_worker",
     venv_python=".venv-ar/bin/python",
@@ -248,13 +250,18 @@ SMOLLM3 = ModelInfo(
             type=ParamType.INT,
             default=256,
             step=1,
-            # Full-snapshot frames make the stream payload grow with
-            # the token count, so the recommended ceiling stays modest.
+            # Decoding is sequential, so the time a run takes grows
+            # with the count, and that is now the whole reason the
+            # recommended ceiling stays modest. It used to be a
+            # payload argument: RUNTIME-01 made autoregressive frames
+            # append-only on the wire and flat on disk, which took a
+            # 2,048-token run from 130 MiB to about 1 MiB.
             recommended=(16, 256),
             experimental=(1, 2048),
-            # CPU decoding is slow, so the default budget is lower and
-            # the recommended cap is 128 on CPU (transparent in the UI,
-            # instead of a hidden clamp). Experimental still lifts it.
+            # CPU decoding is slow, so the default budget is lower
+            # and the recommended cap is 128 there, shown in the UI
+            # rather than applied as a hidden clamp. Experimental
+            # still lifts it.
             overrides={
                 "cpu": ParamOverride(
                     default=128, recommended=(16, 128)

@@ -1,10 +1,7 @@
 {
   "_comment": "Accepted Ruff findings per file and rule. Written by scripts/lint_ratchet.py --update. These may only go down; see audit finding QUALITY-02.",
-  "total": 123,
+  "total": 120,
   "counts": {
-    "src/backends/registry.py": {
-      "E501": 3
-    },
     "src/backends/run_worker.py": {
       "E501": 2
     },

@@ -447,7 +447,7 @@
         <h4>SmolLM3 (autoregressive)</h4>
         <dl>
           <dt>Max Tokens</dt>
-          <dd>How many tokens to generate. Because each saved frame is a full snapshot, the stream payload grows with the token count, so the recommended ceiling stays modest (and is lower on CPU, where decoding is slower).</dd>
+          <dd>How many tokens to generate. Decoding is sequential, so the time a run takes grows with the count, which is why the recommended ceiling stays modest and is lower on CPU where each step is slower. Size is no longer the reason: an autoregressive run is streamed and stored append-only, so its payload grows in step with the token count rather than with the square of it.</dd>
           <dt>Temperature</dt>
           <dd>Controls randomness when sampling each token. 0 is greedy/deterministic (always the argmax); higher values add diversity at the cost of stability.</dd>
           <dt>Top-p</dt>

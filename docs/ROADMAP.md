@@ -974,9 +974,11 @@ cleanly onto AR: frame N is the sequence after N generated tokens, every token
 - **AR streaming**: a manual token-by-token sampling loop (not HF's text
   streamer) capturing per-token confidence, one full-snapshot frame per new
   token (`ar_sampler.py`). Reuses save, token records, and the scrubber
-  (left-to-right replay). Note: full-snapshot frames make the payload O(n^2) in
-  tokens; the registry caps the recommended `max_new_tokens` at 256 and the
-  worker clamps harder (~128) on CPU.
+  (left-to-right replay). The note that sat here, that full-snapshot frames
+  make the payload O(n^2) in tokens, no longer holds: `RUNTIME-01` made AR
+  frames append-only on the wire, in the browser and on disk. The registry
+  still caps the recommended `max_new_tokens` at 256, and at 128 on CPU, but
+  for decode time rather than for size.
 - **Model-type gate**: shipped as one `model_type` ("diffusion" |
   "autoregressive") on `ModelCapabilities`, since split by `ROADMAP-01` into a
   `family` and a `generation_shape`; the gate reads the shape. Hides

@@ -171,14 +171,12 @@ on a card that cannot hold both. Separately, items 102 to 126 of
 `docs/MANUAL_VERIFICATION.md` predate the campaign and have never been
 validated.
 
-**One measured limit worth carrying forward.** Autoregressive frames are
-full snapshots, so a run's per-token records grow with the square of its
-length: a 2047-token SmolLM3 run is about two million of them. It saves
-and reads back correctly, taking 30 to 45 seconds to save and around ten
-to paint in Analytics, but it exceeds the sessionStorage quota, so
-navigating away and back leaves it without its per-token detail and the
-save refuses rather than writing a hollowed-out copy. That is
-`RUNTIME-01`, and the ceiling is storage rather than the format.
+**Autoregressive frames are append-only now**, on the wire, in the
+browser and on disk, which took a 2,048-token run from about 130 MiB to
+1 MiB and its save from 30 to 45 seconds down to roughly 12
+(`RUNTIME-01`). The sessionStorage quota that used to strip a long run
+of its per-token detail is no longer reached. Diffusion frames are
+still full canvases, which denoising one makes inherent.
 
 ## Conventions
 
