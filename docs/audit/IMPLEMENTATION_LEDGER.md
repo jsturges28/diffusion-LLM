@@ -58,8 +58,9 @@ declared rather than inferred from the family, and one resolver answers
 for every model's parameters in place of three coercions. Four
 boundaries were drawn deliberately rather than by omission and each has
 an entry under Deviations: LLaDA's device set, the signal axis,
-per-device memory, and `ROADMAP-02`'s context half. The rest of the
-stage is unblocked.
+per-device memory, and `ROADMAP-02`'s context half. Both cleared
+hardware on 2026-09-22, items 267 to 273. The rest of the stage is
+unblocked.
 
 Baselines: 1,496 tests passing (from 265 at the campaign's start), 372
 browser tests under `node --test`, and Ruff at 120 in `src tests`, gated
@@ -214,13 +215,26 @@ were cleared on 2026-08-11 in the same sitting: the maintainer confirmed items
 could say least about, the amber invalid row's alignment against its
 neighbours and the two-window model switch.
 
-**As of 2026-08-31 two entries remain**, and neither blocks anything.
+**As of 2026-09-22 two entries remain**, and neither blocks anything.
 The stage 4 findings cleared on 2026-08-17, which released `XAI-01`,
 `LIFE-04` and `ORG-02`; `ORG-02`'s own state core and the save work that
 came out of testing it cleared on 2026-08-18, items 162 to 166, and
 `XAI-01` cleared on 2026-08-28, items 180 to 184. What is left is
 `TRUST-03`'s offline retest and `LIFE-02`'s two staged-failure items,
 143 and 144, which are awkward to arrange rather than pending.
+
+- **ROADMAP-01 and ROADMAP-02**: **cleared on 2026-09-22**, items 267
+  to 273 in one sitting. Two are worth keeping rather than ticking.
+  Item 269 is the refusal that did not previously exist, and it
+  answered exactly as intended past the UI: `{"ok":false,"message":
+  "LLaDA-8B-Instruct cannot run on CPU; it supports CUDA."}`, with the
+  resident model and the run on screen both undisturbed, because the
+  check runs before anything is evicted. Item 272 confirmed a run is
+  unchanged, and the saved metadata says why it is safe to believe:
+  `gen_length` 160 over `block_length` 160, so one block, and
+  `model_type: "diffusion"` derived from the generation shape at
+  `schema_version` 2, which did not move. The corpus needed no
+  migration, which was the point of deriving rather than adding.
 
 - **TRUST-04**: **cleared on 2026-08-31.** Queued on 2026-08-28 and
   worked through in three passes. The first cleared 186, 187 and 189
@@ -332,7 +346,7 @@ on real hardware.
 | RUNTIME-01 | medium | L | done | none | Queue bound, then append frames on the wire, in the browser and on disk; 130 MiB to 1 MiB on a 2,048-token run |
 | ORG-02 | medium | L | partial | none | State core verified, boot state now server-rendered; only the ES module conversion remains |
 | RUNTIME-03 | medium | S | done | none | Taken as unblocked against this table; see Deviations |
-| ROADMAP-01 | high | M | needs hardware | none | Family, shape and devices split apart; per-device memory skipped, see Deviations |
+| ROADMAP-01 | high | M | done | none | Family, shape and devices split apart; per-device memory skipped, see Deviations |
 | ROADMAP-05 | high | M | ready | none | |
 | ROADMAP-02 | medium | M | partial | none | Parameter half done: one resolver, three coercions gone. Context half deferred, see Deviations |
 | TRUST-03 | high | L | ready | none | Offline slice only: Load cached weights without asking the Hub |
