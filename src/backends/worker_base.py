@@ -54,6 +54,7 @@ from src.backends.protocol import (
     request_id_of,
     wire_error,
 )
+from src.backends.text_adapter import TextAdapter
 
 logger = logging.getLogger("diffusion_worker")
 
@@ -436,6 +437,12 @@ class Backend(ABC):
     """Model-specific worker logic (loading + streaming)."""
 
     model_info: ModelInfo
+    # This model's text conventions: how a prompt becomes tokens, what
+    # ends a turn, what to hide from the display, and how to split a
+    # reasoning channel from an answer. Annotated without a default,
+    # like ``model_info``, so a backend that ships none fails when it
+    # is first read rather than templating a prompt the wrong way.
+    text_adapter: TextAdapter
     # Set to a progress dict ({fraction, downloaded_bytes, total_bytes})
     # while weights download during ``load``, then back to None. Read by
     # ``/health`` to report a "downloading" state to the supervisor.
@@ -684,6 +691,10 @@ class Backend(ABC):
         text = raw[:COUNT_PROMPT_MAX_CHARS] if (
             isinstance(raw, str)
         ) else ""
+        # Off the event loop, because this is bounded at 200,000
+        # characters rather than at something small: templating and
+        # encoding that much is real work, and doing it inline stalled
+        # every frame and every Cancel behind one keystroke's readout.
         count = self.prompt_token_count(
             text, thinking=bool(data.get("thinking", False))
         )
@@ -705,39 +716,28 @@ class Backend(ABC):
     def prompt_token_count(
         self, prompt: str, *, thinking: bool = False
     ) -> int:
-        """Tokens the templated prompt occupies before generation.
+        """Tokens the prompt occupies before generation.
 
-        Counts the *templated* sequence, not the raw text, which is
-        the whole point of doing this on the worker instead of in the
-        browser. A chat template wraps the prompt in system and role
-        markers, and ``enable_thinking`` changes that wrapping, so a
-        count of the user's characters would understate what actually
-        reaches the model, by a margin that grows with the template
-        rather than with the prompt.
+        Counts what the run actually builds, not the raw text, which
+        is the whole point of doing this on the worker instead of in
+        the browser. A chat template wraps the prompt in system and
+        role markers and ``enable_thinking`` changes that wrapping, so
+        a count of the user's characters would understate what reaches
+        the model by a margin that grows with the template.
 
-        The default mirrors ``_build_inputs`` in the autoregressive
-        and DiffusionGemma samplers exactly, minus the device move
-        this does not need, so SmolLM3 and DiffusionGemma inherit a
-        count of the tokens their runs really build. LLaDA templates
-        in two steps and takes no thinking flag, so it overrides.
+        The adapter answers, so this is the same encode the run
+        performs by construction rather than by a comment asking two
+        implementations to stay in step. Three of them used to: this
+        one, LLaDA's override of it, and two samplers.
         """
         assert isinstance(prompt, str), "prompt must be a string"
         if prompt == "":
             return 0
         tokenizer = getattr(self, "tokenizer", None)
         assert tokenizer is not None, "no tokenizer loaded"
-        chat = [{"role": "user", "content": prompt}]
-        encoded = tokenizer.apply_chat_template(
-            chat,
-            tokenize=True,
-            add_generation_prompt=True,
-            return_dict=True,
-            return_tensors="pt",
-            enable_thinking=thinking,
+        return self.text_adapter.count_prompt_tokens(
+            tokenizer, prompt, thinking=thinking
         )
-        count = int(encoded["input_ids"].shape[-1])
-        assert count > 0, "a templated prompt has tokens"
-        return count
 
     async def handle_probe(
         self, ws: WebSocket, data: Dict[str, Any]

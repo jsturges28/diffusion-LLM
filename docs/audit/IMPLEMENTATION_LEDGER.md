@@ -62,8 +62,12 @@ per-device memory, and `ROADMAP-02`'s context half. Both cleared
 hardware on 2026-09-22, items 267 to 273. The rest of the stage is
 unblocked.
 
-Baselines: 1,496 tests passing (from 265 at the campaign's start), 372
-browser tests under `node --test`, and Ruff at 120 in `src tests`, gated
+`ROADMAP-05` followed: every model's text conventions now sit behind
+one adapter, so the autoregressive loop the next model reuses holds no
+template, control token or reasoning channel of its own.
+
+Baselines: 1,534 tests passing (from 265 at the campaign's start), 372
+browser tests under `node --test`, and Ruff at 119 in `src tests`, gated
 per file and per rule by `scripts/lint_ratchet.py` rather than
 remembered.
 
@@ -347,13 +351,13 @@ on real hardware.
 | ORG-02 | medium | L | partial | none | State core verified, boot state now server-rendered; only the ES module conversion remains |
 | RUNTIME-03 | medium | S | done | none | Taken as unblocked against this table; see Deviations |
 | ROADMAP-01 | high | M | done | none | Family, shape and devices split apart; per-device memory skipped, see Deviations |
-| ROADMAP-05 | high | M | ready | none | |
+| ROADMAP-05 | high | M | needs hardware | none | One text adapter per model; `input_mode` became a fourth axis, see entry |
 | ROADMAP-02 | medium | M | partial | none | Parameter half done: one resolver, three coercions gone. Context half deferred, see Deviations |
 | TRUST-03 | high | L | ready | none | Offline slice only: Load cached weights without asking the Hub |
 | DEPS-01 | medium | L | ready | none | |
 | ROADMAP-03 | high | L | ready | none | Owns the signal axis ROADMAP-01 left alone |
 | ORG-03 | medium | M | ready | none | |
-| ROADMAP-04 | medium | L | blocked | DATA-01, stage 6 order | |
+| ROADMAP-04 | medium | L | ready | none | Unblocked but deliberately last: multimodal is phase 3 |
 | META-03 | medium | M | deferred | milestone boundaries | |
 
 ## Stage map
@@ -560,6 +564,48 @@ resolution: the readout already exists and is tested in
 and getting `prompt_token_count` off the event loop for a
 200,000-character prompt. Taking it here would have put three concerns
 in one plan; the finding stays `partial` with this as its next step.
+
+### ROADMAP-05, and the boundary that is not a parameter, 2026-09-22
+
+`src/backends/text_adapter.py` owns input construction, prompt
+counting, stop ids, sanitization and channel splitting. Every sampler
+takes an adapter as an argument, so none of them holds a template, a
+control token, a turn terminator or a reasoning channel.
+
+**There was more duplication than the finding's evidence lists.** The
+report cites only `ar_sampler.py`, but `dgemma_sampler.py` carried its
+own `_build_inputs`, `_sanitize` and `_split_thinking`. The two
+builders were byte-identical, which is pure dedup.
+
+**And less commonality than it looks, which is the design decision
+here.** The two channel conventions are different algorithms, not one
+taking different delimiters: SmolLM3 partitions on the *first*
+`</think>`, DiffusionGemma `rpartition`s on the *last* `<channel|>` and
+strips a literal `thought` label. So `sanitize` is shared and driven by
+a declared token tuple, while `split_channels` is a method each model
+implements. Parameterizing both would have invented a commonality that
+is not there, and a test swaps the two conventions to prove they cannot
+be collapsed.
+
+**The adapters live together rather than beside their workers**, which
+the plan had the other way round. `dgemma_worker.py` imports
+bitsandbytes and so loads only in its own venv, and an adapter nothing
+else can import is an adapter nothing can test. LLaDA's is the
+exception and sits beside `build_llada_inputs`, which it wraps rather
+than absorbs, so the resume path that calls that function directly is
+untouched.
+
+**What testing the real thing turned up, and it sharpens the finding.**
+The plan intended to prove the chat path *fails* on a base model, using
+a cached tokenizer with `chat_template` cleared. On the pinned
+`transformers` 4.38.2 it does not fail: it falls back to a default
+ChatML wrapping and warns. A base model would therefore be fed role
+markers it never saw in training and the run would look fine, which is
+worse than an error and is exactly the "silently change prompt
+semantics" the report predicts. Newer versions raise instead. The test
+asserts the version-independent claim, that the chat path's answer
+disagrees with the text the user wrote, and uses LLaDA's tokenizer
+because the default venv's `tokenizers` cannot parse SmolLM3's.
 
 ### ROADMAP-03, a down payment made outside the campaign, 2026-08-30
 

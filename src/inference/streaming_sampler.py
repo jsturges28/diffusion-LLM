@@ -21,6 +21,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from src.backends.text_adapter import ChatTextAdapter
 from src.inference.checkpoint import (
     CheckpointBudget,
     FrameCheckpoint,
@@ -141,6 +142,55 @@ def build_llada_inputs(
         "expected (batch, seq) ids"
     )
     return encoded
+
+
+class LladaTextAdapter(ChatTextAdapter):
+    """LLaDA's two-step template, behind the shared interface.
+
+    Wraps ``build_llada_inputs`` rather than absorbing it, because
+    that function is already the single definition this model encodes
+    through and the resume path depends on calling it directly.
+
+    No control tokens and no channel: LLaDA renders unresolved
+    positions as a mask glyph rather than emitting scaffolding, and it
+    has no reasoning channel. No turn terminator either, since the
+    canvas ends when denoising does rather than on a token.
+    """
+
+    def build_inputs(
+        self,
+        tokenizer: Any,
+        model: Any,
+        prompt: str,
+        *,
+        thinking: bool,
+    ) -> Any:
+        """The canvas prompt, on the model's device.
+
+        ``thinking`` is accepted and ignored to keep one signature
+        across adapters. Passing it to a template that does not
+        declare it is a silent no-op on some versions of transformers
+        and an error on others, which is why this overrides rather
+        than reusing the shared chat path.
+        """
+        assert isinstance(prompt, str), "prompt must be a string"
+        encoded = build_llada_inputs(tokenizer, prompt)
+        return encoded.to(model.device)
+
+    def count_prompt_tokens(
+        self, tokenizer: Any, prompt: str, *, thinking: bool
+    ) -> int:
+        """The generator's own encode, so this is the run's count."""
+        assert isinstance(prompt, str), "prompt must be a string"
+        if prompt == "":
+            return 0
+        encoded = build_llada_inputs(tokenizer, prompt)
+        count = int(encoded["input_ids"].shape[-1])
+        assert count > 0, "a templated prompt has tokens"
+        return count
+
+
+LLADA_TEXT = LladaTextAdapter()
 
 
 def sanitize_frame(text: str) -> str:

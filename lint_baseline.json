@@ -1,6 +1,6 @@
 {
   "_comment": "Accepted Ruff findings per file and rule. Written by scripts/lint_ratchet.py --update. These may only go down; see audit finding QUALITY-02.",
-  "total": 120,
+  "total": 119,
   "counts": {
     "src/backends/run_worker.py": {
       "E501": 2
@@ -14,7 +14,7 @@
       "PLR1702": 2
     },
     "src/inference/ar_sampler.py": {
-      "E501": 3
+      "E501": 2
     },
     "src/inference/hf_download.py": {
       "E501": 23

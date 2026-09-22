@@ -19,6 +19,7 @@ from fastapi import WebSocket
 from transformers import AutoTokenizer  # type: ignore[attr-defined]
 
 from src.backends.params import resolve_params
+from src.backends.text_adapter import DGEMMA_TEXT
 from src.backends.protocol import (
     ERROR_GENERATION_FAILED,
     ERROR_INVALID_REQUEST,
@@ -48,7 +49,6 @@ from src.inference.dgemma_sampler import (
 
 logger = logging.getLogger("dgemma_worker")
 
-
 class DgemmaBackend(Backend):
     # A resume splices the retained history, so an abandoned edit
     # session has to be able to put it back. No step count beside
@@ -60,6 +60,7 @@ class DgemmaBackend(Backend):
 
     def __init__(self) -> None:
         self.model_info = DGEMMA
+        self.text_adapter = DGEMMA_TEXT
         self.model: Any = None
         self.tokenizer: Any = None
         self.last_run_state: Optional[Dict[str, Any]] = None
@@ -159,6 +160,7 @@ class DgemmaBackend(Backend):
             generator = streaming_generate(
                 self.model,
                 self.tokenizer,
+                self.text_adapter,
                 params["prompt"],
                 max_new_tokens=params["max_new_tokens"],
                 max_denoising_steps=params[
@@ -319,6 +321,7 @@ class DgemmaBackend(Backend):
             generator = streaming_resume(
                 self.model,
                 self.tokenizer,
+                self.text_adapter,
                 prompt=state["prompt"],
                 base=base,
                 remask_positions=resume_params[

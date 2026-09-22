@@ -42,6 +42,7 @@ from src.inference.checkpoint import (
     DgemmaFrame,
     FrameCheckpoint,
 )
+from src.backends.text_adapter import DGEMMA_TEXT
 from src.inference.dgemma_sampler import (
     FrameQueueStreamer,
     _run_streamed,
@@ -125,6 +126,7 @@ def _drive(
     budget = None if history is None else CheckpointBudget()
     streamer = FrameQueueStreamer(
         _StubTokenizer(),
+        DGEMMA_TEXT,
         out_queue,
         stop_event=stop,
         budget=budget,
@@ -261,7 +263,8 @@ def test_a_checkpoint_exists_before_its_frame_is_handed_over(
 
     out_queue = _CheckingQueue(maxsize=8)
     streamer = FrameQueueStreamer(
-        _StubTokenizer(), out_queue, budget=CheckpointBudget()
+        _StubTokenizer(),
+        DGEMMA_TEXT, out_queue, budget=CheckpointBudget()
     )
     streamer.put(_canvas([0] * CANVAS_LENGTH))
     streamer.put_draft(value=_canvas(SETTLED_IDS))
@@ -278,6 +281,7 @@ def test_an_undelivered_frame_leaves_no_checkpoint() -> None:
     stop.set()
     streamer = FrameQueueStreamer(
         _StubTokenizer(),
+        DGEMMA_TEXT,
         frame_queue_create(),
         stop_event=stop,
         budget=CheckpointBudget(),
@@ -298,7 +302,10 @@ def test_nothing_is_recorded_when_nobody_is_collecting() -> None:
     """A generation with no history sink must not accumulate
     checkpoints nobody will ever claim."""
     out_queue = frame_queue_create()
-    streamer = FrameQueueStreamer(_StubTokenizer(), out_queue)
+    streamer = FrameQueueStreamer(
+        _StubTokenizer(),
+        DGEMMA_TEXT, out_queue
+    )
 
     streamer.put(_canvas([0] * CANVAS_LENGTH))
     streamer.put_draft(value=_canvas(SETTLED_IDS))
@@ -312,7 +319,8 @@ def test_a_claimed_checkpoint_is_released() -> None:
     history: List[FrameCheckpoint] = []
     out_queue = frame_queue_create()
     streamer = FrameQueueStreamer(
-        _StubTokenizer(), out_queue, budget=CheckpointBudget()
+        _StubTokenizer(),
+        DGEMMA_TEXT, out_queue, budget=CheckpointBudget()
     )
 
     async def drive() -> None:
@@ -439,7 +447,10 @@ def _bare_streamer(
     this would block forever on an empty queue.
     """
     out_queue = frame_queue_create()
-    streamer = FrameQueueStreamer(_StubTokenizer(), out_queue)
+    streamer = FrameQueueStreamer(
+        _StubTokenizer(),
+        DGEMMA_TEXT, out_queue
+    )
     streamer._takes_logits = takes_logits
     streamer.put(_canvas([0] * CANVAS_LENGTH))
     assert out_queue.qsize() == 0, "the prompt echo is not a frame"

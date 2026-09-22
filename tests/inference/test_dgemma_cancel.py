@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional
 import pytest
 import torch
 
+from src.backends.text_adapter import DGEMMA_TEXT
 from src.inference.dgemma_sampler import (
     FrameQueueStreamer,
     _run_streamed,
@@ -100,7 +101,8 @@ def test_the_streamer_raises_once_the_run_is_cancelled() -> None:
     out_queue = frame_queue_create()
     stop = threading.Event()
     streamer = FrameQueueStreamer(
-        _StubTokenizer(), out_queue, stop_event=stop
+        _StubTokenizer(),
+        DGEMMA_TEXT, out_queue, stop_event=stop
     )
     streamer.put(_canvas([0] * CANVAS_LENGTH))
 
@@ -115,7 +117,8 @@ def test_the_streamer_is_silent_while_the_run_is_wanted(
     out_queue = frame_queue_create()
     stop = threading.Event()
     streamer = FrameQueueStreamer(
-        _StubTokenizer(), out_queue, stop_event=stop
+        _StubTokenizer(),
+        DGEMMA_TEXT, out_queue, stop_event=stop
     )
     streamer.put(_canvas([0] * CANVAS_LENGTH))
     for step in range(3):
@@ -130,7 +133,10 @@ def test_a_streamer_without_a_stop_event_never_cancels() -> None:
     # Cancellation is opt-in; a caller that wires no event must
     # not have its run read as already stopped.
     out_queue = frame_queue_create()
-    streamer = FrameQueueStreamer(_StubTokenizer(), out_queue)
+    streamer = FrameQueueStreamer(
+        _StubTokenizer(),
+        DGEMMA_TEXT, out_queue
+    )
     streamer.put(_canvas([0] * CANVAS_LENGTH))
     streamer.put_draft(value=_canvas([1] * CANVAS_LENGTH))
     assert out_queue.qsize() == 1
@@ -139,7 +145,10 @@ def test_a_streamer_without_a_stop_event_never_cancels() -> None:
 def test_the_streamer_keeps_the_text_it_last_built() -> None:
     """A cancelled generate returns nothing, so this is the text."""
     out_queue = frame_queue_create()
-    streamer = FrameQueueStreamer(_StubTokenizer(), out_queue)
+    streamer = FrameQueueStreamer(
+        _StubTokenizer(),
+        DGEMMA_TEXT, out_queue
+    )
     assert streamer.last_text == ""
 
     # The first put is the prompt and is deliberately skipped, so
@@ -168,7 +177,8 @@ def _drive(
     """Run the shared streaming path, collecting yielded frames."""
     out_queue = frame_queue_create()
     streamer = FrameQueueStreamer(
-        _StubTokenizer(), out_queue, stop_event=stop
+        _StubTokenizer(),
+        DGEMMA_TEXT, out_queue, stop_event=stop
     )
     frames: List[Dict[str, Any]] = []
 
@@ -241,7 +251,10 @@ def test_the_queue_bound_holds_against_a_fast_denoiser() -> None:
     # A producer far faster than its consumer is the case the
     # bound exists for, and the streamer is that producer.
     out_queue = frame_queue_create()
-    streamer = FrameQueueStreamer(_StubTokenizer(), out_queue)
+    streamer = FrameQueueStreamer(
+        _StubTokenizer(),
+        DGEMMA_TEXT, out_queue
+    )
     streamer.put(_canvas([0] * CANVAS_LENGTH))
     for step in range(FRAME_QUEUE_MAX_FRAMES):
         streamer.put_draft(

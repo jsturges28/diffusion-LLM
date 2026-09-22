@@ -33,6 +33,7 @@ from transformers import (  # type: ignore[attr-defined]
 )
 
 from src.backends.params import resolve_params
+from src.backends.text_adapter import SMOLLM3_TEXT
 from src.backends.protocol import (
     ERROR_GENERATION_FAILED,
     ERROR_INVALID_REQUEST,
@@ -68,6 +69,7 @@ logger = logging.getLogger("smollm3_worker")
 class Smollm3Backend(Backend):
     def __init__(self) -> None:
         self.model_info = SMOLLM3
+        self.text_adapter = SMOLLM3_TEXT
         self.model: Any = None
         self.tokenizer: Any = None
         self.device: str = "cuda"
@@ -193,6 +195,7 @@ class Smollm3Backend(Backend):
             generator = streaming_generate(
                 self.model,
                 self.tokenizer,
+                self.text_adapter,
                 params["prompt"],
                 max_new_tokens=params["max_new_tokens"],
                 temperature=params["temperature"],
@@ -346,6 +349,7 @@ class Smollm3Backend(Backend):
             generator = streaming_substitute(
                 self.model,
                 self.tokenizer,
+                self.text_adapter,
                 state["prompt"],
                 position=position,
                 forced_id=request["forced_id"],
@@ -453,6 +457,7 @@ class Smollm3Backend(Backend):
                     probe_token,
                     model=self.model,
                     tokenizer=self.tokenizer,
+                    adapter=self.text_adapter,
                     prompt=state["prompt"],
                     prefix_ids=state["ids"][:position],
                     token_id=token_id,

@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pytest
 import torch
 
+from src.backends.text_adapter import ChatTextAdapter
 from src.inference import ar_sampler
 from src.inference.ar_sampler import (
     AR_CACHE_BYTES_MAX,
@@ -459,6 +460,10 @@ def _traced(
 def _append_frame(trace: _Trace, index: int) -> Dict[str, Any]:
     return _build_append_frame(
         StubTokenizer(),
+        # A bare chat adapter, declaring no control tokens: the frame
+        # shape under test is the sampler's, and a model's vocabulary
+        # is no longer the sampler's business.
+        ChatTextAdapter(),
         trace,
         frame_index=index,
         total_steps=8,
@@ -581,6 +586,7 @@ def _run_generate(
         async for item in streaming_generate(
             StubModel(),
             StubTokenizer(),
+            ChatTextAdapter(),
             "prompt",
             max_new_tokens=budget,
             temperature=0.0,
@@ -686,6 +692,7 @@ def _run_substitute(
         async for item in streaming_substitute(
             model,
             StubTokenizer(),
+            ChatTextAdapter(),
             "prompt",
             position=position,
             forced_id=forced["id"],
@@ -926,6 +933,7 @@ def test_probe_reproduces_a_recorded_probability() -> None:
     result = probe_token(
         model=StubModel(),
         tokenizer=StubTokenizer(),
+        adapter=ChatTextAdapter(),
         prompt="prompt",
         prefix_ids=state["ids"][:2],
         token_id=captured[0]["id"],
@@ -948,6 +956,7 @@ def test_probe_ranks_the_likeliest_token_first() -> None:
     result = probe_token(
         model=StubModel(),
         tokenizer=StubTokenizer(),
+        adapter=ChatTextAdapter(),
         prompt="prompt",
         prefix_ids=state["ids"][:2],
         token_id=state["ids"][2],
@@ -968,6 +977,7 @@ def test_probe_ranks_a_rejected_token_behind_it() -> None:
     result = probe_token(
         model=StubModel(),
         tokenizer=StubTokenizer(),
+        adapter=ChatTextAdapter(),
         prompt="prompt",
         prefix_ids=state["ids"][:2],
         token_id=EOS_ID,
@@ -982,6 +992,7 @@ def test_probe_at_the_first_position_has_no_prefix() -> None:
     result = probe_token(
         model=StubModel(),
         tokenizer=StubTokenizer(),
+        adapter=ChatTextAdapter(),
         prompt="prompt",
         prefix_ids=[],
         token_id=3,
@@ -1002,6 +1013,7 @@ def test_probe_rejects_a_token_outside_the_output() -> None:
         probe_token(
             model=StubModel(),
             tokenizer=StubTokenizer(),
+            adapter=ChatTextAdapter(),
             prompt="prompt",
             prefix_ids=[],
             token_id=VOCAB_SIZE,
@@ -1025,6 +1037,7 @@ def test_probe_agrees_with_a_typed_substitution() -> None:
     probed = probe_token(
         model=StubModel(),
         tokenizer=StubTokenizer(),
+        adapter=ChatTextAdapter(),
         prompt="prompt",
         prefix_ids=state["ids"][:2],
         token_id=result["forced"]["id"],
@@ -1174,6 +1187,7 @@ def test_a_probe_decodes_one_token_against_the_cache() -> None:
     measured = probe_token(
         model=model,
         tokenizer=StubTokenizer(),
+        adapter=ChatTextAdapter(),
         prompt="prompt",
         prefix_ids=[5, 6],
         token_id=3,
@@ -1192,6 +1206,7 @@ def test_a_probe_without_a_cache_prefills_the_prefix() -> None:
     plain = StubModel()
     args: Dict[str, Any] = {
         "tokenizer": StubTokenizer(),
+        "adapter": ChatTextAdapter(),
         "prompt": "prompt",
         "prefix_ids": [5, 6],
         "token_id": 3,
@@ -1244,6 +1259,7 @@ def test_substitute_rejects_a_misaligned_prefix() -> None:
         generator = streaming_substitute(
             StubModel(),
             StubTokenizer(),
+            ChatTextAdapter(),
             "prompt",
             position=3,
             forced_id=5,

@@ -9,7 +9,11 @@ sequence: every token is resolved (``m`` false) and ``c`` is the
 softmax probability of the chosen token.
 
 Generic across autoregressive ``AutoModelForCausalLM`` checkpoints;
-the SmolLM3 worker is the first caller.
+the SmolLM3 worker is the first caller. Every text convention arrives
+through the ``TextAdapter`` the caller hands over, so nothing here
+knows a template, a control token, a turn terminator or a reasoning
+channel. That is what lets a base completion model, which may carry
+no chat template at all, reuse this loop unchanged.
 
 Two XAI signals ride alongside confidence. Per-token **entropy** is
 always captured (one float, off the softmax the sampler already
@@ -45,13 +49,13 @@ from typing import (
     List,
     NamedTuple,
     Optional,
-    Set,
     Tuple,
 )
 
 import torch
 
 from src.backends.protocol import TERMINAL_CANCELLED
+from src.backends.text_adapter import TextAdapter
 from src.inference.frame_queue import (
     frame_queue_close,
     frame_queue_create,
@@ -63,20 +67,6 @@ from src.inference.frame_queue import (
 # alternatives signal is on. Fixed rather than user-facing: five is
 # enough to read a decision and keeps the payload predictable.
 TOP_K_ALTERNATIVES = 5
-
-# Control/structure tokens hidden from the per-token display so the
-# chat scaffolding does not clutter the streamed output.
-_STRIP_TOKENS = (
-    "<|im_start|>",
-    "<|im_end|>",
-    "<|endoftext|>",
-    "<think>",
-    "</think>",
-)
-
-_THINK_OPEN = "<think>"
-_THINK_CLOSE = "</think>"
-
 
 class _StepPick(NamedTuple):
     """One decoding step's sampled token and captured signals.
@@ -91,72 +81,12 @@ class _StepPick(NamedTuple):
     alternatives: Optional[List[Dict[str, Any]]]
 
 
-def _sanitize(text: str) -> str:
-    for token in _STRIP_TOKENS:
-        text = text.replace(token, "")
-    return text
-
-
-def _split_thinking(raw: str) -> Tuple[str, str]:
-    """Separate the reasoning trace from the final answer.
-
-    SmolLM3 wraps extended reasoning in ``<think> ... </think>``
-    before the answer. Returns (thinking, answer), both cleaned of
-    control tokens. When no reasoning trace is present (thinking
-    disabled), thinking is empty and the whole output is the answer.
-    """
-    if _THINK_CLOSE in raw:
-        head, _, answer = raw.partition(_THINK_CLOSE)
-        head = head.replace(_THINK_OPEN, "", 1)
-        return _sanitize(head).strip(), _sanitize(answer).strip()
-    return "", _sanitize(raw).strip()
-
-
 def _seed(seed: int) -> None:
     if seed < 0:
         return
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-
-
-def _build_inputs(
-    tokenizer: Any, model: Any, prompt: str, *, thinking: bool
-) -> Any:
-    """Tokenize a chat prompt into model-ready generate inputs."""
-    chat = [{"role": "user", "content": prompt}]
-    return tokenizer.apply_chat_template(
-        chat,
-        tokenize=True,
-        add_generation_prompt=True,
-        return_dict=True,
-        return_tensors="pt",
-        enable_thinking=thinking,
-    ).to(model.device)
-
-
-def _stop_ids(tokenizer: Any, model: Any) -> Set[int]:
-    """Collect token ids that end generation (EOS + chat turn end)."""
-    ids: Set[int] = set()
-
-    def _add(value: Any) -> None:
-        if isinstance(value, (list, tuple)):
-            for item in value:
-                if isinstance(item, int):
-                    ids.add(int(item))
-        elif isinstance(value, int):
-            ids.add(int(value))
-
-    _add(tokenizer.eos_token_id)
-    gen_cfg = getattr(model, "generation_config", None)
-    if gen_cfg is not None:
-        _add(getattr(gen_cfg, "eos_token_id", None))
-    # The ChatML turn terminator is a distinct token from EOS.
-    unk = tokenizer.unk_token_id
-    turn_end = tokenizer.convert_tokens_to_ids("<|im_end|>")
-    if isinstance(turn_end, int) and turn_end >= 0 and turn_end != unk:
-        ids.add(int(turn_end))
-    return ids
 
 
 def _top_p_filter(
@@ -407,6 +337,7 @@ FRAME_SHAPE_APPEND = "append"
 
 def _build_append_frame(
     tokenizer: Any,
+    adapter: TextAdapter,
     trace: "_Trace",
     *,
     frame_index: int,
@@ -428,7 +359,7 @@ def _build_append_frame(
     assert 0 <= frame_index < len(trace.ids), "index off the trace"
     assert conf_sum >= 0.0, "confidence sum cannot be negative"
     token_id = trace.ids[frame_index]
-    display = _sanitize(
+    display = adapter.sanitize(
         tokenizer.decode([token_id], skip_special_tokens=False)
     )
     count = frame_index + 1
@@ -553,6 +484,7 @@ def _stream_tokens(
     *,
     model: Any,
     tokenizer: Any,
+    adapter: TextAdapter,
     step_ids: torch.Tensor,
     attention_mask: Optional[torch.Tensor],
     trace: _Trace,
@@ -588,7 +520,7 @@ def _stream_tokens(
     """
     assert budget >= 0, "budget must be non-negative"
     trace.check()
-    stop_ids = _stop_ids(tokenizer, model)
+    stop_ids = adapter.stop_ids(tokenizer, model)
     device = model.device
     dtype = step_ids.dtype
 
@@ -620,6 +552,7 @@ def _stream_tokens(
                 out_queue,
                 _build_append_frame(
                     tokenizer,
+                    adapter,
                     trace,
                     frame_index=frame_index,
                     total_steps=total_steps,
@@ -647,6 +580,7 @@ def _stream_tokens(
 
 def _finalize(
     tokenizer: Any,
+    adapter: TextAdapter,
     trace: _Trace,
     result: Dict[str, Any],
     prompt_len: Optional[int] = None,
@@ -665,7 +599,7 @@ def _finalize(
     raw = tokenizer.decode(
         trace.ids, skip_special_tokens=False
     )
-    thinking_text, final_text = _split_thinking(raw)
+    thinking_text, final_text = adapter.split_channels(raw)
     result["final_text"] = final_text
     result["thinking"] = thinking_text
     if prompt_len is not None:
@@ -680,6 +614,7 @@ def _decode_loop(
     *,
     model: Any,
     tokenizer: Any,
+    adapter: TextAdapter,
     inputs: Any,
     max_new_tokens: int,
     temperature: float,
@@ -697,6 +632,7 @@ def _decode_loop(
     past = _stream_tokens(
         model=model,
         tokenizer=tokenizer,
+        adapter=adapter,
         step_ids=inputs["input_ids"],
         attention_mask=inputs.get("attention_mask"),
         trace=trace,
@@ -710,7 +646,7 @@ def _decode_loop(
         cancel_event=cancel_event,
     )
     prompt_len = int(inputs["input_ids"].shape[-1])
-    _finalize(tokenizer, trace, result, prompt_len)
+    _finalize(tokenizer, adapter, trace, result, prompt_len)
     result["cache"] = _cache_record(
         past, prompt_len, trace.ids
     )
@@ -720,6 +656,7 @@ def _substitute_loop(
     *,
     model: Any,
     tokenizer: Any,
+    adapter: TextAdapter,
     inputs: Any,
     prefix_ids: List[int],
     prefix_confs: List[float],
@@ -787,6 +724,7 @@ def _substitute_loop(
 
     _emit_seed_frame(
         tokenizer=tokenizer,
+        adapter=adapter,
         trace=trace,
         position=position,
         total_steps=max_new_tokens,
@@ -801,6 +739,7 @@ def _substitute_loop(
     _stream_tokens(
         model=model,
         tokenizer=tokenizer,
+        adapter=adapter,
         step_ids=torch.tensor(
             [[forced_id]],
             dtype=prompt_ids.dtype,
@@ -822,6 +761,7 @@ def _substitute_loop(
     )
     _finalize(
         tokenizer,
+        adapter,
         trace,
         result,
         int(prompt_ids.shape[-1]),
@@ -831,6 +771,7 @@ def _substitute_loop(
 def _emit_seed_frame(
     *,
     tokenizer: Any,
+    adapter: TextAdapter,
     trace: _Trace,
     position: int,
     total_steps: int,
@@ -854,6 +795,7 @@ def _emit_seed_frame(
         out_queue,
         _build_append_frame(
             tokenizer,
+            adapter,
             trace,
             frame_index=position,
             total_steps=total_steps,
@@ -1212,6 +1154,7 @@ def probe_token(
     *,
     model: Any,
     tokenizer: Any,
+    adapter: TextAdapter,
     prompt: str,
     prefix_ids: List[int],
     token_id: int,
@@ -1248,7 +1191,7 @@ def probe_token(
     been ranked.
     """
     assert token_id >= 0, "token_id must be non-negative"
-    inputs = _build_inputs(
+    inputs = adapter.build_inputs(
         tokenizer, model, prompt, thinking=thinking
     )
     probs, _past, _mask = _position_distribution(
@@ -1294,6 +1237,7 @@ def _prefill_attention(
 async def streaming_generate(
     model: Any,
     tokenizer: Any,
+    adapter: TextAdapter,
     prompt: str,
     *,
     max_new_tokens: int = 256,
@@ -1317,7 +1261,7 @@ async def streaming_generate(
     ``state_sink``, when given, receives the run's per-position trace
     so the worker can serve a later substitution.
     """
-    inputs = _build_inputs(
+    inputs = adapter.build_inputs(
         tokenizer, model, prompt, thinking=thinking
     )
     out_queue: "queue.Queue[Any]" = frame_queue_create()
@@ -1328,6 +1272,7 @@ async def streaming_generate(
             _decode_loop(
                 model=model,
                 tokenizer=tokenizer,
+                adapter=adapter,
                 inputs=inputs,
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
@@ -1357,6 +1302,7 @@ async def streaming_generate(
 async def streaming_substitute(
     model: Any,
     tokenizer: Any,
+    adapter: TextAdapter,
     prompt: str,
     *,
     position: int,
@@ -1404,7 +1350,7 @@ async def streaming_substitute(
     assert len(prefix_ids) == position, (
         "prefix length must equal the forced position"
     )
-    inputs = _build_inputs(
+    inputs = adapter.build_inputs(
         tokenizer, model, prompt, thinking=thinking
     )
     out_queue: "queue.Queue[Any]" = frame_queue_create()
@@ -1415,6 +1361,7 @@ async def streaming_substitute(
             _substitute_loop(
                 model=model,
                 tokenizer=tokenizer,
+                adapter=adapter,
                 inputs=inputs,
                 prefix_ids=prefix_ids,
                 prefix_confs=prefix_confs,

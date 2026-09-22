@@ -23,6 +23,7 @@ import torch
 from transformers.generation.streamers import BaseStreamer
 
 from src.backends.protocol import TERMINAL_CANCELLED
+from src.backends.text_adapter import TextAdapter
 from src.inference.checkpoint import (
     CheckpointBudget,
     DgemmaFrame,
@@ -49,46 +50,6 @@ MASK_CHAR = "\u2591"
 # noise, small enough that the peak is not.
 LOGIT_CHUNK_POSITIONS = 32
 
-# Control/structure tokens hidden from the per-token display.
-_STRIP_TOKENS = (
-    "<bos>",
-    "<eos>",
-    "<pad>",
-    "<unk>",
-    "<end_of_turn>",
-    "<start_of_turn>",
-    "<|turn>",
-    "<turn|>",
-    "<|channel>",
-    "<channel|>",
-    "<|think|>",
-)
-
-_CHANNEL_CLOSE = "<channel|>"
-
-
-def _sanitize(text: str) -> str:
-    for token in _STRIP_TOKENS:
-        text = text.replace(token, "")
-    return text
-
-
-def _split_thinking(raw: str) -> tuple[str, str]:
-    """Separate the reasoning channel from the final answer.
-
-    DiffusionGemma emits ``<|channel>thought\\n ... <channel|>``
-    before the answer. Returns (thinking, answer), both cleaned of
-    control tokens.
-    """
-    if _CHANNEL_CLOSE in raw:
-        head, _, answer = raw.rpartition(_CHANNEL_CLOSE)
-        if "<|channel>" in head:
-            head = head.split("<|channel>", 1)[1]
-        head = head.replace("thought", "", 1)
-        return _sanitize(head).strip(), _sanitize(answer).strip()
-    return "", _sanitize(raw).strip()
-
-
 class FrameQueueStreamer(BaseStreamer):
     """Turns generate's streamer callbacks into protocol frames.
 
@@ -107,11 +68,13 @@ class FrameQueueStreamer(BaseStreamer):
     def __init__(
         self,
         tokenizer: Any,
+        adapter: TextAdapter,
         out_queue: "queue.Queue[Any]",
         stop_event: Optional[threading.Event] = None,
         budget: Optional[CheckpointBudget] = None,
     ) -> None:
         self.tokenizer = tokenizer
+        self.adapter = adapter
         self._queue = out_queue
         self._stop_event = stop_event
         # Present only when a caller intends to collect checkpoints.
@@ -222,7 +185,7 @@ class FrameQueueStreamer(BaseStreamer):
                 # the client draws the position solid.
                 conf = 0.0
             conf_sum += conf
-            display = _sanitize(
+            display = self.adapter.sanitize(
                 self.tokenizer.decode(
                     [token_id], skip_special_tokens=False
                 )
@@ -401,21 +364,6 @@ def _budget_for(
     return CheckpointBudget()
 
 
-def _build_inputs(
-    tokenizer: Any, model: Any, prompt: str, *, thinking: bool
-) -> Any:
-    """Tokenize a chat prompt into model-ready generate inputs."""
-    chat = [{"role": "user", "content": prompt}]
-    return tokenizer.apply_chat_template(
-        chat,
-        tokenize=True,
-        add_generation_prompt=True,
-        return_dict=True,
-        return_tensors="pt",
-        enable_thinking=thinking,
-    ).to(model.device)
-
-
 async def _run_streamed(
     *,
     model: Any,
@@ -516,7 +464,12 @@ def _terminal_frame(
             sequences[0][prompt_len:],
             skip_special_tokens=False,
         )
-        thinking_text, final_text = _split_thinking(raw)
+        # Through the streamer's adapter rather than a parameter of
+        # its own: the two must agree on the convention, and reading
+        # one of them is how they cannot disagree.
+        thinking_text, final_text = (
+            streamer.adapter.split_channels(raw)
+        )
     done: Dict[str, Any] = {
         "type": "done",
         "final_text": final_text,
@@ -538,6 +491,7 @@ def _terminal_frame(
 async def streaming_generate(
     model: Any,
     tokenizer: Any,
+    adapter: TextAdapter,
     prompt: str,
     *,
     max_new_tokens: int = 256,
@@ -554,7 +508,7 @@ async def streaming_generate(
     When ``frame_history`` is provided, each frame's checkpoint is
     appended to it so the worker can support resume-from-frame.
     """
-    inputs = _build_inputs(
+    inputs = adapter.build_inputs(
         tokenizer, model, prompt, thinking=thinking
     )
     prompt_len = int(inputs["input_ids"].shape[1])
@@ -562,6 +516,7 @@ async def streaming_generate(
     out_queue: "queue.Queue[Any]" = frame_queue_create()
     streamer = FrameQueueStreamer(
         tokenizer,
+        adapter,
         out_queue,
         stop_event=cancel_event,
         budget=_budget_for(frame_history),
@@ -592,6 +547,7 @@ async def streaming_generate(
 async def streaming_resume(
     model: Any,
     tokenizer: Any,
+    adapter: TextAdapter,
     *,
     prompt: str,
     base: FrameCheckpoint,
@@ -628,7 +584,7 @@ async def streaming_resume(
             f" expected {canvas_length}"
         )
 
-    inputs = _build_inputs(
+    inputs = adapter.build_inputs(
         tokenizer, model, prompt, thinking=thinking
     )
     prompt_len = int(inputs["input_ids"].shape[1])
@@ -659,6 +615,7 @@ async def streaming_resume(
     out_queue: "queue.Queue[Any]" = frame_queue_create()
     streamer = FrameQueueStreamer(
         tokenizer,
+        adapter,
         out_queue,
         stop_event=cancel_event,
         budget=_budget_for(frame_history),

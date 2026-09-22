@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, List, Optional
 
+from src.backends.text_adapter import ChatTextAdapter
 from src.backends.worker_base import (
     CONTEXT_LENGTH_SANE_MAX,
     COUNT_PROMPT_MAX_CHARS,
@@ -111,10 +112,18 @@ class _FakeTensor:
 
 
 class _StubBackend(Backend):
-    """Only the tokenizer matters; the rest is contract filler."""
+    """Only the tokenizer and adapter matter; rest is filler."""
 
-    def __init__(self, tokenizer: Any) -> None:
+    def __init__(
+        self,
+        tokenizer: Any,
+        adapter: Any = None,
+    ) -> None:
         self.tokenizer = tokenizer
+        # A bare chat adapter unless a test names one: the counting
+        # under test is the template's, and no model's control tokens
+        # or channel convention reaches it.
+        self.text_adapter = adapter or ChatTextAdapter()
 
     def load(self, *, device: str = "cuda") -> None:
         raise NotImplementedError

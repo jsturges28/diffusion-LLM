@@ -2718,3 +2718,35 @@ real panel show.
     128, rising to 2048 with Experimental on. On GPU the default
     should be 256. That device override is now applied by the shared
     resolver rather than by this worker's own copy.
+
+## Text conventions moved out of the samplers (2026-09-22)
+
+The autoregressive sampler carried SmolLM3's chat template, control
+tokens, turn terminator and `<think>` channel, and DiffusionGemma's
+sampler carried its own near-copies. Every one of those now arrives
+through a per-model text adapter, so the loop the next model reuses
+knows none of them.
+
+Most of this is covered in `tests/backends/test_text_adapter.py`,
+including the no-template case against a real tokenizer. What is left
+needs a GPU, and it is all regression checking: the point of the change
+is that nothing observable moves.
+
+274. **All three models still generate.** One run each, defaults. The
+    templating, the stop tokens and the per-token display all went
+    through an adapter, so a mistake shows as scaffolding leaking into
+    the output, a run that never stops, or a prompt the model answers
+    oddly because it was wrapped wrong.
+275. **SmolLM3 still splits its reasoning.** Turn Thinking on and
+    generate. The trace belongs in the Thinking panel and the answer in
+    the output, with no `<think>` tags visible in either.
+276. **DiffusionGemma still splits its channel.** Same check, different
+    convention: its reasoning is delimited by `<|channel>` and
+    `<channel|>` rather than think tags, and the two conventions are
+    now separate methods. A swap would show as the whole output landing
+    in one panel.
+277. **The prompt count still matches the run.** Type a prompt and note
+    the counter, then generate and open the run in Analytics: the
+    prompt length recorded should equal what the counter said. Both
+    read the same adapter now, where they used to be three
+    implementations kept in step by a comment.
