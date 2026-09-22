@@ -50,9 +50,17 @@ commits and recorded under Deviations. One item, 148, was reclassified as
 unreachable on this hardware rather than left pending, because its scenario
 needs two models resident at once on a card that cannot hold both.
 
-Baselines: 793 tests passing (from 265 at the campaign's start), 145
-browser tests under `node --test`, and Ruff at 128 in `src tests`, gated per
-file and per rule by `scripts/lint_ratchet.py` rather than remembered.
+**Stage 6 has started, with `ROADMAP-01`.** `model_type` is now a family
+and a generation shape, and devices are declared rather than inferred
+from the family. Three boundaries were drawn deliberately rather than by
+omission and each has an entry under Deviations: LLaDA's device set, the
+signal axis left to `ROADMAP-03`, and per-device memory. The rest of the
+stage is unblocked.
+
+Baselines: 1,436 tests passing (from 265 at the campaign's start), 372
+browser tests under `node --test`, and Ruff at 123 in `src tests`, gated
+per file and per rule by `scripts/lint_ratchet.py` rather than
+remembered.
 
 ## How to read this
 
@@ -320,13 +328,13 @@ on real hardware.
 | RUNTIME-01 | medium | L | done | none | Queue bound, then append frames on the wire, in the browser and on disk; 130 MiB to 1 MiB on a 2,048-token run |
 | ORG-02 | medium | L | partial | none | State core verified, boot state now server-rendered; only the ES module conversion remains |
 | RUNTIME-03 | medium | S | done | none | Taken as unblocked against this table; see Deviations |
-| ROADMAP-01 | high | M | blocked | stage 6 order | |
-| ROADMAP-05 | high | M | blocked | stage 6 order | |
-| ROADMAP-02 | medium | M | blocked | stage 6 order | |
-| TRUST-03 | high | L | blocked | stage 6 order | Offline slice only: Load cached weights without asking the Hub |
-| DEPS-01 | medium | L | blocked | stage 6 order | |
-| ROADMAP-03 | high | L | blocked | stage 6 order | |
-| ORG-03 | medium | M | blocked | stage 6 order | |
+| ROADMAP-01 | high | M | needs hardware | none | Family, shape and devices split apart; per-device memory skipped, see Deviations |
+| ROADMAP-05 | high | M | ready | none | |
+| ROADMAP-02 | medium | M | ready | none | |
+| TRUST-03 | high | L | ready | none | Offline slice only: Load cached weights without asking the Hub |
+| DEPS-01 | medium | L | ready | none | |
+| ROADMAP-03 | high | L | ready | none | Owns the signal axis ROADMAP-01 left alone |
+| ORG-03 | medium | M | ready | none | |
 | ROADMAP-04 | medium | L | blocked | DATA-01, stage 6 order | |
 | META-03 | medium | M | deferred | milestone boundaries | |
 
@@ -395,11 +403,12 @@ since nothing it asks for needs modules; see its entry. Compact
 append-only streams (`RUNTIME-01`) landed once the reducer could
 reconstruct them and the run-store version could distinguish them.
 
-**Stage 6, prepare the existing models before adding Mamba.** Split family,
-stream shape, device support, and resource requirements (`ROADMAP-01`),
-extract model-specific text adapters (`ROADMAP-05`), and centralize
-registry-driven parameter validation (`ROADMAP-02`), migrating and testing the
-three existing models first. Pin and attest artifacts (`TRUST-03`) and
+**Stage 6, prepare the existing models before adding Mamba. Started.**
+The family, stream shape and device split (`ROADMAP-01`) has landed.
+Resource requirements stayed as the single `min_vram_gib`; see
+Deviations. What remains is to extract model-specific text adapters
+(`ROADMAP-05`) and centralize registry-driven parameter validation
+(`ROADMAP-02`), migrating and testing the three existing models first. Pin and attest artifacts (`TRUST-03`) and
 consolidate environment intent (`DEPS-01`) before `.venv-ssm` exists. The
 Mamba baseline comes only after those are validated. The axis-aware signal
 manifest (`ROADMAP-03`) precedes its native XAI phase and diffusion entropy
@@ -421,6 +430,72 @@ the difference between that and what turned out to be true is worth keeping.
 No finding has been contradicted so far. The entries below are things learned
 while working one finding that belong to another, recorded rather than
 opportunistically fixed.
+
+### ROADMAP-01, four boundaries drawn on purpose, 2026-09-21
+
+The Direction lists five things to separate: a display family, a
+generation shape, explicit devices with per-device memory, named
+intervention and signal capabilities, and an explicit frame coordinate
+and resume scope. Three landed, and the decisions about the other two
+were taken with the maintainer before any code moved.
+
+**The two axes are required fields, not defaults.** `ModelCapabilities`
+now carries `family` and `generation_shape` with no default, and
+`supported_devices` lost the `("cuda", "cpu")` it had. The finding is
+about a model being filed as something nobody chose, and a default is
+how that happens, so saying nothing now fails at construction. It cost
+two stub capability objects in `test_worker_dispatch.py` and
+`test_worker_provenance.py`, which is a fair price for the guarantee.
+
+**LLaDA is GPU-only, which reverses an earlier deliberate assertion.**
+`test_activation_validation.py` used to assert that LLaDA ran on CPU,
+with a docstring saying so and warning that a wrong entry would refuse a
+switch that would have worked. That belief came from the old default
+rather than from a measurement. Three things say otherwise: the menu
+gives an iterative-canvas row a static GPU tag, so the placement was
+never offered; the Help copy claims GPU-or-CPU for SmolLM3 only; and
+`_validate_headroom` returns early for `device == "cpu"`, so 17 GiB of
+bf16 weights would have been allocated against host memory with nothing
+checking. The test now asserts the opposite and carries the reason, and
+a new case proves the refusal that did not previously exist.
+
+**Per-device memory requirements were skipped for want of a consumer.**
+With both diffusion models GPU-only, the only CPU-capable model is
+SmolLM3 at roughly 6 GiB of weights, and `min_vram_gib` is documented as
+consulted for the GPU pre-flight alone. Building a per-device memory
+axis now would ship a second field nothing reads, so the single figure
+stays and this is the note saying it was a choice. A model that is
+genuinely heavy on CPU makes the axis live.
+
+**The signal axis stayed with `ROADMAP-03`.** That finding owns the
+versioned manifest, the axes, the capture budgets and the entropy and
+top-k channels. Naming signals here would have meant designing that
+structure twice, so the three existing booleans (`supports_resume`,
+`supports_substitution`, `supports_cfg`) were left working as they are.
+
+One boolean was added beside them, and it is worth saying why it is not
+the manifest arriving early. The Verification clause ends "no UI
+decision may inspect a model ID", and one did: `renoiseNote` in
+`app.js` compared `activeModelId` against `"diffusiongemma"` to explain
+that remasking renoises rather than hard-masks, so the note would have
+gone quiet for the next renoising model under another id. That is now
+`remask_renoises`, one flag of the same kind as the three above rather
+than a versioned channel with a capture policy.
+
+**The frame coordinate and resume scope were not touched**, and nothing
+here needs them: the Direction asks for them so multi-canvas
+DiffusionGemma resume stops inferring single-canvas support from
+observed frames, which is its own change with its own verification.
+
+**What the on-disk field does now.** `model_type` stays in saved
+metadata, derived from the generation shape at the one write site in
+`server.py`. Shape rather than family, because every reader of it is
+asking whether the run has a masked canvas that can converge: the
+compare path says as much where it sets `COMPARE_NO_CURVE`, and the
+write comment says it gates diffusion-only charts. The useful
+consequence is that a future state-space run records `"autoregressive"`
+there, which is correct for all three readers even though its family is
+its own, and the corpus needs no migration and no schema bump.
 
 ### ROADMAP-03, a down payment made outside the campaign, 2026-08-30
 

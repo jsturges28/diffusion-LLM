@@ -61,11 +61,29 @@ class ParamSpec(BaseModel):
 class ModelCapabilities(BaseModel):
     """Feature flags a worker advertises to the frontend."""
 
-    # Generation paradigm. Diffusion-only UI (Edit Frames, the
-    # Heatmap/Diff overlays, Commit Order, the convergence chart) is
-    # gated off for "autoregressive" models, which stream a growing
-    # left-to-right sequence rather than denoising a masked canvas.
-    model_type: Literal["diffusion", "autoregressive"] = "diffusion"
+    # Two orthogonal axes, because one value cannot answer both
+    # questions. ``family`` is the architecture class and drives
+    # display: the menu's family glyph and the per-class glow
+    # settings. ``generation_shape`` is how output arrives and drives
+    # behaviour: an iterative canvas has masked positions to remask,
+    # scrub and converge (Edit Frames, the Heatmap/Diff overlays,
+    # Commit Order, the convergence chart), and an append-only stream
+    # has none of that.
+    #
+    # Neither is derivable from the other, which is the point. A
+    # state-space model is its own family and appends like an
+    # autoregressive one, so collapsing the two would either erase
+    # its family or offer it denoising UI it cannot support.
+    #
+    # Required rather than defaulted: a model that says nothing would
+    # otherwise be filed silently as diffusion on both axes, and that
+    # mislabelling is what the split exists to prevent.
+    family: Literal[
+        "diffusion", "autoregressive", "state_space"
+    ]
+    generation_shape: Literal[
+        "append_only", "iterative_canvas"
+    ]
     supports_resume: bool = False
     # Autoregressive counterfactual: replace the token at one
     # position with a captured alternative and regenerate forward
@@ -74,18 +92,86 @@ class ModelCapabilities(BaseModel):
     # selection and remask controls do not apply here.
     supports_substitution: bool = False
     supports_cfg: bool = False
+    # Whether a remasked position is renoised on resume rather than
+    # hard-masked. When it is, committed neighbours can shift too, and
+    # the edit UI says so. LLaDA hard-masks, DiffusionGemma renoises.
+    #
+    # A flag because the alternative was the one UI decision still
+    # reading a model id, which is what ROADMAP-01 forbids: the note
+    # would have gone missing the moment a second renoising model
+    # arrived under a different id. Defaults to the hard-masking
+    # reading, so a model that says nothing simply shows no note.
+    #
+    # One boolean beside the three above, deliberately not the start
+    # of ROADMAP-03's signal manifest; that finding owns the versioned
+    # axes, capture budgets and signal channels.
+    remask_renoises: bool = False
     # Character shown for an unresolved token in the UI.
     unresolved_char: str = "\u2591"
-    # Placements this model can actually load onto. Declared here so
-    # the supervisor can refuse an impossible activation before it
-    # evicts the working model; a backend that raises inside load()
-    # has already cost the user their resident worker by the time it
-    # speaks. Both devices by default, which is true of every model
-    # that does not say otherwise.
+    # Placements this model can actually load onto, and the single
+    # authority on the question. The supervisor refuses an unsupported
+    # activation before it evicts the working model
+    # (``_validate_target``), and the menu draws a device toggle only
+    # where there is a real choice; a backend that raises inside
+    # load() has already cost the user their resident worker by the
+    # time it speaks.
     #
-    # A minimal version of what ROADMAP-01 will fold into a proper
-    # device-support axis alongside family and stream shape.
-    supported_devices: Tuple[str, ...] = ("cuda", "cpu")
+    # Required for the same reason as the axes above. "Both devices"
+    # was once a convenient default, and it outlived its truth: it
+    # left a 17 GiB diffusion model advertising a CPU placement that
+    # nothing enforced a memory budget for. A model that needs a GPU
+    # now has to say so.
+    supported_devices: Tuple[str, ...]
+
+
+# The declared values of the two axes, so a test can enumerate them
+# and a caller can check one without restating the literal.
+FAMILIES: Tuple[str, ...] = (
+    "diffusion",
+    "autoregressive",
+    "state_space",
+)
+GENERATION_SHAPE_APPEND_ONLY = "append_only"
+GENERATION_SHAPE_ITERATIVE_CANVAS = "iterative_canvas"
+GENERATION_SHAPES: Tuple[str, ...] = (
+    GENERATION_SHAPE_APPEND_ONLY,
+    GENERATION_SHAPE_ITERATIVE_CANVAS,
+)
+
+# -- The on-disk vocabulary --
+#
+# Saved runs record ``model_type``, which predates the axes above and
+# is deliberately kept rather than migrated. Every reader of it asks
+# about shape, not family: whether the run has a masked canvas that
+# can converge. So the field stays, derived from ``generation_shape``
+# when a run is written. A state-space run records "autoregressive"
+# here, which is right for every reader that exists even though its
+# family is its own.
+SAVED_MODEL_TYPE_AUTOREGRESSIVE = "autoregressive"
+SAVED_MODEL_TYPE_DIFFUSION = "diffusion"
+
+_SAVED_MODEL_TYPE_BY_SHAPE: Dict[str, str] = {
+    GENERATION_SHAPE_APPEND_ONLY: (
+        SAVED_MODEL_TYPE_AUTOREGRESSIVE
+    ),
+    GENERATION_SHAPE_ITERATIVE_CANVAS: (
+        SAVED_MODEL_TYPE_DIFFUSION
+    ),
+}
+
+# A shape with no on-disk spelling would be saved as an empty string
+# or crash at save time, which is a poor place to learn about it.
+assert len(_SAVED_MODEL_TYPE_BY_SHAPE) == len(
+    GENERATION_SHAPES
+), "every generation shape needs an on-disk model_type"
+
+
+def saved_model_type(generation_shape: str) -> str:
+    """The ``model_type`` a run of this shape records on disk."""
+    assert generation_shape in GENERATION_SHAPES, (
+        f"unknown generation shape: {generation_shape}"
+    )
+    return _SAVED_MODEL_TYPE_BY_SHAPE[generation_shape]
 
 
 class ModelInfo(BaseModel):

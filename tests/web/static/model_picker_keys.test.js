@@ -30,7 +30,11 @@ const LLADA = {
   id: "llada",
   display_name: "LLaDA-8B-Instruct",
   min_vram_gib: 17,
-  capabilities: { model_type: "diffusion" },
+  capabilities: {
+    family: "diffusion",
+    generation_shape: "iterative_canvas",
+    supported_devices: ["cuda"],
+  },
   param_specs: [],
   status: "idle",
 };
@@ -38,16 +42,25 @@ const DGEMMA = {
   id: "diffusiongemma",
   display_name: "DiffusionGemma-26B-A4B",
   min_vram_gib: 18,
-  capabilities: { model_type: "diffusion" },
+  capabilities: {
+    family: "diffusion",
+    generation_shape: "iterative_canvas",
+    supported_devices: ["cuda"],
+  },
   param_specs: [],
   status: "idle",
 };
-// The only autoregressive one, so the only row with two device pills.
+// The only one declaring two placements, so the only row with two
+// device pills. The others are GPU-only and carry a static pill.
 const SMOL = {
   id: "smollm3",
   display_name: "SmolLM3-3B",
   min_vram_gib: 6,
-  capabilities: { model_type: "autoregressive" },
+  capabilities: {
+    family: "autoregressive",
+    generation_shape: "append_only",
+    supported_devices: ["cuda", "cpu"],
+  },
   param_specs: [],
   status: "active",
 };

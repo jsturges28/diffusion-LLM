@@ -47,10 +47,18 @@ function load() {
   return sandbox;
 }
 
-const LLADA = { id: "llada", capabilities: { model_type: "diffusion" } };
+const LLADA = { id: "llada", capabilities: {
+    family: "diffusion",
+    generation_shape: "iterative_canvas",
+    supported_devices: ["cuda"],
+  } };
 const SMOL = {
   id: "smollm3",
-  capabilities: { model_type: "autoregressive" },
+  capabilities: {
+    family: "autoregressive",
+    generation_shape: "append_only",
+    supported_devices: ["cuda", "cpu"],
+  },
 };
 
 const RESIDENT = {

@@ -128,10 +128,10 @@ an owner (`TRUST-04`): a fetch is a child process the supervisor terminates
 on cancel and on shutdown, leaving its partial parts so the next attempt
 resumes.
 
-**The ready list is empty for the first time.** Every finding is done,
-partial with its next step recorded, or blocked behind the stage 6 ordering.
-What is outstanding is hardware confirmation, not work; the ledger's
-validation queue is the list to read.
+**Stage 6 has started.** `model_type` was one value answering four
+questions and is now a `family` and a `generation_shape`, with devices
+declared rather than inferred, so both diffusion models are honestly
+GPU-only (`ROADMAP-01`).
 
 **The analytics read path is done** (`ANALYTICS-03`, `ANALYTICS-04`, and
 `ANALYTICS-02`'s repair half, one plan because they shared one seam).

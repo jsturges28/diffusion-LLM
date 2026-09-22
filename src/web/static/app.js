@@ -498,14 +498,19 @@ function setMaskChar() {
   }
 }
 
-// Autoregressive models stream a growing left-to-right sequence
-// instead of denoising a masked canvas, so diffusion-only affordances
-// (Diff overlay, Commit Order, convergence) are gated off for them.
-function isAutoregressive() {
+// An append-only model streams a growing left-to-right sequence
+// instead of denoising a masked canvas, so the canvas affordances
+// (Diff overlay, Commit Order, convergence) are gated off for it.
+//
+// Generation shape rather than family: a state-space model appends
+// too, so gating on the family would offer it denoising controls it
+// has no masked positions for.
+function isAppendOnly() {
   return !!(
     activeModel
     && activeModel.capabilities
-    && activeModel.capabilities.model_type === "autoregressive"
+    && activeModel.capabilities.generation_shape
+      === "append_only"
   );
 }
 
@@ -599,21 +604,39 @@ function fetchModels() {
   return modelClientLoad();
 }
 
-function modelIsAR(model) {
-  return !!(
+// The placements a model declares, and the only authority on the
+// question. Inferring devices from the family is what used to offer a
+// 17 GiB diffusion model a CPU load nothing budgeted for. A payload
+// missing the field is treated as GPU-only, which is the conservative
+// reading rather than a guess at CPU capability.
+function supportedDevices(model) {
+  var declared =
     model
     && model.capabilities
-    && model.capabilities.model_type === "autoregressive"
-  );
+    && model.capabilities.supported_devices;
+  return declared && declared.length ? declared : ["cuda"];
 }
 
-// The device a plain row-click (on the name) would target: GPU when
-// present, else CPU for the CPU-capable AR models. Diffusion is GPU.
+var DEVICE_LABELS = { cuda: "GPU", cpu: "CPU" };
+
+function deviceLabel(device) {
+  return DEVICE_LABELS[device] || String(device).toUpperCase();
+}
+
+// The device a plain row-click (on the name) would target: the GPU
+// when the host has one and the model can use it, otherwise whatever
+// the model does support. A GPU-only model on a GPU-less host still
+// answers "cuda", so the activation is refused for the real reason
+// instead of silently becoming a CPU load.
 function defaultDeviceFor(model) {
-  if (modelIsAR(model)) {
-    return gpuPresent ? "cuda" : "cpu";
+  var devices = supportedDevices(model);
+  if (gpuPresent && devices.indexOf("cuda") !== -1) {
+    return "cuda";
   }
-  return "cuda";
+  if (!gpuPresent && devices.indexOf("cpu") !== -1) {
+    return "cpu";
+  }
+  return devices[0];
 }
 
 // Full VRAM readout shown to the side of a dropdown option on hover
@@ -740,24 +763,35 @@ function setModelSelectValue(id) {
   }
 }
 
-// Device control for one option row: a static GPU pill for diffusion
-// models, or a clickable GPU/CPU toggle for AR models. Each button
-// routes through requestSwitch so any change goes past the confirm.
+// Device control for one option row: a static pill when the model
+// declares a single placement, or a clickable toggle across the ones
+// it does declare. Each button routes through requestSwitch so any
+// change goes past the confirm.
+//
+// Built from the declaration rather than from a hardcoded GPU/CPU
+// pair, so a future family that supports one device, or a different
+// pair, needs no branch here.
 function buildOptionDevice(model, activeId) {
   var wrap = document.createElement("span");
   wrap.className = "option-device";
-  if (!modelIsAR(model)) {
-    wrap.appendChild(buildDevicePill("GPU", true));
+  var supported = supportedDevices(model);
+  if (supported.length < 2) {
+    wrap.appendChild(
+      buildDevicePill(deviceLabel(supported[0]), true)
+    );
     return wrap;
   }
   var isActiveModel = model.id === activeId;
   var current = isActiveModel && activeDevice
     ? activeDevice
     : defaultDeviceFor(model);
-  var devices = [
-    { value: "cuda", label: "GPU" },
-    { value: "cpu", label: "CPU" },
-  ];
+  var devices = [];
+  for (var d = 0; d < supported.length; d++) {
+    devices.push({
+      value: supported[d],
+      label: deviceLabel(supported[d]),
+    });
+  }
   for (var i = 0; i < devices.length; i++) {
     (function (dev) {
       var btn = document.createElement("button");
@@ -2430,11 +2464,14 @@ var tokenBirthMaxConcurrent = TOKEN_BIRTH_CONCURRENT_MIN;
 // per page load: a model switch ends in location.reload(), so the
 // active model cannot change under a live canvas.
 function applyTokenBirthGlow() {
-  var modelType =
+  // Family, not generation shape: the glow pairs are per model class,
+  // so a state-space model gets its own rather than borrowing the
+  // autoregressive one because it happens to append.
+  var family =
     activeModel
     && activeModel.capabilities
-    && activeModel.capabilities.model_type;
-  var glow = overlaysGlowFor(appSettings, modelType);
+    && activeModel.capabilities.family;
+  var glow = overlaysGlowFor(appSettings, family);
   overlaysApplyGlowVars(
     outputArea, glow.brightness, glow.fadeMs
   );
@@ -2623,7 +2660,7 @@ function renderDiffOverlay(frameIndex) {
 // diffusion-only and omitted from the picker for AR runs; the guard
 // keeps a stale selection from tinting them.
 function effectiveColorMode() {
-  if (overlayMode === "commit" && isAutoregressive()) {
+  if (overlayMode === "commit" && isAppendOnly()) {
     return "none";
   }
   return overlayMode;
@@ -4321,7 +4358,7 @@ function setEntropyProfileVisible(visible) {
   if (!entropyProfileRow) {
     return;
   }
-  entropyProfileRow.hidden = !visible && !isAutoregressive();
+  entropyProfileRow.hidden = !visible && !isAppendOnly();
   entropyProfileRow.classList.toggle("is-empty", !visible);
 }
 
@@ -4377,7 +4414,7 @@ function buildOverlaySelect() {
     overlayMode = "none";
   }
   // Commit Order is diffusion-only; drop a stale selection for AR runs.
-  if (overlayMode === "commit" && isAutoregressive()) {
+  if (overlayMode === "commit" && isAppendOnly()) {
     overlayMode = "none";
   }
   // Keep the commit legend in sync with the (possibly reset) mode on
@@ -4401,14 +4438,14 @@ function buildOverlaySelect() {
   // Commit Order tints by resolution step, which a left-to-right model
   // does not have (its commit order is just position order), so it
   // stays diffusion-only.
-  if (!isAutoregressive()) {
+  if (!isAppendOnly()) {
     options.push({ value: "commit", label: "Commit Order" });
   }
   // Diff needs a branch to compare against. Diffusion runs list it
   // up front (disabled until Edit Frames produces one); autoregressive
   // runs list it only once a What If substitution has, since there is
   // no equivalent standing invitation for them.
-  if (!isAutoregressive() || hasDiff) {
+  if (!isAppendOnly() || hasDiff) {
     options.push({
       value: "diff",
       label: "Diff vs Original",
@@ -5956,11 +5993,19 @@ function exitRemaskMode() {
   activateScrubber();
 }
 
-// DiffusionGemma resumes by renoising remasked positions rather than
-// hard-masking them (as LLaDA does), so committed neighbours may also
-// shift on resume. Surface that difference while editing.
+// Some models resume by renoising remasked positions rather than
+// hard-masking them, so committed neighbours may also shift. Surface
+// that difference while editing.
+//
+// Read from the declared capability rather than from the model id,
+// which is what this used to do: the note would have gone missing for
+// the next renoising model to arrive under a different id.
 function renoiseNote() {
-  if (activeModelId === "diffusiongemma") {
+  if (
+    activeModel
+    && activeModel.capabilities
+    && activeModel.capabilities.remask_renoises
+  ) {
     return " Remasked tokens are renoised, so nearby"
       + " tokens may also change on resume.";
   }

@@ -31,7 +31,11 @@ const SMOL = {
   id: "smollm3",
   display_name: "SmolLM3-3B",
   min_vram_gib: 6,
-  capabilities: { model_type: "autoregressive" },
+  capabilities: {
+    family: "autoregressive",
+    generation_shape: "append_only",
+    supported_devices: ["cuda", "cpu"],
+  },
   param_specs: [
     {
       name: "max_new_tokens",

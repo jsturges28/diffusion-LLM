@@ -193,12 +193,27 @@
 
   // ---- Model rows ----
 
-  // Autoregressive models run on CPU too, so they are never gated by
-  // VRAM: a GPU-less or low-VRAM host just falls back to CPU.
-  function isAutoregressive(model) {
-    return !!(
-      model.capabilities
-      && model.capabilities.model_type === "autoregressive"
+  // The placements a model declares. A model that can fall back to
+  // CPU is never gated by VRAM, because a GPU-less or low-VRAM host
+  // can still load it; one that cannot is gated, and says so.
+  //
+  // Read from the declaration rather than inferred from the family,
+  // which is what used to conflate "appends left to right" with "runs
+  // on CPU". Absent means GPU-only, the conservative reading.
+  function supportedDevices(model) {
+    var declared =
+      model.capabilities && model.capabilities.supported_devices;
+    return declared && declared.length ? declared : ["cuda"];
+  }
+
+  function supportsCpu(model) {
+    return supportedDevices(model).indexOf("cpu") !== -1;
+  }
+
+  function modelFamily(model) {
+    return (
+      (model.capabilities && model.capabilities.family)
+      || "diffusion"
     );
   }
 
@@ -235,13 +250,28 @@
     + '<path d="M11 5 a7 7 0 0 1 0 14 M7 12 h6"'
     + ' stroke-width="1.9" /></svg>';
 
+  // Keyed by family, so a new class is one entry rather than another
+  // branch. State space carries a name but no glyph yet: the label
+  // matters more, because the alternative is telling the user a
+  // state-space model is a diffusion one.
+  var _FAMILY_ICONS = {
+    diffusion: _DIFFUSION_ICON,
+    autoregressive: _AR_ICON,
+  };
+  var _FAMILY_LABELS = {
+    diffusion: "Diffusion",
+    autoregressive: "Autoregressive",
+    state_space: "State space",
+  };
+
   function buildFamilyIcon(model) {
-    var ar = isAutoregressive(model);
+    var family = modelFamily(model);
     var span = document.createElement("span");
     span.className = "model-family-icon";
     span.title = "Model Family: "
-      + (ar ? "Autoregressive" : "Diffusion");
-    span.innerHTML = ar ? _AR_ICON : _DIFFUSION_ICON;
+      + (_FAMILY_LABELS[family] || _FAMILY_LABELS.diffusion);
+    span.innerHTML =
+      _FAMILY_ICONS[family] || _FAMILY_ICONS.diffusion;
     return span;
   }
 
@@ -283,6 +313,10 @@
   // default when a GPU is present and the model fits; otherwise CPU
   // is forced and the GPU option is disabled with an explanatory
   // tooltip. Exposes getDevice() for the activation POST.
+  // GPU/CPU specifically, because that is the only pair any model
+  // declares. The caller reaches this only for a model declaring more
+  // than one placement, so a third device would want a toggle built
+  // from the list rather than another branch here.
   function buildDeviceToggle(model, gpuPresent, fits) {
     var gpuOk = gpuPresent && fits;
     var wrap = document.createElement("div");
@@ -356,8 +390,9 @@
     return wrap;
   }
 
-  // Static, non-interactive device tag for GPU-only (diffusion) rows,
-  // matching the AR toggle's active pill so all rows read consistently.
+  // Static, non-interactive device tag for a row with one declared
+  // placement, matching the toggle's active pill so all rows read
+  // consistently.
   function buildStaticDeviceTag(model, label) {
     var wrap = document.createElement("div");
     wrap.className = "menu-model-device menu-model-device-static";
@@ -374,7 +409,7 @@
 
   function buildRow(model, gpuPresent) {
     var fits = model.fits !== false;
-    var ar = isAutoregressive(model);
+    var cpuOk = supportsCpu(model);
     var li = document.createElement("li");
     li.className = "menu-model-row";
     li.setAttribute("role", "option");
@@ -412,23 +447,30 @@
     );
     li._needsDownload = needsDownload;
 
-    // An AR row carries a CPU/GPU toggle and stays selectable even
-    // when it will not fit on the GPU, since CPU is always a fallback.
-    // Diffusion rows carry a static GPU-only tag.
-    if (ar) {
+    // A row with a real choice of placement carries a toggle and
+    // stays selectable even when it will not fit on the GPU, since
+    // CPU is then a fallback. A row with one declared placement
+    // carries a static tag naming it, which is how a GPU-only model
+    // of any family reads.
+    var devices = supportedDevices(model);
+    if (devices.length > 1) {
       var toggle = buildDeviceToggle(model, gpuPresent, fits);
       li._getDevice = toggle.getDevice;
       li._moveDevice = toggle.moveDevice;
       li.appendChild(toggle);
     } else {
-      li.appendChild(buildStaticDeviceTag(model, "GPU"));
+      li.appendChild(
+        buildStaticDeviceTag(
+          model, devices[0] === "cpu" ? "CPU" : "GPU"
+        )
+      );
     }
 
     if (needsDownload) {
       li.classList.add("needs-download");
       li.appendChild(buildDownloadVeneer(model));
       wireRow(li, model);
-    } else if (ar || fits) {
+    } else if (cpuOk || fits) {
       wireRow(li, model);
     } else {
       li.classList.add("is-disabled");

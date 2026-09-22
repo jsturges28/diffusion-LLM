@@ -603,9 +603,9 @@ function buildGlowClassSelect() {
 // nothing is loaded. Called before the preview is built or played, so
 // unlike the fetch it replaced it only has to set the value; it no
 // longer has to undo a sequence that already started on the wrong one.
-function adoptGlowClassForActiveModel(type) {
-  if (type && GLOW_KEYS[type]) {
-    glowClass = type;
+function adoptGlowClassForActiveModel(family) {
+  if (family && GLOW_KEYS[family]) {
+    glowClass = family;
   }
 }
 
@@ -651,17 +651,18 @@ function wireTabs() {
   }
 }
 
-// Which model is resident, from the boot state the server inlined. It
-// used to be a /api/models fetch feeding two consumers: the Generation
-// nav link, now unhidden in the markup by the server, and the glow
-// class below. Reading it here rather than fetching is what lets the
-// preview open on the right class instead of correcting itself.
-function bootActiveModelType() {
+// The resident model's family, from the boot state the server
+// inlined. It used to be a /api/models fetch feeding two consumers:
+// the Generation nav link, now unhidden in the markup by the server,
+// and the glow class below. Reading it here rather than fetching is
+// what lets the preview open on the right class instead of correcting
+// itself.
+function bootActiveModelFamily() {
   var boot = window.__BOOT__;
-  if (!boot || typeof boot.active_model_type !== "string") {
+  if (!boot || typeof boot.active_model_family !== "string") {
     return null;
   }
-  return boot.active_model_type;
+  return boot.active_model_family;
 }
 
 function bootSettings() {
@@ -671,7 +672,7 @@ function bootSettings() {
   stagedSettings = cloneSettings(appliedSettings);
   // Ahead of everything that reads glowClass: the picker, the preview
   // copy and the preview itself all open on it.
-  adoptGlowClassForActiveModel(bootActiveModelType());
+  adoptGlowClassForActiveModel(bootActiveModelFamily());
   buildModeSelect();
   buildGlowClassSelect();
   buildGlowPreviewCopy();

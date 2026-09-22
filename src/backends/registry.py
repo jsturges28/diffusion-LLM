@@ -35,9 +35,19 @@ LLADA = ModelInfo(
     venv_python=".venv/bin/python",
     checkpoint="GSAI-ML/LLaDA-8B-Instruct",
     capabilities=ModelCapabilities(
+        family="diffusion",
+        generation_shape="iterative_canvas",
         supports_resume=True,
         supports_cfg=True,
         unresolved_char="\u2591",
+        # 17 GiB of bf16 weights. The CPU placement this used to
+        # advertise came from the old default rather than from a
+        # decision, and it was unreachable and unchecked at the same
+        # time: the menu gives diffusion rows a static GPU tag, the
+        # Help text only ever claimed CPU for SmolLM3, and the
+        # headroom pre-flight skips CPU entirely. Declaring the truth
+        # closes a 17 GiB host allocation nothing was measuring.
+        supported_devices=("cuda",),
     ),
     param_specs=[
         ParamSpec(
@@ -126,8 +136,13 @@ DGEMMA = ModelInfo(
     venv_python=".venv-dgemma/bin/python",
     checkpoint="~/models/diffusiongemma-26B-A4B-it-nf4",
     capabilities=ModelCapabilities(
+        family="diffusion",
+        generation_shape="iterative_canvas",
         supports_resume=True,
         supports_cfg=False,
+        # Resume renoises remasked positions instead of hard-masking
+        # them, so committed neighbours can move as well.
+        remask_renoises=True,
         unresolved_char="\u2591",
         # The NF4 experts run through bitsandbytes, which needs a
         # CUDA compute path. The worker has always refused anything
@@ -214,13 +229,17 @@ SMOLLM3 = ModelInfo(
     venv_python=".venv-ar/bin/python",
     checkpoint="HuggingFaceTB/SmolLM3-3B",
     capabilities=ModelCapabilities(
-        model_type="autoregressive",
+        family="autoregressive",
+        generation_shape="append_only",
         # Left-to-right, so no diffusion remask/resume. Substitution
         # is the autoregressive counterfactual instead: it needs the
         # Alternatives capture, which the frontend gates on.
         supports_resume=False,
         supports_substitution=True,
         supports_cfg=False,
+        # The model a GPU-less host can use, so CPU is a placement
+        # this one genuinely supports rather than one it inherited.
+        supported_devices=("cuda", "cpu"),
     ),
     param_specs=[
         ParamSpec(

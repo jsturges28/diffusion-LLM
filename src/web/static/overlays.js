@@ -1337,11 +1337,16 @@ var GLOW_OUTER_BLUR_PX = 12;
 var GLOW_INNER_ALPHA = 0.9;
 var GLOW_OUTER_ALPHA = 0.5;
 
-// The settings keys each model class reads, keyed on the model_type
-// from ModelCapabilities. Written out rather than derived from the
-// class name so every key is greppable as a literal; a new class
-// (state space is on the roadmap) is one entry here plus an option
-// in the Settings picker.
+// The settings keys each model class reads, keyed on the family from
+// ModelCapabilities. Family rather than generation shape: these are
+// per-class visual preferences, so a state-space model wants its own
+// pair even though it appends like an autoregressive one.
+//
+// Written out rather than derived from the class name so every key is
+// greppable as a literal; a new class (state space is on the roadmap)
+// is one entry here plus an option in the Settings picker. The key
+// strings themselves are persisted user settings, so they are named
+// after the family and must not be renamed to follow a refactor.
 var GLOW_KEYS = {
   diffusion: {
     brightness: "glowBrightnessDiffusion",
@@ -1545,9 +1550,9 @@ function prefersReducedMotion() {
 }
 
 // The glow pair a model class reads, falling back to the diffusion
-// pair for a class that has no entry yet.
-function overlaysGlowFor(settings, modelType) {
-  var keys = GLOW_KEYS[modelType] || GLOW_KEYS.diffusion;
+// pair for a family that has no entry yet.
+function overlaysGlowFor(settings, family) {
+  var keys = GLOW_KEYS[family] || GLOW_KEYS.diffusion;
   return {
     brightness: settings[keys.brightness],
     fadeMs: settings[keys.fadeMs],

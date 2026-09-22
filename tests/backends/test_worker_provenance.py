@@ -169,7 +169,13 @@ class _StubBackend:
             id="stub",
             display_name="Stub",
             param_specs=[],
-            capabilities=ModelCapabilities(),
+            # The axes are required, so even a stub says what it is;
+            # provenance reads none of them.
+            capabilities=ModelCapabilities(
+                family="diffusion",
+                generation_shape="iterative_canvas",
+                supported_devices=("cuda", "cpu"),
+            ),
             worker_module="none",
             venv_python="none",
             checkpoint="org/stub-checkpoint",

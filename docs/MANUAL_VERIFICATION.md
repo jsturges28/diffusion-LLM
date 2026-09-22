@@ -2643,3 +2643,55 @@ It also broke the mouse for a session, so read 262 before the rest.
     should come up and the modal should be gone rather than floating
     over it. A dialog is in the top layer, above every stacking order
     the app can set, so the only way to stay covered is to close.
+
+## One value stopped answering four questions (2026-09-21)
+
+`model_type` drove the family glyph, the canvas affordances, the
+Analytics chart gating and CPU capability. It is now a family and a
+generation shape, with devices declared rather than inferred, and the
+declaration is what the supervisor and both pickers read.
+
+The user-visible part is small by design: LLaDA no longer advertises a
+CPU placement, which it never actually offered, and every decision now
+asks the axis that answers it. Most of this is covered automatically in
+`tests/backends/test_model_axes.py` and
+`tests/web/test_model_axis_wiring.py`; what is left needs a GPU or a
+display.
+
+267. **Every model still loads.** Activate all three on GPU in turn.
+    This is the blunt regression check: the axes are read before a
+    worker spawns, so a wrong declaration shows up as a refusal rather
+    than as a subtle fault.
+268. **LLaDA offers no CPU.** In the Main Menu its row should carry a
+    static GPU tag, not a GPU/CPU toggle, and the same in the
+    generator's model dropdown. DiffusionGemma should read the same
+    way. SmolLM3 keeps its toggle, and Left and Right should still
+    move between its two pills.
+
+    This is the one behaviour that changed rather than moved. LLaDA
+    declared `("cuda", "cpu")` because that was the old default, not a
+    decision. The menu never drew the toggle, so nothing offered it,
+    but the supervisor would have accepted a direct request and the
+    headroom pre-flight returns early for CPU, so 17 GiB would have
+    gone to host memory unchecked.
+269. **And refuses one if asked directly.** With a model resident,
+    ask for LLaDA on CPU past the UI:
+
+    ```
+    curl -X POST localhost:8760/api/models/llada/activate \
+      -H 'Content-Type: application/json' -d '{"device":"cpu"}'
+    ```
+
+    It should refuse with "cannot run on CPU", and the resident model
+    and the run on screen should both survive, since the check runs
+    before anything is evicted.
+270. **The renoise note follows the capability.** On DiffusionGemma,
+    open Edit Frames and remask a token: the status text should still
+    mention that nearby tokens may change, because remasking renoises
+    rather than hard-masks. On LLaDA the same gesture should not say
+    it. This was the last UI decision comparing against a model id.
+271. **Settings still opens on the right class.** With SmolLM3
+    resident, open Settings: the glow preview should start on
+    Autoregressive without flicking over from Diffusion. The key the
+    server inlines for this was renamed, so a mistake shows as the
+    picker sitting on Diffusion.

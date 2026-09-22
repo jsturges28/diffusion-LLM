@@ -78,7 +78,10 @@ from src.backends.protocol import (
     ERROR_NO_MODEL_ACTIVE,
     ERROR_SCOPE_FATAL,
     ERROR_WORKER_UNREACHABLE,
+    SAVED_MODEL_TYPE_AUTOREGRESSIVE,
+    SAVED_MODEL_TYPE_DIFFUSION,
     ModelInfo,
+    saved_model_type,
     wire_error,
 )
 from src.backends.registry import DEFAULT_MODEL, REGISTRY
@@ -2240,8 +2243,13 @@ def _build_metadata(body: SaveRunRequest) -> Dict[str, Any]:
     checkpoint = entry.checkpoint if entry else ""
     if provenance is not None and provenance.checkpoint:
         checkpoint = provenance.checkpoint
+    # The one place the axes become the on-disk field. Shape rather
+    # than family, because every reader of it asks whether the run has
+    # a masked canvas to converge, not what the architecture was.
     model_type = (
-        entry.capabilities.model_type if entry else "diffusion"
+        saved_model_type(entry.capabilities.generation_shape)
+        if entry
+        else SAVED_MODEL_TYPE_DIFFUSION
     )
     processor, processor_name = _describe_processor(provenance)
     metadata: Dict[str, Any] = {
@@ -2537,10 +2545,6 @@ COMPARE_REASONS = (
 
 assert COMPARE_RUNS_MAX > 1, "a comparison needs two runs"
 assert len(set(COMPARE_REASONS)) == len(COMPARE_REASONS)
-
-# The capability value marking a left-to-right model, which has no
-# masked canvas and therefore no convergence curve.
-MODEL_TYPE_AUTOREGRESSIVE = "autoregressive"
 
 
 def _compute_run_metrics(run_id: str) -> Dict[str, Any]:
@@ -2927,7 +2931,10 @@ async def _compare_one(run_id: str) -> Dict[str, Any]:
 
     record["status"] = COMPARE_STATUS_DATA
     record["label"] = _compare_label(run_id)
-    if record.get("model_type") == MODEL_TYPE_AUTOREGRESSIVE:
+    if (
+        record.get("model_type")
+        == SAVED_MODEL_TYPE_AUTOREGRESSIVE
+    ):
         # Real run, no comparable curve: an autoregressive run has no
         # masked canvas to converge. Said out loud rather than
         # dropped, which is what the chart used to do.
@@ -3674,8 +3681,12 @@ async def serve_analytics_page() -> HTMLResponse:
     return _serve_stamped_page("analytics.html", boot=boot)
 
 
-def _active_model_type() -> Optional[str]:
-    """Generation paradigm of the resident model, or None.
+def _active_model_family() -> Optional[str]:
+    """Architecture family of the resident model, or None.
+
+    Family rather than generation shape: the glow settings are keyed
+    by model class, so a state-space model wants its own pair even
+    though it appends like an autoregressive one.
 
     Registry data, so this costs no GPU probe. Settings needs it to
     open its glow preview on the right class instead of playing the
@@ -3684,7 +3695,7 @@ def _active_model_type() -> Optional[str]:
     active_id = manager.active_id
     if active_id is None or active_id not in REGISTRY:
         return None
-    return REGISTRY[active_id].capabilities.model_type
+    return REGISTRY[active_id].capabilities.family
 
 
 @app.get("/settings.html")
@@ -3692,7 +3703,7 @@ async def serve_settings_page() -> HTMLResponse:
     """Shared, model-agnostic Settings page (always available)."""
     return _serve_stamped_page(
         "settings.html",
-        boot={"active_model_type": _active_model_type()},
+        boot={"active_model_family": _active_model_family()},
     )
 
 

@@ -325,7 +325,7 @@ def test_the_entropy_row_is_reserved_only_when_it_can_fill() -> None:
     )
 
     assert (
-        "entropyProfileRow.hidden = !visible && !isAutoregressive()"
+        "entropyProfileRow.hidden = !visible && !isAppendOnly()"
         in region
     )
     assert 'classList.toggle("is-empty", !visible)' in region

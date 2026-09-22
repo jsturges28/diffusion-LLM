@@ -482,8 +482,9 @@ analytics suite.
   did not add to; the findings were deliberately left unfixed.
 - Shipped (this session): **per-class glow tuning, sub-setting grouping, the
   load sweep**, and two CSS corrections. Frontend-only, no Python touched.
-  The glow's **Brightness** and **Fade time** are stored per `model_type`
-  behind a class picker, because the trail an eye can follow is roughly rate
+  The glow's **Brightness** and **Fade time** are stored per model family
+  (per `model_type` when shipped, before `ROADMAP-01` split the axes) behind a
+  class picker, because the trail an eye can follow is roughly rate
   times fade and an autoregressive GPU run outpaces a diffusion step by an
   order of magnitude: the default that reads perfectly on LLaDA is gone before
   it registers on SmolLM3. Three details carry the design. The values reach the
@@ -826,10 +827,17 @@ Agreed with the maintainer (deliberate each in Ask mode before Plan). (The
    decision, base vs instruct (the `state-spaces` weights are base LMs, not
    instruction-tuned). Own `.venv-ssm`; native `mamba-ssm` / `causal-conv1d`
    CUDA kernels (GPU-only, custom decode loop); ~3 GB VRAM. The streaming
-   baseline reuses the AR frame / token contract and `model_type` gating; the
-   phase-2 payoff is SSM-native state overlays (per-token Δ / state-write
-   intensity, state-norm sparkline, fixed-state forgetting probes), which need
-   kernel-intermediate capture. Now unblocked, since the AR tools have shipped.
+   baseline reuses the AR frame / token contract and gates on the `append_only`
+   generation shape. The registry can express it now without a special case,
+   which is what `ROADMAP-01` was for: `family="state_space"` keeps its own
+   identity and its own glow pair, `generation_shape="append_only"` gets it the
+   autoregressive affordances and none of the denoising ones, and
+   `supported_devices=("cuda",)` is a declaration the supervisor enforces
+   before it evicts anything rather than a fact buried in a `load()` that
+   raises. The phase-2 payoff is SSM-native state overlays (per-token Δ /
+   state-write intensity, state-norm sparkline, fixed-state forgetting probes),
+   which need kernel-intermediate capture. Now unblocked, since the AR tools
+   have shipped and the axes have landed.
 2. **Entropy and top-k for the diffusion models.** The AR signals generalize, but
    the shape does not: a diffusion position is re-decided every step, so entropy
    becomes a per-position trajectory over steps rather than the single value the
@@ -969,10 +977,12 @@ cleanly onto AR: frame N is the sequence after N generated tokens, every token
   (left-to-right replay). Note: full-snapshot frames make the payload O(n^2) in
   tokens; the registry caps the recommended `max_new_tokens` at 256 and the
   worker clamps harder (~128) on CPU.
-- **Model-type gate**: `model_type` ("diffusion" | "autoregressive") on
-  `ModelCapabilities`; hides diffusion-only UI (Edit Frames, Diff overlay,
-  Commit Order, convergence chart), keeps run + timing + confidence + Heatmap
-  (the natural per-token AR confidence view).
+- **Model-type gate**: shipped as one `model_type` ("diffusion" |
+  "autoregressive") on `ModelCapabilities`, since split by `ROADMAP-01` into a
+  `family` and a `generation_shape`; the gate reads the shape. Hides
+  diffusion-only UI (Edit Frames, Diff overlay, Commit Order, convergence
+  chart), keeps run + timing + confidence + Heatmap (the natural per-token AR
+  confidence view).
 - **Per-activation CPU/GPU device**: `device` on the activate request threaded
   through `run_worker.py` -> `create_worker_app` -> `Backend.load(device=...)`,
   skipping the VRAM preflight on CPU; a CPU/GPU toggle on the AR menu row that

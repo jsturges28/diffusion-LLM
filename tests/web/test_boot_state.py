@@ -179,14 +179,18 @@ def test_the_link_and_the_gate_agree(idle: None) -> None:
 def test_the_settings_page_names_the_resident_class(
     resident: str,
 ) -> None:
-    """SmolLM3 is autoregressive, and Settings opens its glow preview
-    on that class. It used to fetch this, play the diffusion default
-    first, and correct itself a moment later."""
+    """SmolLM3's family is autoregressive, and Settings opens its glow
+    preview on that class. It used to fetch this, play the diffusion
+    default first, and correct itself a moment later.
+
+    Family rather than generation shape, because the glow pairs are
+    per model class: a state-space model wants its own even though it
+    appends the way this one does."""
     with TestClient(server.app) as client:
         response = client.get("/settings.html")
 
     state = _boot_state(response.text)
-    assert state["active_model_type"] == "autoregressive"
+    assert state["active_model_family"] == "autoregressive"
 
 
 def test_it_names_no_class_when_nothing_is_loaded(
@@ -195,7 +199,9 @@ def test_it_names_no_class_when_nothing_is_loaded(
     with TestClient(server.app) as client:
         response = client.get("/settings.html")
 
-    assert _boot_state(response.text)["active_model_type"] is None
+    assert (
+        _boot_state(response.text)["active_model_family"] is None
+    )
 
 
 def _boot_state(html: str) -> Dict[str, Any]:

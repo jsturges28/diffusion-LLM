@@ -153,6 +153,23 @@ def test_an_unsupported_device_evicts_nothing() -> None:
     harness.assert_undisturbed()
 
 
+def test_a_cpu_load_of_llada_is_refused_too() -> None:
+    """The refusal that did not exist before the axes landed. LLaDA
+    declared CPU support it inherited from a default, and the CPU
+    branch of the headroom pre-flight returns early, so 17 GiB of
+    weights would have been allocated against host memory with nothing
+    checking. The menu never offered it, which is why this was quiet;
+    a direct request had nothing standing in its way."""
+    harness = _resident()
+
+    with pytest.raises(RuntimeError, match="cannot run on CPU"):
+        asyncio.run(
+            harness.manager.activate("llada", device="cpu")
+        )
+
+    harness.assert_undisturbed()
+
+
 def test_a_missing_local_checkpoint_evicts_nothing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -360,15 +377,22 @@ def test_the_post_eviction_check_refuses_the_same_way(
 
 
 def test_the_registry_agrees_with_what_the_workers_accept() -> None:
-    """DiffusionGemma is the only CUDA-only model, and the other two
-    genuinely run on CPU (SmolLM3 is the model a GPU-less host uses).
-    A wrong entry here refuses a switch that would have worked."""
-    assert REGISTRY[
-        "diffusiongemma"
-    ].capabilities.supported_devices == ("cuda",)
-    for model_id in ("llada", "smollm3"):
-        supported = REGISTRY[
+    """Both diffusion models are GPU-only and SmolLM3 is the one a
+    GPU-less host can use. A wrong entry here either refuses a switch
+    that would have worked or offers one nothing budgets for.
+
+    This used to assert that LLaDA ran on CPU. It never did in
+    practice: that placement came from the old "both devices" default
+    rather than a decision, the menu gave diffusion rows a static GPU
+    tag so it was never offered, and the headroom pre-flight skips CPU
+    entirely, so 17 GiB of weights would have been allocated against
+    host memory with nothing checking."""
+    for model_id in ("llada", "diffusiongemma"):
+        assert REGISTRY[
             model_id
-        ].capabilities.supported_devices
-        assert "cpu" in supported
-        assert "cuda" in supported
+        ].capabilities.supported_devices == ("cuda",)
+    supported = REGISTRY[
+        "smollm3"
+    ].capabilities.supported_devices
+    assert "cpu" in supported
+    assert "cuda" in supported

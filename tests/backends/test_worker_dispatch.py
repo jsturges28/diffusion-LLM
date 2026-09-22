@@ -58,7 +58,13 @@ def _model_info() -> ModelInfo:
         id=MODEL_ID,
         display_name="Stub",
         param_specs=[],
-        capabilities=ModelCapabilities(),
+        # The axes are required, so even a stub says what it is; none
+        # of the dispatch behaviour under test reads them.
+        capabilities=ModelCapabilities(
+            family="diffusion",
+            generation_shape="iterative_canvas",
+            supported_devices=("cuda", "cpu"),
+        ),
         worker_module="none",
         venv_python="none",
         checkpoint="none",
