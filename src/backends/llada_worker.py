@@ -11,7 +11,7 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
@@ -21,6 +21,7 @@ from transformers.models.auto.tokenization_auto import (
     AutoTokenizer,
 )
 
+from src.backends.params import resolve_params
 from src.backends.protocol import (
     ERROR_GENERATION_FAILED,
     ERROR_INVALID_REQUEST,
@@ -52,21 +53,6 @@ from src.inference.streaming_sampler import (
 )
 
 logger = logging.getLogger("llada_worker")
-
-VALID_REMASKING = {"low_confidence", "random"}
-
-
-def _clamp_int(value: Any, bounds: Tuple[float, float]) -> int:
-    low, high = bounds
-    return int(max(low, min(high, float(value))))
-
-
-def _clamp_float(
-    value: Any, bounds: Tuple[float, float]
-) -> float:
-    low, high = bounds
-    return float(max(low, min(high, float(value))))
-
 
 def _apply_seed(seed: int) -> None:
     """Seed torch/numpy for reproducible sampling (seed >= 0)."""
@@ -205,57 +191,39 @@ class LladaBackend(Backend):
 
     # -- validation --
 
-    def _limits(
-        self, experimental: bool
-    ) -> Dict[str, Tuple[float, float]]:
-        out: Dict[str, Tuple[float, float]] = {}
-        for spec in self.model_info.param_specs:
-            bounds = (
-                spec.experimental
-                if experimental
-                else spec.recommended
-            )
-            if bounds is not None:
-                out[spec.name] = bounds
-        return out
-
     def _validate_generate(
         self, data: Dict[str, Any]
     ) -> Dict[str, Any]:
-        experimental = bool(data.get("experimental", False))
-        limits = self._limits(experimental)
+        """One request as this sampler's arguments.
+
+        Types, defaults, options and bounds come from the registry
+        through ``resolve_params``. What stays here is the prompt,
+        which is not a declared parameter, and the two divisibility
+        rules, which are this sampler's arithmetic rather than
+        anything a ``ParamSpec`` could express.
+        """
+        params = resolve_params(
+            self.model_info.param_specs,
+            data,
+            device=self.effective_device,
+            experimental=bool(
+                data.get("experimental", False)
+            ),
+        )
 
         prompt = str(data.get("prompt", "")).strip()
         if not prompt:
             raise ValueError("prompt must not be empty")
+        params["prompt"] = prompt
 
-        remasking = str(
-            data.get("remasking", "low_confidence")
-        )
-        if remasking not in VALID_REMASKING:
-            raise ValueError(
-                f"remasking must be one of {VALID_REMASKING}"
-            )
-
-        steps = _clamp_int(
-            data.get("steps", 128), limits["steps"]
-        )
-        gen_length = _clamp_int(
-            data.get("gen_length", 128), limits["gen_length"]
-        )
-        block_length = _clamp_int(
-            data.get("block_length", 32),
-            limits["block_length"],
-        )
-        temperature = _clamp_float(
-            data.get("temperature", 0.0),
-            limits["temperature"],
-        )
-        cfg_scale = _clamp_float(
-            data.get("cfg_scale", 0.0), limits["cfg_scale"]
-        )
-        seed = int(data.get("seed", -1))
-
+        steps = int(params["steps"])
+        gen_length = int(params["gen_length"])
+        block_length = int(params["block_length"])
+        # The declared bounds start at 1, so the two divisions below
+        # cannot fault. A ZeroDivisionError would escape the caller's
+        # ValueError/TypeError handler and read as a dead run rather
+        # than a rejected request.
+        assert block_length > 0, "bounds keep this positive"
         if gen_length % block_length != 0:
             raise ValueError(
                 f"gen_length ({gen_length}) must be"
@@ -269,16 +237,7 @@ class LladaBackend(Backend):
                 f" num_blocks ({num_blocks})"
             )
 
-        return {
-            "prompt": prompt,
-            "steps": steps,
-            "gen_length": gen_length,
-            "block_length": block_length,
-            "temperature": temperature,
-            "cfg_scale": cfg_scale,
-            "remasking": remasking,
-            "seed": seed,
-        }
+        return params
 
     # -- generation --
 

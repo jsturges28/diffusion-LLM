@@ -50,14 +50,18 @@ commits and recorded under Deviations. One item, 148, was reclassified as
 unreachable on this hardware rather than left pending, because its scenario
 needs two models resident at once on a card that cannot hold both.
 
-**Stage 6 has started, with `ROADMAP-01`.** `model_type` is now a family
-and a generation shape, and devices are declared rather than inferred
-from the family. Three boundaries were drawn deliberately rather than by
-omission and each has an entry under Deviations: LLaDA's device set, the
-signal axis left to `ROADMAP-03`, and per-device memory. The rest of the
+**Stage 6 has started.** `ROADMAP-01` and `ROADMAP-02` were taken
+together, because both restructure `protocol.py` and `registry.py` from
+different angles and pairing them migrated those files once.
+`model_type` is now a family and a generation shape, devices are
+declared rather than inferred from the family, and one resolver answers
+for every model's parameters in place of three coercions. Four
+boundaries were drawn deliberately rather than by omission and each has
+an entry under Deviations: LLaDA's device set, the signal axis,
+per-device memory, and `ROADMAP-02`'s context half. The rest of the
 stage is unblocked.
 
-Baselines: 1,436 tests passing (from 265 at the campaign's start), 372
+Baselines: 1,496 tests passing (from 265 at the campaign's start), 372
 browser tests under `node --test`, and Ruff at 123 in `src tests`, gated
 per file and per rule by `scripts/lint_ratchet.py` rather than
 remembered.
@@ -330,7 +334,7 @@ on real hardware.
 | RUNTIME-03 | medium | S | done | none | Taken as unblocked against this table; see Deviations |
 | ROADMAP-01 | high | M | needs hardware | none | Family, shape and devices split apart; per-device memory skipped, see Deviations |
 | ROADMAP-05 | high | M | ready | none | |
-| ROADMAP-02 | medium | M | ready | none | |
+| ROADMAP-02 | medium | M | partial | none | Parameter half done: one resolver, three coercions gone. Context half deferred, see Deviations |
 | TRUST-03 | high | L | ready | none | Offline slice only: Load cached weights without asking the Hub |
 | DEPS-01 | medium | L | ready | none | |
 | ROADMAP-03 | high | L | ready | none | Owns the signal axis ROADMAP-01 left alone |
@@ -404,11 +408,15 @@ append-only streams (`RUNTIME-01`) landed once the reducer could
 reconstruct them and the run-store version could distinguish them.
 
 **Stage 6, prepare the existing models before adding Mamba. Started.**
-The family, stream shape and device split (`ROADMAP-01`) has landed.
+The family, stream shape and device split (`ROADMAP-01`) and the
+registry-driven parameter validator (`ROADMAP-02`, its parameter half)
+landed together, against the map's order, which puts `ROADMAP-05`
+between them. They were paired because both restructure the same two
+files and doing them apart meant migrating `ModelCapabilities` and
+`ParamSpec` handling in separate passes over the same call sites.
 Resource requirements stayed as the single `min_vram_gib`; see
 Deviations. What remains is to extract model-specific text adapters
-(`ROADMAP-05`) and centralize registry-driven parameter validation
-(`ROADMAP-02`), migrating and testing the three existing models first. Pin and attest artifacts (`TRUST-03`) and
+(`ROADMAP-05`), migrating and testing the three existing models first. Pin and attest artifacts (`TRUST-03`) and
 consolidate environment intent (`DEPS-01`) before `.venv-ssm` exists. The
 Mamba baseline comes only after those are validated. The axis-aware signal
 manifest (`ROADMAP-03`) precedes its native XAI phase and diffusion entropy
@@ -496,6 +504,47 @@ write comment says it gates diffusion-only charts. The useful
 consequence is that a future state-space run records `"autoregressive"`
 there, which is correct for all three readers even though its family is
 its own, and the corpus needs no migration and no schema bump.
+
+### ROADMAP-02, the parameter half only, 2026-09-21
+
+`src/backends/params.py` resolves defaults, device overrides, primitive
+types, select options and recommended or experimental bounds from
+`ParamSpec`. It replaced three `_clamp_int`/`_clamp_float` pairs, three
+inline fallback sets, LLaDA's `_limits`, DiffusionGemma's `_bounds`,
+SmolLM3's `_bounds` and `_spec_default`, and LLaDA's `VALID_REMASKING`,
+which was a second copy of the `options` the picker is built from.
+
+**It takes the specs rather than the registry.** The plan left the
+resolver's home as the one open question, on the grounds that
+`worker_base.py` would have to acquire a registry import. It does not:
+the resolver is passed `self.model_info.param_specs`, which every
+backend already holds. That also made the omit-each-field matrix
+possible against a schema nothing ships, which is how the override's
+experimental branch is covered at all.
+
+**The drift was real and worse than a smaller number.** The registry
+advertised a generation length of 160 in one block; the worker fell back
+to 128 in blocks of 32. Those are different decoding regimes, not
+different sizes: four blocks means four separate remasking pools rather
+than one. The browser always sends every field, so only an API client or
+a partially upgraded page would have met it.
+
+**One behaviour change beyond the fix.** The seed was previously passed
+through as a bare `int` in all three workers, so the single parameter
+feeding `torch.manual_seed` was the one with declared bounds and no
+enforcement anywhere. It is now held to its declared range like every
+other numeric field. A test names this rather than leaving it to be
+discovered.
+
+**Deferred: the context half.** The Direction also asks to enforce the
+loaded model's context budget before inference, to offload bounded
+prompt tokenization, and its Verification asks for a heartbeat during
+the maximum accepted prompt count. None of that is parameter
+resolution: the readout already exists and is tested in
+`test_context_window.py`, what is missing is enforcement before a run
+and getting `prompt_token_count` off the event loop for a
+200,000-character prompt. Taking it here would have put three concerns
+in one plan; the finding stays `partial` with this as its next step.
 
 ### ROADMAP-03, a down payment made outside the campaign, 2026-08-30
 

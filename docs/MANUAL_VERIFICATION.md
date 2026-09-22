@@ -2695,3 +2695,26 @@ display.
     Autoregressive without flicking over from Diffusion. The key the
     server inlines for this was renamed, so a mistake shows as the
     picker sitting on Diffusion.
+
+## The registry answers for parameters (2026-09-21)
+
+Three workers each coerced and clamped the same request fields with
+their own clamp helpers and their own defaults written out beside every
+read. One resolver does it now, and LLaDA's fallbacks had drifted from
+what the registry advertised. The matrix in
+`tests/backends/test_params.py` omits every field of every model on
+every device it supports, so what is left here is what a real run and a
+real panel show.
+
+272. **A run is unchanged.** Generate on LLaDA with the defaults. The
+    parameter panel and the run should be exactly as before: the
+    registry's numbers did not move, only where they are read from.
+    What changed is the path the browser never takes, a request that
+    omits a field, which used to get 128 tokens in blocks of 32
+    instead of 160 in one block, a different decoding regime rather
+    than a shorter run.
+273. **SmolLM3's CPU cap still shows.** Activate it on CPU and look at
+    Max Tokens: the default should be 128 and the recommended ceiling
+    128, rising to 2048 with Experimental on. On GPU the default
+    should be 256. That device override is now applied by the shared
+    resolver rather than by this worker's own copy.

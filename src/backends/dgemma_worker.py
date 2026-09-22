@@ -13,11 +13,12 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from fastapi import WebSocket
 from transformers import AutoTokenizer  # type: ignore[attr-defined]
 
+from src.backends.params import resolve_params
 from src.backends.protocol import (
     ERROR_GENERATION_FAILED,
     ERROR_INVALID_REQUEST,
@@ -46,18 +47,6 @@ from src.inference.dgemma_sampler import (
 )
 
 logger = logging.getLogger("dgemma_worker")
-
-
-def _clamp_int(value: Any, bounds: Tuple[float, float]) -> int:
-    low, high = bounds
-    return int(max(low, min(high, float(value))))
-
-
-def _clamp_float(
-    value: Any, bounds: Tuple[float, float]
-) -> float:
-    low, high = bounds
-    return float(max(low, min(high, float(value))))
 
 
 class DgemmaBackend(Backend):
@@ -119,51 +108,29 @@ class DgemmaBackend(Backend):
         self.effective_device = device
         logger.info("DiffusionGemma NF4 loaded")
 
-    def _bounds(
-        self, name: str, experimental: bool
-    ) -> Tuple[float, float]:
-        for spec in self.model_info.param_specs:
-            if spec.name != name:
-                continue
-            bounds = (
-                spec.experimental
-                if experimental
-                else spec.recommended
-            )
-            if bounds is not None:
-                return bounds
-        return (float("-inf"), float("inf"))
-
     def _validate_generate(
         self, data: Dict[str, Any]
     ) -> Dict[str, Any]:
-        experimental = bool(data.get("experimental", False))
+        """One request as this sampler's arguments.
+
+        Types, defaults and bounds come from the registry through
+        ``resolve_params``; only the prompt is handled here, since it
+        is not a declared parameter. This model has no relational
+        rules between its parameters.
+        """
+        params = resolve_params(
+            self.model_info.param_specs,
+            data,
+            device=self.effective_device,
+            experimental=bool(
+                data.get("experimental", False)
+            ),
+        )
         prompt = str(data.get("prompt", "")).strip()
         if not prompt:
             raise ValueError("prompt must not be empty")
-        return {
-            "prompt": prompt,
-            "max_new_tokens": _clamp_int(
-                data.get("max_new_tokens", 256),
-                self._bounds("max_new_tokens", experimental),
-            ),
-            "max_denoising_steps": _clamp_int(
-                data.get("max_denoising_steps", 48),
-                self._bounds(
-                    "max_denoising_steps", experimental
-                ),
-            ),
-            "t_max": _clamp_float(
-                data.get("t_max", 0.8),
-                self._bounds("t_max", experimental),
-            ),
-            "t_min": _clamp_float(
-                data.get("t_min", 0.4),
-                self._bounds("t_min", experimental),
-            ),
-            "thinking": bool(data.get("thinking", False)),
-            "seed": int(data.get("seed", -1)),
-        }
+        params["prompt"] = prompt
+        return params
 
     async def handle_generate(
         self,

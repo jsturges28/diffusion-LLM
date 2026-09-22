@@ -23,7 +23,7 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import torch
 from fastapi import WebSocket
@@ -32,6 +32,7 @@ from transformers import (  # type: ignore[attr-defined]
     AutoTokenizer,
 )
 
+from src.backends.params import resolve_params
 from src.backends.protocol import (
     ERROR_GENERATION_FAILED,
     ERROR_INVALID_REQUEST,
@@ -62,18 +63,6 @@ from src.inference.load_progress import (
 )
 
 logger = logging.getLogger("smollm3_worker")
-
-
-def _clamp_int(value: Any, bounds: Tuple[float, float]) -> int:
-    low, high = bounds
-    return int(max(low, min(high, float(value))))
-
-
-def _clamp_float(
-    value: Any, bounds: Tuple[float, float]
-) -> float:
-    low, high = bounds
-    return float(max(low, min(high, float(value))))
 
 
 class Smollm3Backend(Backend):
@@ -141,100 +130,35 @@ class Smollm3Backend(Backend):
             self.model = model.to(resolved).eval()
         logger.info("SmolLM3 loaded on %s", resolved)
 
-    def _bounds(
-        self, name: str, experimental: bool
-    ) -> Tuple[float, float]:
-        """Device-aware (low, high) bounds for a numeric parameter.
-
-        Applies the spec's per-device override for ``self.device``
-        when present, so the CPU token cap is enforced identically to
-        what the frontend shows (no hidden clamp).
-        """
-        for spec in self.model_info.param_specs:
-            if spec.name != name:
-                continue
-            override = (
-                spec.overrides.get(self.device)
-                if spec.overrides
-                else None
-            )
-            if override is not None:
-                bounds = (
-                    override.experimental
-                    if experimental
-                    else override.recommended
-                )
-                if bounds is not None:
-                    return bounds
-            bounds = (
-                spec.experimental
-                if experimental
-                else spec.recommended
-            )
-            if bounds is not None:
-                return bounds
-        return (float("-inf"), float("inf"))
-
-    def _spec_default(self, name: str) -> Any:
-        """Registry default for ``name``, honoring any override.
-
-        These are the values used when the client omits a key. They
-        were previously written out a second time here, which is one
-        copy too many: flipping ``alternatives`` on in the registry
-        would have left this branch still defaulting it off, and
-        nothing would have caught the disagreement because the
-        frontend always sends every key. Reading the spec means the
-        two cannot drift.
-        """
-        for spec in self.model_info.param_specs:
-            if spec.name != name:
-                continue
-            override = (
-                spec.overrides.get(self.device)
-                if spec.overrides
-                else None
-            )
-            if override is not None and override.default is not None:
-                return override.default
-            return spec.default
-        raise KeyError(f"no param spec named {name!r}")
-
     def _validate_generate(
         self, data: Dict[str, Any]
     ) -> Dict[str, Any]:
-        experimental = bool(data.get("experimental", False))
+        """One request as this sampler's arguments.
+
+        This model's two helpers, a device-aware bounds lookup and a
+        registry default lookup, were the pattern the report asked the
+        other workers to adopt. They moved into ``resolve_params``
+        instead of being copied twice, so the device override that
+        enforces the lower CPU token cap is now applied by the same
+        code every model goes through.
+
+        Only the prompt is handled here, since it is not a declared
+        parameter, and this model has no relational rules between its
+        parameters.
+        """
+        params = resolve_params(
+            self.model_info.param_specs,
+            data,
+            device=self.effective_device,
+            experimental=bool(
+                data.get("experimental", False)
+            ),
+        )
         prompt = str(data.get("prompt", "")).strip()
         if not prompt:
             raise ValueError("prompt must not be empty")
-
-        def given(name: str) -> Any:
-            return data.get(name, self._spec_default(name))
-
-        # Device-aware bounds (see _bounds) enforce the CPU token cap
-        # transparently, matching what the frontend shows.
-        max_new_tokens = _clamp_int(
-            given("max_new_tokens"),
-            self._bounds("max_new_tokens", experimental),
-        )
-        return {
-            "prompt": prompt,
-            "max_new_tokens": max_new_tokens,
-            "temperature": _clamp_float(
-                given("temperature"),
-                self._bounds("temperature", experimental),
-            ),
-            "top_p": _clamp_float(
-                given("top_p"),
-                self._bounds("top_p", experimental),
-            ),
-            "top_k": _clamp_int(
-                given("top_k"),
-                self._bounds("top_k", experimental),
-            ),
-            "thinking": bool(given("thinking")),
-            "alternatives": bool(given("alternatives")),
-            "seed": int(given("seed")),
-        }
+        params["prompt"] = prompt
+        return params
 
     async def handle_generate(
         self,
