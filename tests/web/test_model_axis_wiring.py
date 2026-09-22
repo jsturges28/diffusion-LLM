@@ -153,6 +153,26 @@ def test_the_glow_reads_the_family() -> None:
     assert "generation_shape" not in region
 
 
+def test_the_prompt_copy_reads_the_input_mode() -> None:
+    """A base model continues your text rather than answering it, and
+    the box should say which. Read off the declared mode, so the next
+    base checkpoint is described right without an edit here."""
+    region = _region("app.js", "function applyPromptMode()", 500)
+
+    assert "capabilities.input_mode" in region
+    assert "PROMPT_MODE_COPY" in region
+
+
+def test_the_markup_ships_the_chat_wording() -> None:
+    """Every model today is instruction-tuned, and a page with none
+    loaded should read as chat rather than as a blank the script has
+    to fill before the label makes sense."""
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert ">Prompt</label>" in html
+    assert 'placeholder="Enter a prompt..."' in html
+
+
 def test_the_family_glyph_is_keyed_by_family() -> None:
     """A table rather than a branch, so a new class is one entry. The
     label matters more than the glyph: falling back to the diffusion

@@ -128,8 +128,8 @@ an owner (`TRUST-04`): a fetch is a child process the supervisor terminates
 on cancel and on shutdown, leaving its partial parts so the next attempt
 resumes.
 
-**Stage 6 has started.** `model_type` is now a `family` and a
-`generation_shape`, with devices declared rather than inferred, so
+**Stage 6 has started.** `model_type` is now a `family`, a
+`generation_shape` and an `input_mode`, with devices declared rather than inferred, so
 both diffusion models are honestly GPU-only (`ROADMAP-01`). One
 resolver replaced three parameter coercions (`ROADMAP-02`), and a
 per-model text adapter owns templating, prompt counting, stop tokens

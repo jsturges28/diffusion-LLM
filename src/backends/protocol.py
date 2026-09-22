@@ -84,6 +84,18 @@ class ModelCapabilities(BaseModel):
     generation_shape: Literal[
         "append_only", "iterative_canvas"
     ]
+    # How a prompt reaches the model, and a third thing neither axis
+    # above can answer: an instruction-tuned model of any family
+    # wraps the prompt in a template's role markers, while a base
+    # checkpoint continues the text as written and may carry no
+    # template at all.
+    #
+    # Declared rather than inferred because it is user-visible. A base
+    # model presented as a chat partner is easy to run and hard to
+    # interpret: the prompt box would invite a question and the model
+    # would continue it as prose. Required like the axes above, so a
+    # base model cannot arrive silently labelled as chat.
+    input_mode: Literal["chat", "completion"]
     supports_resume: bool = False
     # Autoregressive counterfactual: replace the token at one
     # position with a captured alternative and regenerate forward

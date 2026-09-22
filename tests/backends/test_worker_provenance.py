@@ -174,6 +174,7 @@ class _StubBackend:
             capabilities=ModelCapabilities(
                 family="diffusion",
                 generation_shape="iterative_canvas",
+                input_mode="chat",
                 supported_devices=("cuda", "cpu"),
             ),
             worker_module="none",

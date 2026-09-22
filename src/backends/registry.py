@@ -37,6 +37,7 @@ LLADA = ModelInfo(
     capabilities=ModelCapabilities(
         family="diffusion",
         generation_shape="iterative_canvas",
+        input_mode="chat",
         supports_resume=True,
         supports_cfg=True,
         unresolved_char="\u2591",
@@ -138,6 +139,7 @@ DGEMMA = ModelInfo(
     capabilities=ModelCapabilities(
         family="diffusion",
         generation_shape="iterative_canvas",
+        input_mode="chat",
         supports_resume=True,
         supports_cfg=False,
         # Resume renoises remasked positions instead of hard-masking
@@ -233,6 +235,7 @@ SMOLLM3 = ModelInfo(
     capabilities=ModelCapabilities(
         family="autoregressive",
         generation_shape="append_only",
+        input_mode="chat",
         # Left-to-right, so no diffusion remask/resume. Substitution
         # is the autoregressive counterfactual instead: it needs the
         # Alternatives capture, which the frontend gates on.

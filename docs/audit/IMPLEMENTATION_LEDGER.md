@@ -64,9 +64,11 @@ unblocked.
 
 `ROADMAP-05` followed: every model's text conventions now sit behind
 one adapter, so the autoregressive loop the next model reuses holds no
-template, control token or reasoning channel of its own.
+template, control token or reasoning channel of its own, and
+`input_mode` joined the axes as a fourth so a base model cannot be
+labelled as a chat partner.
 
-Baselines: 1,534 tests passing (from 265 at the campaign's start), 372
+Baselines: 1,542 tests passing (from 265 at the campaign's start), 375
 browser tests under `node --test`, and Ruff at 119 in `src tests`, gated
 per file and per rule by `scripts/lint_ratchet.py` rather than
 remembered.
@@ -586,6 +588,14 @@ a declared token tuple, while `split_channels` is a method each model
 implements. Parameterizing both would have invented a commonality that
 is not there, and a test swaps the two conventions to prove they cannot
 be collapsed.
+
+**`input_mode` became a fourth axis, decided with the maintainer.** The
+Direction lists input mode among the adapter's responsibilities, but it
+is also user-visible: the finding warns that labelling a base model as
+instruction-tuned makes the UI "easy to run and hard to interpret". So
+it is declared on `ModelCapabilities`, required like the other three,
+and the prompt box reads it. A completion model gets "Prompt
+(continued)" and a placeholder saying the model continues the text.
 
 **The adapters live together rather than beside their workers**, which
 the plan had the other way round. `dgemma_worker.py` imports

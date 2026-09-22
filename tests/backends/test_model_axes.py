@@ -40,6 +40,7 @@ def _capabilities(
     shape: str,
     devices: tuple,
     resume: bool = False,
+    input_mode: str = "chat",
 ) -> ModelCapabilities:
     """One capability set, with only the axes under test named."""
     return ModelCapabilities(
@@ -47,6 +48,7 @@ def _capabilities(
         generation_shape=shape,
         supported_devices=devices,
         supports_resume=resume,
+        input_mode=input_mode,
     )
 
 
@@ -147,6 +149,45 @@ def test_an_iterative_canvas_works_either_way_on_resume(
     )
 
 
+def test_a_base_model_declares_completion_not_chat() -> None:
+    """The third combination the split makes expressible, and the one
+    the next model class needs: a state-space base checkpoint appends
+    like an autoregressive model, needs a GPU like a diffusion one,
+    and carries no chat template for either to assume."""
+    capabilities = _capabilities(
+        family="state_space",
+        shape=GENERATION_SHAPE_APPEND_ONLY,
+        devices=("cuda",),
+        input_mode="completion",
+    )
+
+    assert capabilities.input_mode == "completion"
+
+
+@pytest.mark.parametrize("mode", ["chat", "completion"])
+def test_the_input_mode_is_free_of_the_other_axes(
+    mode: str,
+) -> None:
+    """The negative space. An instruct SSM and a base autoregressive
+    model both exist in the wild, so neither family nor shape may
+    decide how a prompt reaches the model."""
+    for family in FAMILIES:
+        capabilities = _capabilities(
+            family=family,
+            shape=GENERATION_SHAPE_APPEND_ONLY,
+            devices=("cuda",),
+            input_mode=mode,
+        )
+        assert capabilities.input_mode == mode
+
+
+def test_every_model_declares_how_a_prompt_reaches_it() -> None:
+    """All three are instruction-tuned today, asserted so the first
+    base checkpoint has to say otherwise rather than inherit this."""
+    for model_id, info in REGISTRY.items():
+        assert info.capabilities.input_mode == "chat", model_id
+
+
 @pytest.mark.parametrize("family", FAMILIES)
 def test_any_family_may_take_any_shape(family: str) -> None:
     """The negative space: no family is wired to a shape. If one were,
@@ -163,7 +204,13 @@ def test_any_family_may_take_any_shape(family: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "missing", ["family", "generation_shape", "supported_devices"]
+    "missing",
+    [
+        "family",
+        "generation_shape",
+        "supported_devices",
+        "input_mode",
+    ],
 )
 def test_an_omitted_axis_is_refused(missing: str) -> None:
     """The point of making these required. A default is how LLaDA came
@@ -173,6 +220,7 @@ def test_an_omitted_axis_is_refused(missing: str) -> None:
         "family": "diffusion",
         "generation_shape": GENERATION_SHAPE_ITERATIVE_CANVAS,
         "supported_devices": ("cuda",),
+        "input_mode": "chat",
     }
     del fields[missing]
 
@@ -185,6 +233,7 @@ def test_an_omitted_axis_is_refused(missing: str) -> None:
     [
         ("family", "transformer"),
         ("generation_shape", "diffusion"),
+        ("input_mode", "instruct"),
     ],
 )
 def test_an_unknown_axis_value_is_refused(
@@ -197,6 +246,7 @@ def test_an_unknown_axis_value_is_refused(
         "family": "diffusion",
         "generation_shape": GENERATION_SHAPE_ITERATIVE_CANVAS,
         "supported_devices": ("cuda",),
+        "input_mode": "chat",
     }
     fields[field] = value
 

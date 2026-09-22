@@ -33,6 +33,8 @@ var paramTooltips = {}; // name -> tooltip span
 
 var promptInput =
   document.getElementById("prompt-input");
+var promptLabel =
+  document.querySelector('label[for="prompt-input"]');
 var promptContextRow =
   document.getElementById("prompt-context");
 var promptContextCount =
@@ -8643,6 +8645,41 @@ function applyModelInfo(info) {
   // Same reason: whether the entropy row is reserved or absent
   // depends on the model, and the markup starts it absent.
   setEntropyProfileVisible(false);
+  applyPromptMode();
+}
+
+// Say which of the two things the prompt box is for. A chat model
+// answers what you write; a base model continues it, and inviting a
+// question from one would be the misreading that makes a base model
+// easy to run and hard to interpret.
+//
+// Read off the declared input mode, never off a model id, so the next
+// base checkpoint is described correctly without an edit here. The
+// markup ships the chat wording, which is right for every model that
+// exists today and is what a page with no model loaded should say.
+var PROMPT_MODE_COPY = {
+  chat: {
+    label: "Prompt",
+    placeholder: "Enter a prompt...",
+  },
+  completion: {
+    label: "Prompt (continued)",
+    placeholder: "Enter text for the model to continue...",
+  },
+};
+
+function applyPromptMode() {
+  var mode =
+    activeModel
+    && activeModel.capabilities
+    && activeModel.capabilities.input_mode;
+  var copy = PROMPT_MODE_COPY[mode] || PROMPT_MODE_COPY.chat;
+  if (promptLabel) {
+    promptLabel.textContent = copy.label;
+  }
+  if (promptInput) {
+    promptInput.placeholder = copy.placeholder;
+  }
 }
 
 function finishBoot() {

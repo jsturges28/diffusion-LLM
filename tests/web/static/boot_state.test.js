@@ -484,3 +484,59 @@ for (const [label, value] of MALFORMED) {
     );
   });
 }
+
+// -- the prompt box says which kind of prompt it wants --
+//
+// The three models that exist are all instruction-tuned, so the
+// interesting case is the one that does not exist yet. Built from a
+// synthetic capability rather than waiting for a base checkpoint,
+// because the whole point of declaring the mode is that the page needs
+// no edit when one arrives.
+
+function withInputMode(mode) {
+  const model = Object.assign({}, SMOL, {
+    capabilities: Object.assign({}, SMOL.capabilities, {
+      input_mode: mode,
+    }),
+  });
+  return {
+    ui_state: {},
+    models: modelsPayload({ models: [model] }),
+  };
+}
+
+test("a chat model keeps the markup's wording", () => {
+  const page = loadPage({
+    bootState: withInputMode("chat"),
+    fetchImpl: recordingFetch([]),
+  });
+
+  assert.equal(page.registry.get("prompt-input").placeholder,
+    "Enter a prompt...");
+});
+
+test("a completion model says it continues your text", () => {
+  const page = loadPage({
+    bootState: withInputMode("completion"),
+    fetchImpl: recordingFetch([]),
+  });
+
+  const placeholder =
+    page.registry.get("prompt-input").placeholder;
+  assert.match(placeholder, /continue/);
+  // Not "Enter a prompt", which invites a question a base model will
+  // answer by continuing it as prose.
+  assert.equal(placeholder.includes("Enter a prompt"), false);
+});
+
+test("an absent mode falls back to chat", () => {
+  // A payload from an older server, or one the page could not read.
+  // Chat is the safe reading: it is what every shipped model is.
+  const page = loadPage({
+    bootState: withInputMode(undefined),
+    fetchImpl: recordingFetch([]),
+  });
+
+  assert.equal(page.registry.get("prompt-input").placeholder,
+    "Enter a prompt...");
+});
