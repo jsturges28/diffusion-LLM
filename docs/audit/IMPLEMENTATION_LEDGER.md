@@ -62,13 +62,13 @@ per-device memory, and `ROADMAP-02`'s context half. Both cleared
 hardware on 2026-09-22, items 267 to 273. The rest of the stage is
 unblocked.
 
-`ROADMAP-05` followed: every model's text conventions now sit behind
-one adapter, so the autoregressive loop the next model reuses holds no
-template, control token or reasoning channel of its own, and
-`input_mode` joined the axes as a fourth so a base model cannot be
-labelled as a chat partner.
+`ROADMAP-05` and `ROADMAP-02`'s remaining half followed, paired for the
+same reason: both change `prompt_token_count`. Every model's text
+conventions now sit behind one adapter, `input_mode` joined the axes as
+a fourth, and the context budget is enforced before inference with the
+count moved off the event loop.
 
-Baselines: 1,542 tests passing (from 265 at the campaign's start), 375
+Baselines: 1,551 tests passing (from 265 at the campaign's start), 375
 browser tests under `node --test`, and Ruff at 119 in `src tests`, gated
 per file and per rule by `scripts/lint_ratchet.py` rather than
 remembered.
@@ -354,7 +354,7 @@ on real hardware.
 | RUNTIME-03 | medium | S | done | none | Taken as unblocked against this table; see Deviations |
 | ROADMAP-01 | high | M | done | none | Family, shape and devices split apart; per-device memory skipped, see Deviations |
 | ROADMAP-05 | high | M | needs hardware | none | One text adapter per model; `input_mode` became a fourth axis, see entry |
-| ROADMAP-02 | medium | M | partial | none | Parameter half done: one resolver, three coercions gone. Context half deferred, see Deviations |
+| ROADMAP-02 | medium | M | needs hardware | none | Context half landed too: an unrunnable prompt is refused and the count is off the event loop |
 | TRUST-03 | high | L | ready | none | Offline slice only: Load cached weights without asking the Hub |
 | DEPS-01 | medium | L | ready | none | |
 | ROADMAP-03 | high | L | ready | none | Owns the signal axis ROADMAP-01 left alone |
@@ -616,6 +616,36 @@ semantics" the report predicts. Newer versions raise instead. The test
 asserts the version-independent claim, that the chat path's answer
 disagrees with the text the user wrote, and uses LLaDA's tokenizer
 because the default venv's `tokenizers` cannot parse SmolLM3's.
+
+### ROADMAP-02, the context half, 2026-09-22
+
+Closed with the two pieces its Direction asks for beyond parameters.
+
+**Only the unrunnable case is refused.** `check_prompt_fits` compares
+the templated count against `describe_context_length` and raises
+`ValueError`, which every `_validate_generate` already turns into an
+invalid-request envelope. A prompt that fits but leaves no room for the
+whole output budget still runs and gets truncated, which is the
+distinction `applyPromptContextWarning` already draws in the browser
+and which somebody may have asked for on purpose.
+
+That decision removed the hardest part of the design. A budget-aware
+check would have had to know which parameter is the output budget per
+model, `gen_length` for LLaDA against `max_new_tokens` for the other
+two, which meant either a fifth axis or a per-model hook. The hard case
+is `count > ceiling` and needs no budget at all.
+
+**An unreadable ceiling permits everything.** `None` means the
+checkpoint declared nothing usable, and inventing a bound there would
+refuse prompts that fit. The readout beside the prompt is blank in that
+case for the same reason.
+
+**The count is off the event loop.** `handle_count_prompt` is bounded
+at 200,000 characters, which is real templating work, and it ran inline
+on the socket's loop. It is an `asyncio.to_thread` call now, the idiom
+already used throughout `server.py`. The heartbeat test asserts the
+longest gap between ticks of a concurrent task rather than a tick
+count, because a blocked loop still ticks either side of the block.
 
 ### ROADMAP-03, a down payment made outside the campaign, 2026-08-30
 

@@ -695,8 +695,10 @@ class Backend(ABC):
         # characters rather than at something small: templating and
         # encoding that much is real work, and doing it inline stalled
         # every frame and every Cancel behind one keystroke's readout.
-        count = self.prompt_token_count(
-            text, thinking=bool(data.get("thinking", False))
+        count = await asyncio.to_thread(
+            self.prompt_token_count,
+            text,
+            thinking=bool(data.get("thinking", False)),
         )
         await ws.send_json(
             {
@@ -737,6 +739,46 @@ class Backend(ABC):
         assert tokenizer is not None, "no tokenizer loaded"
         return self.text_adapter.count_prompt_tokens(
             tokenizer, prompt, thinking=thinking
+        )
+
+    def check_prompt_fits(
+        self, prompt: str, *, thinking: bool = False
+    ) -> None:
+        """Refuse a prompt that cannot run at all.
+
+        Only the case that cannot run: a prompt already longer than
+        the window. A prompt that fits but leaves no room for the
+        whole output budget does run and gets truncated part way,
+        which the browser already says beside the counter. Refusing
+        that one as well would take away a shorter answer somebody
+        asked for on purpose, and it is why this needs no per-model
+        knowledge of which parameter is the output budget.
+
+        An unreadable ceiling permits everything. ``None`` from
+        ``describe_context_length`` means the checkpoint declared
+        nothing usable, and inventing a bound there would refuse
+        prompts that fit; the readout beside the prompt is blank in
+        that case for the same reason.
+
+        Raises ``ValueError``, which every ``_validate_generate``
+        already turns into an invalid-request envelope.
+        """
+        assert isinstance(prompt, str), "prompt must be a string"
+        model = getattr(self, "model", None)
+        tokenizer = getattr(self, "tokenizer", None)
+        if model is None or tokenizer is None:
+            return
+        ceiling = describe_context_length(model, tokenizer)
+        if ceiling is None:
+            return
+        assert ceiling > 0, "a ceiling is positive or absent"
+        count = self.prompt_token_count(prompt, thinking=thinking)
+        if count <= ceiling:
+            return
+        raise ValueError(
+            f"This prompt is {count:,} tokens once templated, past"
+            f" the model's {ceiling:,}-token context window."
+            " Shorten it and try again."
         )
 
     async def handle_probe(

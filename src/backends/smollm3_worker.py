@@ -160,6 +160,9 @@ class Smollm3Backend(Backend):
         if not prompt:
             raise ValueError("prompt must not be empty")
         params["prompt"] = prompt
+        self.check_prompt_fits(
+            prompt, thinking=bool(params["thinking"])
+        )
         return params
 
     async def handle_generate(

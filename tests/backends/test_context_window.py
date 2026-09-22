@@ -21,7 +21,10 @@ lookalike derived beside it.
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any, Dict, List, Optional
+
+import pytest
 
 from src.backends.text_adapter import ChatTextAdapter
 from src.backends.worker_base import (
@@ -112,18 +115,23 @@ class _FakeTensor:
 
 
 class _StubBackend(Backend):
-    """Only the tokenizer and adapter matter; rest is filler."""
+    """Only the tokenizer, adapter and model matter."""
 
     def __init__(
         self,
         tokenizer: Any,
         adapter: Any = None,
+        model: Any = None,
     ) -> None:
         self.tokenizer = tokenizer
         # A bare chat adapter unless a test names one: the counting
         # under test is the template's, and no model's control tokens
         # or channel convention reaches it.
         self.text_adapter = adapter or ChatTextAdapter()
+        # None until a test gives one, which is also what an unloaded
+        # backend looks like: the refusal has nothing to read then and
+        # must not invent a ceiling.
+        self.model = model
 
     def load(self, *, device: str = "cuda") -> None:
         raise NotImplementedError
@@ -357,3 +365,146 @@ def test_the_llada_encode_adds_no_second_bos() -> None:
     build_llada_inputs(tokenizer, "she ran")
 
     assert tokenizer.special_tokens_seen == [False]
+
+
+# -- refusing a prompt that cannot run --
+#
+# The readout above tells the user; this turns it into something the
+# worker enforces. Only the case that cannot run at all: a prompt
+# already past the window. One that fits but leaves no room for the
+# whole output budget still runs and gets truncated, which the browser
+# says beside the counter, and which somebody may have asked for.
+
+
+def _sized_backend(window: Any) -> _StubBackend:
+    """A backend whose config declares ``window`` tokens."""
+    return _StubBackend(
+        _TemplateTokenizer(), model=_StubModel(window)
+    )
+
+
+def test_a_prompt_inside_the_window_is_allowed() -> None:
+    """Four words plus four markers is eight, so a window of eight is
+    the largest prompt that fits, not the first that does not."""
+    _sized_backend(8).check_prompt_fits("she ran home today")
+
+
+def test_a_prompt_exactly_at_the_window_is_allowed() -> None:
+    """The boundary, stated from the permissive side. Off by one here
+    refuses a prompt the model would have accepted."""
+    _sized_backend(8).check_prompt_fits("she ran home today")
+
+
+def test_a_prompt_one_past_the_window_is_refused() -> None:
+    """And from the other side, so a comparison flipped either way
+    fails one of the two."""
+    with pytest.raises(ValueError, match="context window"):
+        _sized_backend(7).check_prompt_fits("she ran home today")
+
+
+def test_the_refusal_names_both_numbers() -> None:
+    """The user can only act on this by shortening the prompt, which
+    needs to know by how much."""
+    with pytest.raises(ValueError, match="8.*7|7.*8"):
+        _sized_backend(7).check_prompt_fits("she ran home today")
+
+
+def test_an_unreadable_ceiling_refuses_nothing() -> None:
+    """``describe_context_length`` answers None when the checkpoint
+    declares nothing usable, and inventing a bound there would turn
+    away prompts that fit. The readout is blank in this case too."""
+    backend = _StubBackend(
+        _TemplateTokenizer(),
+        model=_StubModel(_UNSPECIFIED_LENGTH),
+    )
+
+    backend.check_prompt_fits("she ran home today")
+
+
+def test_an_unloaded_backend_refuses_nothing() -> None:
+    """Not a generation path, since nothing can run before a load, but
+    reading a ceiling off a model that is not there would raise where
+    a refusal was meant to be reported."""
+    _StubBackend(_TemplateTokenizer()).check_prompt_fits("she ran")
+
+
+def test_the_thinking_flag_reaches_the_refusal() -> None:
+    """Thinking selects a wider template, so the same prompt can fit
+    one way and not the other. A refusal taken under the wrong flag is
+    wrong in whichever direction the flag moved the count."""
+    backend = _sized_backend(8)
+
+    backend.check_prompt_fits("she ran home today", thinking=False)
+    with pytest.raises(ValueError):
+        backend.check_prompt_fits(
+            "she ran home today", thinking=True
+        )
+
+
+# -- the count does not stall the socket --
+
+
+class _SlowTokenizer(_TemplateTokenizer):
+    """Templates correctly, and takes real time doing it.
+
+    ``time.sleep`` rather than ``asyncio.sleep`` on purpose: the thing
+    under test is whether blocking work reaches the event loop, and a
+    cooperative sleep would yield and prove nothing.
+    """
+
+    BLOCK_SECONDS = 0.2
+
+    def apply_chat_template(self, *args: Any, **kwargs: Any) -> Any:
+        time.sleep(self.BLOCK_SECONDS)
+        return super().apply_chat_template(*args, **kwargs)
+
+
+def test_the_loop_keeps_ticking_during_a_long_count() -> None:
+    """The offload's whole point. This request is bounded at 200,000
+    characters, which is real work, and doing it inline held every
+    frame and every Cancel behind one keystroke's readout.
+
+    Asserted as the longest gap between ticks rather than as a tick
+    count, because a blocked loop still ticks before and after the
+    block; the gap is what distinguishes the two.
+    """
+    stamps: List[float] = []
+
+    async def drive() -> None:
+        async def tick() -> None:
+            while True:
+                stamps.append(time.monotonic())
+                await asyncio.sleep(0.005)
+
+        ticker = asyncio.create_task(tick())
+        await asyncio.sleep(0.01)
+        backend = _StubBackend(_SlowTokenizer())
+        await backend.handle_count_prompt(
+            _StubWebSocket(), {"text": "she ran home"}
+        )
+        ticker.cancel()
+
+    asyncio.run(drive())
+
+    assert len(stamps) > 2, "the ticker never ran"
+    gaps = [
+        later - earlier
+        for earlier, later in zip(
+            stamps[:-1], stamps[1:], strict=True
+        )
+    ]
+    assert max(gaps) < _SlowTokenizer.BLOCK_SECONDS / 2, (
+        f"the loop stalled for {max(gaps):.3f}s while counting"
+    )
+
+
+def test_the_slow_count_still_answers() -> None:
+    """Paired with the test above: a count moved off the loop has to
+    come back, or the readout would simply never arrive."""
+    ws = _StubWebSocket()
+    backend = _StubBackend(_SlowTokenizer())
+
+    asyncio.run(backend.handle_count_prompt(ws, {"text": "she ran"}))
+
+    assert len(ws.sent) == 1
+    assert ws.sent[0]["count"] > 0

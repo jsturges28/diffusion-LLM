@@ -217,6 +217,7 @@ class LladaBackend(Backend):
         if not prompt:
             raise ValueError("prompt must not be empty")
         params["prompt"] = prompt
+        self.check_prompt_fits(prompt)
 
         steps = int(params["steps"])
         gen_length = int(params["gen_length"])

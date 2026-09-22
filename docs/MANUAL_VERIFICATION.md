@@ -2725,12 +2725,13 @@ The autoregressive sampler carried SmolLM3's chat template, control
 tokens, turn terminator and `<think>` channel, and DiffusionGemma's
 sampler carried its own near-copies. Every one of those now arrives
 through a per-model text adapter, so the loop the next model reuses
-knows none of them.
+knows none of them. The prompt box also says which kind of prompt it
+wants, and an unrunnable prompt is refused before inference.
 
 Most of this is covered in `tests/backends/test_text_adapter.py`,
 including the no-template case against a real tokenizer. What is left
-needs a GPU, and it is all regression checking: the point of the change
-is that nothing observable moves.
+needs a GPU, and it is mostly regression checking: the point of the
+change is that nothing observable moves.
 
 274. **All three models still generate.** One run each, defaults. The
     templating, the stop tokens and the per-token display all went
@@ -2750,3 +2751,18 @@ is that nothing observable moves.
     prompt length recorded should equal what the counter said. Both
     read the same adapter now, where they used to be three
     implementations kept in step by a comment.
+278. **An oversized prompt is refused, readably.** Paste enough text to
+    pass the model's context window (the counter turns amber and says
+    "over the context window") and press Generate. It should refuse
+    with a message naming both numbers, and the resident model and the
+    page should be undisturbed.
+279. **A prompt that only overflows with its output still runs.** Get
+    the counter to the second warning, "prompt + N output exceeds the
+    window", and generate. This one is allowed deliberately: it runs
+    and gets truncated part way, which is a shorter answer somebody may
+    have wanted rather than an error.
+280. **A very long prompt no longer stalls the page.** Import or paste
+    something near the 200,000-character cap. While the counter is
+    catching up, the UI should stay responsive: hover a hyperparameter,
+    open the model dropdown, press Escape. Counting used to run on the
+    socket's event loop, so everything queued behind one keystroke.
