@@ -222,7 +222,14 @@ class ModelInfo(BaseModel):
     # Supervisor-only launch config (stripped before the
     # frontend response in the supervisor).
     worker_module: str
-    venv_python: str
+    # Which environment from ``[tool.diffusion-llm]`` this model runs
+    # in, by name rather than by interpreter path. The path was a
+    # fourth place every environment had to be spelled out, alongside
+    # its lock, its setup instructions and the agent conventions, and
+    # one of them was always going to fall behind the others.
+    # ``src.backends.environments`` resolves it, lazily, so a worker
+    # that imports this registry never parses the manifest.
+    environment: str
     checkpoint: str
     # The Hub commit this model loads, pinning code and weights
     # together. Without it the same app commit, the same parameters

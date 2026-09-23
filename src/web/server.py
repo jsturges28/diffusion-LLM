@@ -85,6 +85,11 @@ from src.backends.protocol import (
     saved_model_type,
     wire_error,
 )
+from src.backends.environments import (
+    UnknownEnvironmentError,
+    interpreter_for,
+    lock_for,
+)
 from src.backends.registry import DEFAULT_MODEL, REGISTRY
 from src.inference.render_gif import history_to_gif
 from src.web import collections as collection_ops
@@ -872,11 +877,19 @@ class ModelManager:
         Returns the interpreter to launch, since finding it is one of
         the checks.
         """
-        python = REPO_ROOT / info.venv_python
+        try:
+            relative = interpreter_for(info.environment)
+        except UnknownEnvironmentError as exc:
+            raise ActivationRefused(
+                f"{info.display_name} runs in an environment this"
+                f" build does not declare: {exc}"
+            ) from exc
+        python = REPO_ROOT / relative
         if not python.exists():
             raise ActivationRefused(
                 f"{info.display_name} is not installed:"
-                f" no interpreter at {info.venv_python}."
+                f" no interpreter at {relative}. Create it and"
+                f" install {lock_for(info.environment)}."
             )
         supported = info.capabilities.supported_devices
         if device not in supported:
@@ -1543,7 +1556,7 @@ def _model_entry(model_id: str, info: Any) -> Dict[str, Any]:
     """
     data = info.model_dump()
     data.pop("worker_module", None)
-    data.pop("venv_python", None)
+    data.pop("environment", None)
     data["status"] = manager.status(model_id)
     return data
 

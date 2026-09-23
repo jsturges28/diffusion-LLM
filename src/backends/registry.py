@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Dict
 
+from src.backends.environments import environment_names
 from src.backends.protocol import (
     ModelCapabilities,
     ModelInfo,
@@ -33,7 +34,7 @@ LLADA = ModelInfo(
     ),
     min_vram_gib=17.0,
     worker_module="src.backends.llada_worker",
-    venv_python=".venv/bin/python",
+    environment="core",
     checkpoint="GSAI-ML/LLaDA-8B-Instruct",
     # The commit every run of this model has been made against, taken
     # from the cache that produced them rather than from the Hub, so
@@ -141,7 +142,7 @@ DGEMMA = ModelInfo(
     ),
     min_vram_gib=18.0,
     worker_module="src.backends.dgemma_worker",
-    venv_python=".venv-dgemma/bin/python",
+    environment="dgemma",
     checkpoint="~/models/diffusiongemma-26B-A4B-it-nf4",
     capabilities=ModelCapabilities(
         family="diffusion",
@@ -237,7 +238,7 @@ SMOLLM3 = ModelInfo(
     # memory figure to be loadable on a GPU-less machine.
     min_vram_gib=8.0,
     worker_module="src.backends.smollm3_worker",
-    venv_python=".venv-ar/bin/python",
+    environment="ar",
     checkpoint="HuggingFaceTB/SmolLM3-3B",
     # As with LLaDA, the commit already in the cache, so pinning is a
     # record of what has been running rather than a change to it.
@@ -385,3 +386,14 @@ for _model in REGISTRY.values():
         assert _model.revision is None, (
             f"{_model.id} is a local artifact and has no Hub revision"
         )
+
+# Every model names an environment the manifest declares. Asserted at
+# import rather than only at launch, because the alternative is to
+# find out when a user clicks the model: the interpreter lookup would
+# fail after the supervisor had decided what to evict for it.
+_DECLARED = environment_names()
+for _model in REGISTRY.values():
+    assert _model.environment in _DECLARED, (
+        f"{_model.id} runs in {_model.environment!r}, which"
+        " pyproject.toml does not declare"
+    )

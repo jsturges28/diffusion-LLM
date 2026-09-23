@@ -67,7 +67,7 @@ def _model_info() -> ModelInfo:
             supported_devices=("cuda", "cpu"),
         ),
         worker_module="none",
-        venv_python="none",
+        environment="none",
         checkpoint="none",
     )
 

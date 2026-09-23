@@ -42,6 +42,9 @@ written by `scripts/lock_environments.py` with every transitive pin hashed.
   `tests/test_lock_environments.py` fails when they disagree.
 - Regeneration is constrained by the lock it replaces, so it cannot move a
   version. Upgrading is a deliberate act, not a side effect of tidying.
+- The registry names an environment, not an interpreter path;
+  `src/backends/environments.py` resolves it. Do not put a `bin/python` path
+  back into `src/backends/registry.py`.
 - Install to an environment by path; never to system or user Python.
 
 ## Models and hardware

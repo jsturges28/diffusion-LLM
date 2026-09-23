@@ -186,7 +186,10 @@ class _StubBackend:
                 supported_devices=("cuda", "cpu"),
             ),
             worker_module="none",
-            venv_python="none",
+            # Not a declared environment, deliberately. Resolving one
+            # only happens on launch, and nothing here launches, so a
+            # stub stays constructible without the manifest.
+            environment="none",
             checkpoint="org/stub-checkpoint",
         )
         self.effective_device = effective_device
