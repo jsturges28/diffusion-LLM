@@ -26,6 +26,23 @@ treats the whole canvas as a single block, because a resume cannot
 know which block a saved frame came from. Those are covered by
 `test_llada_resume_conf.py` and `test_llada_mask_candidate.py`. This
 file is about the step and the schedule they share.
+
+What it compares, and what it deliberately does not. The kernel reads
+confidence through a chunked `exp(logit - logsumexp)` where the
+reference builds a whole-canvas softmax and gathers from it
+(`ROADMAP-03`; the softmax is 96 MiB at LLaDA's default canvas and
+513 MiB at the registry's ceiling, per step). Those are the same
+quantity and not the same bits, so this file compares **selections**
+and requires them exact: the canvas, and which positions were revealed
+at each step, which is what the app draws and what a reveal-order
+regression would break. The confidence *values* are compared against a
+full-softmax oracle with a tolerance in
+`tests/inference/test_logit_signals.py`, where the arithmetic belongs.
+
+Splitting it that way is deliberate, not a concession. Loosening this
+file to `allclose` on everything would let a genuine reveal-order
+change hide inside a tolerance, and the ten cases below all agree
+bit-for-bit on selections, so nothing here needs slack.
 """
 
 from __future__ import annotations

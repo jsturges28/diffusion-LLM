@@ -32,6 +32,12 @@ from src.inference.checkpoint import (
     rng_capture,
     rng_restore,
 )
+from src.inference.logit_signals import (
+    LOGIT_CHUNK_POSITIONS as _LOGIT_CHUNK_POSITIONS,
+)
+from src.inference.logit_signals import (
+    top_confidence,
+)
 from src.inference.frame_queue import (
     FrameQueueCancelled,
     frame_queue_close,
@@ -43,12 +49,12 @@ from src.inference.reveal import newly_revealed
 
 MASK_CHAR = "\u2591"
 
-# Positions reduced at a time when reading confidence off the
-# logits. The transient is this many rows of the vocabulary in
-# float32, so 32 is about 33 MiB against the 256 MiB a whole-canvas
-# softmax would hold. Large enough that the per-chunk overhead is
-# noise, small enough that the peak is not.
-LOGIT_CHUNK_POSITIONS = 32
+# Re-exported, not defined here. The chunked reductions moved to
+# `logit_signals` when LLaDA needed the same technique, and this name
+# stays importable because a test and this module's own docstrings
+# refer to it. One constant, so the two models cannot drift apart on
+# how much transient memory a signal read is allowed to hold.
+LOGIT_CHUNK_POSITIONS = _LOGIT_CHUNK_POSITIONS
 
 class FrameQueueStreamer(BaseStreamer):
     """Turns generate's streamer callbacks into protocol frames.
@@ -128,27 +134,18 @@ class FrameQueueStreamer(BaseStreamer):
         ``exp(max - logsumexp)`` is the same quantity from two
         reductions, in the numerically stable form, and processing a
         slice of positions at a time bounds what exists at once to
-        one chunk. The reductions also generalise: entropy and top-k
-        come off the same pass, which is where `ROADMAP-03` is going.
+        one chunk.
+
+        The reduction lives in `logit_signals` now, shared with
+        LLaDA, so the two diffusion models cannot disagree about how
+        much transient memory reading a signal may hold. Entropy and
+        top-k come off the same pass, which is where `ROADMAP-03` is
+        going.
         """
         tensor = logits
         if hasattr(tensor, "dim") and tensor.dim() > 2:
             tensor = tensor[0]
-        id_chunks: List[torch.Tensor] = []
-        conf_chunks: List[torch.Tensor] = []
-        chunks = torch.split(tensor, LOGIT_CHUNK_POSITIONS, dim=0)
-        for chunk in chunks:
-            # Cast per chunk rather than up front. bf16 accumulates
-            # visible error summing 262K terms, and casting the whole
-            # canvas would restore the allocation this exists to
-            # avoid.
-            wide = chunk.float()
-            top, top_ids = wide.max(dim=-1)
-            spread = torch.logsumexp(wide, dim=-1)
-            id_chunks.append(top_ids)
-            conf_chunks.append(torch.exp(top - spread))
-        ids = torch.cat(id_chunks, dim=0)
-        conf = torch.cat(conf_chunks, dim=0)
+        ids, conf = top_confidence(tensor)
         return (
             ids.detach().to("cpu").tolist(),
             conf.detach().to("cpu").tolist(),

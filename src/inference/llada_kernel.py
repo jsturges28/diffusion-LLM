@@ -29,7 +29,8 @@ from typing import Any, Tuple
 
 import numpy as np
 import torch
-import torch.nn.functional as F
+
+from src.inference.logit_signals import picked_confidence
 
 # LLaDA's [MASK] token. Every masked position on the canvas holds this
 # id until a step reveals it, so it is both the sentinel the sampler
@@ -210,9 +211,9 @@ def diffusion_step(
     """Execute one synchronous diffusion step, mutating x.
 
     Returns (x, true_conf, transfer_index, x0): the mutated
-    sequence, the per-position softmax confidence of the argmax
-    prediction, the boolean mask of positions revealed this step,
-    and the argmax prediction itself for every position.
+    sequence, the per-position probability of the picked token, the
+    boolean mask of positions revealed this step, and the
+    prediction itself for every position.
     """
     mask_index = x == MASK_ID
 
@@ -225,20 +226,17 @@ def diffusion_step(
     )
     x0 = torch.argmax(logits_with_noise, dim=-1)
 
-    # True per-token confidence: softmax prob of the argmax
-    # prediction. Computed for every strategy, not just
-    # low_confidence, because the heatmap shows it either way. The
-    # extra softmax under random remasking is deliberate: it costs one
-    # pass and is the only thing that makes those frames readable.
-    p = F.softmax(logits, dim=-1)
-    true_conf = torch.squeeze(
-        torch.gather(
-            p,
-            dim=-1,
-            index=torch.unsqueeze(x0, -1),
-        ),
-        -1,
-    ).float()
+    # True per-token confidence: the clean probability of whatever was
+    # picked. Computed for every strategy, not just low_confidence,
+    # because the heatmap shows it either way.
+    #
+    # The probability of the pick rather than of the maximum, which
+    # are the same thing only at temperature 0. Read by a chunked
+    # reduction rather than a softmax over the canvas: at LLaDA's
+    # default 160-token canvas that tensor is 96 MiB, and 513 MiB at
+    # the ceiling the registry allows, per step, on a card already
+    # holding 17 GiB of weights. See `logit_signals`.
+    true_conf = picked_confidence(logits[0], x0[0]).unsqueeze(0)
     if remasking == "low_confidence":
         x0_p = true_conf.clone()
     elif remasking == "random":
