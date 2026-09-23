@@ -1700,8 +1700,12 @@ the temperature**; the signal is trustworthy as it stands.
 candidates with opacity by probability share, expanding on click into
 something like SmolLM3's alternatives popover. This is the expensive one and
 it is already sequenced: `ROADMAP-03`'s axis-aware signal manifest "precedes
-its native XAI phase and diffusion entropy and top-k", and `ORG-03`
-consolidates the LLaDA sampling kernel before top-k goes into it. The shape is
+its native XAI phase and diffusion entropy and top-k". `ORG-03` is done, so
+there is now one place for top-k to go: `src/inference/llada_kernel.py` owns
+the diffusion step, and `diffusion_step` already returns the argmax pick for
+every position, settled or not, which is the first of the five candidates that
+layer wants. Adding the rest means widening that return rather than choosing
+between two sampling loops. The shape is
 also new, per-frame *and* per-position, where `alternatives.json` today is
 per-position only, which suffices for an autoregressive run because a position
 is decided once and does not for a diffusion draft that is re-decided every

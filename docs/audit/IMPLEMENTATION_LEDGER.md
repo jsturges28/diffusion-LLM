@@ -369,7 +369,7 @@ on real hardware.
 | TRUST-03 | high | L | done | none | Both Hub models pinned to a commit, local artifact carries a manifest; branch-move case unverifiable, see entry |
 | DEPS-01 | medium | L | done | none | One manifest, four generated locks with hashes and a drift guard; 2.6 GiB of orphans dropped across two environments, one dgemma generation left for hardware |
 | ROADMAP-03 | high | L | ready | none | Owns the signal axis ROADMAP-01 left alone |
-| ORG-03 | medium | M | ready | none | |
+| ORG-03 | medium | M | done | none | One kernel owns the step and the schedule; the dormant loop is a quarantined reference with a differential test, and the lint baseline fell 118 to 70 |
 | ROADMAP-04 | medium | L | ready | none | Unblocked but deliberately last: multimodal is phase 3 |
 | META-03 | medium | M | deferred | milestone boundaries | |
 
@@ -1199,6 +1199,75 @@ arrive as different base classes, and `KeyboardInterrupt` does not inherit from
 real-world ending through untouched, and mutating the clause to that does fail
 two of these tests. One real end-to-end build is still worth doing whenever the
 checkpoint is next rebuilt, which is all the plan asked hardware for.
+
+### ORG-03
+
+**Half the work was already done, which changed what the rest of it was.** The
+finding asks to "extract one synchronous diffusion step/schedule kernel with
+typed inputs". `streaming_sampler.py` already had `_forward_pass` and
+`_diffusion_step` factored out exactly that way, and **both** live paths, generate
+and resume, already shared them. So this was not an extraction. It was giving
+those functions a home of their own, adding the one thing they did not own, and
+retiring the copy nobody could reach.
+
+**The dormant file was 41% of the repo's entire lint debt**: 48 of 118 findings,
+against 25 for `server.py` and 22 for `hf_download.py`. Because
+`scripts/lint_ratchet.py` counts only `("src", "tests")`, moving it out of `src/`
+removed all 48 without deleting a line, so quarantine and deletion bought the
+same reduction and the choice between them was purely about whether the reference
+earns its keep. The baseline is now 70, and the entire drop is that one file with
+nothing else moving.
+
+**Quarantined rather than deleted, because deleting it removes the only way to
+check the surviving implementation.** The finding's Verification clause asks for
+golden differential tests matching live against offline under identical logits
+and RNG state, which is only possible with both present. It costs one file nobody
+imports and buys a test that fails if the kernel ever drifts from the algorithm
+LLaDA published. `reference/llada/` follows the pattern
+`src/web/static/vendor/README.md` already set: a provenance table, a "do not
+edit" note, and a pointer to the finding.
+
+**The reference keeps its own copies of the two helpers, on purpose.** A
+reference that imported the kernel's `add_gumbel_noise` would make the
+differential test compare the kernel to itself. That duplication is the one kind
+this finding is not about.
+
+**Provenance is honest about what it does not know.** The exact upstream commit
+was never recorded: the file arrived in this repository's first commit,
+`a58a2ba`, with no source note. The README says so rather than reconstructing a
+plausible revision, and says the recorded digest describes the trimmed file
+committed here rather than upstream's original.
+
+**Two upstream defects were found and deliberately left unfixed.** The first was
+already visible: `logits_with_noise[:, :, 126081] = logits[:, :, 126348] =
+-torch.inf` is a chained assignment writing into two different tensors. The
+second was found by the differential test, which originally passed
+`attention_mask=None`: with guidance and no mask, the reference builds
+`attention_mask_` inside a conditional and then reads it unconditionally, so it
+raises `UnboundLocalError`. Neither is reachable in production, and both stay,
+because this file's value is fidelity to upstream rather than correctness. They
+are recorded so nobody reads a divergence from the kernel as the kernel being
+wrong. The test now supplies a mask on both sides, which is also what production
+does: `build_llada_inputs` always returns one.
+
+**What was deliberately not unified.** `streaming_resume` runs a single-block
+loop where `streaming_generate` iterates blocks, because a resume from an
+arbitrary saved frame cannot reconstruct which block that frame belonged to.
+Merging the two loops would have silently changed resume. The step and the
+schedule are shared; the loops stay with their callers, and the kernel's
+docstring says why so the asymmetry does not read as an oversight.
+
+**A claim made while deliberating and then retracted.** I reported that a user
+could crash the worker with an indivisible schedule, having tested
+`resolve_params` in isolation. That is not the request path:
+`llada_worker._validate_generate` already refused both cases with a `ValueError`
+that becomes an invalid-request envelope, which driving the real method
+confirmed. `block_schedule` is therefore consolidation, not a bug fix, and the
+rule went from three copies to two: the kernel owns it, and the browser's
+`validateDivisibility` keeps its own because disabling a button beats refusing a
+request, and it is on the far side of a network boundary. Recorded because the
+next session would otherwise re-derive the same wrong conclusion from the same
+partial test.
 
 ### DEPS-01
 
