@@ -21,6 +21,7 @@ workers can share it.
 
 from __future__ import annotations
 
+import shutil
 import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -214,6 +215,141 @@ def _emit(sink: ProgressSink, done: int, total: int) -> None:
     sink(progress_sample(done, total))
 
 
+# How much room to leave free beyond the download itself. A disk
+# filled to the last byte takes the whole host down with it, not just
+# the fetch: the cache lives under the user's home directory, where
+# the desktop session, the shell and this app's own run store are all
+# writing. One gibibyte is small next to a 17 GiB checkpoint and large
+# enough to leave the machine usable if the estimate is off.
+DOWNLOAD_SPACE_RESERVE_BYTES: int = 1 * 1024**3
+
+# Below this, a "total" is not a measurement. ``repo_total_bytes``
+# returns 0 when Hub metadata is unavailable, and a check against 0
+# would pass every time while looking like it had run.
+_SPACE_CHECK_MIN_TOTAL_BYTES: int = 1
+
+# A cache path is a handful of components deep. This only keeps the
+# ancestor walk in ``free_bytes`` finite.
+_ANCESTOR_WALK_MAX: int = 64
+
+assert DOWNLOAD_SPACE_RESERVE_BYTES > _SPACE_CHECK_MIN_TOTAL_BYTES, (
+    "the reserve must exceed the floor it is compared past"
+)
+assert _ANCESTOR_WALK_MAX > 0, "the walk must take a step"
+
+
+class InsufficientSpaceError(RuntimeError):
+    """The download will not fit, found before starting it.
+
+    Its own type rather than an OSError because it is an operating
+    condition with a specific remedy, and because the alternative is
+    what happens today: the fetch runs for twenty minutes, fills the
+    disk, and fails with ``[Errno 28] No space left on device`` from
+    inside a library, having left partial blobs behind and possibly
+    taken the desktop session with it.
+    """
+
+
+def free_bytes(path: Path) -> int:
+    """Free space on the filesystem holding ``path``.
+
+    Walks up to the nearest existing ancestor, because the cache
+    directory for a model that has never been fetched does not exist
+    yet, and a first download is exactly when this question matters.
+    """
+    assert isinstance(path, Path), "path required"
+    current = path.expanduser()
+    for _ in range(_ANCESTOR_WALK_MAX):
+        if current.exists():
+            usage = shutil.disk_usage(current)
+            assert usage.free >= 0, "free space must be non-negative"
+            return int(usage.free)
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    # Root itself did not exist, which cannot happen on a running
+    # system; reported as no space rather than crashing the caller.
+    return 0
+
+
+def describe_insufficient_space(
+    *, needed_bytes: int, free_bytes_now: int
+) -> str:
+    """The refusal, in numbers the user can act on.
+
+    Both figures, not just the shortfall, because the action depends
+    on the gap: freeing 200 MiB is a different afternoon from freeing
+    14 GiB, and a message saying only "not enough space" leaves the
+    user to work that out by trial.
+    """
+    assert needed_bytes >= 0, "needed bytes must be non-negative"
+    assert free_bytes_now >= 0, "free bytes must be non-negative"
+    return (
+        f"This download needs about {_gib(needed_bytes)} GiB free,"
+        f" including a {_gib(DOWNLOAD_SPACE_RESERVE_BYTES)} GiB"
+        f" reserve, and {_gib(free_bytes_now)} GiB is available."
+        " Free some space and try again."
+    )
+
+
+def _gib(value: int) -> str:
+    """Bytes as gibibytes, at one decimal place."""
+    return f"{value / 1024**3:.1f}"
+
+
+def space_needed_bytes(repo_id: str, *, total_bytes: int) -> int:
+    """Room this download still requires, including the reserve.
+
+    What is left to fetch rather than the repository's full size,
+    because a resumed download has already put some of it on disk and
+    refusing on the full figure would block a fetch that fits.
+
+    Returns 0 when ``total_bytes`` is not a measurement, which is the
+    signal to skip the check: Hub metadata is unavailable offline and
+    for a private repo without a token, and a fetch that might fit is
+    better than one refused on a number nobody read.
+    """
+    assert isinstance(repo_id, str) and repo_id, "repo_id required"
+    assert total_bytes >= 0, "total bytes must be non-negative"
+    if total_bytes < _SPACE_CHECK_MIN_TOTAL_BYTES:
+        return 0
+    remaining = total_bytes - _downloaded_bytes(
+        _repo_blobs_dir(repo_id)
+    )
+    if remaining < 0:
+        remaining = 0
+    return remaining + DOWNLOAD_SPACE_RESERVE_BYTES
+
+
+def repo_free_bytes(repo_id: str) -> int:
+    """Free space where this repository's blobs would land.
+
+    Named per repository rather than taken as a path so callers do not
+    have to know the cache layout to ask the question, and so they
+    cannot accidentally measure a different filesystem than the one
+    the download will write to.
+    """
+    assert isinstance(repo_id, str) and repo_id, "repo_id required"
+    return free_bytes(_repo_blobs_dir(repo_id))
+
+
+def check_space_for_download(
+    repo_id: str, *, total_bytes: int
+) -> None:
+    """Raise if this download cannot fit, before it starts."""
+    needed = space_needed_bytes(repo_id, total_bytes=total_bytes)
+    if needed == 0:
+        return
+    available = repo_free_bytes(repo_id)
+    if available < needed:
+        raise InsufficientSpaceError(
+            describe_insufficient_space(
+                needed_bytes=needed, free_bytes_now=available
+            )
+        )
+
+
 class WeightsUnavailableError(RuntimeError):
     """Weights are neither cached nor reachable.
 
@@ -329,6 +465,11 @@ def download_with_progress(
         )
 
     total_bytes = repo_total_bytes(repo_id, revision=revision)
+    # Before the fetch, not during it. The library discovers a full
+    # disk by failing to write to it, which happens partway through a
+    # long download and after the damage is done; the size is already
+    # known here, so the answer is available for free.
+    check_space_for_download(repo_id, total_bytes=total_bytes)
     blobs_dir = _repo_blobs_dir(repo_id)
 
     result: Dict[str, str] = {}

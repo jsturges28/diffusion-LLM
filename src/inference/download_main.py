@@ -43,10 +43,20 @@ DOWNLOAD_EXIT_FAILED = 1
 # Neither cached nor reachable, which has a remedy worth naming and
 # would otherwise surface as a wall of urllib3 retry text.
 DOWNLOAD_EXIT_UNREACHABLE = 3
+# Will not fit, refused before starting. Distinct from a generic
+# failure because the remedy is the user's and specific, and because
+# nothing was attempted: there are no partial blobs to resume.
+DOWNLOAD_EXIT_NO_SPACE = 4
 
 assert DOWNLOAD_EXIT_OK == 0, "success is zero, as a shell expects"
 assert DOWNLOAD_EXIT_FAILED != DOWNLOAD_EXIT_UNREACHABLE, (
     "the parent tells the two failures apart by number alone"
+)
+assert DOWNLOAD_EXIT_NO_SPACE != DOWNLOAD_EXIT_UNREACHABLE, (
+    "every status this module returns must be distinguishable"
+)
+assert DOWNLOAD_EXIT_NO_SPACE != DOWNLOAD_EXIT_FAILED, (
+    "a refusal is not the same outcome as a failure"
 )
 
 
@@ -62,12 +72,30 @@ def main() -> int:
     parser.add_argument("--revision", default=None)
     args = parser.parse_args()
 
-    from src.inference.hf_download import _is_unreachable
+    from src.inference.hf_download import (
+        InsufficientSpaceError,
+        _is_unreachable,
+        check_space_for_download,
+        repo_total_bytes,
+    )
 
     from huggingface_hub import snapshot_download
 
     try:
+        # The same pre-flight the in-process path makes. Duplicated
+        # here rather than shared because this process calls
+        # ``snapshot_download`` directly: it has no progress sink to
+        # feed, which is the only reason the helper exists.
+        check_space_for_download(
+            args.repo,
+            total_bytes=repo_total_bytes(
+                args.repo, revision=args.revision
+            ),
+        )
         snapshot_download(args.repo, revision=args.revision)
+    except InsufficientSpaceError as exc:
+        print(f"download refused: {exc}", file=sys.stderr)
+        return DOWNLOAD_EXIT_NO_SPACE
     except BaseException as exc:  # noqa: BLE001 - reported by status.
         # Printed for the log the maintainer reads, not for the
         # parent, which is deliberately reading only the status: a

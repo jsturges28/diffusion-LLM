@@ -33,6 +33,7 @@ import pytest
 
 from src.inference.download_main import (
     DOWNLOAD_EXIT_FAILED,
+    DOWNLOAD_EXIT_NO_SPACE,
     DOWNLOAD_EXIT_OK,
     DOWNLOAD_EXIT_UNREACHABLE,
 )
@@ -234,6 +235,62 @@ def test_an_offline_exit_says_so_in_words() -> None:
     assert harness.manager.download_state == "error"
     message = harness.manager.download_error or ""
     assert "could not be reached" in message
+
+
+def test_a_no_space_exit_says_what_to_free(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The second status with a remedy worth naming.
+
+    Folded into the generic failure it would read "the download
+    failed (exit 4). The log has the underlying error", which is true
+    and useless: the user can act on this one immediately.
+    """
+    from src.inference import hf_download
+
+    monkeypatch.setattr(
+        hf_download, "repo_free_bytes", lambda repo_id: 3 * 1024**3
+    )
+    harness = _Harness()
+
+    async def run() -> None:
+        harness.manager.start_download(DOWNLOADABLE)
+        harness.child.finish(DOWNLOAD_EXIT_NO_SPACE)
+        await _settle(harness)
+
+    asyncio.run(run())
+
+    assert harness.manager.download_state == "error"
+    message = harness.manager.download_error or ""
+    assert "space" in message
+    assert "3.0 GiB" in message
+
+
+def test_a_no_space_exit_still_says_something_unmeasured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The figures are re-measured, so they can fail to arrive. The
+    sentence that names the remedy must not depend on them."""
+    from src.inference import hf_download
+
+    def _boom(repo_id: str) -> int:
+        raise OSError("cannot stat the cache")
+
+    monkeypatch.setattr(
+        hf_download, "repo_free_bytes", _boom
+    )
+    harness = _Harness()
+
+    async def run() -> None:
+        harness.manager.start_download(DOWNLOADABLE)
+        harness.child.finish(DOWNLOAD_EXIT_NO_SPACE)
+        await _settle(harness)
+
+    asyncio.run(run())
+
+    message = harness.manager.download_error or ""
+    assert "not enough disk space" in message
+    assert "Free" in message
 
 
 def test_any_other_failure_is_reported_as_one() -> None:

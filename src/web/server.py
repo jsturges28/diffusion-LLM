@@ -99,6 +99,7 @@ from src.web.ui_state import (
     set_ui_state_key,
 )
 from src.inference.download_main import (
+    DOWNLOAD_EXIT_NO_SPACE,
     DOWNLOAD_EXIT_OK,
     DOWNLOAD_EXIT_UNREACHABLE,
 )
@@ -470,6 +471,45 @@ def _is_downloaded(
         except Exception:  # noqa: BLE001 - probe failure: treat as not cached
             return False
     return Path(checkpoint).expanduser().is_dir()
+
+
+def _describe_no_space(
+    checkpoint: str, revision: Optional[str] = None
+) -> str:
+    """The refusal message for a download that will not fit.
+
+    Re-measured here because the child reported only a status, so its
+    figures are gone. When they cannot be read back, this falls back
+    to the situation without the numbers, which is still the one
+    sentence that names the remedy.
+    """
+    try:
+        from src.inference.hf_download import (
+            describe_insufficient_space,
+            repo_free_bytes,
+            repo_total_bytes,
+            space_needed_bytes,
+        )
+
+        needed = space_needed_bytes(
+            checkpoint,
+            total_bytes=repo_total_bytes(
+                checkpoint, revision=revision
+            ),
+        )
+        if needed > 0:
+            return describe_insufficient_space(
+                needed_bytes=needed,
+                free_bytes_now=repo_free_bytes(checkpoint),
+            )
+    except Exception:  # noqa: BLE001 - the figures are a courtesy.
+        logger.warning(
+            "could not measure the shortfall for %s", checkpoint
+        )
+    return (
+        "There is not enough disk space for this download. Free"
+        " some space and try again."
+    )
 
 
 def _git_commit() -> Optional[str]:
@@ -1091,6 +1131,15 @@ class ModelManager:
             )
 
             self.download_error = describe_unreachable(checkpoint)
+            return
+        if code == DOWNLOAD_EXIT_NO_SPACE:
+            # Rebuilt rather than relayed, like the message above: the
+            # child reports an exit status and nothing else, so its
+            # figures are gone. Measured again here, which is honest
+            # anyway, since the answer may have changed since.
+            self.download_error = _describe_no_space(
+                checkpoint, revision
+            )
             return
         if code is None:
             self.download_error = (

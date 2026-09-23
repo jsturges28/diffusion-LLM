@@ -2856,3 +2856,18 @@ change is that nothing observable moves.
     This is TRUST-02's offline test re-run, because the revision now
     reaches the same calls `local_files_only` does and a wrong one
     would fail here first.
+287. **The space pre-flight.** *Exercised against this machine's real
+    filesystem*, with only the repository size synthetic: real
+    `disk_usage` on the real cache directory (142.2 GiB free), real
+    subtraction of the 14.9 GiB of LLaDA blobs already there. A
+    17 GiB repo needs 3.1 GiB and is allowed; a 200 GiB one is
+    refused with "needs about 186.1 GiB free, including a 1.0 GiB
+    reserve, and 142.2 GiB is available".
+
+    What remains unverified is the end of that path through the UI: a
+    download refused by the child process turning into that sentence
+    on the model row. Reaching it honestly needs a nearly full
+    filesystem. If there is ever a partition with less than about
+    18 GiB free, point `HF_HOME` at it and ask the menu to download a
+    model; it should refuse at once rather than downloading for
+    twenty minutes and failing with `[Errno 28]`.
