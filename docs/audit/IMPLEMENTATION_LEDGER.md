@@ -241,6 +241,17 @@ came out of testing it cleared on 2026-08-18, items 162 to 166, and
   `model_type: "diffusion"` derived from the generation shape at
   `schema_version` 2, which did not move. The corpus needed no
   migration, which was the point of deriving rather than adding.
+- **ROADMAP-05 and ROADMAP-02's context half**: **cleared on
+  2026-09-22**, items 274 to 283, and this pass was the most productive
+  of the campaign: five of the ten items failed first, and each failure
+  is written up under Deviations. Three were code faults nothing
+  automated could have caught (a reasoning channel that never closes, a
+  panel that could not scroll, a counter whose floor read as fitting),
+  one was a fix of mine regressing the layout it was meant to cap, and
+  one, 279, turned out to be unreachable on this card. It is recorded
+  that way rather than left open, like item 148, and it produced the
+  most useful finding of the lot: passing the context check does not
+  mean the run fits in memory.
 
 - **TRUST-04**: **cleared on 2026-08-31.** Queued on 2026-08-28 and
   worked through in three passes. The first cleared 186, 187 and 189
@@ -353,8 +364,8 @@ on real hardware.
 | ORG-02 | medium | L | partial | none | State core verified, boot state now server-rendered; only the ES module conversion remains |
 | RUNTIME-03 | medium | S | done | none | Taken as unblocked against this table; see Deviations |
 | ROADMAP-01 | high | M | done | none | Family, shape and devices split apart; per-device memory skipped, see Deviations |
-| ROADMAP-05 | high | M | needs hardware | none | One text adapter per model; `input_mode` became a fourth axis, see entry |
-| ROADMAP-02 | medium | M | needs hardware | none | Context half landed too: an unrunnable prompt is refused and the count is off the event loop |
+| ROADMAP-05 | high | M | done | none | One text adapter per model; `input_mode` became a fourth axis, see entry |
+| ROADMAP-02 | medium | M | done | none | Context half landed too: an unrunnable prompt is refused and the count is off the event loop |
 | TRUST-03 | high | L | ready | none | Offline slice only: Load cached weights without asking the Hub |
 | DEPS-01 | medium | L | ready | none | |
 | ROADMAP-03 | high | L | ready | none | Owns the signal axis ROADMAP-01 left alone |
