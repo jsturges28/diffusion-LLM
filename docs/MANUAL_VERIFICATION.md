@@ -2768,16 +2768,52 @@ change is that nothing observable moves.
     "over the context window") and press Generate. It should refuse
     with a message naming both numbers, and the resident model and the
     page should be undisturbed.
-279. **A prompt that only overflows with its output still runs.** Get
-    the counter to the second warning, "prompt + N output exceeds the
-    window", and generate. This one is allowed deliberately: it runs
-    and gets truncated part way, which is a shorter answer somebody may
-    have wanted rather than an error.
+279. **A prompt that only overflows with its output still runs.**
+    **Unreachable on this hardware**, recorded rather than left
+    pending, the way item 148 is.
+
+    The amber case needs the prompt *under* the window and the prompt
+    plus Max Tokens *over* it, so it can only be reached within a few
+    thousand tokens of the window. Of the three models, only SmolLM3
+    declares a window at all, and its window is 65,536: a prompt that
+    long needs about 15.6 GiB of KV cache on top of 6 GiB of weights,
+    which does not fit a 23.49 GiB card. Attempting it on 2026-09-22
+    gave `CUDA out of memory. Tried to allocate 15.60 GiB`. LLaDA
+    declares no window, so its readout is blank and neither note can
+    fire, and DiffusionGemma's is 262,144, further out of reach still.
+
+    So the soft warning is correct and untestable here at once. A
+    model with a smaller declared window, or a larger card, makes it
+    live. What *is* confirmed is the refusal (278) and that the two
+    notes differ (281).
+
+    A real finding came out of the attempt, and it is worth keeping
+    separately: passing the context check does not mean the run fits
+    in memory. The window is the model's attention limit and the KV
+    cache is a VRAM limit, and on this card the second bites first.
+    Nothing checks it.
+
+    The counter is at least an exact figure to tune against now, which
+    it was not on 2026-09-22: past 200,000 characters the worker
+    stopped reading and the readout showed a floor, as
+    `>= 35,385 / 65,536`. Tuning against a floor is impossible, and
+    worse, a floor below the window read as fitting, so a
+    600,000-character prompt that was really 107,304 tokens drew no
+    warning at all.
 280. **A very long prompt no longer stalls the page.** Import or paste
-    something near the 200,000-character cap. While the counter is
-    catching up, the UI should stay responsive: hover a hyperparameter,
-    open the model dropdown, press Escape. Counting used to run on the
-    socket's event loop, so everything queued behind one keystroke.
+    a few hundred thousand characters. While the counter is catching
+    up, the UI should stay responsive: hover a hyperparameter, open the
+    model dropdown, press Escape. Counting used to run on the socket's
+    event loop, so everything queued behind one keystroke.
+
+    The worker's cap moved from 200,000 characters to 1,000,000 when
+    the counter stopped reporting floors, so this is more work than it
+    was and the offload matters more.
+281. **The two context notes look different.** Amber for "prompt + N
+    output exceeds the window", red for "over the context window". They
+    read alike and no longer behave alike, so colour is what separates
+    a run that will be shorter than you asked from one that will not
+    run at all. Both figures stay plain numbers with no inequality.
 282. **A long reasoning trace scrolls.** On DiffusionGemma with Max
     Tokens well past 256 and Thinking on, generate until the Reasoning
     panel fills. It should scroll inside itself, with the Reasoning
@@ -2793,3 +2829,13 @@ change is that nothing observable moves.
     caused: capping the panel by making the `details` a flex column let
     the trace escape its box and draw over the output. The cap is on
     the trace, in viewport units, and the `details` is a plain block.
+283. **A clipped status message can be read.** Trigger something long,
+    most easily by asking for a model that will not fit (a switch
+    refusal names two figures) or by overflowing the context. The row
+    truncates with an ellipsis, so hover it: the cursor should become a
+    question mark and the full text should appear as a tooltip.
+
+    This is the general fix for a one-line row. Shortening our own
+    messages is still worth doing and a test enforces it, but a CUDA
+    out-of-memory report comes from torch, runs past the window on its
+    own, and keeps its numbers at the end where the clip lands.

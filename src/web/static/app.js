@@ -4877,30 +4877,39 @@ function renderPromptContext() {
     return;
   }
   var count = promptCountLatest.count;
+  // A plain number, both figures the same shape. This used to prefix a
+  // truncated count with an inequality sign, which answered the wrong
+  // question: the number you are tuning against the window has to be
+  // the whole prompt's, and a floor is unusable for that.
   var text = count.toLocaleString();
-  if (promptCountLatest.truncated) {
-    // The worker capped what it read, so the count is a floor.
-    text = "\u2265 " + text;
-  }
   if (activeContextLength !== null) {
     text += " / " + activeContextLength.toLocaleString();
   }
   text += count === 1 ? " token" : " tokens";
   promptContextCount.textContent = text;
   promptContextRow.classList.remove("is-empty");
-  applyPromptContextWarning(count);
+  applyPromptContextWarning(count, promptCountLatest.truncated);
 }
 
 // Warn when the prompt plus the output budget will not fit. Two
-// distinct failures, worth distinct wording: a prompt that already
-// exceeds the window cannot run at all, while one that only exceeds it
-// once the output is added will run and be truncated part-way.
-function applyPromptContextWarning(count) {
+// distinct failures, worth distinct wording and distinct colors,
+// because they no longer behave alike: a prompt that already exceeds
+// the window is refused, while one that only exceeds it once the
+// output is added runs and is truncated part-way.
+//
+// ``truncated`` means the worker stopped reading at its cap, so the
+// count is short of the real one. The cap sits far past any window
+// here, so hitting it is itself proof the prompt is over: treating it
+// as a number to compare would read as "fits", which is the bug this
+// replaces.
+function applyPromptContextWarning(count, truncated) {
   var note = "";
+  var over = false;
   if (activeContextLength !== null) {
     var budget = outputBudgetTokens();
-    if (count > activeContextLength) {
+    if (truncated || count > activeContextLength) {
       note = "over the context window";
+      over = true;
     } else if (count + budget > activeContextLength) {
       note =
         "prompt + "
@@ -4912,6 +4921,7 @@ function applyPromptContextWarning(count) {
     promptContextNote.textContent = note;
   }
   promptContextRow.classList.toggle("is-warning", note !== "");
+  promptContextRow.classList.toggle("is-over", over);
 }
 
 // ---- Persistent UI settings (localStorage) ----
@@ -6577,6 +6587,42 @@ var statusChips = [];
 // The offset goes on `transform` while the chips' own entrances and
 // exits use the `translate` longhand, so a chip can be sliding
 // sideways and rising at the same time without either being lost.
+// Every status message carries its full text as a tooltip, and says so
+// with a cursor when there is more than the row can show.
+//
+// The row is one clipped line and some messages are not ours to
+// shorten: a CUDA out-of-memory report comes from torch and runs past
+// the window on its own. Shortening them one at a time is whack-a-mole
+// and loses the part that matters, which for that error is the numbers
+// at the end.
+//
+// An observer rather than a helper, because a helper is only as good
+// as the next call site remembering it, and fourteen places already
+// assign this element's text. Nothing can add a fifteenth that
+// arrives without its tooltip.
+function watchStatusMessage() {
+  if (!statusMessage || typeof MutationObserver !== "function") {
+    return;
+  }
+  var observer = new MutationObserver(applyStatusMessageTitle);
+  observer.observe(statusMessage, {
+    childList: true,
+    characterData: true,
+    subtree: true,
+  });
+  applyStatusMessageTitle();
+}
+
+function applyStatusMessageTitle() {
+  var text = statusMessage.textContent || "";
+  // Only when clipped: a permanent tooltip on a message already fully
+  // visible is a hover target that repeats what is on screen.
+  var clipped =
+    statusMessage.scrollWidth > statusMessage.clientWidth + 1;
+  statusMessage.title = clipped ? text : "";
+  statusMessage.classList.toggle("is-clipped", clipped);
+}
+
 function statusRowReflow(mutate) {
   if (!statusStack || prefersReducedMotion()) {
     mutate();
@@ -8692,6 +8738,9 @@ function finishBoot() {
   if (!restored) {
     showOutputPlaceholder();
   }
+  // Before connect, so the first message the socket produces already
+  // carries its tooltip.
+  watchStatusMessage();
   connect();
 }
 

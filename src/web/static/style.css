@@ -558,12 +558,22 @@ body {
   color: var(--text-secondary);
 }
 
+/* Amber for the run that will be cut short, red for the one that will
+   be refused. The two notes read alike and no longer behave alike, so
+   the colour is what separates "this will be shorter than you asked"
+   from "this will not run". `is-over` follows `is-warning` here so it
+   wins on equal specificity. */
 .prompt-context.is-warning {
   color: var(--warn);
 }
 
 .prompt-context.is-warning .prompt-context-note {
   color: var(--warn);
+}
+
+.prompt-context.is-over,
+.prompt-context.is-over .prompt-context-note {
+  color: var(--danger);
 }
 
 #param-row {
@@ -1469,6 +1479,13 @@ button {
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Set only while the text does not fit, so the cursor is a promise
+   that hovering shows something rather than a decoration. The full
+   text is on the `title`; see watchStatusMessage. */
+#status-message.is-clipped {
+  cursor: help;
 }
 
 /* Two messages abutting on one row in the same accent green read as

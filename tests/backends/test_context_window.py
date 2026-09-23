@@ -398,7 +398,7 @@ def test_a_prompt_exactly_at_the_window_is_allowed() -> None:
 def test_a_prompt_one_past_the_window_is_refused() -> None:
     """And from the other side, so a comparison flipped either way
     fails one of the two."""
-    with pytest.raises(ValueError, match="context window"):
+    with pytest.raises(ValueError, match="window"):
         _sized_backend(7).check_prompt_fits("she ran home today")
 
 
@@ -407,6 +407,30 @@ def test_the_refusal_names_both_numbers() -> None:
     needs to know by how much."""
     with pytest.raises(ValueError, match="8.*7|7.*8"):
         _sized_backend(7).check_prompt_fits("she ran home today")
+
+
+def test_the_refusal_fits_the_status_row() -> None:
+    """The status row is one nowrap line that truncates with an
+    ellipsis, and it already carries Step, Elapsed and T/s. A refusal
+    the user has to act on is the worst thing in the app to clip, and
+    the first version of this message was clipped mid-sentence.
+
+    The row now puts any clipped message on a tooltip, which is the
+    general answer, because a CUDA out-of-memory report comes from
+    torch and is not ours to shorten. This still holds our own
+    messages short: a tooltip is a fallback for text we do not
+    control, not a licence to write past the row.
+
+    Bounded on the real numbers rather than the stub's, since six
+    figures of tokens is what an overflowing prompt actually reports.
+    """
+    try:
+        _sized_backend(7).check_prompt_fits("she ran home today")
+    except ValueError as exc:
+        message = str(exc).replace("8", "107,304").replace(
+            "7", "65,536"
+        )
+    assert len(f"Error: {message}") < 80, message
 
 
 def test_an_unreadable_ceiling_refuses_nothing() -> None:

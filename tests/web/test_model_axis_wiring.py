@@ -163,6 +163,65 @@ def test_the_prompt_copy_reads_the_input_mode() -> None:
     assert "PROMPT_MODE_COPY" in region
 
 
+def test_the_prompt_count_shows_no_inequality() -> None:
+    """A truncated count used to be prefixed with an inequality sign,
+    which answered the wrong question. The number a user tunes against
+    the window has to be the whole prompt's, and a floor is unusable
+    for that."""
+    code = _code("app.js")
+
+    assert "\\u2265" not in code
+    assert "\u2265" not in code
+
+
+def test_a_truncated_count_still_warns() -> None:
+    """The bug the inequality sign hid. A floor below the window read
+    as "fits", so a 600,000 character prompt showed no warning at all
+    while being three times over. Hitting the worker's cap is itself
+    proof the prompt is over, because the cap sits far past any window
+    here."""
+    region = _region(
+        "app.js", "function applyPromptContextWarning(", 700
+    )
+
+    assert "truncated ||" in region
+
+
+def test_the_two_context_failures_look_different() -> None:
+    """One is refused and one runs short, so they cannot both be
+    amber. The refusal takes the danger colour."""
+    css = (STATIC / "style.css").read_text(encoding="utf-8")
+
+    assert ".prompt-context.is-over" in css
+    assert "is-over" in _code("app.js")
+
+
+def test_a_clipped_status_message_carries_its_full_text() -> None:
+    """The general answer to a row that truncates. Some messages are
+    not ours to shorten: a CUDA out-of-memory report comes from torch
+    and runs past the window on its own, and shortening ours one at a
+    time loses whichever one is added next."""
+    region = _region("app.js", "function watchStatusMessage()", 700)
+
+    assert "MutationObserver" in region
+    body = _region(
+        "app.js", "function applyStatusMessageTitle()", 600
+    )
+    assert "statusMessage.title" in body
+    assert "scrollWidth" in body
+
+
+def test_the_tooltip_cannot_be_bypassed_by_a_new_message() -> None:
+    """An observer rather than a helper, and this is the reason: there
+    are already more than ten places that assign the row's text, and a
+    helper is only as good as the next one remembering it."""
+    code = _code("app.js")
+    writes = code.count("statusMessage.textContent =")
+
+    assert writes > 5, writes
+    assert "observer.observe(statusMessage" in code
+
+
 def test_the_reasoning_panel_can_scroll() -> None:
     """A long trace was unreachable: the panel and the canvas were
     plain blocks in a section that hides its overflow, so the panel

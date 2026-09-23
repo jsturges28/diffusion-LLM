@@ -680,6 +680,77 @@ An unclosed channel now reports everything as reasoning and no answer,
 which is what it is. Item 276 gained the instruction to raise the budget
 first, since the check is untestable at the default.
 
+### Found while verifying: a floor is not a number you can tune
+
+Item 278 showed the counter reading `>= 35,385 / 65,536 tokens` while
+the refusal named 107,304. The first reading of this was that both were
+right at different precisions and the `>=` kept them honest. That was
+wrong, and the maintainer was right to push back: a floor cannot be
+tuned against, which is the readout's entire job when you are trying to
+land just under a window.
+
+Worse, it was hiding a real bug. `applyPromptContextWarning` compared
+the floor against the window, and 35,385 is *under* 65,536, so a
+600,000-character prompt that was really 107,304 tokens drew **no
+warning at all**. The inequality sign was the visible half of a readout
+that had quietly concluded the prompt fits.
+
+Three changes. `COUNT_PROMPT_MAX_CHARS` went from 200,000 to
+1,000,000, which is affordable now that the count runs off the event
+loop and is what makes the figure exact for any prompt in the range
+anyone tunes. The readout shows a plain number, both figures the same
+shape. And a truncated count is treated as over the window rather than
+as a number to compare, since the cap sits far past any window here, so
+reaching it is itself the answer. A module-level assertion ties the cap
+to that claim.
+
+The two failures also now differ by colour, red for the refusal and
+amber for the run that will be cut short, because they read alike and
+no longer behave alike.
+
+The refusal's wording changed too. The status row is one `nowrap` line
+that truncates with an ellipsis, and the first message was long enough
+to be clipped mid-sentence, which is the worst thing in the app to clip.
+A test now bounds its length against six-figure token counts.
+
+### Found while verifying: fitting the window is not fitting in memory
+
+Item 279 is unreachable on this hardware, recorded the way item 148 is
+rather than left pending, and the reason is worth more than the item.
+
+The soft warning needs a prompt within a few thousand tokens of the
+window. Only SmolLM3 declares a window (65,536); LLaDA declares none,
+so its readout is blank and neither note can fire, and DiffusionGemma's
+is 262,144. A 65,000-token prompt on SmolLM3 wants roughly 15.6 GiB of
+KV cache on top of 6 GiB of weights, and the attempt returned `CUDA out
+of memory. Tried to allocate 15.60 GiB` on a 23.49 GiB card.
+
+So `check_prompt_fits` is necessary and not sufficient. The context
+window is the model's attention limit; the KV cache is a VRAM limit,
+and on this card the second binds first. Nothing checks it, and a
+generation-time VRAM pre-flight is a larger piece of work than
+`ROADMAP-02` asked for: it needs layer count, KV head count, head
+dimension and dtype per model, which is the kind of per-model resource
+data `ROADMAP-01` deliberately did not build for want of a consumer.
+This is that consumer, when someone wants it.
+
+Also seen in the same sitting, and probably a consequence: after the
+out-of-memory error the status badge went to DISCONNECTED, and a switch
+to DiffusionGemma was then refused for wanting 18 GiB against 17.8 GiB
+free. A generation failure is run-scoped and should not drop the socket,
+so the likely story is that the failed 15.6 GiB allocation left the
+worker unusable and the supervisor saw it go. Not reproducible without
+a GPU, so it is written down rather than chased.
+
+Two models report no context window at all, which is worth knowing
+before anyone reads the readout as universal. LLaDA's config declares no
+`max_position_embeddings`, and DiffusionGemma nests its under
+`text_config`, where `describe_context_length` does not look. The
+conservative behaviour is deliberate ("a missing readout is honest"),
+but reading the nested key would make DiffusionGemma report 262,144 and
+give its prompts a refusal they currently cannot get. Left for whoever
+wants it.
+
 ### Found while verifying: the reasoning panel could not scroll
 
 Raising DiffusionGemma's budget for item 276 made the panel long enough
@@ -702,6 +773,25 @@ container, since that is the mistake that looks correct.
 
 Only one thing measures either element, a tooltip reading
 `getBoundingClientRect().top`, which is unaffected.
+
+### Found while verifying: the status row needed a general answer
+
+The maintainer asked the right question after a second long message was
+clipped: whether shortening them one at a time is whack-a-mole. It is.
+`#status-message` is one `nowrap` line with an ellipsis, and the worst
+offenders are not ours to shorten. A CUDA out-of-memory report comes
+from torch, runs past the window on its own, and keeps its numbers at
+the end, which is exactly where the clip lands.
+
+Any clipped message now carries its full text as a `title`, with a
+`cursor: help` set only while it is clipped so the tooltip is a promise
+rather than a decoration. Done with a `MutationObserver` rather than a
+setter helper, deliberately: fourteen places assign that element's
+text, and a helper is only as good as the fifteenth remembering it.
+
+Our own messages stay short and a test still enforces it. A tooltip is
+a fallback for text we do not control, not a licence to write past the
+row.
 
 ### ROADMAP-03, a down payment made outside the campaign, 2026-08-30
 

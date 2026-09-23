@@ -68,15 +68,30 @@ TOKENIZE_TEXT_MAX_CHARS = 200
 # Upper bound on a prompt being counted. Far larger than the preview
 # cap above, because the whole point is to answer for a file somebody
 # imported, and a bound that rejected those would leave the readout
-# silent exactly when it matters. Still bounded: this is a per-request
-# encode on the worker, and the client caps imports well below it, so
-# reaching this means something is wrong rather than large. Truncating
-# beats rejecting, and the reply reports that it truncated so the
-# readout can say the count is a floor.
-COUNT_PROMPT_MAX_CHARS = 200_000
+# silent exactly when it matters.
+#
+# Raised from 200,000 once the count moved off the event loop, because
+# at 200,000 the cap was reachable by typing and the consequence was
+# worse than a slow count. The reply reports a truncated count as a
+# floor, and a floor below the window reads as "fits": a 600,000
+# character prompt showed ">= 35,385 / 65,536" and no warning at all,
+# while the real count was 107,304. The number a user is tuning
+# against has to be the whole prompt's.
+#
+# Still bounded, because unbounded per-keystroke work is not an
+# option. Reaching a million characters means the prompt is past every
+# window this app serves by a wide margin, so the client treats a
+# truncated count as over the window rather than as a floor.
+COUNT_PROMPT_MAX_CHARS = 1_000_000
 
 assert COUNT_PROMPT_MAX_CHARS > TOKENIZE_TEXT_MAX_CHARS, (
     "counting a prompt must allow more than previewing a token"
+)
+# The claim the client's truncated-means-over rule rests on: even at
+# a generous four characters per token, a prompt this long cannot fit
+# the largest window any registered model declares.
+assert COUNT_PROMPT_MAX_CHARS // 4 > 200_000, (
+    "a truncated prompt must exceed any real context window"
 )
 
 def rewind_retained_history(
@@ -775,10 +790,12 @@ class Backend(ABC):
         count = self.prompt_token_count(prompt, thinking=thinking)
         if count <= ceiling:
             return
+        # Kept short because the status row is one nowrap line that
+        # truncates with an ellipsis, and a refusal the user has to
+        # act on is the worst thing in the app to clip.
         raise ValueError(
-            f"This prompt is {count:,} tokens once templated, past"
-            f" the model's {ceiling:,}-token context window."
-            " Shorten it and try again."
+            f"Prompt needs {count:,} tokens; the window is"
+            f" {ceiling:,}. Shorten it."
         )
 
     async def handle_probe(
