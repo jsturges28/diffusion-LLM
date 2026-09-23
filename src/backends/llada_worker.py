@@ -45,6 +45,7 @@ from src.inference.hf_download import (
     download_with_progress,
     revision_from_snapshot,
 )
+from src.inference.llada_kernel import block_schedule
 from src.inference.load_progress import (
     load_target_bytes,
     sample_load_progress,
@@ -222,10 +223,11 @@ class LladaBackend(Backend):
         """One request as this sampler's arguments.
 
         Types, defaults, options and bounds come from the registry
-        through ``resolve_params``. What stays here is the prompt,
-        which is not a declared parameter, and the two divisibility
-        rules, which are this sampler's arithmetic rather than
-        anything a ``ParamSpec`` could express.
+        through ``resolve_params``. The prompt stays here, since it is
+        not a declared parameter. The two divisibility rules are a
+        relationship between three parameters rather than a property
+        of any one, so no ``ParamSpec`` can express them; they belong
+        to the algorithm, and ``block_schedule`` owns them.
         """
         params = resolve_params(
             self.model_info.param_specs,
@@ -242,26 +244,16 @@ class LladaBackend(Backend):
         params["prompt"] = prompt
         self.check_prompt_fits(prompt)
 
-        steps = int(params["steps"])
-        gen_length = int(params["gen_length"])
-        block_length = int(params["block_length"])
-        # The declared bounds start at 1, so the two divisions below
-        # cannot fault. A ZeroDivisionError would escape the caller's
-        # ValueError/TypeError handler and read as a dead run rather
-        # than a rejected request.
-        assert block_length > 0, "bounds keep this positive"
-        if gen_length % block_length != 0:
-            raise ValueError(
-                f"gen_length ({gen_length}) must be"
-                f" divisible by block_length"
-                f" ({block_length})"
-            )
-        num_blocks = gen_length // block_length
-        if steps % num_blocks != 0:
-            raise ValueError(
-                f"steps ({steps}) must be divisible by"
-                f" num_blocks ({num_blocks})"
-            )
+        # The arithmetic itself lives with the algorithm, which is the
+        # only place that knows what a block is. It raises ValueError
+        # naming the offending pair, which the caller already turns
+        # into an invalid-request envelope, so this refuses the
+        # request rather than faulting mid-run.
+        block_schedule(
+            gen_length=int(params["gen_length"]),
+            block_length=int(params["block_length"]),
+            steps=int(params["steps"]),
+        )
 
         return params
 

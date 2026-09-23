@@ -2,8 +2,12 @@
 
 Yields decoded text frames one at a time so a WebSocket handler
 can stream them to the browser without waiting for the full run.
-Reuses helper functions from llada_sampler.py; the core sampling
-file stays untouched.
+
+The algorithm itself is in `llada_kernel.py`. What lives here is
+everything that makes it streamable: the block loop, cancellation
+between steps, checkpointing for resume, and turning a canvas into
+the token records the browser draws. Keeping the two apart is what
+lets a resume drive the same step function with a different loop.
 """
 
 from __future__ import annotations
@@ -17,9 +21,7 @@ from typing import (
     List,
 )
 
-import numpy as np
 import torch
-import torch.nn.functional as F
 
 from src.backends.text_adapter import ChatTextAdapter
 from src.inference.checkpoint import (
@@ -29,13 +31,17 @@ from src.inference.checkpoint import (
     RngState,
     rng_restore,
 )
-from src.inference.llada_sampler import (
-    add_gumbel_noise,
+from src.inference.llada_kernel import (
+    MASK_ID,
+    block_schedule,
+    diffusion_step,
     get_num_transfer_tokens,
 )
 from src.inference.reveal import newly_revealed
 
-MASK_ID: int = 126336
+# Re-exported rather than defined here. The algorithm owns the mask id
+# now, and several tests import it from this module by its old path.
+__all__ = ["MASK_ID"]
 
 
 def checkpoint_append(
@@ -293,126 +299,6 @@ def _mean_conf(
     return round(float(reveal_conf[resolved].mean().item()), 4)
 
 
-def _forward_pass(
-    model: Any,
-    x: torch.Tensor,
-    attention_mask: torch.Tensor | None,
-    prompt_index: torch.Tensor,
-    cfg_scale: float,
-) -> torch.Tensor:
-    """Run a single model forward pass (blocking)."""
-    if cfg_scale > 0.0:
-        un_x = x.clone()
-        un_x[prompt_index] = MASK_ID
-        x_cat = torch.cat([x, un_x], dim=0)
-        if attention_mask is not None:
-            attention_mask_cat = torch.cat(
-                [attention_mask, attention_mask], dim=0
-            )
-        else:
-            attention_mask_cat = None
-        logits = model(
-            x_cat, attention_mask=attention_mask_cat
-        ).logits
-        logits, un_logits = torch.chunk(
-            logits, 2, dim=0
-        )
-        logits = un_logits + (cfg_scale + 1) * (
-            logits - un_logits
-        )
-    else:
-        logits = model(
-            x, attention_mask=attention_mask
-        ).logits
-    return logits
-
-
-@torch.no_grad()
-def _diffusion_step(
-    x: torch.Tensor,
-    model: Any,
-    attention_mask: torch.Tensor | None,
-    prompt_index: torch.Tensor,
-    cfg_scale: float,
-    temperature: float,
-    remasking: str,
-    block_end: int,
-    num_transfer_tokens: torch.Tensor,
-    step_in_block: int,
-) -> tuple[
-    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
-]:
-    """Execute one synchronous diffusion step, mutating x.
-
-    Returns (x, true_conf, transfer_index, x0): the mutated
-    sequence, the per-position softmax confidence of the argmax
-    prediction, the boolean mask of positions revealed this step,
-    and the argmax prediction itself for every position.
-    """
-    mask_index = x == MASK_ID
-
-    logits = _forward_pass(
-        model, x, attention_mask, prompt_index, cfg_scale
-    )
-
-    logits_with_noise = add_gumbel_noise(
-        logits, temperature=temperature
-    )
-    x0 = torch.argmax(logits_with_noise, dim=-1)
-
-    # True per-token confidence: softmax prob of the argmax
-    # prediction. Used for the heatmap regardless of the
-    # remasking strategy.
-    p = F.softmax(logits, dim=-1)
-    true_conf = torch.squeeze(
-        torch.gather(
-            p,
-            dim=-1,
-            index=torch.unsqueeze(x0, -1),
-        ),
-        -1,
-    ).float()
-    if remasking == "low_confidence":
-        x0_p = true_conf.clone()
-    elif remasking == "random":
-        x0_p = torch.rand(
-            (x0.shape[0], x0.shape[1]),
-            device=x0.device,
-        )
-    else:
-        raise NotImplementedError(remasking)
-
-    x0_p[:, block_end:] = -np.inf
-
-    x0 = torch.where(mask_index, x0, x)
-    confidence = torch.where(
-        mask_index, x0_p, -np.inf
-    )
-
-    transfer_index = torch.zeros_like(
-        x0, dtype=torch.bool, device=x0.device
-    )
-    for j in range(confidence.shape[0]):
-        k = int(
-            num_transfer_tokens[j, step_in_block].item()
-        )
-        if k <= 0:
-            continue
-        k = min(k, confidence[j].numel())
-        _, select_index = torch.topk(
-            confidence[j], k=k
-        )
-        transfer_index[j, select_index] = True
-
-    x[transfer_index] = x0[transfer_index]
-    # x0 goes back out as well as into x. It is the model's pick for
-    # every position, settled or not, and the line above keeps only
-    # the few that were revealed this step. The rest are what a
-    # masked position is currently holding out for, and the display
-    # had no way to name them because they stopped here.
-    return x, true_conf, transfer_index, x0
-
-
 async def streaming_generate(
     model: Any,
     tokenizer: Any,
@@ -446,12 +332,19 @@ async def streaming_generate(
         confidence, random state) is appended here so the server can
         support resume-from-frame.
     """
-    assert gen_length % block_length == 0
-    num_blocks = gen_length // block_length
-    assert steps % num_blocks == 0
-    steps_per_block = steps // num_blocks
-
-    total_steps = steps_per_block * num_blocks
+    # The worker validates this before the request reaches here, so
+    # by now a ValueError would be a programmer error rather than bad
+    # input. Called anyway rather than re-derived: one owner for the
+    # arithmetic, and the assert below is its postcondition.
+    schedule = block_schedule(
+        gen_length=gen_length,
+        block_length=block_length,
+        steps=steps,
+    )
+    num_blocks = schedule.num_blocks
+    steps_per_block = schedule.steps_per_block
+    total_steps = schedule.total_steps
+    assert total_steps == steps, "the schedule must spend every step"
 
     encoded = build_llada_inputs(tokenizer, prompt)
     input_ids = encoded["input_ids"].to(model.device)
@@ -533,7 +426,7 @@ async def streaming_generate(
 
             x, step_conf, step_transfer, step_guess = (
                 await asyncio.to_thread(
-                    _diffusion_step,
+                    diffusion_step,
                     x,
                     model,
                     attention_mask,
@@ -725,7 +618,7 @@ async def streaming_resume(
 
         x, step_conf, step_transfer, step_guess = (
             await asyncio.to_thread(
-                _diffusion_step,
+                diffusion_step,
                 x,
                 model,
                 attention_mask,
