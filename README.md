@@ -226,13 +226,32 @@ python3 -m venv .venv-dgemma
 .venv-dgemma/bin/pip install -r requirements-dgemma.txt
 ```
 
-DiffusionGemma is gated on Hugging Face. Accept its license, download the bf16 base, then produce the local 4-bit checkpoint (only the MoE experts are quantized to NF4, which is what makes it fit in 24 GB):
+DiffusionGemma is gated on Hugging Face. Accept its license, then download the bf16 base at a specific commit so the artifact you build can name what it was built from:
 
 ```bash
-.venv-dgemma/bin/python scripts/quantize_diffusiongemma_nf4.py
+.venv-dgemma/bin/huggingface-cli download \
+    google/diffusiongemma-26B-A4B-it \
+    --revision <commit> \
+    --local-dir ~/models/diffusiongemma-26B-A4B-it-bf16
 ```
 
-This writes the NF4 checkpoint to the path referenced by the registry (`~/models/diffusiongemma-26B-A4B-it-nf4`). If you only want LLaDA, you can skip this environment entirely; the model selector will still list DiffusionGemma but activation will fail gracefully with a clear message.
+Then produce the local 4-bit checkpoint (only the MoE experts are quantized to NF4, which is what makes it fit in 24 GB):
+
+```bash
+.venv-dgemma/bin/python scripts/quantize_diffusiongemma_nf4.py \
+    --base-revision <commit>
+```
+
+This writes the NF4 checkpoint to the path referenced by the registry (`~/models/diffusiongemma-26B-A4B-it-nf4`). The build happens in a `.incomplete` sibling directory and is moved into place with a single rename, so an interrupted run never leaves something that looks installed. The finished directory carries an `artifact_manifest.json` naming the base checkpoint and its revision, this repository's commit, and the state dict's size and SHA-256; the app requires that manifest before it treats the checkpoint as present.
+
+If you built this checkpoint before manifests existed, attest it in place rather than rebuilding it. This needs no GPU and no base checkpoint:
+
+```bash
+.venv/bin/python scripts/quantize_diffusiongemma_nf4.py --adopt \
+    --out ~/models/diffusiongemma-26B-A4B-it-nf4
+```
+
+If you only want LLaDA, you can skip this environment entirely; the model selector will still list DiffusionGemma but activation will fail gracefully with a clear message.
 
 **SmolLM3 (`.venv-ar`, transformers >= 4.53), optional:**
 
@@ -414,7 +433,7 @@ The metadata captures the model, prompt, hyperparameters, any remask edits, per-
 - [x] Analytics Suite: model-aware run browser, convergence, timing, confidence, canvas-boundary markers
 - [x] Analytics run deletion (confirmation modal + toast) and contained, toggleable chart tooltips with line burn-through
 - [x] Reproducibility metadata (seed, GPU, app commit, model commit, library versions) and deterministic seeding
-- [x] Hub checkpoints load a pinned commit, recorded per run
+- [x] Pinned model artifacts: Hub checkpoints load a fixed commit, the local quantized checkpoint carries a completion manifest
 - [x] Graceful VRAM handling: pre-flight free-memory check and worker load-error reporting
 - [x] Save runs (metadata, history, final text, GIF) with per-frame timing and confidence
 - [x] Optional desktop app: pywebview native window that owns the server lifecycle (graceful shutdown frees VRAM) plus a Linux app-menu launcher; launching it a second time joins the window already open instead of starting a rival server, since two servers each enforce "one model at a time" over a GPU neither knows it shares and the second load dies of out-of-memory after you have waited for it

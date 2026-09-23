@@ -462,6 +462,11 @@ def _is_downloaded(
     and reporting it as ready would send the user into an activation
     that has to fetch after all.
 
+    A local checkpoint has to carry a manifest. The existence of a
+    directory used to be the whole test, which is why an interrupted
+    quantization could leave a truncated 16 GB state dict that the
+    menu offered as a ready model. The manifest is written last, after
+    every file it names, so having one is the completion signal.
     """
     if is_hub_checkpoint(checkpoint):
         try:
@@ -470,7 +475,54 @@ def _is_downloaded(
             return is_repo_cached(checkpoint, revision=revision)
         except Exception:  # noqa: BLE001 - probe failure: treat as not cached
             return False
-    return Path(checkpoint).expanduser().is_dir()
+    try:
+        from src.inference.artifact_manifest import (
+            is_complete_artifact,
+        )
+
+        return is_complete_artifact(
+            Path(checkpoint).expanduser()
+        )
+    except Exception:  # noqa: BLE001 - probe failure: treat as absent
+        return False
+
+
+def _validate_local_artifact(info: ModelInfo, path: Path) -> None:
+    """Refuse a local checkpoint that cannot attest it is complete.
+
+    Raised before any eviction, like every check around it, so
+    discovering this costs nothing that was already loaded.
+
+    The message names the command that fixes each case, because
+    neither is guessable. A directory built before manifests existed
+    is attested in place, with no rebuild and no GPU; a directory left
+    behind by an interrupted build cannot be repaired and has to be
+    built again. Telling the user only that something is wrong with a
+    16 GB directory would leave the two indistinguishable.
+    """
+    from src.inference.artifact_manifest import (
+        is_complete_artifact,
+        read_manifest,
+    )
+
+    if is_complete_artifact(path):
+        return
+    if read_manifest(path) is None:
+        raise ActivationRefused(
+            f"{info.display_name} at {path} has no artifact"
+            " manifest, so there is no way to tell a finished"
+            " build from an interrupted one. If this checkpoint"
+            " works, attest it in place with:"
+            " .venv/bin/python"
+            " scripts/quantize_diffusiongemma_nf4.py --adopt"
+            f" --out {path}"
+        )
+    raise ActivationRefused(
+        f"{info.display_name} at {path} is incomplete: its"
+        " manifest does not match what is on disk, which is what"
+        " an interrupted build leaves behind. Remove the"
+        " directory and build it again."
+    )
 
 
 def _describe_no_space(
@@ -844,6 +896,7 @@ class ModelManager:
                     f"{info.display_name} checkpoint not found"
                     f" at {path}."
                 )
+            _validate_local_artifact(info, path)
         self._validate_headroom(info, device)
         return python
 

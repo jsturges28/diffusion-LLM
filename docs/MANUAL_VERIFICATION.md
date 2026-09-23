@@ -2840,7 +2840,7 @@ change is that nothing observable moves.
     out-of-memory report comes from torch, runs past the window on its
     own, and keeps its numbers at the end where the clip lands.
 
-## Pinned model revisions (TRUST-03)
+## Pinned and attested artifacts (TRUST-03)
 
 284. **The two Hub models still activate, and load no slower.**
     *Confirmed.* Both now name a commit, and the commit is the one
@@ -2848,15 +2848,56 @@ change is that nothing observable moves.
     If either one ever starts downloading, the pin no longer matches
     what is on disk and the sha in `src/backends/registry.py` is
     wrong.
-285. **A saved run records the model's commit.** *Confirmed.* A
+285. **The existing DiffusionGemma checkpoint is attested.**
+    *Done on the maintainer's machine, 23 Sep 2026.* Until it was,
+    the menu reported DiffusionGemma as not downloaded and activating
+    it was refused, because a directory is no longer taken as proof a
+    build finished. Digesting the 17.5 GiB state dict took 16
+    seconds, not the minute estimated:
+
+        .venv/bin/python scripts/quantize_diffusiongemma_nf4.py \
+            --adopt --out ~/models/diffusiongemma-26B-A4B-it-nf4
+
+    `artifact_manifest.json` now sits in that directory naming the
+    state dict's size and sha256, and both `_is_downloaded` and the
+    activation pre-flight accept it. Worth re-running only if that
+    checkpoint is ever rebuilt or replaced.
+
+    Two bugs surfaced here, both from running the documented command
+    rather than from writing it. The script imported DiffusionGemma's
+    model class and `bitsandbytes` at module scope, so `--adopt` in
+    `.venv` failed on `ImportError` before parsing its arguments,
+    which defeated the entire point of an escape hatch that needs no
+    GPU. And it never put the repository root on `sys.path`, so `src`
+    was not importable when run as a file. Both are fixed and the
+    first is now covered by a test that fails if CUDA is so much as
+    consulted during adoption.
+
+    The directory is owned by `root` on this machine, so the manifest
+    is too. That is fine, since the app only reads it, but a rebuild
+    as an ordinary user would want the ownership sorted out first.
+286. **An un-attested directory is refused, and says how to fix it.**
+    *Verified against the real checkpoint before item 285 ran*, which
+    was exactly this state. `_is_downloaded` returned False and
+    activation refused with a message naming `--adopt` and the path.
+    Automated in `tests/web/test_activation_validation.py`.
+287. **A truncated artifact is refused too.**
+    *Verified*, using the real manifest with a short state dict
+    rather than damaging the 17.5 GiB file, which is precisely what
+    the size check sees: a manifest claiming 18,818,622,412 bytes
+    against 3,000 on disk. It correctly took the other branch,
+    telling the user to rebuild rather than to adopt, since adopting
+    a truncated directory would attest the damage. Automated in
+    `tests/inference/test_artifact_manifest.py`.
+288. **A saved run records the model's commit.** *Confirmed.* A
     "Model commit" row of twelve hex characters below Model, with the
     Model row still showing the repo name rather than a cache path,
     and no row at all on older runs.
-286. **Offline activation still works, now pinned.** *Confirmed.*
+289. **Offline activation still works, now pinned.** *Confirmed.*
     This is TRUST-02's offline test re-run, because the revision now
     reaches the same calls `local_files_only` does and a wrong one
     would fail here first.
-287. **The space pre-flight.** *Exercised against this machine's real
+290. **The space pre-flight.** *Exercised against this machine's real
     filesystem*, with only the repository size synthetic: real
     `disk_usage` on the real cache directory (142.2 GiB free), real
     subtraction of the 14.9 GiB of LLaDA blobs already there. A
@@ -2871,3 +2912,20 @@ change is that nothing observable moves.
     18 GiB free, point `HF_HOME` at it and ask the menu to download a
     model; it should refuse at once rather than downloading for
     twenty minutes and failing with `[Errno 28]`.
+291. **A rebuild stages and promotes.** *The failure paths are now
+    automated* in `tests/inference/test_quantize_staging.py`, which
+    drives the script's real `main()` with only the GPU phase
+    stubbed: a Ctrl-C, a CUDA error and a full disk each leave no
+    destination and no staging directory, a stale staging directory
+    from a hard kill is discarded, and a finished build appears in
+    one step. Reproducing "killed during the save" four ways is not
+    something to ask of a twenty-minute GPU job.
+
+    That leaves one thing worth doing on hardware, once, whenever the
+    checkpoint is next rebuilt: a real end-to-end run, to confirm the
+    quantization itself still produces a loadable model through the
+    staging path. The bf16 base is still present, and there is room
+    for a second copy. Writing the tests found a defect the automated
+    pass would otherwise have missed: refusing on space left an empty
+    `.incomplete` directory behind, which the next run announced as
+    stale when nothing had ever been staged in it.

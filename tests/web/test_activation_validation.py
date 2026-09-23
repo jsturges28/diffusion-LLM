@@ -112,6 +112,24 @@ def _interpreters_exist(
     monkeypatch.setattr(Path, "is_dir", lambda self: True)
 
 
+@pytest.fixture(autouse=True)
+def _local_artifact_is_complete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One impossibility per test, and this is not it.
+
+    A local checkpoint has to attest completeness now, which every
+    case below would otherwise trip over on its way to the thing it
+    is actually about. The artifact check has its own tests at the
+    bottom of this file.
+    """
+    from src.inference import artifact_manifest
+
+    monkeypatch.setattr(
+        artifact_manifest, "is_complete_artifact", lambda p: True
+    )
+
+
 def _resident() -> Harness:
     harness = Harness()
     asyncio.run(harness.make_resident())
@@ -188,6 +206,95 @@ def test_a_missing_local_checkpoint_evicts_nothing(
             )
         )
 
+    harness.assert_undisturbed()
+
+
+def test_an_unattested_local_artifact_evicts_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A directory is not evidence a build finished.
+
+    This is the case the finding names: an interrupted quantization
+    left a truncated 16 GB state dict in a directory the menu read as
+    an installed model, and the load discovered it minutes later,
+    after the resident model had already been unloaded for it.
+    """
+    from src.inference import artifact_manifest
+
+    harness = _resident()
+    monkeypatch.setattr(
+        artifact_manifest, "is_complete_artifact", lambda p: False
+    )
+    monkeypatch.setattr(
+        artifact_manifest, "read_manifest", lambda p: None
+    )
+
+    with pytest.raises(RuntimeError, match="no artifact manifest"):
+        asyncio.run(
+            harness.manager.activate(
+                "diffusiongemma", device="cuda"
+            )
+        )
+
+    harness.assert_undisturbed()
+
+
+def test_the_refusal_names_the_command_that_fixes_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A working checkpoint from before manifests existed must not
+    have to be rebuilt, and nobody would guess the flag."""
+    from src.inference import artifact_manifest
+
+    harness = _resident()
+    monkeypatch.setattr(
+        artifact_manifest, "is_complete_artifact", lambda p: False
+    )
+    monkeypatch.setattr(
+        artifact_manifest, "read_manifest", lambda p: None
+    )
+
+    with pytest.raises(RuntimeError) as caught:
+        asyncio.run(
+            harness.manager.activate(
+                "diffusiongemma", device="cuda"
+            )
+        )
+
+    assert "--adopt" in str(caught.value)
+
+
+def test_a_mismatched_manifest_says_to_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pair to the test above, and a different remedy.
+
+    A manifest that is present but does not describe what is on disk
+    means the build was interrupted after the manifest somehow, or the
+    weights were replaced. Adoption cannot fix that, so saying
+    "--adopt" here would send the user to attest a broken directory.
+    """
+    from src.inference import artifact_manifest
+
+    harness = _resident()
+    monkeypatch.setattr(
+        artifact_manifest, "is_complete_artifact", lambda p: False
+    )
+    monkeypatch.setattr(
+        artifact_manifest,
+        "read_manifest",
+        lambda p: {"manifest_version": 1},
+    )
+
+    with pytest.raises(RuntimeError, match="incomplete") as caught:
+        asyncio.run(
+            harness.manager.activate(
+                "diffusiongemma", device="cuda"
+            )
+        )
+
+    assert "--adopt" not in str(caught.value)
+    assert "build it again" in str(caught.value)
     harness.assert_undisturbed()
 
 

@@ -366,7 +366,7 @@ on real hardware.
 | ROADMAP-01 | high | M | done | none | Family, shape and devices split apart; per-device memory skipped, see Deviations |
 | ROADMAP-05 | high | M | done | none | One text adapter per model; `input_mode` became a fourth axis, see entry |
 | ROADMAP-02 | medium | M | done | none | Context half landed too: an unrunnable prompt is refused and the count is off the event loop |
-| TRUST-03 | high | L | ready | none | Offline slice only: Load cached weights without asking the Hub |
+| TRUST-03 | high | L | done | none | Both Hub models pinned to a commit, local artifact carries a manifest; branch-move case unverifiable, see entry |
 | DEPS-01 | medium | L | ready | none | |
 | ROADMAP-03 | high | L | ready | none | Owns the signal axis ROADMAP-01 left alone |
 | ORG-03 | medium | M | ready | none | |
@@ -1049,11 +1049,154 @@ returns, since a successful return already means every file is present. Plus
 actually shows a connectivity failure, so a 403 or a full disk keeps its own
 message rather than being relabelled as an offline problem.
 
-**Still open for this finding**, and unchanged by the slice: pinned source
-revisions in the registry, resolved revisions and weight digests in run
+**Still open after the slice**, and now closed by the main pass below: pinned
+source revisions in the registry, resolved revisions and weight digests in run
 provenance, cache-space preflight against remaining bytes, and a completion
 manifest for the locally quantized DiffusionGemma artifact. The slice deals
 with availability only.
+
+#### The main pass
+
+**`revision` is optional on `ModelInfo`, and the registry asserts when it must
+not be.** Making it required would have forced a value for DiffusionGemma,
+whose checkpoint is a local directory with no commit to name, and the only
+values available there are lies: a sentinel nobody can resolve, or the base
+model's commit, which is not what the artifact is. So `None` means "not a Hub
+artifact", and a module-level loop in `registry.py` asserts the invariant that
+actually holds: every Hub checkpoint declares a revision, and every local one
+declares none. The two-sided form matters as much as the first half. Without
+it, someone converting DiffusionGemma to a Hub id later would silently skip the
+pinning requirement.
+
+**The two shas are the ones already in the cache.** Read from
+`refs/main` on the maintainer's machine rather than from the Hub, so pinning
+changed nothing about what loads today. It is a record of what has been
+running, which also means it cannot be the cause of a regression: if activation
+breaks after this, the cause is the plumbing and not the pin.
+
+**`revision` had to reach the cache-hit path, not just the fetch.** The easy
+version of this change pins `snapshot_download` in the slow path and stops
+there, which would be a pin that stops applying the moment it starts working:
+after the first download every activation takes the fast return. `is_repo_cached`
+also had to take it, because "is this repo cached" and "is this commit cached"
+are different questions, and answering the first for the second would report a
+different commit's files as this model's and then fail offline, where the user
+cannot fix it. `tests/inference/test_hf_download.py` tests the fast path first
+for that reason.
+
+**Provenance records what was resolved, not what was requested.** The worker
+reads the commit back off the snapshot path the cache returned
+(`revision_from_snapshot`), which costs nothing and needs no network. A first
+attempt asserted that the resolved commit equalled the pinned one; that was
+wrong, and is the case this field is most useful for. A revision may name a
+branch or a tag, which resolves to a snapshot directory named for the commit
+behind it, so the assertion would have crashed exactly where reading it back
+earns its keep. The worker now asserts only that a commit was resolved at all.
+
+**`name_or_path` deliberately still shows the repo name.** The early slice
+deferred passing the snapshot path because it would put a long cache path where
+`GSAI-ML/LLaDA-8B-Instruct` used to be in every saved run and in the Analytics
+panel. That reasoning still holds, so the commit is recorded as its own field,
+`reproducibility.model_revision`, shown as a separate "Model commit" row
+abbreviated to twelve characters. The name says which model, the commit says
+which version of it, and they answer different questions.
+
+**Runs saved before this have `model_revision: ""`, not a guessed value.** The
+field is not required on `RunProvenance` and the supervisor never fills it in
+from whatever is resident. Guessing would produce a record that looks like
+proof and is not, which is the failure mode the whole DATA-04 family of
+findings is about; empty is honest.
+
+**The space pre-flight refuses on remaining bytes, not repository size.** A
+resumed download already has some of itself on disk, so checking the full
+figure would refuse a fetch that fits. It skips entirely when Hub metadata is
+unreadable, because `repo_total_bytes` returns 0 there and a check against 0
+passes every time while looking like it ran; refusing on a number nobody read
+would block a download that fits, offline, with no way to see why. The 1 GiB
+reserve is not about the download: the cache shares a filesystem with the
+user's home directory, so filling it to the last byte takes the desktop session
+down too.
+
+**The quantize script stages, and the manifest is written last.** That ordering
+is the completion signal, so writing the manifest first would be the same lie
+the bare directory was. The staging directory is a sibling of the destination
+rather than somewhere under `/tmp`, because the promotion is a rename and a
+rename is only atomic within one filesystem; staging elsewhere would turn the
+atomic step into a 16 GB copy and reintroduce the half-written state it exists
+to avoid. A stale staging directory is discarded rather than resumed: there is
+no way to tell how far a killed `torch.save` got, and a partial file that
+happened to be the right length would be indistinguishable from a good one.
+
+**`is_complete_artifact` checks size, not the digest.** The digest is recorded
+at build time and hashing 16 GB takes about a minute, which is acceptable once
+and not acceptable on every menu render. Size is what a save that was killed or
+ran out of disk gets wrong, and it costs one stat.
+
+**`--adopt` exists so nobody rebuilds 16 GB for a 1 KB record.** Requiring a
+manifest would otherwise have marked the maintainer's working NF4 checkpoint as
+not downloaded, with a twenty-minute GPU-bound rebuild as the only remedy.
+Adoption digests the weights that are there, needs no GPU and no base
+checkpoint, and is named in the refusal message, because nobody would guess the
+flag. It is honest about its limit: it cannot detect a directory that was
+already truncated. Nothing can, after the fact, which is why new builds stage.
+
+**The refusal messages are two, not one.** No manifest means "attest it in
+place, here is the command"; a manifest that disagrees with the disk means
+"remove it and build again". Collapsing them would send a user to adopt a
+broken directory, which would attest the truncation rather than find it.
+
+**One test-harness gap was worth fixing rather than working around.**
+`tests/web/static/dom_stub.js` returned `""` from every `innerHTML` read, which
+made `analytics.js`'s `escHtml` return `""` for every input. Every label and
+value the Analytics panel renders was therefore untestable, and a test could
+only assert that a row was absent. The getter now serializes appended text
+nodes with a browser's escaping. It is the only `innerHTML` read in any page
+script, and all 381 browser tests pass unchanged.
+
+**The branch-move verification case cannot be run here.** The finding's
+Verification asks to "move a Hub branch after caching", which needs write
+access to a Hub repository the maintainer does not own. What the pin gives is
+tested instead by construction: every load names a full sha, and a sha is not a
+branch, so there is no pointer left for a branch move to redirect. The
+observable consequence, that a moved branch no longer changes what loads, is
+recorded as unverifiable rather than quietly dropped.
+
+**`--adopt` was shipped unrunnable, and the verification pass is what found
+it.** The script imported `DiffusionGemmaForBlockDiffusion` and, through
+`dgemma_nf4`, `bitsandbytes` at module scope. Both need `.venv-dgemma`, while
+the whole premise of adoption is that it runs in `.venv` with no GPU, so the
+documented command failed on `ImportError` before parsing its arguments. It also
+never put the repository root on `sys.path`, so `src` was not importable when
+the file was run directly, a second failure hidden behind the first. Both
+imports moved inside `stage_artifact`, which is the only function that needs
+them, and the `sys.path` bootstrap copies `scripts/measure_frame_payload.py`.
+
+The lesson is narrower than "test more". Both defects were invisible to every
+form of checking done before handing the work back: the module imports fine in
+`.venv-dgemma`, the unit tests never import the script, and lint has no opinion
+about which environment an import needs. What found them was running the command
+exactly as written in the documentation. There is now a test asserting adoption
+never so much as consults `torch.cuda.is_available`, which fails if either
+import creeps back to module scope.
+
+**Writing the staging tests found a third defect.** The early space check ran
+after `staging.mkdir()` and outside the cleanup, so refusing on space left an
+empty `.incomplete` directory that the next run announced as stale when nothing
+had ever been staged in it. Benign, but it is the kind of residue this finding
+is about. The check moved before the `mkdir`, which works because `free_bytes`
+walks up to the nearest existing ancestor: the same behaviour that lets it
+measure a cache directory for a model never fetched.
+
+**The interrupt cases are automated rather than manual, which the plan already
+called for.** `tests/inference/test_quantize_staging.py` drives the real
+`main()` with only the GPU phase stubbed, so the staging directory, the
+pre-flight checks, the cleanup and the rename are all the script's own. A
+Ctrl-C, a CUDA failure and a full disk are parametrised separately because they
+arrive as different base classes, and `KeyboardInterrupt` does not inherit from
+`Exception`: the obvious `except Exception` would let the single most likely
+real-world ending through untouched, and mutating the clause to that does fail
+two of these tests. One real end-to-end build is still worth doing whenever the
+checkpoint is next rebuilt, which is all the plan asked hardware for.
 
 ### LIFE-06
 
