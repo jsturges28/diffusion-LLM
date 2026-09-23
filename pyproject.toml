@@ -12,7 +12,7 @@ line-length = 70
 
 [tool.ruff]
 line-length = 70
-target-version = "py311"
+target-version = "py312"
 extend-exclude = [".venv", ".venv-dgemma", ".venv-ar", "results"]
 
 [tool.ruff.lint]
@@ -31,3 +31,164 @@ max-complexity = 10
 
 [tool.ruff.lint.pylint]
 max-nested-blocks = 3
+
+
+# ---------------------------------------------------------------------
+# Environments
+#
+# The authoritative record of what this project depends on, and the
+# only place a dependency is chosen. Each table below names one virtual
+# environment, lists the packages that environment is actually asked
+# for, and points at the lock file generated from that list by
+# `scripts/lock_environments.py`.
+#
+# Why a `[tool.*]` table and not `[project.optional-dependencies]`.
+# Extras have to co-resolve inside one project, so they cannot hold
+# `transformers==4.38.2` and `transformers==5.13.0` at the same time.
+# That is this project's defining constraint, which makes extras the
+# one shape that cannot express it. These environments are resolved
+# independently instead, which is why there is still no `[project]`
+# table here: nothing about this repo is a single resolvable unit.
+#
+# The lists are direct requirements only. Everything transitive lives
+# in the generated locks, with hashes, so this file answers "what did
+# we ask for" and the locks answer "what did that produce".
+# ---------------------------------------------------------------------
+
+[tool.diffusion-llm]
+# The one Python these environments are built and tested against. Not
+# a floor: 3.12 is what all three are running and the only version any
+# of this has been exercised on, and claiming a range nobody has tried
+# would be a promise rather than a record.
+python-version = "3.12"
+# Recorded because it was previously unknowable. No package here needs
+# a PyTorch-specific index; the CUDA wheels torch depends on come from
+# PyPI, which is worth stating so nobody reintroduces a second index
+# looking for them.
+index = "https://pypi.org/simple"
+
+[tool.diffusion-llm.environments.core]
+description = "Supervisor, LLaDA worker, test suite, tooling"
+path = ".venv"
+lock = "requirements.txt"
+requirements = [
+    # Needed for `device_map="auto"` in the LLaDA worker, which is a
+    # runtime dependency with no import to prove it.
+    "accelerate",
+    # Not used to format anything. Its 70-column table above is what
+    # stops a stray `black .` reflowing the whole tree, and the tool
+    # has to be present for the table to mean anything.
+    "black",
+    "fastapi",
+    # The test client's transport.
+    "httpx",
+    "huggingface_hub",
+    "numpy",
+    # GIF rendering in `src/inference/render_gif.py`.
+    "pillow",
+    "pydantic",
+    "pytest",
+    "ruff",
+    # Imported directly by the web tests for its response types.
+    "starlette",
+    "torch",
+    "transformers",
+    # The locker itself, pinned because a different resolver version
+    # could produce a different lock from the same list.
+    "uv",
+    "uvicorn",
+    # Named individually rather than through `uvicorn[standard]`.
+    # uvicorn runs with `loop="auto"` and `http="auto"`, so it selects
+    # these two whenever they are importable: dropping them would not
+    # be a tidy-up, it would quietly move the supervisor back to the
+    # asyncio event loop and the pure-Python HTTP parser. The
+    # `standard` extra would also drag in watchfiles and python-dotenv
+    # for `--reload` and `--env-file`, which nothing here uses, and it
+    # pins watchfiles to a version this environment does not have.
+    # The worker environments keep plain uvicorn, because that is what
+    # they were built with.
+    "httptools",
+    "uvloop",
+    # uvicorn's WebSocket backend. Plain uvicorn does not require it,
+    # and this app is mostly WebSocket, so it has to be asked for.
+    "websockets",
+]
+
+[tool.diffusion-llm.environments.dgemma]
+description = "DiffusionGemma worker only (transformers v5)"
+path = ".venv-dgemma"
+lock = "requirements-dgemma.txt"
+# Before changing this list, run
+#   ldd .venv-dgemma/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so
+# and look for "not found". torch loads CUDA libraries dynamically, so a
+# dependency graph cannot tell you what it needs, and the CUDA 12 and
+# CUDA 13 wheels here own overlapping file paths: uninstalling a cu12
+# package deletes libraries the cu13 package also claims and leaves its
+# metadata looking healthy. That is how pruning this environment once
+# produced a worker that satisfied its lock and could not import torch.
+requirements = [
+    "accelerate",
+    "bitsandbytes",
+    "fastapi",
+    "huggingface_hub",
+    "numpy",
+    # Declared even though no import and no package requires it.
+    # transformers lists pillow and protobuf as optional extras and
+    # reaches for them at runtime: protobuf when converting a
+    # SentencePiece tokenizer, pillow for image preprocessing. This
+    # checkpoint's config carries a full `vision_config`, so a resolve
+    # that dropped them would produce an environment that installs
+    # cleanly and fails when the model loads.
+    "pillow",
+    "protobuf",
+    "pydantic",
+    "sentencepiece",
+    "torch",
+    "transformers",
+    "uvicorn",
+    "websockets",
+]
+
+[tool.diffusion-llm.environments.ar]
+description = "SmolLM3 autoregressive worker only"
+path = ".venv-ar"
+lock = "requirements-ar.txt"
+requirements = [
+    "accelerate",
+    "fastapi",
+    "huggingface_hub",
+    "numpy",
+    "pydantic",
+    "torch",
+    "transformers",
+    "uvicorn",
+    "websockets",
+]
+
+[tool.diffusion-llm.environments.desktop]
+description = "Optional native window, installed on top of core"
+# No `path`: this is an overlay into core's environment rather than an
+# environment of its own. Recorded because a tool that synced core
+# alone would remove pywebview and Qt without anything looking wrong.
+extends = "core"
+lock = "requirements-desktop.txt"
+requirements = [
+    "pywebview[qt]",
+    # Both backends, because the launcher uses both. Qt is preferred
+    # for smoother compositing, and `desktop.py` imports
+    # `gi.repository` to set the Wayland app_id, falling back to GTK
+    # when Qt is absent. The GTK half also needs system WebKitGTK
+    # libraries, which pip cannot install; the README says so.
+    "pywebview[gtk]",
+    # Qt itself, pinned at the versions the native window has
+    # actually been run with. These are transitive through
+    # pywebview[qt], and the file this replaced pinned only pywebview,
+    # so they were the one part of this project free to move on any
+    # reinstall. A fresh resolve picks 6.11.2 and 13.12.0, which may
+    # well be fine and has never been opened once: the sandbox has no
+    # display, so an upgrade here cannot be verified in the same pass
+    # that makes it. Raise them deliberately, with the window open.
+    "pyqt6-qt6==6.11.1",
+    "pyqt6-sip==13.11.1",
+    "pyqt6-webengine-qt6==6.11.1",
+]

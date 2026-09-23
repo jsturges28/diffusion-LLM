@@ -207,7 +207,14 @@ The contract lives in `src/backends/`:
 
 **Platform.** This app is currently built and tested only on **Ubuntu 24.04** (Linux). The desktop app, launcher script, and GPU/VRAM tooling assume a Linux environment, so other operating systems are unsupported for now; broader cross-OS support (Windows, macOS) is a future goal, not a current guarantee.
 
-Requires Python 3.10+ and a CUDA GPU. The two models live in separate virtual environments because of their conflicting `transformers` versions.
+Requires **Python 3.12** and a CUDA GPU. The three models live in separate virtual environments because of their conflicting `transformers` versions, which is why there is no single project interpreter and no single requirements file.
+
+What each environment depends on is declared in one place, `[tool.diffusion-llm]` in [`pyproject.toml`](pyproject.toml): one table per environment listing only the packages that environment is actually asked for. The `requirements*.txt` files below are generated from those lists by `scripts/lock_environments.py`, which resolves each environment independently and writes every transitive pin with a SHA-256 hash. Install from the generated files as usual; regenerate them only when you change a requirements list:
+
+```bash
+.venv/bin/python scripts/lock_environments.py            # verify, offline
+.venv/bin/python scripts/lock_environments.py --update   # resolve and write
+```
 
 **Supervisor and LLaDA (`.venv`, transformers 4.38.2):**
 
@@ -434,6 +441,7 @@ The metadata captures the model, prompt, hyperparameters, any remask edits, per-
 - [x] Analytics run deletion (confirmation modal + toast) and contained, toggleable chart tooltips with line burn-through
 - [x] Reproducibility metadata (seed, GPU, app commit, model commit, library versions) and deterministic seeding
 - [x] Pinned model artifacts: Hub checkpoints load a fixed commit, the local quantized checkpoint carries a completion manifest
+- [x] One declared dependency manifest per environment, locked with hashes and guarded against drift
 - [x] Graceful VRAM handling: pre-flight free-memory check and worker load-error reporting
 - [x] Save runs (metadata, history, final text, GIF) with per-frame timing and confidence
 - [x] Optional desktop app: pywebview native window that owns the server lifecycle (graceful shutdown frees VRAM) plus a Linux app-menu launcher; launching it a second time joins the window already open instead of starting a rival server, since two servers each enforce "one model at a time" over a GPU neither knows it shares and the second load dies of out-of-memory after you have waited for it

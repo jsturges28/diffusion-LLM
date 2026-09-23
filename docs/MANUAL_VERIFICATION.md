@@ -2929,3 +2929,91 @@ change is that nothing observable moves.
     pass would otherwise have missed: refusing on space left an empty
     `.incomplete` directory behind, which the next run announced as
     stale when nothing had ever been staged in it.
+
+## Declared environments (DEPS-01)
+
+292. **All three models still activate after the core prune.**
+    `.venv` went from 119 installed distributions to 84, dropping 35
+    the locks no longer want: the `datasets` and `tensorboard` trees,
+    `tiktoken`, `einops`, `rich`, the `typer` trio, and `watchfiles`
+    plus `python-dotenv` which only serve uvicorn's `--reload` and
+    `--env-file`. The full suite, the ratchet and all 381 browser
+    tests were re-run afterwards and pass, but nothing in the suite
+    loads a model, so activate LLaDA and SmolLM3 once to confirm.
+
+    Two packages were nearly removed and should not be: `uvloop` and
+    `httptools`. uvicorn runs with `loop="auto"` and `http="auto"`, so
+    it picks both up whenever they are importable, and dropping them
+    would have quietly moved the supervisor back to the asyncio event
+    loop and the pure-Python HTTP parser. They are now declared.
+293. **The desktop window still opens.** The overlay lives in the same
+    environment the prune touched, and `pygobject` and `pycairo` were
+    on the first cut of the remove list before `desktop.py:229` turned
+    out to import `gi.repository` for the Wayland app_id. Both are now
+    declared, and the Qt packages are pinned at the versions the
+    window has actually run with (6.11.1, not the 6.11.2 a fresh
+    resolve picks), because a display is the one thing the sandbox
+    cannot check.
+294. **The DiffusionGemma environment is pruned, and the uninstall
+    needs a second step.** *Done and repaired, 23 Sep 2026.*
+    `.venv-dgemma` is now 4.9 GiB, down from 7.2, and matches its lock
+    exactly: 17 packages gone, no extras, no version drift.
+
+    The first attempt broke the worker, and the reason is worth
+    keeping. The CUDA 12 and CUDA 13 wheels **share file paths**:
+    `nvidia-cudnn-cu12` and `nvidia-cudnn-cu13` both own
+    `nvidia/cudnn/lib/libcudnn.so.9`, and the same holds for nccl and
+    cusparselt. Uninstalling the cu12 package deletes the shared file,
+    leaving the cu13 package's metadata intact and its library gone.
+    The worker then failed at `import torch` with "libcudnn.so.9:
+    cannot open shared object file", which the menu reported only as
+    "worker exited during startup (code 1)".
+
+    So the prune is two steps, not one. Uninstall, then restore the
+    three collided files:
+
+        .venv-dgemma/bin/pip uninstall -y \
+            nvidia-cublas-cu12 nvidia-cuda-cupti-cu12 \
+            nvidia-cuda-nvrtc-cu12 nvidia-cuda-runtime-cu12 \
+            nvidia-cudnn-cu12 nvidia-cufft-cu12 nvidia-cufile-cu12 \
+            nvidia-curand-cu12 nvidia-cusolver-cu12 \
+            nvidia-cusparse-cu12 nvidia-cusparselt-cu12 \
+            nvidia-nccl-cu12 nvidia-nvjitlink-cu12 nvidia-nvtx-cu12 \
+            compressed-tensors loguru wheel
+
+        .venv-dgemma/bin/pip install --force-reinstall --no-deps \
+            nvidia-cudnn-cu13==9.20.0.48 \
+            nvidia-nccl-cu13==2.29.7 \
+            nvidia-cusparselt-cu13==0.8.1
+
+    `--no-deps` matters: without it, cuDNN drags `nvidia-cublas-cu12`
+    back in and costs most of what the prune saved, for a library
+    torch does not use. Check the result with
+    `ldd .venv-dgemma/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so`
+    and look for "not found"; that is the check that would have caught
+    this before a model load.
+
+    What still wants doing on hardware is the generation itself. The
+    stack imports and links cleanly here, but the sandbox has no GPU,
+    so activate DiffusionGemma and generate once. `pillow` and
+    `protobuf` are the pair to suspect if it fails on an import: both
+    are kept deliberately despite nothing declaring them, because
+    transformers reaches for protobuf when converting a SentencePiece
+    tokenizer and pillow for image preprocessing, and this
+    checkpoint's config has a full `vision_config`.
+
+    Recovery is `git show HEAD:requirements-dgemma.txt > /tmp/old.txt`
+    then installing that, **not** the current lock: the lock no longer
+    names the pruned packages, so installing it reports everything
+    already satisfied and repairs nothing. That wrong instruction was
+    in this item on the first pass.
+295. **A hashed install works at all.** The locks now carry SHA-256
+    for every pin, which makes pip strict: one unhashed requirement
+    anywhere in a file fails the whole install. Worth proving once on
+    a throwaway environment rather than discovering it during a
+    rebuild:
+
+        python3 -m venv /tmp/lock-probe
+        /tmp/lock-probe/bin/pip install -r requirements-ar.txt
+
+    It should install and verify. This is the smallest of the four.

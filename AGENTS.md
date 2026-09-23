@@ -28,10 +28,21 @@ you are running, and always invoke it by path.
 - `.venv-ar`: SmolLM3 autoregressive worker only (`transformers` >= 4.53,
   CUDA torch wheel that also runs on CPU). Use `.venv-ar/bin/python`.
 
-Dependency files: `requirements.txt` (core `.venv`), `requirements-dgemma.txt`
-(the DiffusionGemma env), `requirements-ar.txt` (the SmolLM3 env),
-`requirements-desktop.txt` (optional `pywebview[qt]` desktop add-on for
-`.venv`). Pin versions; do not install to system/user Python.
+**Dependencies are declared in one place and the lock files are generated.**
+`[tool.diffusion-llm]` in `pyproject.toml` holds one table per environment,
+listing only that environment's direct requirements plus its Python version,
+index and interpreter. The four lock files, `requirements.txt` (core `.venv`),
+`requirements-dgemma.txt`, `requirements-ar.txt` and
+`requirements-desktop.txt` (the desktop add-on, an overlay into `.venv`), are
+written by `scripts/lock_environments.py` with every transitive pin hashed.
+
+- Add or remove a dependency by editing the manifest, then run
+  `.venv/bin/python scripts/lock_environments.py --update`. Never hand-edit a
+  lock: each one carries a digest of the manifest entry that produced it, and
+  `tests/test_lock_environments.py` fails when they disagree.
+- Regeneration is constrained by the lock it replaces, so it cannot move a
+  version. Upgrading is a deliberate act, not a side effect of tidying.
+- Install to an environment by path; never to system or user Python.
 
 ## Models and hardware
 
