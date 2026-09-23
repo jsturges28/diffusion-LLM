@@ -40,6 +40,8 @@ RUN_TOKENIZER: Dict[str, Any] = {
     "model_vocab_size": 126_464,
 }
 RUN_VERSIONS = {"torch": "2.4.0", "transformers": "4.38.2"}
+# The commit the run's weights came from.
+SHA = "08b83a6feb34df1a6011b80c3c00c7563e963b07"
 
 # What the supervisor thinks is going on: a different model, on a
 # different device, in a different environment.
@@ -151,6 +153,46 @@ def test_every_provenance_field_moves_together(
     assert meta["reproducibility"]["tokenizer"] == RUN_TOKENIZER
     assert meta["context"]["context_length"] == 4_096
     assert meta["model"] == "GSAI-ML/LLaDA-8B-Instruct"
+
+
+def test_the_model_commit_is_recorded_beside_the_app_s(
+    switched_supervisor: None,
+) -> None:
+    """Half the inputs to a run are the weights, and the block used
+    to name only the code. A reader with the app commit and the seed
+    still cannot reproduce a run whose checkpoint has moved."""
+    meta = _build_metadata(
+        _request(provenance=_provenance(revision=SHA))
+    )
+
+    block = meta["reproducibility"]
+    assert block["model_revision"] == SHA
+    # The repo name stays where users look for it; the commit is an
+    # addition rather than a replacement.
+    assert meta["model"] == "GSAI-ML/LLaDA-8B-Instruct"
+
+
+def test_a_run_from_before_pinning_reports_no_commit(
+    switched_supervisor: None,
+) -> None:
+    """Negative space, and the reason the field is not required:
+    every run already on disk has no commit to name, and empty says
+    that honestly rather than inventing the current one."""
+    meta = _build_metadata(_request())
+
+    assert meta["reproducibility"]["model_revision"] == ""
+
+
+def test_an_unattested_run_claims_no_commit(
+    switched_supervisor: None,
+) -> None:
+    """The supervisor must not fill this in from whatever is
+    resident. That is the substitution this whole file exists to
+    prevent, and a commit is the worst field to guess at: it would
+    look like proof."""
+    meta = _build_metadata(_request(provenance=None))
+
+    assert meta["reproducibility"]["model_revision"] == ""
 
 
 def test_the_record_says_whether_it_was_attested(

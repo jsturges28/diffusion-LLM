@@ -415,6 +415,13 @@ def provenance_envelope(backend: Backend) -> Dict[str, Any]:
             getattr(backend, "model", None),
         ),
     }
+    # The commit, alongside the repo name rather than folded into it.
+    # ``checkpoint`` is what the user recognises and what the menu
+    # shows; the commit is what makes the name mean one thing. Omitted
+    # rather than null for a local checkpoint, matching
+    # ``context_length`` below, so a reader's key check is enough.
+    if backend.loaded_revision is not None:
+        envelope["revision"] = backend.loaded_revision
     # Omitted rather than null when unreadable, matching /health, so
     # a consumer's "is there a ceiling" test stays a plain key check.
     context = describe_context_length(
@@ -469,6 +476,14 @@ class Backend(ABC):
     # its timings should be read against. None means ``load`` has not
     # finished, or a backend has not been taught to say.
     effective_device: Optional[str] = None
+    # The commit the weights were actually read from, set by ``load``
+    # from the snapshot path the cache returned. Kept beside
+    # ``effective_device`` because it is the same kind of fact: what
+    # the run got, rather than what it asked for. The registry's
+    # ``revision`` is the request; if the two ever disagree, this is
+    # the one that describes the run. None for a local checkpoint,
+    # which has no commit and attests itself through its manifest.
+    loaded_revision: Optional[str] = None
     # The one run this worker can still answer questions about.
     # Declared here rather than only on each backend because the two
     # members below are what make it safe to read, and the three of

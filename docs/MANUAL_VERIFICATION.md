@@ -2839,3 +2839,20 @@ change is that nothing observable moves.
     messages is still worth doing and a test enforces it, but a CUDA
     out-of-memory report comes from torch, runs past the window on its
     own, and keeps its numbers at the end where the clip lands.
+
+## Pinned model revisions (TRUST-03)
+
+284. **The two Hub models still activate, and load no slower.**
+    *Confirmed.* Both now name a commit, and the commit is the one
+    already in the cache, so this is indistinguishable from before.
+    If either one ever starts downloading, the pin no longer matches
+    what is on disk and the sha in `src/backends/registry.py` is
+    wrong.
+285. **A saved run records the model's commit.** *Confirmed.* A
+    "Model commit" row of twelve hex characters below Model, with the
+    Model row still showing the repo name rather than a cache path,
+    and no row at all on older runs.
+286. **Offline activation still works, now pinned.** *Confirmed.*
+    This is TRUST-02's offline test re-run, because the revision now
+    reaches the same calls `local_files_only` does and a wrong one
+    would fail here first.

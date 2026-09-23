@@ -217,7 +217,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-LLaDA weights (~16 GB) download automatically from Hugging Face on first use. The supervisor itself runs in this environment and never imports torch or transformers.
+LLaDA weights (~16 GB) download automatically from Hugging Face on first use, at the commit the registry pins, so the same app version always loads the same weights and remote code. The supervisor itself runs in this environment and never imports torch or transformers.
 
 **DiffusionGemma (`.venv-dgemma`, transformers 5.13), optional:**
 
@@ -241,7 +241,7 @@ python3 -m venv .venv-ar
 .venv-ar/bin/pip install -r requirements-ar.txt
 ```
 
-SmolLM3-3B weights (~6 GB) download automatically from Hugging Face on first activation. The pinned torch is the standard CUDA build, so this environment runs the model on the GPU when one is present and on CPU otherwise; the Main Menu row for SmolLM3 carries a CPU/GPU toggle. On a machine with no GPU, this is the model you can still run.
+SmolLM3-3B weights (~6 GB) download automatically from Hugging Face on first activation, at a pinned commit as with LLaDA. The pinned torch is the standard CUDA build, so this environment runs the model on the GPU when one is present and on CPU otherwise; the Main Menu row for SmolLM3 carries a CPU/GPU toggle. On a machine with no GPU, this is the model you can still run.
 
 If you have no GPU and want to avoid downloading the large CUDA libraries, install the CPU-only torch wheel first, then the rest:
 
@@ -413,7 +413,8 @@ The metadata captures the model, prompt, hyperparameters, any remask edits, per-
 - [x] Shared tabbed Settings page (`/settings.html`) reached from a gear icon in the generator, Main Menu, and Analytics headers (Appearance: diffusion-style text + Mode, highlight tokens; Interface: device-tag ticker) with staged Save/Reset, server-persisted and shared across pages; Commit Order moved from a Settings toggle to the overlay picker
 - [x] Analytics Suite: model-aware run browser, convergence, timing, confidence, canvas-boundary markers
 - [x] Analytics run deletion (confirmation modal + toast) and contained, toggleable chart tooltips with line burn-through
-- [x] Reproducibility metadata (seed, GPU, git commit, library versions) and deterministic seeding
+- [x] Reproducibility metadata (seed, GPU, app commit, model commit, library versions) and deterministic seeding
+- [x] Hub checkpoints load a pinned commit, recorded per run
 - [x] Graceful VRAM handling: pre-flight free-memory check and worker load-error reporting
 - [x] Save runs (metadata, history, final text, GIF) with per-frame timing and confidence
 - [x] Optional desktop app: pywebview native window that owns the server lifecycle (graceful shutdown frees VRAM) plus a Linux app-menu launcher; launching it a second time joins the window already open instead of starting a rival server, since two servers each enforce "one model at a time" over a GPU neither knows it shares and the second load dies of out-of-memory after you have waited for it

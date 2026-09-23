@@ -57,7 +57,10 @@ from src.inference.ar_sampler import (
     streaming_generate,
     streaming_substitute,
 )
-from src.inference.hf_download import download_with_progress
+from src.inference.hf_download import (
+    download_with_progress,
+    revision_from_snapshot,
+)
 from src.inference.load_progress import (
     load_target_bytes,
     sample_load_progress,
@@ -91,13 +94,31 @@ class Smollm3Backend(Backend):
         self.device = resolved
         self.effective_device = resolved
         name = self.model_info.checkpoint
+        # The commit the registry pins, passed to the fetch and to
+        # both loads so a saved run names weights that cannot change
+        # under it. The chat template is part of that: it ships in the
+        # tokenizer files, and it decides what this model is asked.
+        revision = self.model_info.revision
+        assert revision, "SmolLM3 must load a pinned commit"
         # Fetch weights first (reporting progress via /health) so the
         # first activation shows a download bar; a cache hit is a no-op.
         logger.info("ensuring weights for %s", name)
         snapshot = download_with_progress(
-            name, sink=lambda p: setattr(self, "load_progress", p)
+            name,
+            revision=revision,
+            sink=lambda p: setattr(self, "load_progress", p),
         )
         self.load_progress = None
+        # What the cache resolved, read back rather than assumed, so
+        # the attestation describes the files on disk. Not compared
+        # against the pin: a revision may name a branch or a tag,
+        # which resolves to a snapshot directory named for the commit
+        # instead, and that is the case where reading it back is worth
+        # most. What must hold is that a commit was resolved at all.
+        self.loaded_revision = revision_from_snapshot(snapshot)
+        assert self.loaded_revision is not None, (
+            f"cache returned a path naming no commit: {snapshot}"
+        )
         # local_files_only from here down. Returning from
         # download_with_progress means every file is on disk, so any
         # request past this point is transformers revalidating a
@@ -106,7 +127,7 @@ class Smollm3Backend(Backend):
         # additional chat templates while building the tokenizer.
         logger.info("loading tokenizer %s", name)
         self.tokenizer = AutoTokenizer.from_pretrained(
-            name, local_files_only=True
+            name, revision=revision, local_files_only=True
         )
         logger.info(
             "loading model %s on %s (bfloat16)", name, resolved
@@ -126,6 +147,7 @@ class Smollm3Backend(Backend):
             # CPU/RAM-constrained hosts.
             model = AutoModelForCausalLM.from_pretrained(
                 name,
+                revision=revision,
                 torch_dtype=torch.bfloat16,
                 local_files_only=True,
             )

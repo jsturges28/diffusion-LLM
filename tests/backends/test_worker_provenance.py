@@ -21,7 +21,7 @@ supervisor's current state, is in `tests/web/test_run_provenance.py`.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, AsyncGenerator, Dict, List
+from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import pytest
 
@@ -31,6 +31,10 @@ from src.backends.worker_base import (
     library_versions,
     provenance_envelope,
 )
+from src.inference.hf_download import revision_from_snapshot
+
+# Any full sha; nothing here depends on it resolving.
+SHA = "08b83a6feb34df1a6011b80c3c00c7563e963b07"
 
 ENVELOPE: Dict[str, Any] = {
     "model_id": "stub",
@@ -164,7 +168,11 @@ def test_a_streamer_without_provenance_stamps_nothing() -> None:
 class _StubBackend:
     """A loaded backend, minus the model."""
 
-    def __init__(self, effective_device: str) -> None:
+    def __init__(
+        self,
+        effective_device: str,
+        loaded_revision: Optional[str] = None,
+    ) -> None:
         self.model_info = ModelInfo(
             id="stub",
             display_name="Stub",
@@ -182,6 +190,7 @@ class _StubBackend:
             checkpoint="org/stub-checkpoint",
         )
         self.effective_device = effective_device
+        self.loaded_revision = loaded_revision
         self.tokenizer = None
         self.model = None
 
@@ -239,3 +248,89 @@ def test_the_envelope_omits_an_unreadable_context_window() -> None:
     )
 
     assert "context_length" not in envelope
+
+
+# -- the commit, which is the other half of "which model" --
+
+
+def test_the_envelope_names_the_commit_it_loaded() -> None:
+    """The checkpoint name alone does not identify weights. This is
+    the field that makes the name mean one thing, and it is the
+    worker's to report because only the worker saw the files."""
+    envelope = provenance_envelope(
+        _StubBackend("cpu", SHA)  # type: ignore[arg-type]
+    )
+
+    assert envelope["revision"] == SHA
+    # Beside the name, not instead of it: the name is what a reader
+    # recognises, and the pair is what makes the record usable.
+    assert envelope["checkpoint"] == "org/stub-checkpoint"
+
+
+def test_a_local_checkpoint_omits_the_commit() -> None:
+    """Omitted rather than empty, for the same reason the window is:
+    a local directory has no commit, and a blank string would be a
+    value a reader has to learn to ignore."""
+    envelope = provenance_envelope(
+        _StubBackend("cpu")  # type: ignore[arg-type]
+    )
+
+    assert "revision" not in envelope
+
+
+# -- reading the commit back off the cache layout --
+
+
+def test_a_snapshot_path_yields_its_commit() -> None:
+    """The reason no network call is needed: the cache already names
+    the resolved commit in the path it hands back."""
+    resolved = revision_from_snapshot(
+        f"/cache/models--org--model/snapshots/{SHA}"
+    )
+
+    assert resolved == SHA
+
+
+def test_a_trailing_separator_does_not_hide_the_commit() -> None:
+    resolved = revision_from_snapshot(
+        f"/cache/models--org--model/snapshots/{SHA}/"
+    )
+
+    assert resolved == SHA
+
+
+def test_a_branch_resolves_to_the_commit_behind_it() -> None:
+    """Why the worker reads this back instead of recording what it
+    asked for.
+
+    A revision may name a branch or a tag; the cache lays the result
+    out under the commit that name resolved to. Recording the request
+    would then attest "main", which is not a fact about the run: it
+    describes wherever the branch points when someone reads it.
+    """
+    resolved = revision_from_snapshot(
+        f"/cache/models--org--model/snapshots/{SHA}"
+    )
+
+    assert resolved == SHA
+    assert resolved != "main"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        # The local quantized checkpoint, which is the real case.
+        "/home/user/models/diffusiongemma-nf4",
+        # A cache path stopping one level short.
+        "/cache/models--org--model/snapshots",
+        # Nothing to read at all.
+        "",
+        "/",
+    ],
+)
+def test_a_path_that_names_no_commit_reads_as_none(
+    path: str,
+) -> None:
+    """Negative space. Returning something for these would put a
+    directory name in a field that means "commit"."""
+    assert revision_from_snapshot(path) is None

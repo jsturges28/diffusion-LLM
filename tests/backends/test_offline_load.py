@@ -21,6 +21,14 @@ that safe is the ordering asserted here too: the flag is only set on
 calls made after `download_with_progress` has returned, and returning
 means every file is present.
 
+The same recorder now answers TRUST-03's question, because it is the
+same call sites: every load also names the commit the registry pins.
+The two properties are independent. `local_files_only` decides
+whether the Hub is consulted; `revision` decides which files are
+read. A cache holding two commits of one repository satisfies the
+first and can still load either, so only both together make a run
+reproducible.
+
 DiffusionGemma is deliberately absent. Its checkpoint is a local
 directory rather than a Hub id, which is why it was the one model
 that did activate offline, and it has no Hub call to pin.
@@ -29,12 +37,13 @@ that did activate offline, and it has no Hub call to pin.
 from __future__ import annotations
 
 import contextlib
-from typing import Any, Dict, Iterator, List
+from typing import Any, Dict, Iterator, List, Optional
 
 import pytest
 
 from src.backends import llada_worker, smollm3_worker
 from src.backends.llada_worker import LladaBackend
+from src.backends.registry import LLADA, SMOLLM3
 from src.backends.smollm3_worker import Smollm3Backend
 
 SNAPSHOT = "/cache/models--org--model/snapshots/abc123"
@@ -46,6 +55,7 @@ class _LoadRecorder:
     def __init__(self) -> None:
         self.calls: List[Dict[str, Any]] = []
         self.order: List[str] = []
+        self.fetched_revision: Optional[str] = None
 
     def loader(self, label: str) -> Any:
         def _load(name: str, **kwargs: Any) -> Any:
@@ -86,9 +96,12 @@ def _install(
 ) -> None:
     """Replace the fetch, the samplers, and both loaders."""
 
-    def fake_download(repo_id: str, *, sink: Any) -> str:
+    def fake_download(
+        repo_id: str, *, revision: Any = None, sink: Any
+    ) -> str:
         del sink
         recorder.order.append("download")
+        recorder.fetched_revision = revision
         return SNAPSHOT
 
     @contextlib.contextmanager
@@ -264,3 +277,49 @@ def test_every_hub_load_is_pinned(
         assert call.get("local_files_only") is True, (
             f"{call['label']} can still reach the Hub"
         )
+
+
+# -- the commit, which local_files_only does not name --
+
+
+@pytest.mark.parametrize(
+    "loader,model",
+    [(_load_llada, LLADA), (_load_smollm3, SMOLLM3)],
+    ids=["llada", "smollm3"],
+)
+def test_every_hub_load_names_the_registry_commit(
+    monkeypatch: pytest.MonkeyPatch, loader: Any, model: Any
+) -> None:
+    """The same shape as the test above, for the other half of the
+    property.
+
+    ``local_files_only`` says do not go to the network; it does not
+    say which commit's files to read. A cache holding two commits of
+    one repository resolves to whichever the refs happen to point at,
+    so without the revision the load is local and still not pinned.
+    """
+    recorder = loader(monkeypatch)
+
+    assert model.revision is not None
+    for call in recorder.calls:
+        assert call.get("revision") == model.revision, (
+            f"{call['label']} does not name a commit"
+        )
+
+
+@pytest.mark.parametrize(
+    "loader,model",
+    [(_load_llada, LLADA), (_load_smollm3, SMOLLM3)],
+    ids=["llada", "smollm3"],
+)
+def test_the_fetch_and_the_loads_agree_on_the_commit(
+    monkeypatch: pytest.MonkeyPatch, loader: Any, model: Any
+) -> None:
+    """Fetching one commit and loading another would be worse than
+    not pinning: the download would succeed, and the load would then
+    look for files that were never asked for."""
+    recorder = loader(monkeypatch)
+
+    assert recorder.fetched_revision == model.revision
+    for call in recorder.calls:
+        assert call.get("revision") == recorder.fetched_revision

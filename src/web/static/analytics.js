@@ -2349,6 +2349,8 @@ function renderRunMeta(run) {
     );
   }
 
+  html += modelRevisionMetaRow(run);
+
   html += processorMetaRow(run);
 
   html += tokenizerMetaRow(run);
@@ -2494,6 +2496,33 @@ function contextMetaRows(run) {
     );
   }
   return html;
+}
+
+// How many characters of a commit to show. A full sha is 40 and
+// carries no more meaning here than its prefix does: nobody is
+// verifying it by eye, and a 40-character value would crowd every
+// other row in the panel. Twelve is long enough to identify a commit
+// and is what git itself grows to for large repositories.
+var REVISION_DISPLAY_CHARS = 12;
+
+// Which commit of the model produced this run, beside the model name
+// rather than folded into it: the name says which model, the commit
+// says which version of it, and two runs of "SmolLM3-3B" a month
+// apart are not necessarily the same model at all.
+//
+// Absent for a run saved before the field existed and for a local
+// checkpoint, which has no commit. Absence is honest in both cases,
+// so this degrades to no row rather than to "unknown".
+function modelRevisionMetaRow(run) {
+  var repro = run.reproducibility || {};
+  var revision = repro.model_revision;
+  if (!revision) {
+    return "";
+  }
+  return metaRowHtml(
+    "Model commit",
+    String(revision).slice(0, REVISION_DISPLAY_CHARS)
+  );
 }
 
 function runTokenizer(run) {

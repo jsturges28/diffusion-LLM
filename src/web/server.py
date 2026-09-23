@@ -81,6 +81,7 @@ from src.backends.protocol import (
     SAVED_MODEL_TYPE_AUTOREGRESSIVE,
     SAVED_MODEL_TYPE_DIFFUSION,
     ModelInfo,
+    is_hub_checkpoint,
     saved_model_type,
     wire_error,
 )
@@ -421,19 +422,6 @@ def _sweep_orphan_workers() -> None:
             pass
 
 
-def _is_repo_checkpoint(checkpoint: str) -> bool:
-    """True when the checkpoint is an HF repo id, not a local path.
-
-    Repo-id checkpoints (e.g. ``org/name``) download from the Hub;
-    local paths (``~/models/...``) are produced offline (e.g. the
-    DiffusionGemma quantize script) and are not UI-downloadable.
-    """
-    value = checkpoint.strip()
-    if not value or value.startswith(("~", "/", ".")):
-        return False
-    return value.count("/") == 1
-
-
 def _is_partial(checkpoint: str) -> bool:
     """Whether an interrupted fetch left parts of this one behind.
 
@@ -445,7 +433,7 @@ def _is_partial(checkpoint: str) -> bool:
     Always false for a local path. Those are produced offline rather
     than fetched, so there is no partial state for them to be in.
     """
-    if not _is_repo_checkpoint(checkpoint):
+    if not is_hub_checkpoint(checkpoint):
         return False
     try:
         from src.inference.hf_download import (
@@ -457,7 +445,9 @@ def _is_partial(checkpoint: str) -> bool:
         return False
 
 
-def _is_downloaded(checkpoint: str) -> bool:
+def _is_downloaded(
+    checkpoint: str, revision: Optional[str] = None
+) -> bool:
     """Whether the checkpoint's files are fully present locally.
 
     A partial cache (an interrupted download leaving ``*.incomplete``
@@ -465,12 +455,18 @@ def _is_downloaded(checkpoint: str) -> bool:
     veneer and a re-click resumes, rather than the model being
     marked ready and hanging on load. ``_is_partial`` above is what
     lets that veneer say "resume" rather than "download".
+
+    The question is asked about the pinned commit, not the repository.
+    A cache holding a different commit is not this model downloaded,
+    and reporting it as ready would send the user into an activation
+    that has to fetch after all.
+
     """
-    if _is_repo_checkpoint(checkpoint):
+    if is_hub_checkpoint(checkpoint):
         try:
             from src.inference.hf_download import is_repo_cached
 
-            return is_repo_cached(checkpoint)
+            return is_repo_cached(checkpoint, revision=revision)
         except Exception:  # noqa: BLE001 - probe failure: treat as not cached
             return False
     return Path(checkpoint).expanduser().is_dir()
@@ -801,7 +797,7 @@ class ModelManager:
         # A Hub id is not checked here: an uncached one downloads on
         # first activation, which is a supported path rather than a
         # failure, and the menu already marks it.
-        if not _is_repo_checkpoint(info.checkpoint):
+        if not is_hub_checkpoint(info.checkpoint):
             path = Path(info.checkpoint).expanduser()
             if not path.is_dir():
                 raise ActivationRefused(
@@ -1004,8 +1000,9 @@ class ModelManager:
         """
         if model_id not in REGISTRY:
             raise KeyError(model_id)
-        checkpoint = REGISTRY[model_id].checkpoint
-        if not _is_repo_checkpoint(checkpoint):
+        info = REGISTRY[model_id]
+        checkpoint = info.checkpoint
+        if not is_hub_checkpoint(checkpoint):
             raise ValueError(
                 f"{model_id} is not downloadable from the Hub"
             )
@@ -1013,7 +1010,9 @@ class ModelManager:
             raise RuntimeError("a download is already running")
         handle = self._spawn(
             download_command(
-                python=Path(sys.executable), repo_id=checkpoint
+                python=Path(sys.executable),
+                repo_id=checkpoint,
+                revision=info.revision,
             ),
             cwd=REPO_ROOT,
             env=dict(os.environ),
@@ -1025,12 +1024,18 @@ class ModelManager:
         self.download_error = None
         self.download_id += 1
         self._download_task = asyncio.create_task(
-            self._watch_download(checkpoint, handle)
+            self._watch_download(
+                checkpoint, handle, revision=info.revision
+            )
         )
         return self.download_id
 
     async def _watch_download(
-        self, checkpoint: str, handle: WorkerHandle
+        self,
+        checkpoint: str,
+        handle: WorkerHandle,
+        *,
+        revision: Optional[str] = None,
     ) -> None:
         """Sample progress from disk until the child exits.
 
@@ -1045,7 +1050,7 @@ class ModelManager:
         )
 
         total = await asyncio.to_thread(
-            repo_total_bytes, checkpoint
+            repo_total_bytes, checkpoint, revision=revision
         )
         code: Optional[int] = None
         for _ in range(DOWNLOAD_POLL_ITERATIONS_MAX):
@@ -1056,10 +1061,16 @@ class ModelManager:
                 repo_progress, checkpoint, total
             )
             await asyncio.sleep(self._download_poll_s)
-        self._settle_download(checkpoint, code)
+        self._settle_download(
+            checkpoint, code, revision=revision
+        )
 
     def _settle_download(
-        self, checkpoint: str, code: Optional[int]
+        self,
+        checkpoint: str,
+        code: Optional[int],
+        *,
+        revision: Optional[str] = None,
     ) -> None:
         """Turn the child's exit status into a reportable outcome.
 
@@ -1470,10 +1481,12 @@ def _models_snapshot() -> Dict[str, Any]:
         data["fits"] = _model_fits(
             info, status=status, headroom_gib=headroom
         )
-        data["downloadable"] = _is_repo_checkpoint(
+        data["downloadable"] = is_hub_checkpoint(
             info.checkpoint
         )
-        data["downloaded"] = _is_downloaded(info.checkpoint)
+        data["downloaded"] = _is_downloaded(
+            info.checkpoint, info.revision
+        )
         data["partial"] = _is_partial(info.checkpoint)
         models.append(data)
     gpu = _gpu_name()
@@ -1929,6 +1942,12 @@ class RunProvenance(BaseModel):
 
     model_id: str
     checkpoint: str = ""
+    # The commit the weights were read from. Defaults to empty rather
+    # than being required because runs saved before TRUST-03 have no
+    # commit to report, and a schema that rejected them would lose the
+    # corpus to gain a field. Empty means "not recorded", which is
+    # what those runs honestly are.
+    revision: str = ""
     # The placement the model actually got, which is not always the
     # one requested: LLaDA and SmolLM3 fall back to CPU when CUDA is
     # unavailable, so a run that ran on CPU could be saved as GPU.
@@ -2332,6 +2351,15 @@ def _reproducibility_block(
         "seed": body.params.get("seed"),
         "gpu": _gpu_name(),
         "git_commit": _git_commit(),
+        # The model's commit, beside the app's. The pair is the whole
+        # answer to "what produced this": ``git_commit`` pins the code
+        # that ran, ``model_revision`` pins the weights it ran. Only
+        # one of them used to be here, which made the block look
+        # complete while leaving half the inputs unnamed. Empty for a
+        # local checkpoint and for runs saved before this existed.
+        "model_revision": (
+            provenance.revision if provenance is not None else ""
+        ),
         "versions": versions,
         # Which tokenizer produced these ids. Persisted per run so an
         # old run still answers the question after the model it used

@@ -119,7 +119,7 @@ def worker_command(
 
 
 def download_command(
-    *, python: Path, repo_id: str
+    *, python: Path, repo_id: str, revision: Optional[str] = None
 ) -> List[str]:
     """The argv that fetches one repository's weights.
 
@@ -128,14 +128,20 @@ def download_command(
     supervisor has to be able to end it. Built here beside
     ``worker_command`` so both argv shapes are asserted in tests
     without launching anything.
+
+    ``--revision`` is omitted rather than passed empty when there is
+    none, so the argv says what it means: nothing was pinned.
     """
-    return [
+    argv = [
         str(python),
         "-m",
         "src.inference.download_main",
         "--repo",
         repo_id,
     ]
+    if revision is not None:
+        argv.extend(["--revision", revision])
+    return argv
 
 
 def spawn_worker(

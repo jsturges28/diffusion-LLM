@@ -16,6 +16,7 @@ from src.backends.protocol import (
     ParamOverride,
     ParamSpec,
     ParamType,
+    is_hub_checkpoint,
 )
 
 DEFAULT_MODEL = "llada"
@@ -34,6 +35,12 @@ LLADA = ModelInfo(
     worker_module="src.backends.llada_worker",
     venv_python=".venv/bin/python",
     checkpoint="GSAI-ML/LLaDA-8B-Instruct",
+    # The commit every run of this model has been made against, taken
+    # from the cache that produced them rather than from the Hub, so
+    # pinning changes nothing about what loads today. It only stops
+    # the repository moving underneath a saved run. This model also
+    # executes remote code, which the same commit pins.
+    revision="08b83a6feb34df1a6011b80c3c00c7563e963b07",
     capabilities=ModelCapabilities(
         family="diffusion",
         generation_shape="iterative_canvas",
@@ -232,6 +239,9 @@ SMOLLM3 = ModelInfo(
     worker_module="src.backends.smollm3_worker",
     venv_python=".venv-ar/bin/python",
     checkpoint="HuggingFaceTB/SmolLM3-3B",
+    # As with LLaDA, the commit already in the cache, so pinning is a
+    # record of what has been running rather than a change to it.
+    revision="a07cc9a04f16550a088caea529712d1d335b0ac1",
     capabilities=ModelCapabilities(
         family="autoregressive",
         generation_shape="append_only",
@@ -359,3 +369,19 @@ REGISTRY: Dict[str, ModelInfo] = {
     DGEMMA.id: DGEMMA,
     SMOLLM3.id: SMOLLM3,
 }
+
+# Anything fetched from the Hub names the commit it was fetched at,
+# and anything local does not, because a local directory has no commit
+# to name and says what it is through its manifest instead. Asserted
+# rather than tested only, so a new Hub model cannot be registered
+# unpinned: the whole point is that the repository must not be able to
+# move underneath a saved run.
+for _model in REGISTRY.values():
+    if is_hub_checkpoint(_model.checkpoint):
+        assert _model.revision, (
+            f"{_model.id} loads from the Hub and must pin a revision"
+        )
+    else:
+        assert _model.revision is None, (
+            f"{_model.id} is a local artifact and has no Hub revision"
+        )

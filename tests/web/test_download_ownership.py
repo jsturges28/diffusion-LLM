@@ -118,7 +118,9 @@ def _no_hub(monkeypatch: pytest.MonkeyPatch) -> None:
     from src.inference import hf_download
 
     monkeypatch.setattr(
-        hf_download, "repo_total_bytes", lambda repo_id: 1000
+        hf_download,
+        "repo_total_bytes",
+        lambda repo_id, **kwargs: 1000,
     )
     monkeypatch.setattr(
         hf_download,

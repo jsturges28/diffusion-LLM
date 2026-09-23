@@ -36,18 +36,27 @@ _POLL_MAX_SECONDS: float = 6 * 60 * 60
 _POLL_MAX_ITERATIONS: int = int(_POLL_MAX_SECONDS / _POLL_INTERVAL_SECONDS)
 
 
-def repo_total_bytes(repo_id: str) -> int:
+def repo_total_bytes(
+    repo_id: str, *, revision: Optional[str] = None
+) -> int:
     """Total download size for ``repo_id`` from Hub file metadata.
 
     Sums the size of every sibling file. Returns 0 when the metadata is
     unavailable (offline / private without token); the caller then
     reports byte counts with an indeterminate percentage.
+
+    ``revision`` sizes the commit that will actually be fetched, which
+    matters for the progress bar: asking about the branch tip while
+    downloading an older commit reports a percentage of the wrong
+    total. ``None`` means the repository default.
     """
     assert isinstance(repo_id, str) and repo_id, "repo_id required"
     from huggingface_hub import HfApi
 
     try:
-        info = HfApi().repo_info(repo_id, files_metadata=True)
+        info = HfApi().repo_info(
+            repo_id, revision=revision, files_metadata=True
+        )
     except Exception:  # noqa: BLE001 - metadata is best-effort.
         return 0
     siblings = getattr(info, "siblings", None) or []
@@ -58,6 +67,32 @@ def repo_total_bytes(repo_id: str) -> int:
             total += size
     assert total >= 0, "total bytes must be non-negative"
     return total
+
+
+def revision_from_snapshot(snapshot: str) -> Optional[str]:
+    """The commit a cached snapshot path names, if it names one.
+
+    The cache lays a repository out as
+    ``models--org--name/snapshots/<commit>/``, so the commit that was
+    actually resolved is already in the path the loaders were given.
+    Reading it there costs nothing and needs no network, which is what
+    makes it usable for attestation: asking the Hub what a branch
+    points at would fail offline, and would answer about now rather
+    than about the run.
+
+    Returns ``None`` for a path that is not a Hub snapshot, which is
+    the local quantized directory's case. Deliberately does not check
+    that the value looks like a sha: a snapshot directory can be named
+    for a tag or a branch, and reporting what was resolved beats
+    reporting nothing because it was not the shape expected.
+    """
+    assert isinstance(snapshot, str), "snapshot path required"
+    parts = Path(snapshot).parts
+    if len(parts) < 2:
+        return None
+    if parts[-2] != "snapshots":
+        return None
+    return parts[-1] or None
 
 
 def _repo_blobs_dir(repo_id: str) -> Path:
@@ -87,19 +122,31 @@ def has_partial_download(repo_id: str) -> bool:
     into. "Not cached" covers both a model never fetched and one
     stopped at 8%, and the menu wants to say "resume" for the second
     rather than offering to start it over.
+
+    Takes no revision because the cache does not keep one: every
+    commit of a repository shares a single ``blobs`` directory, so a
+    partial part cannot be attributed to the commit that was being
+    fetched when it was left behind.
     """
     assert isinstance(repo_id, str) and repo_id, "repo_id required"
     return _has_incomplete(_repo_blobs_dir(repo_id))
 
 
-def is_repo_cached(repo_id: str) -> bool:
-    """Whether ``repo_id`` is *fully* cached, with no partial parts.
+def is_repo_cached(
+    repo_id: str, *, revision: Optional[str] = None
+) -> bool:
+    """Whether ``revision`` of ``repo_id`` is fully cached.
 
     Both the fast path here and the supervisor's ``_is_downloaded`` use
     this so an interrupted download (leaving ``*.incomplete`` blobs) is
     treated as not-downloaded rather than complete. Re-downloading then
     resumes the remaining parts instead of the cache being misread as
     ready and the model hanging on load.
+
+    The revision has to be part of the question. A cache holding some
+    other commit of the same repository would otherwise answer "yes"
+    to a pinned load that then finds its own files missing, and it
+    would find that out offline, where it cannot fix it.
     """
     assert isinstance(repo_id, str) and repo_id, "repo_id required"
     from huggingface_hub import snapshot_download
@@ -107,7 +154,9 @@ def is_repo_cached(repo_id: str) -> bool:
     if _has_incomplete(_repo_blobs_dir(repo_id)):
         return False
     try:
-        snapshot_download(repo_id, local_files_only=True)
+        snapshot_download(
+            repo_id, revision=revision, local_files_only=True
+        )
         return True
     except Exception:  # noqa: BLE001 - not (fully) cached.
         return False
@@ -245,9 +294,12 @@ def _is_unreachable(exc: BaseException) -> bool:
 
 
 def download_with_progress(
-    repo_id: str, *, sink: ProgressSink
+    repo_id: str,
+    *,
+    revision: Optional[str] = None,
+    sink: ProgressSink,
 ) -> str:
-    """Ensure ``repo_id`` is fully cached, reporting progress to ``sink``.
+    """Ensure ``revision`` of ``repo_id`` is cached, with progress.
 
     Returns the local snapshot path. On a cache hit this returns
     immediately without invoking ``sink`` (no download bar) and without
@@ -256,9 +308,14 @@ def download_with_progress(
     ``{fraction, downloaded_bytes, total_bytes}`` to ``sink`` roughly
     twice a second.
 
-    Callers may treat a successful return as proof that every file is
-    on disk, which is what lets the workers load with
+    Callers may treat a successful return as proof that every file of
+    that commit is on disk, which is what lets the workers load with
     ``local_files_only=True`` and never revalidate against the Hub.
+
+    ``revision`` reaches every path here, the cache check and the fast
+    return as much as the fetch. Pinning only the slow path would pin
+    nothing in practice, because after the first download every
+    activation takes the fast one.
     """
     assert isinstance(repo_id, str) and repo_id, "repo_id required"
     from huggingface_hub import snapshot_download
@@ -266,10 +323,12 @@ def download_with_progress(
     # Fast path: fully cached (and not partial) already. A partial cache
     # falls through so the fetch below resumes the ``*.incomplete`` parts
     # and the poller continues from the on-disk size.
-    if is_repo_cached(repo_id):
-        return snapshot_download(repo_id, local_files_only=True)
+    if is_repo_cached(repo_id, revision=revision):
+        return snapshot_download(
+            repo_id, revision=revision, local_files_only=True
+        )
 
-    total_bytes = repo_total_bytes(repo_id)
+    total_bytes = repo_total_bytes(repo_id, revision=revision)
     blobs_dir = _repo_blobs_dir(repo_id)
 
     result: Dict[str, str] = {}
@@ -281,7 +340,9 @@ def download_with_progress(
             # huggingface_hub import (see server.py / run_worker.py), so
             # bytes land in ``blobs`` as ``*.incomplete`` parts that the
             # poller below can measure as they grow.
-            result["path"] = snapshot_download(repo_id)
+            result["path"] = snapshot_download(
+                repo_id, revision=revision
+            )
         except BaseException as exc:  # noqa: BLE001 - reraised on join.
             failure["error"] = exc
 

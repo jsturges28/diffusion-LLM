@@ -55,6 +55,11 @@ def main() -> int:
         description="Fetch one model repository's weights."
     )
     parser.add_argument("--repo", required=True)
+    # Optional because the menu can be asked to fetch a repository the
+    # registry does not pin, but passed for every registered model, so
+    # that a download and the load that follows it agree on which
+    # commit they are about.
+    parser.add_argument("--revision", default=None)
     args = parser.parse_args()
 
     from src.inference.hf_download import _is_unreachable
@@ -62,7 +67,7 @@ def main() -> int:
     from huggingface_hub import snapshot_download
 
     try:
-        snapshot_download(args.repo)
+        snapshot_download(args.repo, revision=args.revision)
     except BaseException as exc:  # noqa: BLE001 - reported by status.
         # Printed for the log the maintainer reads, not for the
         # parent, which is deliberately reading only the status: a

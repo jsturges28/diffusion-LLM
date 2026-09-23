@@ -342,11 +342,42 @@ function makeElement(id) {
   });
 
   Object.defineProperty(element, "innerHTML", {
-    get: () => "",
+    get: () => serializeTextChildren(element),
     set: () => { element.children = []; },
   });
 
   return element;
+}
+
+// Enough of innerHTML to serve the one page script that reads it.
+//
+// `escHtml` in analytics.js is the sole reader: it appends a text
+// node to a throwaway div and reads the escaped result back. A getter
+// returning "" made that function return "" for every input, which
+// silently emptied every label and value the panel renders and made
+// them untestable, so tests could only assert that a row was absent.
+//
+// Elements are not serialized, only text children, and that is the
+// whole of what a stub should claim here: rendering nested markup
+// would be a half-built engine whose gaps are harder to notice than
+// its absence. The escaping matches a browser's, because tests about
+// escaping are worthless against an escaper that is merely similar.
+function serializeTextChildren(element) {
+  let html = "";
+  for (let at = 0; at < element.children.length; at++) {
+    const child = element.children[at];
+    if (child.isTextNode) {
+      html += escapeText(String(child.textContent));
+    }
+  }
+  return html;
+}
+
+function escapeText(text) {
+  return text
+    .split("&").join("&amp;")
+    .split("<").join("&lt;")
+    .split(">").join("&gt;");
 }
 
 // Enough selector support for `closest`, which is the only place the
@@ -415,6 +446,10 @@ function makeDocument(registry, fontsReady) {
     createTextNode: (text) => {
       const node = makeElement(null);
       node.textContent = text;
+      // Flagged rather than inferred from the absence of a tag, so
+      // the innerHTML getter below can serialize text without having
+      // to guess which appended children are text.
+      node.isTextNode = true;
       return node;
     },
     // A stub rather than null: page scripts wire listeners onto

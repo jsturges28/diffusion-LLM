@@ -186,6 +186,27 @@ def saved_model_type(generation_shape: str) -> str:
     return _SAVED_MODEL_TYPE_BY_SHAPE[generation_shape]
 
 
+def is_hub_checkpoint(checkpoint: str) -> bool:
+    """True when the checkpoint is a Hub repo id, not a local path.
+
+    Repo-id checkpoints (``org/name``) download from the Hub and
+    carry a commit; local paths (``~/models/...``) are produced
+    offline by the quantize script and attest themselves through a
+    manifest.
+
+    Lives here rather than beside its callers because two modules now
+    need the same answer: the supervisor, to decide what is
+    downloadable, and the registry, to assert that everything fetched
+    from the Hub names the commit it was fetched at.
+    """
+    value = checkpoint.strip()
+    if not value:
+        return False
+    if value.startswith(("~", "/", ".")):
+        return False
+    return value.count("/") == 1
+
+
 class ModelInfo(BaseModel):
     """Everything needed to launch and describe one model."""
 
@@ -203,6 +224,17 @@ class ModelInfo(BaseModel):
     worker_module: str
     venv_python: str
     checkpoint: str
+    # The Hub commit this model loads, pinning code and weights
+    # together. Without it the same app commit, the same parameters
+    # and the same displayed seed can load different weights after
+    # the repository moves, and a saved run cannot say which it got.
+    #
+    # ``None`` means the checkpoint is not a Hub artifact. The local
+    # quantized directory has no commit to name, and attests itself
+    # through the manifest written beside it instead, so a sentinel
+    # here would be a value nobody could check. The registry asserts
+    # that every Hub checkpoint does declare one.
+    revision: Optional[str] = None
 
 
 # -- WebSocket message type constants (client <-> worker) --
