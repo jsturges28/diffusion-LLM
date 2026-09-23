@@ -32,7 +32,7 @@ Cell = Tuple[str, str]
 BASELINE: Dict[Cell, int] = {
     ("src/web/server.py", "E501"): 30,
     ("src/web/server.py", "C901"): 1,
-    ("src/inference/llada_sampler.py", "E501"): 46,
+    ("src/inference/streaming_sampler.py", "E501"): 46,
 }
 
 
@@ -63,7 +63,7 @@ def test_a_swap_does_not_pass() -> None:
     count-based gate would wave it through.
     """
     current = dict(BASELINE)
-    current[("src/inference/llada_sampler.py", "E501")] = 45
+    current[("src/inference/streaming_sampler.py", "E501")] = 45
     current[("src/web/server.py", "C901")] = 2
 
     assert sum(current.values()) == sum(BASELINE.values())
@@ -133,11 +133,11 @@ def test_a_fully_cleaned_cell_is_reported() -> None:
 def test_regressions_are_ordered_worst_first() -> None:
     current = dict(BASELINE)
     current[("src/web/server.py", "E501")] = 31
-    current[("src/inference/llada_sampler.py", "E501")] = 56
+    current[("src/inference/streaming_sampler.py", "E501")] = 56
 
     grown = lint_ratchet.regressions(BASELINE, current)
 
-    assert grown[0][0][0] == "src/inference/llada_sampler.py"
+    assert grown[0][0][0] == "src/inference/streaming_sampler.py"
 
 
 # -- reading and writing the baseline file --

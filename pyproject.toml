@@ -13,7 +13,16 @@ line-length = 70
 [tool.ruff]
 line-length = 70
 target-version = "py312"
-extend-exclude = [".venv", ".venv-dgemma", ".venv-ar", "results"]
+extend-exclude = [
+    ".venv",
+    ".venv-dgemma",
+    ".venv-ar",
+    "results",
+    # Vendored upstream code kept for differential testing. Being
+    # diffable against its source is the point, so reformatting it
+    # would destroy the only thing it is for. See reference/llada.
+    "reference",
+]
 
 [tool.ruff.lint]
 # E/F are the pyflakes and pycodestyle core. C901 and PLR1702 are the
