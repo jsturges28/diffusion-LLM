@@ -259,6 +259,61 @@ def test_diffusiongemma_takes_the_last_close_marker() -> None:
     assert "middle" in thinking
 
 
+def test_an_unclosed_channel_is_all_reasoning() -> None:
+    """What a real run does. DiffusionGemma is a reasoning model and
+    256 tokens is not enough to finish reasoning, so the channel opens
+    and the budget runs out before it closes. Everything produced is
+    then reasoning and there is no answer yet.
+
+    Reporting it as the answer instead put a bare ``thought`` at the
+    head of a reply, because sanitizing strips the markers around the
+    label but not the label. Found on the first run anyone ever made
+    with this model's thinking enabled.
+    """
+    thinking, answer = DGEMMA_TEXT.split_channels(
+        "<|channel>thought\nweighing it up and running out of"
+    )
+
+    assert thinking == "weighing it up and running out of"
+    assert answer == ""
+
+
+def test_an_unclosed_channel_is_found_by_its_label_too() -> None:
+    """The same case with the opener missing. Which spelling arrives
+    depends on where the prompt ended: the template emits
+    ``<|channel>thought`` from the model on an ordinary turn and
+    pre-fills it on a tool-response turn, leaving only the label in
+    the generated slice. A saved run cannot tell the two apart,
+    because sanitizing removes the opener either way, so both are
+    handled."""
+    thinking, answer = DGEMMA_TEXT.split_channels(
+        "thought\nweighing it up and running out of"
+    )
+
+    assert thinking == "weighing it up and running out of"
+    assert answer == ""
+
+
+def test_an_answer_beginning_with_a_word_is_not_reasoning() -> None:
+    """The negative space of the label check, and the reason it is
+    anchored at the start: prose mentioning a thought is an answer."""
+    thinking, answer = DGEMMA_TEXT.split_channels(
+        "A thought experiment is a useful device."
+    )
+
+    assert thinking == ""
+    assert answer == "A thought experiment is a useful device."
+
+
+def test_an_unmarked_output_is_still_all_answer() -> None:
+    """The negative space of the test above, and the common case with
+    thinking off: no opener either, so nothing was reasoning."""
+    thinking, answer = DGEMMA_TEXT.split_channels("just the answer")
+
+    assert thinking == ""
+    assert answer == "just the answer"
+
+
 @pytest.mark.parametrize(
     "adapter",
     [SMOLLM3_TEXT, DGEMMA_TEXT, ChatTextAdapter()],

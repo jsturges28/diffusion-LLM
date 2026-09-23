@@ -1150,8 +1150,15 @@ button {
 
 /* ---- Output area ---- */
 
+/* A column, so the reasoning panel and the canvas divide this space
+   between them. They used to be plain blocks: the panel took its
+   natural height and the canvas asked for 100% of the section on top
+   of it, so a long reasoning trace pushed the canvas past the clip
+   below and neither child scrolled. The trace was unreachable. */
 #output-section {
   position: relative;
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
   overflow: hidden;
@@ -1159,7 +1166,8 @@ button {
 }
 
 #output-area {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   background: var(--bg-surface);
   border: 1px solid var(--border);
@@ -2588,7 +2596,13 @@ input[type="checkbox"].app-checkbox:checked::after {
 
 /* ---- Thinking / reasoning panel ---- */
 
+/* Natural height, and the cap goes on the trace below rather than
+   here. Deliberately not `display: flex` on this element: a `details`
+   lays its disclosure content out through a slot, and making it a flex
+   container let the trace escape the panel's box and draw over the
+   canvas instead of scrolling inside it. */
 #thinking-panel {
+  flex: 0 0 auto;
   margin-bottom: 10px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 4px;
@@ -2605,11 +2619,33 @@ input[type="checkbox"].app-checkbox:checked::after {
   font-size: 11px;
 }
 
+/* The trace scrolls in its own box, capped in viewport units rather
+   than as a percentage of the column: a percentage needs a resolved
+   parent height, which a `details` in a flex column does not reliably
+   give, and that is what left a long trace unscrollable. The heading
+   sits outside this box, so it stays put. */
 #thinking-content {
+  max-height: 30vh;
+  overflow-y: auto;
   margin-top: 8px;
   white-space: pre-wrap;
   opacity: 0.75;
   font-style: italic;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+#thinking-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+#thinking-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+#thinking-content::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
 }
 
 /* ---- Model selector + dynamic param panel ---- */

@@ -647,6 +647,62 @@ already used throughout `server.py`. The heartbeat test asserts the
 longest gap between ticks of a concurrent task rather than a tick
 count, because a blocked loop still ticks either side of the block.
 
+### Found while verifying: the channel convention was never exercised
+
+Item 276 failed on 2026-09-22, and the interesting part is why it could
+not have passed before. Every DiffusionGemma run in `results/` before
+that day had `thinking=False`, so `_split_thinking` had never once run
+against the model. It was written from the convention and left
+unverified for a month.
+
+The convention itself is right, confirmed against the NF4 checkpoint
+the registry actually points at. Its `chat_template.jinja` renders
+reasoning as `'<|channel>thought\n' + thinking_text + '\n<channel|>'`
+(line 242), which is exactly the pair the adapter looks for.
+
+The template also settled where the opener comes from, which a saved
+run cannot answer: on an ordinary turn the generation prompt ends at
+`'<|turn>model\n'` (line 384) and the model emits the opener itself, so
+it is inside the generated slice. Only a tool-response turn pre-fills
+`'<|channel>thought\n'` into the prompt (line 385), leaving the bare
+label in the slice. Sanitizing removes the opener either way, so the
+artifact looks identical and both spellings are handled.
+
+What is wrong is the assumption that a run reaches the close marker.
+DiffusionGemma's `max_new_tokens` defaults to 256, and a reasoning model
+given 256 tokens does not finish reasoning: the saved run opens the
+channel and stops mid-outline. With no close marker there was nothing to
+split, and the output was reported as the answer with a bare `thought`
+at its head, because `sanitize` strips the markers around that label and
+not the label.
+
+An unclosed channel now reports everything as reasoning and no answer,
+which is what it is. Item 276 gained the instruction to raise the budget
+first, since the check is untestable at the default.
+
+### Found while verifying: the reasoning panel could not scroll
+
+Raising DiffusionGemma's budget for item 276 made the panel long enough
+to expose this. `#thinking-panel` and `#output-area` were plain blocks
+inside `#output-section`, which sets `overflow: hidden`. The panel took
+its natural height and the canvas asked for `height: 100%` of the
+section on top of it, so a long trace pushed the canvas past the clip
+and neither child scrolled. Everything past the first screenful of
+reasoning was unreachable.
+
+The section is a flex column now and the trace scrolls in its own box.
+The first attempt at the cap was wrong in an instructive way: it made
+the `details` a flex column so the cap would land on the trace rather
+than the heading, and the trace then escaped the panel's box and drew
+over the canvas, because a `details` lays its disclosure content out
+through a slot rather than as an ordinary child. The cap belongs on the
+content, in viewport units that need no resolved parent height, and the
+`details` stays a plain block. A test asserts it is not a flex
+container, since that is the mistake that looks correct.
+
+Only one thing measures either element, a tooltip reading
+`getBoundingClientRect().top`, which is unaffected.
+
 ### ROADMAP-03, a down payment made outside the campaign, 2026-08-30
 
 `ROADMAP-03` observes that DiffusionGemma's `entropy_signal` "actually

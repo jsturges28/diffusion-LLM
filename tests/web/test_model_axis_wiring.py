@@ -163,6 +163,33 @@ def test_the_prompt_copy_reads_the_input_mode() -> None:
     assert "PROMPT_MODE_COPY" in region
 
 
+def test_the_reasoning_panel_can_scroll() -> None:
+    """A long trace was unreachable: the panel and the canvas were
+    plain blocks in a section that hides its overflow, so the panel
+    took its natural height and pushed the canvas past the clip
+    while neither of them scrolled."""
+    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    panel = css[css.index("#thinking-content {"):][:400]
+
+    assert "overflow-y: auto" in panel
+    assert "max-height" in panel
+    section = css[css.index("#output-section {"):][:400]
+    assert "flex-direction: column" in section
+
+
+def test_the_reasoning_details_is_not_a_flex_container() -> None:
+    """The first attempt at the cap made the `details` itself a flex
+    column, which let the trace escape the panel's box and draw over
+    the canvas: a `details` lays its disclosure content out through a
+    slot. The cap belongs on the content, in units that need no
+    resolved parent height."""
+    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    panel = css[css.index("#thinking-panel {"):][:400]
+
+    assert "display: flex" not in panel
+    assert "max-height" not in panel
+
+
 def test_the_markup_ships_the_chat_wording() -> None:
     """Every model today is instruction-tuned, and a page with none
     loaded should read as chat rather than as a blank the script has

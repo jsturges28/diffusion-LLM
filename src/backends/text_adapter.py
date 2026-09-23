@@ -338,10 +338,21 @@ class DgemmaTextAdapter(ChatTextAdapter):
     )
 
     def split_channels(self, raw: str) -> Tuple[str, str]:
-        """``<|channel>thought ... <channel|>``, then the answer."""
+        """``<|channel>thought ... <channel|>``, then the answer.
+
+        An opener with no close marker means the budget ran out while
+        the model was still reasoning, so everything it produced is
+        reasoning and there is no answer yet. Reporting that as the
+        answer put a bare ``thought`` label at the head of a reply,
+        because sanitizing removes the markers around the label but
+        not the label itself.
+        """
         assert isinstance(raw, str), "split takes a string"
         if _CHANNEL_CLOSE not in raw:
-            return "", self.sanitize(raw).strip()
+            opened = _opened_channel(raw)
+            if opened is None:
+                return "", self.sanitize(raw).strip()
+            return self.sanitize(opened).strip(), ""
         head, _, answer = raw.rpartition(_CHANNEL_CLOSE)
         if _CHANNEL_OPEN in head:
             head = head.split(_CHANNEL_OPEN, 1)[1]
@@ -354,6 +365,28 @@ class DgemmaTextAdapter(ChatTextAdapter):
 
 SMOLLM3_TEXT = Smollm3TextAdapter()
 DGEMMA_TEXT = DgemmaTextAdapter()
+
+# The template's own label for the reasoning channel. It follows
+# the opener as a literal word rather than as a token.
+_CHANNEL_LABEL = "thought"
+
+
+def _opened_channel(raw: str) -> Optional[str]:
+    """The reasoning after an opener, or None if none was opened.
+
+    Both spellings, because which one arrives depends on where the
+    prompt ended. The template has the model emit
+    ``<|channel>thought`` on an ordinary turn, and pre-fills the same
+    opener on a tool-response turn, leaving only the label in the
+    generated slice. Keyed on the template's own literals either way
+    rather than on a guess.
+    """
+    if _CHANNEL_OPEN in raw:
+        after = raw.split(_CHANNEL_OPEN, 1)[1]
+        return after.replace(_CHANNEL_LABEL, "", 1)
+    if raw.lstrip().startswith(_CHANNEL_LABEL):
+        return raw.lstrip()[len(_CHANNEL_LABEL):]
+    return None
 
 
 def _collect_ids(ids: Set[int], value: Any) -> None:

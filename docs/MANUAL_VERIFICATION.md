@@ -2746,6 +2746,18 @@ change is that nothing observable moves.
     `<channel|>` rather than think tags, and the two conventions are
     now separate methods. A swap would show as the whole output landing
     in one panel.
+
+    **Raise Max Tokens well past 256 first**, or this cannot pass. On
+    2026-09-22 it did not, and the reason was not the split: this was
+    the first run anyone had ever made with this model's thinking
+    enabled, and at 256 tokens a reasoning model never finishes
+    reasoning, so the closing `<channel|>` is never emitted and there
+    is no answer to separate. The channel opens and the budget ends.
+
+    That case now reports the whole output as reasoning, which is what
+    it is. It used to be reported as the answer, which put a bare
+    `thought` at the head of a reply, because sanitizing strips the
+    markers around that label but not the label itself.
 277. **The prompt count still matches the run.** Type a prompt and note
     the counter, then generate and open the run in Analytics: the
     prompt length recorded should equal what the counter said. Both
@@ -2766,3 +2778,18 @@ change is that nothing observable moves.
     catching up, the UI should stay responsive: hover a hyperparameter,
     open the model dropdown, press Escape. Counting used to run on the
     socket's event loop, so everything queued behind one keystroke.
+282. **A long reasoning trace scrolls.** On DiffusionGemma with Max
+    Tokens well past 256 and Thinking on, generate until the Reasoning
+    panel fills. It should scroll inside itself, with the Reasoning
+    heading staying put, and the answer should still be visible below
+    it rather than pushed out of view.
+
+    The panel and the canvas were plain blocks in a section that hides
+    its overflow, so the panel took its natural height and pushed the
+    canvas past the clip while neither of them scrolled. Anything past
+    the first screenful of reasoning was unreachable.
+
+    Then check it does not *overlap* the canvas, which the first fix
+    caused: capping the panel by making the `details` a flex column let
+    the trace escape its box and draw over the output. The cap is on
+    the trace, in viewport units, and the `details` is a plain block.
