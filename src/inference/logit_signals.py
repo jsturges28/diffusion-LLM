@@ -1,8 +1,8 @@
 """Read XAI signals off logits without materializing a softmax.
 
 Every signal this project shows comes from one forward pass's logits:
-how confident the model was, and in time how spread its distribution
-was and what else it was considering. The obvious way to get any of
+how confident the model was, how spread its distribution was, and
+eventually what else it was considering. The obvious way to get any of
 them is `softmax(logits)`, and the obvious way does not fit: a
 probability tensor over the whole canvas is hundreds of megabytes on a
 card already holding the model.
@@ -98,6 +98,34 @@ def picked_confidence(
         spread = torch.logsumexp(wide, dim=-1)
         conf_chunks.append(torch.exp(taken - spread))
     return torch.cat(conf_chunks, dim=0)
+
+
+def entropy_nats(logits: torch.Tensor) -> torch.Tensor:
+    """Shannon entropy of each position's distribution, in nats.
+
+    ``H = logsumexp(z) - sum(softmax(z) * z)``, which is the stable
+    rearrangement of ``-sum(p log p)``. The softmax still exists, but
+    only for one chunk at a time, which is the whole difference.
+
+    Nats rather than bits to match the autoregressive sampler, which
+    has reported nats since entropy first appeared there. Two units
+    for one quantity would make the Analytics scale a guess.
+    """
+    assert logits.dim() == 2, "expected (positions, vocabulary)"
+    chunks = []
+    for chunk in torch.split(
+        logits, LOGIT_CHUNK_POSITIONS, dim=0
+    ):
+        wide = _widen(chunk)
+        spread = torch.logsumexp(wide, dim=-1)
+        probs = torch.softmax(wide, dim=-1)
+        weighted = (probs * wide).sum(dim=-1)
+        chunks.append(spread - weighted)
+    value = torch.cat(chunks, dim=0)
+    # Clamped because the arithmetic can land a hair below zero on a
+    # near-deterministic distribution, and a negative entropy would
+    # render as a colour outside the scale rather than as an error.
+    return value.clamp_min(0.0)
 
 
 def _widen(chunk: torch.Tensor) -> torch.Tensor:

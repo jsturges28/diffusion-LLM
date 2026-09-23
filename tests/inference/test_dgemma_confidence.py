@@ -61,7 +61,7 @@ def _logits(positions: int, *, seed: int = 0) -> torch.Tensor:
 def test_the_argmax_is_unchanged() -> None:
     logits = _logits(64)
 
-    ids, _ = FrameQueueStreamer._from_logits(logits)
+    ids, _conf, _spread = FrameQueueStreamer._from_logits(logits)
 
     assert ids == _reference(logits)[0]
 
@@ -69,7 +69,7 @@ def test_the_argmax_is_unchanged() -> None:
 def test_the_probability_is_unchanged() -> None:
     logits = _logits(64)
 
-    _, conf = FrameQueueStreamer._from_logits(logits)
+    _ids, conf, _spread = FrameQueueStreamer._from_logits(logits)
 
     expected = _reference(logits)[1]
     # strict, so a chunking bug that returned the wrong number of
@@ -85,7 +85,7 @@ def test_a_ragged_tail_is_not_dropped() -> None:
     positions = LOGIT_CHUNK_POSITIONS * 2 + 7
     logits = _logits(positions, seed=3)
 
-    ids, conf = FrameQueueStreamer._from_logits(logits)
+    ids, conf, _spread = FrameQueueStreamer._from_logits(logits)
 
     assert len(ids) == positions
     assert len(conf) == positions
@@ -95,7 +95,7 @@ def test_a_ragged_tail_is_not_dropped() -> None:
 def test_a_canvas_smaller_than_one_chunk_works() -> None:
     logits = _logits(3, seed=5)
 
-    ids, conf = FrameQueueStreamer._from_logits(logits)
+    ids, conf, _spread = FrameQueueStreamer._from_logits(logits)
 
     assert len(ids) == 3
     assert ids == _reference(logits)[0]
@@ -106,8 +106,10 @@ def test_a_batched_leading_dimension_is_squeezed() -> None:
     built from one canvas."""
     logits = _logits(16, seed=7)
 
-    flat, _ = FrameQueueStreamer._from_logits(logits)
-    batched, _ = FrameQueueStreamer._from_logits(logits.unsqueeze(0))
+    flat = FrameQueueStreamer._from_logits(logits)[0]
+    batched = FrameQueueStreamer._from_logits(
+        logits.unsqueeze(0)
+    )[0]
 
     assert flat == batched
 

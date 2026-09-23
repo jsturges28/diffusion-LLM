@@ -223,7 +223,7 @@ def _run_kernel(
             )
         )
         for step in range(schedule.steps_per_block):
-            x, _conf, _transfer, _guess = diffusion_step(
+            x, _conf, _transfer, _guess, _entropy = diffusion_step(
                 x,
                 model,
                 attention_mask,
@@ -366,6 +366,83 @@ def test_guidance_doubles_the_batch() -> None:
     )
 
     assert model.batch_shapes[0][0] == 2
+
+
+# -- the kernel's own outputs, which the reference has none of --
+#
+# Entropy is not in the reference, so these are not differential. They
+# are here because this is where `diffusion_step` is driven, and
+# because a channel wired to the wrong reduction is the defect the
+# report found: DiffusionGemma once emitted argmax confidence under an
+# entropy label.
+
+
+def test_the_step_reports_entropy_distinct_from_confidence() -> None:
+    """Swapping one reduction for the other has to fail something.
+
+    Without this, returning `true_conf` twice passes every other test
+    in the suite: both are per-position floats in a plausible range,
+    and the differential comparison never looks at either.
+    """
+    model = _StubModel()
+    prompt = _prompt()
+    x = torch.full(
+        (1, PROMPT_LEN + GEN_LENGTH), MASK_ID, dtype=torch.long
+    )
+    x[:, :PROMPT_LEN] = prompt
+    prompt_index = x != MASK_ID
+
+    _x, conf, _transfer, _guess, entropy = diffusion_step(
+        x,
+        model,
+        _extended_mask(),
+        prompt_index,
+        0.0,
+        0.0,
+        "low_confidence",
+        PROMPT_LEN + GEN_LENGTH,
+        torch.ones((1, 1), dtype=torch.int64),
+        0,
+    )
+
+    assert conf.shape == entropy.shape
+    assert not torch.allclose(conf, entropy, atol=0.1)
+
+
+def test_entropy_is_in_nats_and_confidence_in_probability() -> None:
+    """The units the manifest declares, checked against the numbers.
+
+    A confidence is bounded by one; an entropy over this vocabulary is
+    not, and on a near-uniform stub it sits near ln(vocab). Getting
+    these the wrong way round is how a mislabelled channel reads.
+    """
+    model = _StubModel()
+    prompt = _prompt()
+    x = torch.full(
+        (1, PROMPT_LEN + GEN_LENGTH), MASK_ID, dtype=torch.long
+    )
+    x[:, :PROMPT_LEN] = prompt
+    prompt_index = x != MASK_ID
+
+    _x, conf, _transfer, _guess, entropy = diffusion_step(
+        x,
+        model,
+        _extended_mask(),
+        prompt_index,
+        0.0,
+        0.0,
+        "low_confidence",
+        PROMPT_LEN + GEN_LENGTH,
+        torch.ones((1, 1), dtype=torch.int64),
+        0,
+    )
+
+    assert bool((conf >= 0.0).all())
+    assert bool((conf <= 1.0).all())
+    assert bool((entropy >= 0.0).all())
+    # The stub's logits are standard normal, so no position is close
+    # to deterministic and every entropy should be well above zero.
+    assert float(entropy.min()) > 1.0
 
 
 def test_nothing_past_the_block_end_is_revealed() -> None:

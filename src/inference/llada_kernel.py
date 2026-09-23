@@ -30,7 +30,10 @@ from typing import Any, Tuple
 import numpy as np
 import torch
 
-from src.inference.logit_signals import picked_confidence
+from src.inference.logit_signals import (
+    entropy_nats,
+    picked_confidence,
+)
 
 # LLaDA's [MASK] token. Every masked position on the canvas holds this
 # id until a step reveals it, so it is both the sentinel the sampler
@@ -206,14 +209,27 @@ def diffusion_step(
     num_transfer_tokens: torch.Tensor,
     step_in_block: int,
 ) -> Tuple[
-    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
 ]:
     """Execute one synchronous diffusion step, mutating x.
 
-    Returns (x, true_conf, transfer_index, x0): the mutated
+    Returns (x, true_conf, transfer_index, x0, entropy): the mutated
     sequence, the per-position probability of the picked token, the
-    boolean mask of positions revealed this step, and the
-    prediction itself for every position.
+    boolean mask of positions revealed this step, the prediction
+    itself for every position, and the entropy in nats of each
+    position's distribution at this step.
+
+    Entropy is this step's value at every position, settled or not,
+    rather than a value frozen when a position was revealed. That is
+    what the signal manifest declares it to be, a channel over frame
+    and position, and it is the more useful reading for a canvas that
+    keeps re-deciding: a committed token whose support is degrading
+    looks different from one whose support is firming up, and a frozen
+    number cannot show either.
     """
     mask_index = x == MASK_ID
 
@@ -237,6 +253,10 @@ def diffusion_step(
     # the ceiling the registry allows, per step, on a card already
     # holding 17 GiB of weights. See `logit_signals`.
     true_conf = picked_confidence(logits[0], x0[0]).unsqueeze(0)
+    # Off the same logits and the same chunked walk, so entropy costs
+    # a second pass over a bounded transient rather than anything the
+    # earlier softmax was holding.
+    entropy = entropy_nats(logits[0]).unsqueeze(0)
     if remasking == "low_confidence":
         x0_p = true_conf.clone()
     elif remasking == "random":
@@ -272,4 +292,4 @@ def diffusion_step(
     # the few that were revealed this step. The rest are what a
     # masked position is currently holding out for, and the display
     # had no way to name them because they stopped here.
-    return x, true_conf, transfer_index, x0
+    return x, true_conf, transfer_index, x0, entropy

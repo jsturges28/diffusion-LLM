@@ -26,11 +26,14 @@ is a case where the two numbers cannot be confused.
 
 from __future__ import annotations
 
+import math
+
 import pytest
 import torch
 
 from src.inference.logit_signals import (
     LOGIT_CHUNK_POSITIONS,
+    entropy_nats,
     picked_confidence,
     top_confidence,
 )
@@ -123,6 +126,68 @@ def test_picked_confidence_can_be_far_below_the_maximum() -> None:
     assert float(unlikely) < 0.01
 
 
+# -- entropy, which is not confidence --
+
+
+def test_entropy_of_a_uniform_distribution_is_log_vocab() -> None:
+    """Hand-computable: four equally likely tokens carry ln 4 nats,
+    and confidence is 0.25. Two numbers that cannot be mistaken for
+    each other, which is the point of the case."""
+    logits = torch.zeros((1, 4))
+
+    entropy = float(entropy_nats(logits))
+    _, conf = top_confidence(logits)
+
+    assert entropy == pytest.approx(math.log(4), abs=1e-5)
+    assert float(conf) == pytest.approx(0.25, abs=1e-5)
+
+
+def test_entropy_of_a_peaked_distribution_is_near_zero() -> None:
+    """The other end, and the pair to the test above: high confidence
+    with low entropy. A channel emitting confidence under an entropy
+    label would get these two backwards."""
+    logits = torch.tensor([[40.0, 0.0, 0.0, 0.0]])
+
+    entropy = float(entropy_nats(logits))
+    _, conf = top_confidence(logits)
+
+    assert entropy == pytest.approx(0.0, abs=1e-5)
+    assert float(conf) == pytest.approx(1.0, abs=1e-5)
+
+
+def test_entropy_matches_the_direct_definition() -> None:
+    """Against `-sum(p log p)` computed from a materialized softmax,
+    which is the formula the stable rearrangement replaces."""
+    logits = _logits(64, seed=7)
+    probs = _softmax_oracle(logits)
+    want = -(probs * torch.log(probs.clamp_min(1e-12))).sum(dim=-1)
+
+    got = entropy_nats(logits)
+
+    assert torch.allclose(got, want, atol=1e-4)
+
+
+def test_entropy_is_never_negative() -> None:
+    """The arithmetic can land a hair below zero on a
+    near-deterministic distribution, and a negative entropy would
+    render as a colour outside the scale rather than as an error."""
+    logits = torch.tensor([[100.0, -100.0, -100.0]])
+
+    assert float(entropy_nats(logits)) >= 0.0
+
+
+def test_entropy_and_confidence_are_not_the_same_series() -> None:
+    """The report found a channel labelled entropy that emitted
+    argmax confidence. Stated as a property so no future channel can
+    be wired to the wrong reduction and still pass."""
+    logits = _logits(32, seed=9)
+
+    entropy = entropy_nats(logits)
+    _, conf = top_confidence(logits)
+
+    assert not torch.allclose(entropy, conf, atol=0.1)
+
+
 # -- chunking, where the tail is easy to lose --
 
 
@@ -147,9 +212,11 @@ def test_every_canvas_width_survives_chunking(
     want_conf, want_ids = probs.max(dim=-1)
 
     ids, conf = top_confidence(logits)
+    entropy = entropy_nats(logits)
 
     assert ids.shape[0] == positions
     assert conf.shape[0] == positions
+    assert entropy.shape[0] == positions
     assert torch.equal(ids, want_ids)
     assert torch.allclose(conf, want_conf, atol=TOLERANCE)
 
@@ -163,8 +230,10 @@ def test_bfloat16_logits_are_widened_before_reducing() -> None:
     narrow = wide.to(torch.bfloat16)
 
     _, conf = top_confidence(narrow)
+    entropy = entropy_nats(narrow)
 
     assert conf.dtype == torch.float32
+    assert entropy.dtype == torch.float32
     # bf16 has about three decimal digits, so agreement with the
     # float32 answer is loose by construction; what is checked is that
     # the reduction happened in the wider type rather than in bf16.

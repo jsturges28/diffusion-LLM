@@ -36,6 +36,7 @@ from src.inference.logit_signals import (
     LOGIT_CHUNK_POSITIONS as _LOGIT_CHUNK_POSITIONS,
 )
 from src.inference.logit_signals import (
+    entropy_nats,
     top_confidence,
 )
 from src.inference.frame_queue import (
@@ -121,8 +122,8 @@ class FrameQueueStreamer(BaseStreamer):
     @staticmethod
     def _from_logits(
         logits: torch.Tensor,
-    ) -> tuple[List[int], List[float]]:
-        """The argmax and its probability, without the probabilities.
+    ) -> tuple[List[int], List[float], List[float]]:
+        """The argmax, its probability, and the spread, cheaply.
 
         A softmax over this vocabulary is the expensive way to ask a
         cheap question. At 256 positions by roughly 262K entries the
@@ -136,19 +137,21 @@ class FrameQueueStreamer(BaseStreamer):
         slice of positions at a time bounds what exists at once to
         one chunk.
 
-        The reduction lives in `logit_signals` now, shared with
-        LLaDA, so the two diffusion models cannot disagree about how
-        much transient memory reading a signal may hold. Entropy and
-        top-k come off the same pass, which is where `ROADMAP-03` is
-        going.
+        Entropy comes off the same bounded walk, which is the
+        generalisation that note anticipated. It lives in
+        `logit_signals` now, shared with LLaDA, so the two diffusion
+        models cannot disagree about what a signal means or about how
+        much transient memory reading one is allowed to hold.
         """
         tensor = logits
         if hasattr(tensor, "dim") and tensor.dim() > 2:
             tensor = tensor[0]
         ids, conf = top_confidence(tensor)
+        spread = entropy_nats(tensor)
         return (
             ids.detach().to("cpu").tolist(),
             conf.detach().to("cpu").tolist(),
+            spread.detach().to("cpu").tolist(),
         )
 
     def _emit(
@@ -157,6 +160,7 @@ class FrameQueueStreamer(BaseStreamer):
         *,
         committed: bool,
         conf_override: Optional[List[float]] = None,
+        entropy: Optional[List[float]] = None,
     ) -> None:
         count = len(ids)
         tokens: List[Dict[str, Any]] = []
@@ -204,6 +208,12 @@ class FrameQueueStreamer(BaseStreamer):
             # a probability.
             if committed or conf_override is not None:
                 token["c"] = round(conf, 4)
+            # Written only where it was measured, on the same
+            # terms as `c` above. A committed canvas arrives
+            # without logits, so it carries no spread rather
+            # than a made-up zero.
+            if entropy is not None:
+                token["e"] = round(float(entropy[i]), 4)
             tokens.append(token)
             resolved.append(not unresolved)
             text_parts.append(
@@ -312,9 +322,12 @@ class FrameQueueStreamer(BaseStreamer):
         **kwargs: Any,
     ) -> None:
         if logits is not None:
-            ids, conf = self._from_logits(logits)
+            ids, conf, spread = self._from_logits(logits)
             self._emit(
-                ids, committed=False, conf_override=conf
+                ids,
+                committed=False,
+                conf_override=conf,
+                entropy=spread,
             )
         elif value is not None:
             self._emit(

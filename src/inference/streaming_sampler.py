@@ -214,6 +214,7 @@ def _build_token_list(
     reveal_conf: torch.Tensor | None = None,
     mask_conf: torch.Tensor | None = None,
     mask_guess: torch.Tensor | None = None,
+    entropy: torch.Tensor | None = None,
 ) -> List[Dict[str, Any]]:
     """Build per-token metadata for the generation region.
 
@@ -238,6 +239,13 @@ def _build_token_list(
     happens once per run on the all-masked opening frame. Those
     positions keep the glyph, because at that point the model has
     genuinely not looked at the canvas.
+
+    ``entropy`` is this step's spread at every position, in nats, and
+    is written as ``e`` whether or not the position has settled.
+    Unlike ``c`` it is not frozen at reveal: the signal manifest
+    declares it over frame and position, and freezing it would make
+    that declaration false while hiding the thing it is for, which is
+    watching a position's support move.
     """
     gen_ids = x[0, prompt_len:].tolist()
     conf = (
@@ -249,6 +257,7 @@ def _build_token_list(
     guess = (
         mask_guess.tolist() if mask_guess is not None else None
     )
+    spread = entropy.tolist() if entropy is not None else None
     if guess is not None:
         assert len(guess) == len(gen_ids), (
             "a prediction per generated position, or none at all"
@@ -273,6 +282,8 @@ def _build_token_list(
                 token["c"] = round(float(pred[i]), 4)
         elif conf is not None:
             token["c"] = round(float(conf[i]), 4)
+        if spread is not None:
+            token["e"] = round(float(spread[i]), 4)
         tokens.append(token)
     return tokens
 
@@ -424,24 +435,29 @@ async def streaming_generate(
             ):
                 return
 
-            x, step_conf, step_transfer, step_guess = (
-                await asyncio.to_thread(
-                    diffusion_step,
-                    x,
-                    model,
-                    attention_mask,
-                    prompt_index,
-                    cfg_scale,
-                    temperature,
-                    remasking,
-                    block_end,
-                    num_transfer_tokens,
-                    i,
-                )
+            (
+                x,
+                step_conf,
+                step_transfer,
+                step_guess,
+                step_entropy,
+            ) = await asyncio.to_thread(
+                diffusion_step,
+                x,
+                model,
+                attention_mask,
+                prompt_index,
+                cfg_scale,
+                temperature,
+                remasking,
+                block_end,
+                num_transfer_tokens,
+                i,
             )
             gen_transfer = step_transfer[0, prompt_len:]
             gen_step_conf = step_conf[0, prompt_len:]
             gen_step_guess = step_guess[0, prompt_len:]
+            gen_step_entropy = step_entropy[0, prompt_len:]
             reveal_conf[gen_transfer] = (
                 gen_step_conf[gen_transfer]
             )
@@ -474,6 +490,7 @@ async def streaming_generate(
                 "tokens": _build_token_list(
                     x, prompt_len, tokenizer, reveal_conf,
                     gen_step_conf, gen_step_guess,
+                    gen_step_entropy,
                 ),
                 "revealed": born,
             }
@@ -616,24 +633,29 @@ async def streaming_resume(
         ):
             return
 
-        x, step_conf, step_transfer, step_guess = (
-            await asyncio.to_thread(
-                diffusion_step,
-                x,
-                model,
-                attention_mask,
-                prompt_index,
-                cfg_scale,
-                temperature,
-                remasking,
-                block_end,
-                num_transfer_tokens,
-                i,
-            )
+        (
+            x,
+            step_conf,
+            step_transfer,
+            step_guess,
+            step_entropy,
+        ) = await asyncio.to_thread(
+            diffusion_step,
+            x,
+            model,
+            attention_mask,
+            prompt_index,
+            cfg_scale,
+            temperature,
+            remasking,
+            block_end,
+            num_transfer_tokens,
+            i,
         )
         gen_transfer = step_transfer[0, prompt_len:]
         gen_step_conf = step_conf[0, prompt_len:]
         gen_step_guess = step_guess[0, prompt_len:]
+        gen_step_entropy = step_entropy[0, prompt_len:]
         reveal_conf[gen_transfer] = (
             gen_step_conf[gen_transfer]
         )
@@ -662,6 +684,7 @@ async def streaming_resume(
             "tokens": _build_token_list(
                 x, prompt_len, tokenizer, reveal_conf,
                 gen_step_conf, gen_step_guess,
+                gen_step_entropy,
             ),
             "revealed": born,
         }
