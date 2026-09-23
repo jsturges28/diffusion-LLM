@@ -2007,24 +2007,41 @@ Still candidate directions:
   idiomatic for an ML repo and encodes real structure (two incompatible
   `transformers` universes plus an optional feature layer).
 
-## Dependency management: potential pyproject.toml consolidation
+## Dependency management: consolidated, 2026-09-23
 
-The flat `requirements-*.txt` layout is intentional for now. Consider migrating
-to a single `pyproject.toml` with `[project.optional-dependencies]` extras (e.g.
-`dgemma`, `desktop`, a future `ar` for autoregressive models) plus a lockfile
-(uv / pip-tools) for the transitive pinning the flat freezes currently provide.
-That collapses everything into one authoritative file and scales to new groups
-without adding files. Triggers to make the switch: (a) the file count would
-exceed ~4-5, (b) a new incompatible environment is added (e.g. an autoregressive
-model class), or (c) the project is ever packaged/distributed. Until one of
-those, the flat files are simpler and reproducibility is already covered.
+**Done, and the shape this section originally proposed was wrong.** The
+trigger it named fired twice: `.venv-ar` was the new incompatible
+environment, and Mamba's `.venv-ssm` would have been the second. `DEPS-01`
+was taken before that one arrives, so the fifth environment lands into a
+structure that can hold it.
 
-A `pyproject.toml` now exists, but it is **tool configuration only**: no
-`[build-system]` and no `[project]` table, since the app runs from source. It
-holds ruff and black, both pinned to 70 columns so a stray `black .` cannot
-reflow the whole tree. If the consolidation above ever happens, that file is
-where the dependency groups would go, and the tool tables already there stay
-as they are.
+The original proposal was `[project.optional-dependencies]` extras. That
+cannot work here, and it is worth stating plainly so nobody re-proposes it.
+Extras have to co-resolve inside one project, so they cannot hold
+`transformers==4.38.2` and `transformers==5.13.0` at the same time. Mutual
+incompatibility is this project's defining constraint, which makes extras the
+one shape unable to express it.
+
+What exists instead is `[tool.diffusion-llm]` in `pyproject.toml`: one table
+per environment, each listing only its **direct** requirements plus its lock
+file, with a shared Python version and index. `scripts/lock_environments.py`
+resolves each independently through `uv` and writes the four
+`requirements*.txt` files with hashes. Still no `[project]` or
+`[build-system]` table, for the original reason and now a second one: nothing
+here is a single resolvable unit.
+
+Two details worth keeping. Each lock carries a digest of the manifest entry
+that produced it, so `tests/test_lock_environments.py` catches a requirements
+list edited without regenerating, offline and with no resolver. And
+regeneration is constrained by the lock it replaces, so it cannot move a
+version: every saved run records its library versions, and a resolver that
+helpfully upgraded torch would change what the models do while looking like a
+tidying commit. Upgrading is a separate act, done by removing the constraint
+on purpose.
+
+The registry no longer spells out interpreter paths. A model names an
+environment and `src/backends/environments.py` resolves it, which removes the
+fourth independent copy of each environment's identity.
 
 ## References
 

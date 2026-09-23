@@ -367,7 +367,7 @@ on real hardware.
 | ROADMAP-05 | high | M | done | none | One text adapter per model; `input_mode` became a fourth axis, see entry |
 | ROADMAP-02 | medium | M | done | none | Context half landed too: an unrunnable prompt is refused and the count is off the event loop |
 | TRUST-03 | high | L | done | none | Both Hub models pinned to a commit, local artifact carries a manifest; branch-move case unverifiable, see entry |
-| DEPS-01 | medium | L | ready | none | |
+| DEPS-01 | medium | L | done | none | One manifest, four generated locks with hashes and a drift guard; 2.6 GiB of orphans dropped across two environments, one dgemma generation left for hardware |
 | ROADMAP-03 | high | L | ready | none | Owns the signal axis ROADMAP-01 left alone |
 | ORG-03 | medium | M | ready | none | |
 | ROADMAP-04 | medium | L | ready | none | Unblocked but deliberately last: multimodal is phase 3 |
@@ -448,9 +448,11 @@ the same two files and doing them apart meant migrating
 same call sites. Resource requirements stayed as the single
 `min_vram_gib`; see Deviations. What remains is to extract
 model-specific text adapters (`ROADMAP-05`), migrating and testing the
-three existing models first. Pin and attest artifacts (`TRUST-03`) and
-consolidate environment intent (`DEPS-01`) before `.venv-ssm` exists. The
-Mamba baseline comes only after those are validated. The axis-aware signal
+three existing models first. Pinning and attesting artifacts (`TRUST-03`)
+and consolidating environment intent (`DEPS-01`) are both done, so
+`.venv-ssm` now lands into a manifest that can hold it: adding a fifth
+environment is one table plus one regeneration. The Mamba baseline comes
+after the two hardware items those left behind. The axis-aware signal
 manifest (`ROADMAP-03`) precedes its native XAI phase and diffusion entropy
 and top-k, though not necessarily the baseline decode. Consolidate the LLaDA
 sampling kernel (`ORG-03`) before adding diffusion entropy and top-k to it.
@@ -1197,6 +1199,134 @@ arrive as different base classes, and `KeyboardInterrupt` does not inherit from
 real-world ending through untouched, and mutating the clause to that does fail
 two of these tests. One real end-to-end build is still worth doing whenever the
 checkpoint is next rebuilt, which is all the plan asked hardware for.
+
+### DEPS-01
+
+**The shape this finding's own cited evidence proposed cannot work.**
+`ROADMAP.md` suggested "a single `pyproject.toml` with
+`[project.optional-dependencies]` extras". Extras have to co-resolve inside one
+project, so they cannot hold `transformers==4.38.2` and `transformers==5.13.0`
+at once, and mutual incompatibility is the entire reason this repo has three
+environments. The finding's own Direction is right where the ROADMAP was wrong
+("lock each incompatible environment separately"), and that note is now
+corrected in place, because leaving it would have sent a future session down an
+unsatisfiable path with a citation to back it up.
+
+**Four measurements decided the design, and each was cheap enough that not
+taking them was the real mistake in how these files got here.**
+
+- **Locking is provably non-upgrading.** Passing the current freeze as
+  `--constraint` produced zero version changes across all four locks: `ar` 54 to
+  54 pins, `dgemma` 84 to 67, core 100 to 71, desktop effectively 1 to 14. This
+  matters more than tidiness. Every saved run records its library versions, and
+  `TRUST-03` had just pinned model revisions so a run names its weights; a
+  resolver that helpfully upgraded torch in the same week would have moved the
+  other half of the same record while looking like a cleanup.
+- **Both CUDA families are not required.** All 14 `-cu12` packages in
+  `.venv-dgemma` have no parent outside the cu12 island, `torch==2.13.0`
+  requires only CUDA 13, and `bitsandbytes` pins no CUDA at all. A fresh resolve
+  dropped all 14 unprompted. They are residue from an in-place torch upgrade pip
+  never cleaned, and removing them took `.venv-dgemma` from 7.2 GiB to 4.9 GiB.
+  Correct, and see "the prune needed a second step" below for how believing it
+  too completely still broke the worker.
+- **No custom wheel index exists.** All four resolved from plain PyPI,
+  including `torch==2.13.0` with the CUDA 13 toolkit. The finding's
+  "unrecorded wheel-index metadata" turned out to be recordable as one line.
+- **Raising ruff to `py312` is lint-neutral**: 174 findings under both
+  `py311` and `py312`.
+
+**The drift guard is a digest, not a re-resolve.** Proving a lock is what the
+manifest *would* produce needs the network, minutes, and an index that answers
+the same way twice. Proving it *was* produced from this manifest entry costs a
+hash of a dict and catches the thing that actually decays: a requirements list
+edited without regenerating. The digest covers canonical JSON with sorted keys
+rather than the TOML text, so reordering a list does not invalidate a lock that
+would compile identically, and both halves of that are tested. Without this the
+locks would drift back into being the only record of intent, which is exactly
+the state this finding describes.
+
+**Three packages were nearly deleted, and each one was a different kind of
+near-miss.** The first cut of the prune list came from "installed but not in any
+lock", which is the obvious rule and the wrong one.
+
+- `uvloop` and `httptools` are selected by uvicorn on its own, because it runs
+  with `loop="auto"` and `http="auto"`. Removing them would not have failed
+  anything; it would have silently moved the supervisor to the asyncio event
+  loop and the pure-Python HTTP parser. Declaring `uvicorn[standard]` instead
+  looked tidier and was worse: that extra pins `watchfiles==1.3.0`, which this
+  environment does not have, so it would have forced an upgrade to express a
+  fact about two packages already installed. They are named individually.
+- `pygobject` and `pycairo` are the GTK half of the desktop backend.
+  `desktop.py:229` imports `gi.repository` to set the Wayland app_id, inside a
+  `try`, so removing them would have degraded quietly rather than crashed.
+- `pillow` and `protobuf` survive in the DiffusionGemma environment despite a
+  resolver dropping them, because they are declared only as optional extras of
+  `transformers` and `sentencepiece` and reached for at runtime: protobuf when
+  converting a SentencePiece tokenizer, pillow for image preprocessing, and that
+  checkpoint's config carries a full `vision_config`. Writing down "needed even
+  though nothing declares it" is precisely the intent this finding wants
+  recorded, and it is the one thing a `pip freeze` could never say.
+
+**The desktop overlay was the only file that was not actually pinned.** It
+carried `pywebview[qt]==6.2.1` and nothing else, so PyQt6 and its Qt runtime
+were free to move on any reinstall. A fresh resolve picks `pyqt6-qt6==6.11.2`
+and `pyqt6-sip==13.12.0` where 6.11.1 and 13.11.1 are installed and working.
+Those are pinned at the working versions, in the manifest, with the reason
+attached: the sandbox has no display, so an upgrade here cannot be verified in
+the same pass that makes it. The generated file also emits a real
+`-r requirements.txt` rather than only recording `extends` in a comment, which
+was a genuine defect in the first version: it would still have installed, just
+a native window with no app underneath it.
+
+**The registry names an environment, not a path.** `venv_python` made each
+environment's identity exist in four independent places: its lock, its setup
+instructions, the agent conventions, and the registry. Four copies of one fact
+is three chances to be wrong, and nothing compared them. `src/backends/environments.py`
+resolves a name through the same table the locks come from, and a test asserts
+no `bin/python` path has crept back into the registry. An overlay resolves to
+the interpreter of whatever it extends, since the desktop packages live in
+core's environment and a desktop-specific path would name a directory nobody
+creates.
+
+**The prune needed a second step, and finding out cost an activation.** The
+analysis above is right that nothing requires the 14 cu12 wheels, and the lock
+that omits them is correct. Uninstalling them package by package still broke the
+worker: `import torch` failed with "libcudnn.so.9: cannot open shared object
+file", surfacing in the menu as the uninformative "worker exited during startup
+(code 1)".
+
+The cause is file collision, not dependency. `nvidia-cudnn-cu12` and
+`nvidia-cudnn-cu13` both own `nvidia/cudnn/lib/libcudnn.so.9`, and nccl and
+cusparselt collide the same way. Uninstalling the cu12 package deletes the
+shared file and leaves the cu13 package's metadata intact with no library
+behind it. So the environment satisfied its lock, reported every package
+present, and could not load torch. The repair is a `--force-reinstall
+--no-deps` of the three cu13 packages, and `--no-deps` is load-bearing: without
+it cuDNN drags `nvidia-cublas-cu12` back in and costs most of the saving for a
+library torch does not use, since it wants `libcublas.so.13`.
+
+**The methodological error is the part worth keeping.** Two methods were cited
+above as agreeing, a reverse-dependency walk and a fresh resolve, and that was
+presented as corroboration. It was not: both read the same declared metadata, so
+they could only ever agree, and neither can see a file two wheels both claim or
+a library loaded dynamically. The check that finds this class of problem is
+`ldd` on `libtorch_cuda.so` looking for "not found", which takes a second and
+was not run until after the breakage. Independence has to mean a different kind
+of evidence, not a second query against the same source.
+
+**The recovery instruction handed back was also wrong**, in a way that made the
+breakage look worse than it was. It said to reinstall from
+`requirements-dgemma.txt`, but the regenerated lock no longer names the pruned
+packages, so the install reported everything already satisfied and repaired
+nothing. Recovery from a prune has to come from the *previous* lock, which is
+`git show HEAD:requirements-dgemma.txt`.
+
+**What remains for hardware.** One DiffusionGemma generation, since the sandbox
+has no GPU: the stack now imports and links cleanly, and `pillow` and `protobuf`
+are the pair to suspect if a load ever fails on an import. The desktop window,
+since there is no display. Everything else was verified in session: core went
+from 119 distributions to 84 and dgemma from 7.2 GiB to 4.9, both matching their
+locks exactly, with the full suite, the ratchet and all 381 browser tests green.
 
 ### LIFE-06
 
