@@ -3413,6 +3413,79 @@ function overlaySeriesCommitSteps(series) {
 // overlayEntropyAvailable so the pre-edit snapshot can be tested the
 // same way: it was saved by the same code path but predates the
 // signal on older runs.
+// ---- The signal manifest ----
+//
+// A run says what its signals measure and what they vary over, so a
+// view does not have to guess from where a number is stored. Before
+// this, everything read the final frame, which is right for an
+// autoregressive position decided once and silently wrong for a
+// diffusion position re-decided at every denoising step: the value
+// shown was whatever the last step happened to hold.
+//
+// Absent on every run saved before the manifest existed, and those
+// read exactly as they did before: one value per position.
+
+// The shapes this page can actually draw. An axis pair outside this
+// list is not a bug to hide, it is a channel a future model declared
+// and this build has no view for, and saying so is the point.
+var ENTROPY_SHAPES = ["position", "frame|position"];
+
+// A channel's axes as one comparable string. Sorted deliberately not
+// at all: "frame|position" is the declaration order, and treating
+// ("frame","position") and ("position","frame") as different would
+// invent a distinction nobody makes.
+function channelShape(channel) {
+  if (!channel || !channel.axes || !channel.axes.length) {
+    return "";
+  }
+  return channel.axes.join("|");
+}
+
+// One declared channel by name, or null when the run declares none.
+function signalChannel(run, name) {
+  var signals = (run && run.signals) || [];
+  for (var i = 0; i < signals.length; i++) {
+    if (signals[i] && signals[i].name === name) {
+      return signals[i];
+    }
+  }
+  return null;
+}
+
+// Which frame a channel should be read at. A per-position channel is
+// the same in every frame, so the final one is as good as any and is
+// what the charts already used. A channel that varies by frame has to
+// follow the scrub, or the reader is shown one arbitrary step.
+function channelFrameIndex(channel, series) {
+  var finalIndex = overlaySeriesFinalIndex(series);
+  if (channelShape(channel) !== "frame|position") {
+    return finalIndex;
+  }
+  if (overlayFrameIndex > finalIndex) {
+    return finalIndex;
+  }
+  return overlayFrameIndex;
+}
+
+// Why the entropy view is or is not drawable: "ok", "absent" when the
+// run captured none, or "unsupported" when it declared a shape no
+// view here understands. Three answers rather than a boolean, because
+// hiding the section for the third case is how a silently dropped
+// channel would look.
+function entropyAvailability(data) {
+  var series = overlaySeriesOf(data, false);
+  var channel = signalChannel(data, "entropy");
+  if (channel) {
+    if (ENTROPY_SHAPES.indexOf(channelShape(channel)) === -1) {
+      return "unsupported";
+    }
+    return framesHaveEntropy(series) ? "ok" : "absent";
+  }
+  // No manifest: a run from before this existed. Fall back to the
+  // probe those runs were always read with.
+  return framesHaveEntropy(series) ? "ok" : "absent";
+}
+
 function framesHaveEntropy(series) {
   var final = overlaySeriesFinal(series);
   if (!final) {
@@ -5239,6 +5312,38 @@ function clearEntropyChart() {
   if (section) {
     section.hidden = true;
   }
+  var notice = document.getElementById("entropy-unavailable");
+  if (notice) {
+    notice.hidden = true;
+  }
+}
+
+// The run captured entropy, and declared it in a shape no view here
+// understands. Name the shape: the reader is either looking at a run
+// from a newer build, or at a channel whose declaration is wrong, and
+// either way the axes are the useful thing to show.
+function showEntropyUnavailable(data) {
+  chartEntropy = destroyChart(chartEntropy);
+  chartInstances.entropy = null;
+  clearTokenHighlight();
+  var section = document.getElementById("entropy-section");
+  var notice = document.getElementById("entropy-unavailable");
+  var wrap = section
+    ? section.querySelector(".chart-wrap")
+    : null;
+  if (!section || !notice) {
+    return;
+  }
+  section.hidden = false;
+  if (wrap) {
+    wrap.hidden = true;
+  }
+  var channel = signalChannel(data, "entropy");
+  notice.textContent =
+    "This run records entropy over "
+    + channelShape(channel).replace("|", " and ")
+    + ", which this version has no chart for.";
+  notice.hidden = false;
 }
 
 // Per-position entropy for one frame series, read off its final
@@ -5247,8 +5352,14 @@ function clearEntropyChart() {
 // Mirrors the generator's entropyProfileValues. Runs over both the
 // open run and its pre-edit snapshot, which is why it takes frames
 // rather than the payload.
-function entropySeriesFrom(series) {
-  var final = overlaySeriesFinal(series) || [];
+// The values at one frame. `at` is which frame to read, which the
+// caller takes from the channel's declared axes: the final frame for a
+// per-position channel, the scrubbed one for a trajectory.
+function entropySeriesFrom(series, at) {
+  var index = typeof at === "number"
+    ? at
+    : overlaySeriesFinalIndex(series);
+  var final = overlaySeriesAt(series, index) || [];
   var values = [];
   var texts = [];
   for (var i = 0; i < final.length; i++) {
@@ -5380,7 +5491,10 @@ function entropyOriginalSeries(data, divergence) {
   if (!framesHaveEntropy(baseline)) {
     return null;
   }
-  return entropySeriesFrom(baseline);
+  var channel = signalChannel(data, "entropy");
+  return entropySeriesFrom(
+    baseline, channelFrameIndex(channel, baseline)
+  );
 }
 
 // One bar per generated position, tall and hot where the model was
@@ -5390,16 +5504,41 @@ function entropyOriginalSeries(data, divergence) {
 // a time series. Hidden for runs saved without the entropy signal.
 function renderEntropyChart(data) {
   var section = document.getElementById("entropy-section");
-  if (!chartsAvailable || !overlayEntropyAvailable(data)) {
+  if (!chartsAvailable) {
     clearEntropyChart();
+    return;
+  }
+  var availability = entropyAvailability(data);
+  if (availability === "absent") {
+    clearEntropyChart();
+    return;
+  }
+  if (availability === "unsupported") {
+    // Said rather than hidden. The run captured entropy in a shape
+    // this build cannot draw, and an empty space is how a channel
+    // dropped by accident would also look.
+    showEntropyUnavailable(data);
     return;
   }
   if (section) {
     section.hidden = false;
+    // Undo whatever the unsupported branch may have hidden, so
+    // switching between two runs does not leave the canvas dark.
+    var wrap = section.querySelector(".chart-wrap");
+    if (wrap) {
+      wrap.hidden = false;
+    }
+    var notice = document.getElementById("entropy-unavailable");
+    if (notice) {
+      notice.hidden = true;
+    }
   }
 
   var divergence = divergencePosition(data);
-  var edited = entropySeriesFrom(overlaySeriesOf(data, false));
+  var series = overlaySeriesOf(data, false);
+  var channel = signalChannel(data, "entropy");
+  var at = channelFrameIndex(channel, series);
+  var edited = entropySeriesFrom(series, at);
   var original = entropyOriginalSeries(data, divergence);
 
   // Labels span the longer run: a branch can outlive or fall short

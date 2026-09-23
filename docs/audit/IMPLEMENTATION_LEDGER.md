@@ -368,7 +368,7 @@ on real hardware.
 | ROADMAP-02 | medium | M | done | none | Context half landed too: an unrunnable prompt is refused and the count is off the event loop |
 | TRUST-03 | high | L | done | none | Both Hub models pinned to a commit, local artifact carries a manifest; branch-move case unverifiable, see entry |
 | DEPS-01 | medium | L | done | none | One manifest, four generated locks with hashes and a drift guard; 2.6 GiB of orphans dropped across two environments, one dgemma generation left for hardware |
-| ROADMAP-03 | high | L | ready | none | Owns the signal axis ROADMAP-01 left alone |
+| ROADMAP-03 | high | L | needs hardware | none | Signals declared by axis and unit, diffusion entropy added, LLaDA's per-step softmax cut 6.2x; top-k left downstream with a budget field |
 | ORG-03 | medium | M | done | none | One kernel owns the step and the schedule; the dormant loop is a quarantined reference with a differential test, and the lint baseline fell 118 to 70 |
 | ROADMAP-04 | medium | L | ready | none | Unblocked but deliberately last: multimodal is phase 3 |
 | META-03 | medium | M | deferred | milestone boundaries | |
@@ -1199,6 +1199,92 @@ arrive as different base classes, and `KeyboardInterrupt` does not inherit from
 real-world ending through untouched, and mutating the clause to that does fail
 two of these tests. One real end-to-end build is still worth doing whenever the
 checkpoint is next rebuilt, which is all the plan asked hardware for.
+
+### ROADMAP-03
+
+**Two thirds of the memory complaint was already fixed, and the entry above at
+"a down payment made outside the campaign" exists so this finding is not
+credited with it.** What remained was the manifest, the axes, the budgets, and
+the channels themselves. That entry's closing line, that only the reduction
+technique had been borrowed "on one existing channel, for one model", turned out
+to be the useful part: the same defect was still live in LLaDA.
+
+**LLaDA was computing a whole-canvas softmax every step to read one number per
+position**, the identical mistake DiffusionGemma had already had removed.
+Measured against the registry's own bounds:
+
+| Gen length | Softmax tensor | Peak with the cast |
+|---|---|---|
+| 160 (default) | 96 MiB | 193 MiB |
+| 1024 (ceiling) | 513 MiB | 1,027 MiB |
+
+Per denoising step, on a card holding 17 GiB of weights. The chunked form brings
+the default from 96.5 MiB to 15.4, a 6.2x reduction, agreeing with the softmax it
+replaces to 3.6e-11. `ORG-03` is what made this a one-place change, which is the
+clearest payoff that finding has produced.
+
+**The reductions went to `logit_signals.py` rather than into the LLaDA kernel,
+which is a deviation from the plan.** The plan said to move `LOGIT_CHUNK_POSITIONS`
+into `llada_kernel.py` so both samplers cite one constant. That would have made
+DiffusionGemma import from a module named for the other model. Signals are a
+cross-model concern, which is the finding's whole premise, so a module of their
+own serves the same goal without the wrong dependency.
+
+**All four shapes the Verification clause asks for already existed in the data.**
+That is why the manifest describes rather than proposes, which is the difference
+between this and the "generic untyped signals dictionary" the report rejected:
+
+- one value per position: autoregressive entropy, written once per position
+- position by frame: confidence, already per (frame, position) in `tokens.json`
+- one value per frame: `mean_conf`, computed by all three samplers and persisted
+  as a per-frame list since long before this, entirely undescribed
+- an absent opt-in channel: SmolLM3's `alternatives` switched off
+
+**Keeping `axes` separate from `location` is the load-bearing decision.**
+Autoregressive and diffusion entropy live in the same place, a `TokenRecord`, and
+mean different things. A description that recorded only storage could not tell
+them apart, which is exactly how `framesHaveEntropy` came to read the final
+frame: correct for a position decided once, and silently wrong for one re-decided
+at every step, where it showed whatever the last step happened to hold. There is
+a test asserting the two channels share a location and differ in axes, because
+that pair is the property the whole design rests on.
+
+**A new `signals` key, not an extended `capture`.** `capture` is read as
+per-sidecar booleans by both the staging validator and the analytics reader, and
+it answers "which files were written". Overloading it would have broken two
+readers to express a different question. Its own comment already said that
+combinations of optional signals are not a version, which is the same instinct.
+
+**No schema bump and no corpus migration.** `TokenRecord.e` was already
+`Optional[float]`, so diffusion entropy needed no field, and an absent `signals`
+key reads as "infer as before", the contract `FRAME_SHAPE_KEY` set. 258 saved runs
+keep working, and a test pins that an unmanifested run is still read the old way.
+
+**No capture toggle for entropy**, following the precedent that removed
+DiffusionGemma's: once the measurement costs a bounded reduction rather than a
+canvas-sized softmax there is nothing for a gate to protect, and `e` now means
+one thing on every diffusion run the way `c` does. It costs +0.20 MiB on a
+1.01 MiB default LLaDA run, a 19% surcharge measured against a real saved run.
+
+**Diffusion entropy is live per frame, not frozen at reveal.** Confidence freezes
+because the heatmap is about the moment a token committed. Freezing entropy would
+have contradicted the axes just declared for it and hidden the thing it is for: a
+committed token whose support is degrading looks different from one whose support
+is firming up, and a frozen number shows neither. It also meant no checkpoint
+change, so resume was untouched.
+
+**Top-k stayed downstream, and the manifest carries a budget field for it.**
+Measured at 42 bytes per candidate record from the existing corpus, a per-frame
+per-position capture is 4 MiB at the defaults and 212 MiB at the experimental
+ceiling, against a largest-ever `tokens.json` of 132 MiB. That is the problem the
+append-only work solved once already, and it wants its own pass.
+
+**One mutation slipped through the first time.** Returning `true_conf` under the
+entropy name passed all 347 inference tests: both are per-position floats in a
+plausible range, and the differential comparison looks at neither. Two tests now
+assert the step's two outputs differ and that their units are the ones declared,
+which is the same class of defect the report found in DiffusionGemma and so worth
+a named guard rather than an assumption.
 
 ### ORG-03
 

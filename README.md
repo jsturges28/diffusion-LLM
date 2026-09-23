@@ -386,7 +386,7 @@ The remaining persistent preferences live on a shared **Settings page** (`/setti
 
 A single always-present row directly above the token canvas, on both the generator and the Analytics detail modal, reads out the hovered position: the token (with visible stand-ins for whitespace), `position / total`, confidence and entropy with a small bar each on the overlays' own ramps, the overlay-specific extra (`Resolved at step N` under Commit Order, `was: X` under Diff), and an `Original` / `Edited` tag while both runs are stacked. It replaced the native `title` tooltip, which the browser delayed, would not let us style or place, and could only ever be bound to one element, so it fed nothing from the entropy chart.
 
-Two sources drive it: a token hover, and an entropy hover (the generator's profile, the Analytics chart), so a tall bar can be read back to a word without moving the pointer to the text. It also follows the frame, so a held position updates while scrubbing and during live generation. Absent is distinguished from zero: a dash means the run does not carry the value (diffusion runs record no entropy) rather than that the model measured nothing. Height is reserved permanently rather than shown on hover, which would push the canvas down every time the pointer crossed into it.
+Two sources drive it: a token hover, and an entropy hover (the generator's profile, the Analytics chart), so a tall bar can be read back to a word without moving the pointer to the text. It also follows the frame, so a held position updates while scrubbing and during live generation. Absent is distinguished from zero: a dash means the run does not carry the value, rather than that the model measured nothing. Every model records entropy now; on the diffusion models it is the current step's, so it moves as you scrub. Height is reserved permanently rather than shown on hover, which would push the canvas down every time the pointer crossed into it.
 
 #### Analytics Suite
 
@@ -442,6 +442,7 @@ The metadata captures the model, prompt, hyperparameters, any remask edits, per-
 - [x] Reproducibility metadata (seed, GPU, app commit, model commit, library versions) and deterministic seeding
 - [x] Pinned model artifacts: Hub checkpoints load a fixed commit, the local quantized checkpoint carries a completion manifest
 - [x] One declared dependency manifest per environment, locked with hashes and guarded against drift
+- [x] Signals described by unit and axes, so a view knows whether a value is one per position or one per frame; per-token entropy on every model
 - [x] Graceful VRAM handling: pre-flight free-memory check and worker load-error reporting
 - [x] Save runs (metadata, history, final text, GIF) with per-frame timing and confidence
 - [x] Optional desktop app: pywebview native window that owns the server lifecycle (graceful shutdown frees VRAM) plus a Linux app-menu launcher; launching it a second time joins the window already open instead of starting a rival server, since two servers each enforce "one model at a time" over a GPU neither knows it shares and the second load dies of out-of-memory after you have waited for it

@@ -2907,10 +2907,45 @@ function diffAvailable() {
   );
 }
 
-// Whether the run carries per-token entropy. Gated on the data
-// rather than on model_type, so the overlay appears for any model
-// that starts emitting `e` (autoregressive runs are just the first).
+// Shapes the per-position entropy strip can draw. A model declaring
+// anything else has a channel this build has no view for, which is a
+// different thing from a run that captured none.
+var ENTROPY_SHAPES = ["position", "frame|position"];
+
+// The active model's declared entropy channel, or null. Read off
+// capabilities rather than off the run, because the strip has to be
+// offered or withheld before the first frame arrives, and provenance
+// does not turn up until the terminal one.
+function declaredEntropyChannel() {
+  if (!activeModel || !activeModel.capabilities) {
+    return null;
+  }
+  var signals = activeModel.capabilities.signals || [];
+  for (var i = 0; i < signals.length; i++) {
+    if (signals[i] && signals[i].name === "entropy") {
+      return signals[i];
+    }
+  }
+  return null;
+}
+
+// Whether the run carries per-token entropy this build can draw.
+//
+// Still gated on the data, so a model that starts emitting `e`
+// without declaring it keeps working, which is how autoregressive
+// runs behaved before any of this existed. The declaration is
+// consulted only to withhold the strip from a shape it would
+// misrepresent: a canvas-level or frame-only entropy has no
+// per-position bars to draw, and drawing them anyway would invent a
+// reading rather than admit there is none.
 function entropyAvailable() {
+  var channel = declaredEntropyChannel();
+  if (channel) {
+    var shape = (channel.axes || []).join("|");
+    if (ENTROPY_SHAPES.indexOf(shape) === -1) {
+      return false;
+    }
+  }
   var tokens = runFramesTokensLast(runFrames);
   if (!tokens) {
     return false;

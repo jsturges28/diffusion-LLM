@@ -475,6 +475,12 @@
                     </button>
                   </div>
                 </div>
+                <!-- Shown when the run captured entropy in a shape
+                     this build has no view for. Saying so beats an
+                     empty space, which is also what a channel lost by
+                     accident would look like. -->
+                <p class="chart-unavailable" id="entropy-unavailable"
+                  hidden></p>
                 <div class="chart-wrap">
                   <canvas id="chart-entropy"></canvas>
                   <div class="chart-zoom-dock">

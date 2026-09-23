@@ -565,6 +565,19 @@ html, body {
   padding: 8px;
 }
 
+/* A chart that cannot be drawn says so in the space it would have
+   occupied. Same frame as a chart, so the section keeps its shape
+   rather than collapsing and shifting everything below it. */
+.chart-unavailable {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
 .chart-wrap-lg {
   height: 260px;
 }

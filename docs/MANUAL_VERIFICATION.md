@@ -3017,3 +3017,47 @@ change is that nothing observable moves.
         /tmp/lock-probe/bin/pip install -r requirements-ar.txt
 
     It should install and verify. This is the smallest of the four.
+
+## Signals declared by axis (ROADMAP-03)
+
+296. **LLaDA's per-step memory, measured.** This is the item worth a
+    number rather than a tick. `diffusion_step` no longer builds a
+    softmax over the whole canvas to read one probability per
+    position: at the default 160-token canvas that tensor was 96 MiB
+    and the chunked reduction holds 15.4, a 6.2x cut, per denoising
+    step, on a card already carrying 17 GiB of weights. At the 1024
+    the registry allows it was 513 MiB.
+
+    Watch `nvidia-smi` through a LLaDA run, or read
+    `torch.cuda.max_memory_allocated()` around one, and record the
+    before and after. The before is on the commit prior to "Read
+    LLaDA's signals without a canvas-wide softmax". Also note whether
+    the run feels slower: two chunked reductions replace one fused
+    softmax, so a small latency cost would not be surprising and is
+    worth knowing against the memory saved.
+
+    Worth trying at a large canvas too, since that is where the old
+    transient was near a gibibyte. A gen length and steps that used to
+    fail with CUDA out of memory may now fit.
+297. **Entropy appears on both diffusion models.** Generate on LLaDA
+    and on DiffusionGemma, then switch the canvas colour mode to
+    Entropy. Every position should carry a colour, settled or not,
+    where before only autoregressive runs had any. The numbers are in
+    nats, so a torn position reads high and a certain one near zero;
+    if entropy and confidence look like the same picture inverted,
+    that is the mislabelling this finding was about and the channels
+    are crossed.
+298. **A diffusion entropy trajectory follows the scrub.** Save a
+    LLaDA run, open it in Analytics, and drag the frame slider while
+    watching "Entropy by Position". The bars should change, because a
+    diffusion position is re-decided at every step. Before this they
+    were read off the final frame and stayed put no matter where you
+    scrubbed.
+
+    Then open a saved SmolLM3 run and scrub: those bars should *not*
+    move, because an autoregressive position is decided once. The two
+    behaviours together are the point of declaring axes.
+299. **An older saved run still reads.** Open something saved before
+    today, which is all 258 of them. The entropy chart should behave
+    exactly as it did: no manifest means infer as before, and a
+    regression here would take the whole archive dark at once.

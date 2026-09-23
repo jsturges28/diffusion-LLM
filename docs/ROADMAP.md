@@ -1699,13 +1699,22 @@ the temperature**; the signal is trustworthy as it stands.
 *Layer three is the top-k stack*, unsettled tokens rendered as their top five
 candidates with opacity by probability share, expanding on click into
 something like SmolLM3's alternatives popover. This is the expensive one and
-it is already sequenced: `ROADMAP-03`'s axis-aware signal manifest "precedes
-its native XAI phase and diffusion entropy and top-k". `ORG-03` is done, so
-there is now one place for top-k to go: `src/inference/llada_kernel.py` owns
-the diffusion step, and `diffusion_step` already returns the argmax pick for
-every position, settled or not, which is the first of the five candidates that
-layer wants. Adding the rest means widening that return rather than choosing
-between two sampling loops. The shape is
+it was already sequenced behind `ROADMAP-03`'s axis-aware signal manifest and
+`ORG-03`'s kernel, and both are now done, so the groundwork is in place.
+`src/inference/llada_kernel.py` owns the diffusion step, `diffusion_step`
+already returns the argmax pick for every position, settled or not, and
+`src/inference/logit_signals.py` holds the chunked reductions that a top-k
+comes off. `SignalChannel` carries a `budget_records` field this channel is
+the reason for.
+
+**The budget is the open question, and it is measured.** Candidate records cost
+42 bytes each in the existing corpus, so a per-frame per-position capture is
+about 4 MiB at the default 160-token canvas and 128 steps, 26 MiB at 512 and
+256, and **212 MiB** at the 1024 the registry allows for both. The largest
+`tokens.json` ever written here is 132 MiB, and shrinking those is what the
+append-only work was for. So this layer needs a capture policy before it needs
+a renderer: a stride over frames, a smaller k, capturing only positions still
+masked, or refusing the combination outright. The shape is
 also new, per-frame *and* per-position, where `alternatives.json` today is
 per-position only, which suffices for an autoregressive run because a position
 is decided once and does not for a diffusion draft that is re-decided every
