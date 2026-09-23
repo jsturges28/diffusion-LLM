@@ -415,6 +415,18 @@ def provenance_envelope(backend: Backend) -> Dict[str, Any]:
             getattr(backend, "model", None),
         ),
     }
+    # What this run's signals mean, travelling with the run rather
+    # than being looked up later from whatever model is resident. A
+    # saved run outlives the registry entry that produced it, so a
+    # reader months from now needs the description that was true when
+    # the frames were made, which is the argument for every other
+    # field here. Omitted when a model declares none, so an older
+    # worker's runs read as "infer as before".
+    signals = backend.model_info.capabilities.signals
+    if signals:
+        envelope["signals"] = [
+            channel.model_dump() for channel in signals
+        ]
     # The commit, alongside the repo name rather than folded into it.
     # ``checkpoint`` is what the user recognises and what the menu
     # shows; the commit is what makes the name mean one thing. Omitted

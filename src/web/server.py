@@ -1953,8 +1953,14 @@ class TokenRecord(BaseModel):
     Mirrors the live protocol shape ``{t, m, id, c?, e?}``: ``t`` is
     the display text, ``m`` marks an unresolved position, ``id`` is
     the vocab id, ``c`` is the reveal confidence (absent for masked
-    positions), and ``e`` is the sampling-time entropy in nats
-    (autoregressive runs only, so absent elsewhere).
+    positions), and ``e`` is the entropy in nats.
+
+    Both floats, and what they vary over is not visible from here:
+    ``e`` is one value per position on an autoregressive run, whose
+    positions are decided once, and a value per denoising step on a
+    diffusion run, whose positions are re-decided. That is what the
+    signal manifest says and this shape cannot, which is the whole
+    reason the manifest exists. See ``SignalChannel``.
 
     A new signal must be declared here to reach ``tokens.json``. It
     used to be dropped silently; now the request fails and says which
@@ -2070,6 +2076,12 @@ class RunProvenance(BaseModel):
     versions: Dict[str, str] = Field(default_factory=dict)
     tokenizer: Dict[str, Any] = Field(default_factory=dict)
     context_length: Optional[int] = None
+    # What the run's signals measure and vary over, as the worker
+    # declared them. A list of dicts rather than parsed channels: this
+    # model is deliberately not strict because a worker may gain a
+    # field ahead of the supervisor, and validating the channels here
+    # would reintroduce exactly the coupling that permits.
+    signals: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class SaveRunRequest(BaseModel):
@@ -2439,6 +2451,15 @@ def _build_metadata(body: SaveRunRequest) -> Dict[str, Any]:
     context = _context_metadata(body.prompt_len, provenance)
     if context:
         metadata["context"] = context
+    # The signal manifest, as its own key rather than folded into
+    # ``capture``. That one answers "which files were written" and is
+    # read as booleans per sidecar, both by the staging validator and
+    # by the analytics reader; this answers "what do the channels mean
+    # and what do they vary over". Written only when the run declared
+    # any, so absent keeps meaning "infer as before" for every run
+    # already on disk.
+    if provenance is not None and provenance.signals:
+        metadata[run_store.SIGNALS_KEY] = provenance.signals
     metadata["reproducibility"] = _reproducibility_block(
         body, provenance
     )

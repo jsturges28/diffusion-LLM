@@ -58,6 +58,60 @@ class ParamSpec(BaseModel):
     help: Optional[str] = None
 
 
+# What a signal varies over. "canvas" is one value for the whole run,
+# and exists because a channel that has neither a frame nor a position
+# axis would otherwise be indistinguishable from a channel with no
+# declaration at all.
+Axis = Literal["frame", "position", "canvas"]
+
+AXES: Tuple[str, ...] = ("frame", "position", "canvas")
+
+
+class SignalChannel(BaseModel):
+    """One XAI signal, described rather than inferred.
+
+    Signal shape used to be implicit in where the value was stored,
+    which is the whole of what `ROADMAP-03` is about. Confidence and
+    entropy are both floats on a token record, so nothing told
+    "one value per position, the same in every frame" from "a value
+    that changes every denoising step". Analytics resolved the
+    ambiguity by reading the final frame, which is right for an
+    autoregressive run and silently wrong for a diffusion trajectory.
+
+    ``axes`` is what it varies over and ``location`` is where it is
+    written, and keeping them apart is the point. The autoregressive
+    and diffusion entropy channels share a location and differ only in
+    axes, so a reader that knew only the location could not tell a
+    trajectory from a constant.
+    """
+
+    # Stable identifier, used in the manifest and by a view asking
+    # for a channel by name. Not the storage key: several channels
+    # live under one-letter keys for payload size, and a name people
+    # can read is worth more in a description than in a hot path.
+    name: str
+    # Nats for entropy, matching the autoregressive sampler, which has
+    # reported nats since entropy first appeared there. Two units for
+    # one quantity would make the Analytics scale a guess.
+    unit: Literal["probability", "nats"]
+    axes: Tuple[Axis, ...]
+    location: Literal["token_record", "frame_scalar", "sidecar"]
+    # Where to find it: a key on each token record, a metadata key
+    # holding one value per frame, or a sidecar filename.
+    key: str
+    # Whether a run always has it, or only when a parameter asked for
+    # it. An ``opt_in`` channel may legitimately be absent from a run
+    # that could have captured it, which is a different fact from a
+    # model that cannot produce it at all.
+    capture: Literal["always", "opt_in"]
+    # Records this channel writes for a full run, when that is
+    # knowable in advance and large enough to matter. Present so a
+    # channel with a real budget has somewhere to say so: per-frame
+    # candidate sets run to millions of records at the bounds the
+    # registry allows, where entropy is one float per token record.
+    budget_records: Optional[int] = None
+
+
 class ModelCapabilities(BaseModel):
     """Feature flags a worker advertises to the frontend."""
 
@@ -114,9 +168,8 @@ class ModelCapabilities(BaseModel):
     # arrived under a different id. Defaults to the hard-masking
     # reading, so a model that says nothing simply shows no note.
     #
-    # One boolean beside the three above, deliberately not the start
-    # of ROADMAP-03's signal manifest; that finding owns the versioned
-    # axes, capture budgets and signal channels.
+    # One boolean beside the three above. It is not a signal channel:
+    # ``signals`` below is where those are declared.
     remask_renoises: bool = False
     # Character shown for an unresolved token in the UI.
     unresolved_char: str = "\u2591"
@@ -134,6 +187,18 @@ class ModelCapabilities(BaseModel):
     # nothing enforced a memory budget for. A model that needs a GPU
     # now has to say so.
     supported_devices: Tuple[str, ...]
+    # Which XAI signals this model emits, and in what shape. Declared
+    # here so the UI can offer an overlay before any run exists,
+    # rather than deciding per token from whether a float happened to
+    # be there, which cannot tell "this model does not produce
+    # entropy" from "this position has none".
+    #
+    # Defaulted to empty rather than required, unlike the axes above.
+    # An empty tuple is honest for a model whose channels nobody has
+    # described yet, and it reads as "infer as before"; a required
+    # field would instead force every future model to restate the four
+    # channels that are the same everywhere.
+    signals: Tuple[SignalChannel, ...] = ()
 
 
 # The declared values of the two axes, so a test can enumerate them

@@ -112,6 +112,22 @@ FRAME_SHAPE_SNAPSHOT = "snapshot"
 # which is why this is a separate field from the one above.
 CAPTURE_KEY = "capture"
 
+# What each captured signal measures and what it varies over: a list
+# of channels, as the worker declared them on the terminal frame.
+#
+# Separate from CAPTURE_KEY above, which answers a different question.
+# That one is a per-sidecar boolean, checked by the staging validator
+# and by the analytics reader to tell a v1 run's rich records from a
+# v0 run's bare strings. This one says that two float channels living
+# in the same token record mean different things: one value per
+# position for an autoregressive run, a value per denoising step for a
+# diffusion one. Without it a reader has to guess, and the guess it
+# made was the final frame.
+#
+# Absent on every run saved before this existed, which reads as "infer
+# as before" exactly like FRAME_SHAPE_KEY. See finding `ROADMAP-03`.
+SIGNALS_KEY = "signals"
+
 # Which generation produced this run, as the worker named it on the
 # terminal frame (see `LIFE-01`). Present so a save can be published
 # under the run's own identity rather than under whatever the client

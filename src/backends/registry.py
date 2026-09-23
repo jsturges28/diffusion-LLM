@@ -8,7 +8,7 @@ worker venv never imports another model's dependencies.
 
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, Tuple
 
 from src.backends.environments import environment_names
 from src.backends.protocol import (
@@ -17,7 +17,83 @@ from src.backends.protocol import (
     ParamOverride,
     ParamSpec,
     ParamType,
+    SignalChannel,
     is_hub_checkpoint,
+)
+
+# The signal channels the models share, declared once. Each says what
+# it measures, what it varies over, and where to find it, which is the
+# distinction `ROADMAP-03` exists to draw: confidence and entropy are
+# both floats on a token record, so location alone cannot tell a
+# per-position constant from a per-frame trajectory.
+
+# Every diffusion position is re-decided at every denoising step, so
+# both of these vary over frame and position. That is the axis pair
+# Analytics could not previously see, having read the final frame.
+_DIFFUSION_SIGNALS: Tuple[SignalChannel, ...] = (
+    SignalChannel(
+        name="confidence",
+        unit="probability",
+        axes=("frame", "position"),
+        location="token_record",
+        key="c",
+        capture="always",
+    ),
+    SignalChannel(
+        name="entropy",
+        unit="nats",
+        axes=("frame", "position"),
+        location="token_record",
+        key="e",
+        capture="always",
+    ),
+    SignalChannel(
+        name="mean_confidence",
+        unit="probability",
+        axes=("frame",),
+        location="frame_scalar",
+        key="mean_conf",
+        capture="always",
+    ),
+)
+
+# An autoregressive position is decided once and never revisited, so
+# its confidence and entropy are per-position constants even though
+# they live in the same per-frame records. Candidates are the same,
+# and are the one channel here a parameter can switch off.
+_AUTOREGRESSIVE_SIGNALS: Tuple[SignalChannel, ...] = (
+    SignalChannel(
+        name="confidence",
+        unit="probability",
+        axes=("position",),
+        location="token_record",
+        key="c",
+        capture="always",
+    ),
+    SignalChannel(
+        name="entropy",
+        unit="nats",
+        axes=("position",),
+        location="token_record",
+        key="e",
+        capture="always",
+    ),
+    SignalChannel(
+        name="mean_confidence",
+        unit="probability",
+        axes=("frame",),
+        location="frame_scalar",
+        key="mean_conf",
+        capture="always",
+    ),
+    SignalChannel(
+        name="alternatives",
+        unit="probability",
+        axes=("position",),
+        location="sidecar",
+        key="alternatives",
+        capture="opt_in",
+    ),
 )
 
 DEFAULT_MODEL = "llada"
@@ -57,6 +133,7 @@ LLADA = ModelInfo(
         # headroom pre-flight skips CPU entirely. Declaring the truth
         # closes a 17 GiB host allocation nothing was measuring.
         supported_devices=("cuda",),
+        signals=_DIFFUSION_SIGNALS,
     ),
     param_specs=[
         ParamSpec(
@@ -159,6 +236,7 @@ DGEMMA = ModelInfo(
         # else, but it did so inside load(), by which point the
         # previous model had already been evicted for it.
         supported_devices=("cuda",),
+        signals=_DIFFUSION_SIGNALS,
     ),
     param_specs=[
         ParamSpec(
@@ -256,6 +334,7 @@ SMOLLM3 = ModelInfo(
         # The model a GPU-less host can use, so CPU is a placement
         # this one genuinely supports rather than one it inherited.
         supported_devices=("cuda", "cpu"),
+        signals=_AUTOREGRESSIVE_SIGNALS,
     ),
     param_specs=[
         ParamSpec(
