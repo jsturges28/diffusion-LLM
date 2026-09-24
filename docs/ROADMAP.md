@@ -1886,6 +1886,47 @@ candidates: with the reveal off, a revision is a block that stays a block,
 and a mark is the only evidence there is. That, rather than the `" the"`
 example, is the case to design for.
 
+**Frame-to-frame linking for the line charts.** Raised on 2026-09-24, out of
+the hardware pass on `ROADMAP-03`. The original thought was to give the
+Analytics line charts the cross-highlighting the entropy chart has, where
+hovering a bar lights the token behind it. That reading does not transfer: the
+entropy chart is indexed by *position*, and convergence, timing and confidence
+are indexed by *frame*, so there is no token under a point to light.
+
+What makes the idea coherent is the change that prompted it. Now that a
+diffusion entropy chart follows the scrubber, the frame is a shared coordinate
+between the two families of chart, and hovering a frame on a line chart could
+scrub the position-indexed views to it: the entropy bars, the token canvas and
+the metrics strip would all move to the frame under the pointer. That turns
+"this step was slow" into "and here is the canvas that made it slow", which is
+the question the timing chart currently raises and cannot answer.
+
+Two things to settle first. Scrubbing on hover is a strong default, since
+sweeping a chart would redraw the canvas continuously and the pointer would be
+steering something on the other side of the page; a click-to-scrub, or a hover
+that only moves a frame marker until clicked, may be the better shape. And the
+crossfade already owns the scrubber on an edited run, so the interaction has to
+say which run it is scrubbing.
+
+**A small live GPU and CPU meter on the Generation screen.** Raised on
+2026-09-24, and worth recording with its motivation rather than as a wish. The
+`ROADMAP-03` reduction cut LLaDA's per-step softmax transient from 96 MiB to
+15.4 MiB by arithmetic, and the matching hardware item asks for peak VRAM and
+step latency before and after. That measurement is genuinely awkward to take by
+hand: it means watching `nvidia-smi` beside a run and catching a transient that
+lasts one step. A small meter on the page, a sparkline in a corner rather than a
+dashboard, would have made it a glance.
+
+So the case for it is not ornament. Several entries in this file end in "and
+the maintainer would have to measure it on hardware", and a resident readout
+turns that from a separate exercise into something a run reports about itself.
+Worth scoping as its own pass: it needs a sampling source (`torch.cuda`
+memory stats from the worker, or `nvidia-smi` polled by the supervisor, which
+differ in what they can see and in what they cost), a cadence that does not
+compete with generation for the GIL, and a decision about whether the samples
+are persisted with the run. Persisting them is what would make it XAI rather
+than a system monitor, since a saved run could then be asked what it cost.
+
 Shipped from this backlog (see `README.md`):
 - Token commit-order coloring: tokens are tinted by the step at which they
   resolved (light green early to red-orange late), as a persistent overlay. Now

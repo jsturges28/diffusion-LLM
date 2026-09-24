@@ -3061,3 +3061,62 @@ change is that nothing observable moves.
     today, which is all 258 of them. The entropy chart should behave
     exactly as it did: no manifest means infer as before, and a
     regression here would take the whole archive dark at once.
+
+## UI polish after ROADMAP-03
+
+300. **Analytics Commit Order paints a ramp at all.** The one item
+    here that is a bug fix rather than a refinement, and the one to
+    check first. Open any saved LLaDA run in Analytics and pick
+    **Commit Order**. Tokens should span green to red-orange by the
+    step they settled at, the same as the generator's overlay does.
+
+    Before this they could not: the overlay asked for two variables
+    the Analytics page never declared, so in the browser the ramp's
+    denominator silently became the page's iframe count and the
+    second one threw outright. The predicted symptom was the legend
+    appearing while the token colours stayed on whatever the previous
+    overlay left, which is quiet enough to have gone unnoticed since
+    2026-08-02. Worth confirming that is what it used to do, since
+    the fix was made from reading rather than from seeing it fail.
+
+    Also worth opening the browser console once on that page: an
+    uncaught `ReferenceError` on picking the mode is the old
+    behaviour, and silence is the new one.
+301. **Edit markers read by the frame they were made at.** Needs a
+    run remasked in two clearly separated rounds, which is the only
+    way to see this. Generate on LLaDA, scrub near the start,
+    remask a token or two and resume; then scrub near the end,
+    remask elsewhere and resume again.
+
+    The dashed markers in the entropy strip should now differ in
+    colour: the early edit green, the late one red-orange, on the
+    same scale as **Commit Order**. They should also sit slightly
+    below full brightness, since they annotate the entropy bars
+    rather than compete with them. Save that run and open it in
+    Analytics: the markers on "Entropy by Position" should be the
+    same two colours, because both surfaces resolve them through one
+    shared helper now.
+
+    Then open a run edited before today. Its markers should be the
+    flat orange they always were, because its edit log records the
+    positions without the frame.
+302. **A newline shows where it is.** The case that prompted this:
+    sweep the entropy profile onto a position whose token is a line
+    break and the text area lit nothing, because a newline has no
+    width for a background to fill. There should now be a thin
+    upright bar standing at that position instead.
+
+    Check the neighbours in the same sweep. An ordinary word should
+    look exactly as it did, with no extra bar over its first letter,
+    and a plain space token should also be unchanged, since a space
+    does occupy width. The Analytics detail modal has the same
+    cross-highlight and should behave identically.
+303. **The prompt history counter climbs to the right.** Run a few
+    different prompts so there is a history, then open it. It should
+    show `N / N` on your most recent prompt rather than `1 / N`.
+
+    Press the right arrow: the number rises and the prompt gets
+    newer. Press the left arrow: the number falls and the prompt gets
+    older. The arrows and their tooltips are unchanged, because they
+    were already correct; only the numbering direction moved, so that
+    the count now reads as which prompt in the order you typed them.
