@@ -3163,3 +3163,61 @@ change is that nothing observable moves.
     This follows from the peak restarting where the run token does, so
     a regression here would most likely show up as an
     above-baseline figure that looks too small for the work done.
+
+## The live resource meter
+
+306. **The line moves during a run.** Open the generator with LLaDA
+    active and look at the status bar, right of **T/s**. There should
+    be a small sparkline labelled **VRAM** with a reading beside it
+    like `17.4 GiB / 24.0 GiB`. Start a generation: the line should
+    keep moving, and it should also be moving before you start, since
+    it is on a timer rather than tied to frames.
+
+    Worth watching the reading against `nvidia-smi` once. This is the
+    whole card rather than the process, so the two should broadly
+    agree, unlike the per-run Peak VRAM figure which counts only live
+    tensors.
+307. **The meter goes away with the model, and comes back with it.**
+    This item asked for the load ramp on the first pass and was
+    wrong to: the supervisor refuses a socket until the model is
+    ready, so the page is never connected during a load and there is
+    nothing to show. Confirmed by the maintainer trying it.
+
+    What to check instead is that the meter is honest about the gap.
+    Switch models from the generator page. The meter should
+    *disappear* while the new model comes up, rather than sitting
+    there showing the last reading from the model you just left, and
+    it should reappear once the new one is serving.
+
+    Then confirm the history does not span the gap: after switching
+    between two models on the same device, the line should start
+    again from one end rather than carrying on from where it was. A
+    continuous line there would claim readings across a period
+    nothing was sampled in.
+308. **A CPU run meters the CPU instead.** Activate SmolLM3 on CPU and
+    generate. The label should read **CPU** and the value something
+    like `38% of 32 cores`, not VRAM, because a CPU-placed model has
+    no VRAM of its own even on a machine with a card.
+
+    The percentage is of the whole machine, so a busy run will not
+    read near 100% on a wide host. That is deliberate: it is the only
+    reading that shares a scale with the VRAM line.
+
+    Then switch back to a GPU model without reloading the page. The
+    label should change and the line should start again from the right
+    rather than continuing, since the two measure different things and
+    there is no conversion between them.
+309. **No card and no meter.** Not verifiable on the maintainer's
+    hardware, and recorded as such rather than left looking pending:
+    the row-absent case needs a machine with neither CUDA nor
+    `/proc`, which in practice means Windows or macOS, and this
+    project runs on Linux with a card.
+
+    It is covered by tests instead, on both sides of the wire: the
+    worker sends nothing when neither source answers
+    (`test_nothing_to_measure_sends_nothing`) and the page keeps the
+    row hidden until a usable sample arrives
+    (`the meter is hidden before any sample`). If this ever does get
+    run on such a host, the failure to look for is a labelled meter
+    sitting flat at the bottom, which is what sending zeros instead
+    of sending nothing would produce.

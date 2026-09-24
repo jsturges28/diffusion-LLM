@@ -83,6 +83,14 @@ var statusElapsed =
   document.getElementById("status-elapsed");
 var statusTps =
   document.getElementById("status-tps");
+var statusResource =
+  document.getElementById("status-resource");
+var statusResourceLabel =
+  document.getElementById("status-resource-label");
+var statusResourceSpark =
+  document.getElementById("status-resource-spark");
+var statusResourceValue =
+  document.getElementById("status-resource-value");
 var statusMessage =
   document.getElementById("status-message");
 var statusStack =
@@ -1731,6 +1739,9 @@ function connect() {
   ws.onclose = function () {
     setBadge("disconnected");
     modelReady = false;
+    // Nothing is sampling this machine any more, so the meter must
+    // stop claiming to. A switch between models comes through here.
+    clearResourceMeter();
     // A run in flight when the socket drops has stopped: the worker
     // treats the disconnect as a cancel, so there is no terminal
     // frame coming and nothing left computing. Leaving the
@@ -1804,6 +1815,155 @@ function handleMessage(data) {
     case "count_prompt_result":
       handleCountPromptResult(data);
       break;
+    case "resource_sample":
+      handleResourceSample(data);
+      break;
+  }
+}
+
+// ---- Resource meter ----
+//
+// What the machine is doing, volunteered by the worker on a timer
+// rather than attached to frames. The timer is why it keeps moving
+// while a model loads and while nothing is running, which is when
+// VRAM moves most and when there are no frames to carry anything.
+//
+// One meter, not two. Its meaning follows where the model landed: on
+// a card that is VRAM, and on a CPU-placed model it is how hard the
+// worker is working, because there is no VRAM of its own to report.
+// Showing both always would leave one flat line in either case.
+
+// One minute of history at the worker's 2 Hz. Bounded because the
+// socket can stay open for hours and this is the only thing on the
+// page that grows purely with elapsed time.
+var RESOURCE_HISTORY_MAX = 120;
+
+// The kinds this build can draw. A sample naming anything else is
+// dropped rather than guessed at: the label and the value string are
+// both kind-specific, so a future kind would render as a mislabelled
+// number rather than as a gap.
+var RESOURCE_LABELS = {
+  vram: "VRAM",
+  cpu: "CPU",
+};
+
+// The app's accent green, as used for the live-run chip. A literal
+// because a canvas cannot read a CSS custom property without a
+// computed-style lookup on every draw.
+var RESOURCE_LINE_COLOR = "#00ff41";
+
+// Fractions in arrival order, oldest first. Values only: the
+// label and readout come from the newest sample, held beside it.
+var resourceHistory = [];
+var resourceLatest = null;
+
+function handleResourceSample(data) {
+  if (!statusResource) {
+    return;
+  }
+  var label = RESOURCE_LABELS[data.kind];
+  if (!label) {
+    return;
+  }
+  if (typeof data.fraction !== "number") {
+    return;
+  }
+  // A switch from one model to another can change what the meter
+  // measures, and a VRAM series joined to a CPU series would draw as
+  // one continuous line describing two different things. Dropping the
+  // history is the only honest response: there is nothing to convert.
+  if (resourceLatest !== null && resourceLatest.kind !== data.kind) {
+    resourceHistory = [];
+  }
+  resourceLatest = data;
+  resourceHistory.push(Math.max(0, Math.min(1, data.fraction)));
+  if (resourceHistory.length > RESOURCE_HISTORY_MAX) {
+    resourceHistory.shift();
+  }
+  statusResource.hidden = false;
+  statusResourceLabel.textContent = label;
+  statusResourceValue.textContent = resourceValueText(data);
+  drawResourceSpark();
+}
+
+// The figures behind the line, in the unit each kind is read in.
+// Bytes for a card, because "71%" of a card nobody remembers the size
+// of says less than the pair does; cores for CPU, because a fraction
+// of a machine says nothing without knowing how wide the machine is.
+function resourceValueText(sample) {
+  if (sample.kind === "cpu") {
+    return Math.round(sample.fraction * 100) + "% of "
+      + sample.total_cores + " cores";
+  }
+  return formatVramGib(sample.used_bytes)
+    + " / " + formatVramGib(sample.total_bytes);
+}
+
+function formatVramGib(bytes) {
+  if (typeof bytes !== "number") {
+    return "?";
+  }
+  return (bytes / (1024 * 1024 * 1024)).toFixed(1) + " GiB";
+}
+
+// One line, drawn on arrival rather than on a timer of its own: a
+// sample is the only thing that changes it, so anything else would be
+// a redraw with nothing to show.
+//
+// Both kinds are fractions of an available resource, so the full
+// height always means "all of it" and there is no per-kind scaling to
+// get wrong.
+function drawResourceSpark() {
+  if (!statusResourceSpark || resourceHistory.length === 0) {
+    return;
+  }
+  // Match the backing store to the CSS box, as the entropy profile
+  // does, so the line stays crisp on HiDPI displays.
+  var ratio = window.devicePixelRatio || 1;
+  var cssWidth = statusResourceSpark.clientWidth || 60;
+  var cssHeight = statusResourceSpark.clientHeight || 11;
+  statusResourceSpark.width = Math.round(cssWidth * ratio);
+  statusResourceSpark.height = Math.round(cssHeight * ratio);
+  var ctx = statusResourceSpark.getContext("2d");
+  if (!ctx) {
+    return;
+  }
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.clearRect(0, 0, cssWidth, cssHeight);
+
+  // Stepped across the full width whatever the history holds, so a
+  // fresh meter fills out as samples arrive rather than starting as a
+  // dot in the corner. One sample is a flat line at its own level.
+  var span = Math.max(1, RESOURCE_HISTORY_MAX - 1);
+  var first = RESOURCE_HISTORY_MAX - resourceHistory.length;
+  ctx.beginPath();
+  for (var i = 0; i < resourceHistory.length; i++) {
+    var x = ((first + i) / span) * cssWidth;
+    var y = cssHeight - resourceHistory[i] * cssHeight;
+    if (i === 0) {
+      ctx.moveTo(x, y);
+    } else {
+      ctx.lineTo(x, y);
+    }
+  }
+  ctx.strokeStyle = RESOURCE_LINE_COLOR;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
+
+// Put the meter away, and forget what it was showing.
+//
+// Called when the socket drops, which is what a model switch looks
+// like from here. Both halves matter. Leaving the row up would show
+// the last reading as current when nothing is being sampled any more,
+// and keeping the history would later splice a new model's samples
+// onto the old one's across a gap nothing was measured in, drawing a
+// continuous line through a period that has no data at all.
+function clearResourceMeter() {
+  resourceHistory = [];
+  resourceLatest = null;
+  if (statusResource) {
+    statusResource.hidden = true;
   }
 }
 

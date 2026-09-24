@@ -1407,6 +1407,48 @@ button {
    rather than restyled, so at rest it still reads as one of the
    metrics beside it rather than as a button parked in the status
    bar. */
+/* The resource meter: a label, a small sparkline, and a value, laid
+   out as one footer item so the 24px gap between footer readouts does
+   not open up inside it. */
+#status-resource {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#status-resource[hidden] {
+  display: none;
+}
+
+#status-resource-label {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* Fixed width rather than flexible: the footer's other items are text
+   that sizes itself, and a meter that grew as the window did would
+   shift everything beside it on every resize. Sixty pixels holds a
+   minute of history at 2 Hz without the line becoming a smear.
+
+   Bordered, faintly, because an unbounded line reads as leaking off
+   the side rather than as reaching the edge of its own window: a
+   sparkline is only legible against a frame that says where full and
+   empty are. Global box-sizing is border-box, so the border takes its
+   two pixels from the drawing area and clientWidth already excludes
+   it, which is the figure drawResourceSpark measures against. */
+#status-resource-spark {
+  width: 62px;
+  height: 13px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+}
+
+#status-resource-value {
+  min-width: 74px;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
 #status-tps {
   cursor: pointer;
   user-select: none;

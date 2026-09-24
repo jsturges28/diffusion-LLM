@@ -1945,13 +1945,51 @@ long as the page is, not only during a run. And the sampler awaits
 `asyncio.to_thread` per step, so a timer task on the worker's loop can sample
 while a step computes.
 
-What is left is genuinely the live half, and it is a different instrument
-rather than the same one turned up: a timer keeps moving while idle and during
-a model load, which is when VRAM moves most and when no frames exist to hang a
-sample on. CPU is still open too, and still faces the choice between
-`/proc/<pid>/stat`, which is standard library and Linux-only, and `psutil`,
-which would be a new dependency. A GPU-only meter is blank for exactly the
-people running SmolLM3 on CPU.
+**The live half landed the same day, and one assumption here was wrong.**
+"GPU and CPU" reads as two lines, and two lines means one of them is always
+dead: on a diffusion run the card is the story and the CPU sits near idle,
+while a CPU-placed model has no VRAM of its own at all. So the meter is one
+sparkline whose meaning follows `effective_device`, labelled so it says which.
+Both readings are fractions of an available resource, which is what lets them
+share a scale; the CPU figure is normalised against every core rather than one,
+because a single saturated thread is 100% of a core and 3% of a 32-core host
+and only the second can be drawn beside a VRAM fraction.
+
+`/proc/self/stat` won over `psutil`, at about thirty lines and no new
+dependency. Its one trap is worth knowing before anyone touches it: the process
+name field can contain spaces and parentheses, so the file cannot be split on
+whitespace and the parser finds the last `)` instead.
+
+The sampling is a timer task on the worker's socket rather than anything
+attached to frames, which is what keeps it moving between runs as well as
+during them. An advisory sample can therefore interleave with the replies a
+client is waiting for. The browser does not care, since it dispatches on type
+with no default branch, but a test reading positionally does, which is why
+`test_worker_dispatch.py` filters them out through a wrapper rather than at
+twenty call sites.
+
+**It does not cover a model loading, and the first version of this entry said
+it did.** The claim was that a timer would show the weight-load ramp, which is
+the largest VRAM movement the application makes. It cannot, and the reason is a
+gate that exists on purpose: `websocket_proxy` refuses a socket unless
+`is_serving` holds, and that requires `load_state == "ready"`, which the
+supervisor only sets once the worker reports its model loaded. So the page is
+never connected during a load, and the pump's early start inside the worker's
+handler buys only the narrow case of a client reaching a worker directly. The
+maintainer found this by trying to watch a model switch and seeing nothing.
+
+Showing a load would mean loosening that gate, letting a browser hold a socket
+to a worker that cannot yet answer a generate. That gate was put there
+deliberately, because both page gates used to ask "does a process exist" and
+let traffic through to a model that was never going to answer. Reopening it for
+a telemetry line is a poor trade, so the honest state is that the load is
+uncovered. A meter on the menu, where activation actually happens, would be the
+place to revisit it, and would need a sampling source outside the worker.
+
+What else remains is the idea of persisting the samples, which would make a
+saved run answerable about its whole trajectory rather than about its peak.
+That still wants the signal manifest's vocabulary and a new unit, and it is not
+obviously worth the bytes, so it stays here rather than being built.
 
 Shipped from this backlog (see `README.md`):
 - Token commit-order coloring: tokens are tinted by the step at which they
