@@ -3752,12 +3752,6 @@ function redrawTypedEntry() {
 
 // ---- Per-position entropy profile ----
 
-// The app's edit color, shared with .token-remasked in style.css and
-// with EDIT_COLOR in analytics.js, so an intervention reads the same
-// in the strip as it does in the tokens above it.
-var EDIT_MARKER_COLOR = "#ff9f1c";
-var EDIT_MARKER_TINT = "rgba(255, 159, 28, 0.15)";
-
 function entropyValuesFrom(tokens) {
   if (!tokens) {
     return [];
@@ -3802,11 +3796,20 @@ function entropyProfileColumns() {
   );
 }
 
-// Every position an edit touched, as a lookup. Sequential What If
-// rounds each push their own entry, so a branch can carry more than
-// one, and a diffusion remask contributes a whole group at once.
-// Sibling to editDivergencePosition, which reduces the same records
-// to their minimum for the popover's pager.
+// Every position an edit touched, mapped to the frame the edit was
+// made at. Sequential What If rounds each push their own entry, so a
+// branch can carry more than one, and a diffusion remask contributes
+// a whole group at once. Sibling to editDivergencePosition, which
+// reduces the same records to their minimum for the popover's pager.
+//
+// The frame is the value rather than a bare true because the markers
+// colour themselves by it, on the same ramp as Commit Order. A
+// position remasked in two different frames keeps the later one,
+// which falls out of the loop order: the log is appended
+// chronologically, so a later entry overwrites an earlier one. That
+// is the reading we want (the marker names the most recent
+// intervention) and it is written down here because it is a property
+// of the log, not of this function.
 //
 // Held rather than rebuilt because the token layer asks about every
 // position it draws, and a diffusion remask can hold dozens against
@@ -3827,7 +3830,7 @@ function editedPositionMarks() {
   for (var e = 0; e < remaskEdits.length; e++) {
     var group = remaskEdits[e].token_positions || [];
     for (var p = 0; p < group.length; p++) {
-      marks[group[p]] = true;
+      marks[group[p]] = remaskEdits[e].frame_index;
     }
   }
   editedMarksCache = {
@@ -3838,12 +3841,19 @@ function editedPositionMarks() {
   return marks;
 }
 
+// Whether a position was touched by an edit. A separate predicate
+// because frame 0 is a real answer and a falsy one, so asking the map
+// directly would silently drop an edit made at the very first frame.
+function positionWasEdited(marks, position) {
+  return typeof marks[position] === "number";
+}
+
 // The same positions as a list, for the profile's dashed markers.
 function editedProfilePositions() {
   var marks = editedPositionMarks();
   var positions = [];
   for (var key in marks) {
-    if (marks[key] === true) {
+    if (positionWasEdited(marks, key)) {
       positions.push(Number(key));
     }
   }
@@ -3915,7 +3925,8 @@ function drawEntropyProfile() {
   // plugin order, so the pointer's guide lays over the edit tint
   // rather than under it.
   var edits = editedProfilePositions();
-  drawEntropyProfileEditTint(ctx, layout, edits);
+  var editColors = editMarkerColors(edits);
+  drawEntropyProfileEditTint(ctx, layout, edits, editColors);
 
   var paired = original.length > 0;
   if (paired) {
@@ -3937,7 +3948,7 @@ function drawEntropyProfile() {
     current: current,
     filled: current,
   });
-  drawEntropyProfileEditLines(ctx, layout, edits);
+  drawEntropyProfileEditLines(ctx, layout, edits, editColors);
 
   // The glow and the readout speak for one run, so they follow
   // whichever the crossfade is favoring.
@@ -3950,16 +3961,34 @@ function drawEntropyProfile() {
   );
 }
 
-// A faint column behind each edited position. Floored at 2px like
-// the hover guide: at a few hundred tokens a bar-width tint is too
-// thin to notice.
-function drawEntropyProfileEditTint(ctx, layout, positions) {
+// The frame each marker speaks for, and the last frame index to
+// normalize it against. Computed once per draw rather than per
+// marker, so the two passes below stay loops over geometry.
+function editMarkerColors(positions) {
+  var marks = editedPositionMarks();
+  // Asked of the run rather than of its token array, which an
+  // append-shaped run leaves empty. A What If substitution puts an
+  // edit on an autoregressive run, so this path is not diffusion-only
+  // the way Commit Order is.
+  var maxFrame = runFramesLength(runFrames) - 1;
+  var colors = [];
+  for (var i = 0; i < positions.length; i++) {
+    colors.push(overlaysEditColor(marks[positions[i]], maxFrame));
+  }
+  return colors;
+}
+
+// A faint column behind each edited position, in the hue of the frame
+// the edit was made at. Floored at 2px like the hover guide: at a few
+// hundred tokens a bar-width tint is too thin to notice.
+function drawEntropyProfileEditTint(ctx, layout, positions, colors) {
   if (positions.length === 0) {
     return;
   }
   ctx.save();
-  ctx.fillStyle = EDIT_MARKER_TINT;
+  ctx.globalAlpha = OVERLAYS_EDIT_TINT_ALPHA;
   for (var i = 0; i < positions.length; i++) {
+    ctx.fillStyle = colors[i];
     ctx.fillRect(
       positions[i] * layout.step,
       0,
@@ -3974,15 +4003,16 @@ function drawEntropyProfileEditTint(ctx, layout, positions) {
 // it marks so it reads as belonging to that position rather than to
 // the gap beside it. Mirrors substitutionMarkerPlugin in
 // analytics.js, down to the dash pattern.
-function drawEntropyProfileEditLines(ctx, layout, positions) {
+function drawEntropyProfileEditLines(ctx, layout, positions, colors) {
   if (positions.length === 0) {
     return;
   }
   ctx.save();
-  ctx.strokeStyle = EDIT_MARKER_COLOR;
+  ctx.globalAlpha = OVERLAYS_EDIT_LINE_ALPHA;
   ctx.lineWidth = 1;
   ctx.setLineDash([4, 4]);
   for (var i = 0; i < positions.length; i++) {
+    ctx.strokeStyle = colors[i];
     var x = positions[i] * layout.step
       + layout.barWidth / 2;
     ctx.beginPath();
@@ -5020,7 +5050,7 @@ function tokenClassFn(index, tok, masked) {
     return "";
   }
   var classes = [];
-  if (editedPositionMarks()[index] === true) {
+  if (positionWasEdited(editedPositionMarks(), index)) {
     classes.push("token-edited");
   }
   if (runPhase.mode === "edit") {

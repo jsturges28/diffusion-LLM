@@ -34,6 +34,37 @@ function commitColor(step, maxStep) {
   return "hsl(" + hue + ", " + sat + "%, " + light + "%)";
 }
 
+// Edit markers: the tint behind an entropy column and the dashed line
+// over it, on the generator's profile and on the Analytics chart
+// alike. Shared because the two surfaces draw the same mark and had
+// drifted into keeping identical values under different names.
+//
+// A marker whose frame is known takes its hue from commitColor
+// instead, so an edit reads against the same early-to-late scale as
+// the tokens do. These stay as the fallback for an edit that cannot
+// be placed in the run, which is the shape a pre-frame_index edit log
+// has, and they are still the colour .token-remasked uses in
+// style.css, so the fallback matches the tokens it annotates.
+var OVERLAYS_EDIT_COLOR = "#ff9f1c";
+// Drawn through globalAlpha rather than baked into the colour, since
+// commitColor returns an opaque hsl() string and the alpha has to
+// apply to either source. The line sits under full strength: it
+// competes with the entropy bars now, and at full opacity it read as
+// the loudest thing in a strip it is only annotating.
+var OVERLAYS_EDIT_LINE_ALPHA = 0.62;
+var OVERLAYS_EDIT_TINT_ALPHA = 0.15;
+
+// One marker's colour: the run-relative hue of the frame the edit was
+// made at, or the flat fallback when the frame is unknown. Kept here
+// rather than in either page so a marker cannot mean one thing on the
+// generator and another in Analytics.
+function overlaysEditColor(frame, maxFrame) {
+  if (typeof frame === "number" && frame >= 0) {
+    return commitColor(frame, maxFrame);
+  }
+  return OVERLAYS_EDIT_COLOR;
+}
+
 // Divergence coloring: changed tokens glow magenta, unchanged tokens
 // fade to a dim neutral so an intervention's footprint stands out.
 function diffColor(changed) {

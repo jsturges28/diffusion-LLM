@@ -619,12 +619,6 @@ function withAlpha(hex, alpha) {
     + alpha + ")";
 }
 
-// The app's edit color, shared with .token-remasked in style.css, so
-// an intervention reads the same in the chart as it does in the
-// generator's token view.
-var EDIT_COLOR = "#ff9f1c";
-var EDIT_TINT = "rgba(255, 159, 28, 0.15)";
-
 // ---- Data fetching ----
 
 function fetchRuns() {
@@ -2624,10 +2618,17 @@ function canvasBoundaryPlugin(boundaries) {
 // the shared prefix ends. Empty list is a no-op, so unedited runs
 // draw nothing.
 //
+// Each marker carries the hue of the frame its edit was made at, on
+// the same ramp as Commit Order, so a run edited in several rounds
+// shows the order of its interventions rather than one flat colour.
+// ``colors`` is parallel to ``positions``, resolved by the caller
+// because the frame count is a property of the run and the plugin
+// only knows about geometry.
+//
 // Two hooks: the tint goes behind the bars (an edited column reads as
 // touched even where its bar is short), the dashed line goes over
 // them (a one-pixel bar would otherwise hide it).
-function substitutionMarkerPlugin(positions) {
+function substitutionMarkerPlugin(positions, colors) {
   return {
     id: "substitutionMarkers",
     beforeDatasetsDraw: function (chart) {
@@ -2636,10 +2637,11 @@ function substitutionMarkerPlugin(positions) {
       var ctx = chart.ctx;
       ctx.save();
       clipToChartArea(ctx, chart.chartArea);
-      ctx.fillStyle = EDIT_TINT;
+      ctx.globalAlpha = OVERLAYS_EDIT_TINT_ALPHA;
       for (var i = 0; i < positions.length; i++) {
         var span = entropyColumnSpan(chart, positions[i]);
         if (span) {
+          ctx.fillStyle = colors[i];
           ctx.fillRect(
             span.left,
             yScale.top,
@@ -2657,10 +2659,11 @@ function substitutionMarkerPlugin(positions) {
       var ctx = chart.ctx;
       ctx.save();
       clipToChartArea(ctx, chart.chartArea);
-      ctx.strokeStyle = EDIT_COLOR;
+      ctx.globalAlpha = OVERLAYS_EDIT_LINE_ALPHA;
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 4]);
       for (var i = 0; i < positions.length; i++) {
+        ctx.strokeStyle = colors[i];
         var x = xScale.getPixelForValue(positions[i]);
         ctx.beginPath();
         ctx.moveTo(x, yScale.top);
@@ -4075,7 +4078,7 @@ function overlayOpacityFn(index, tok, masked) {
 // to the branch layer: the pre-edit run below it is what the model
 // did on its own, and marking it would claim otherwise.
 function editedClassFn(index) {
-  if (editedPositionMarks(overlayData)[index] === true) {
+  if (positionWasEdited(editedPositionMarks(overlayData), index)) {
     return "token-edited";
   }
   return "";
@@ -5388,17 +5391,44 @@ function editedPositions(data) {
   var marks = editedPositionMarks(data);
   var positions = [];
   for (var key in marks) {
-    if (marks[key] === true) {
+    if (positionWasEdited(marks, key)) {
       positions.push(Number(key));
     }
   }
   return positions;
 }
 
-// The same set as a lookup, for the token layer, which asks about
-// every position it draws. Keyed on the run payload itself, which is
-// replaced wholesale when a run is selected and never mutated in
-// place, so switching runs rebuilds this and staying on one does not.
+// Whether a position was touched by an edit. A separate predicate
+// because frame 0 is a real answer and a falsy one, so asking the map
+// directly would silently drop an edit made at the very first frame.
+function positionWasEdited(marks, position) {
+  return typeof marks[position] === "number";
+}
+
+// One colour per entry of ``editedPositions(data)``, in the same
+// order. The denominator is the run's last frame index, asked of the
+// series so the append and per-frame shapes normalize alike.
+function editedPositionColors(data, positions) {
+  var marks = editedPositionMarks(data);
+  var series = overlaySeriesOf(data, false);
+  var maxFrame = overlaySeriesLength(series) - 1;
+  var colors = [];
+  for (var i = 0; i < positions.length; i++) {
+    colors.push(overlaysEditColor(marks[positions[i]], maxFrame));
+  }
+  return colors;
+}
+
+// Every touched position mapped to the frame its edit was made at, as
+// a lookup for the token layer, which asks about every position it
+// draws. The frame is the value rather than a bare true because the
+// markers colour themselves by it on the Commit Order ramp; a
+// position remasked twice keeps the later frame, which falls out of
+// the log being appended chronologically.
+//
+// Keyed on the run payload itself, which is replaced wholesale when a
+// run is selected and never mutated in place, so switching runs
+// rebuilds this and staying on one does not.
 var editedMarksCache = { data: null, marks: {} };
 
 function editedPositionMarks(data) {
@@ -5410,7 +5440,7 @@ function editedPositionMarks(data) {
   for (var i = 0; i < edits.length; i++) {
     var group = edits[i].token_positions || [];
     for (var j = 0; j < group.length; j++) {
-      marks[group[j]] = true;
+      marks[group[j]] = edits[i].frame_index;
     }
   }
   editedMarksCache = { data: data, marks: marks };
@@ -5570,6 +5600,8 @@ function renderEntropyChart(data) {
   datasets.push(entropyDataset("Edited", edited));
   texts.push(edited.texts);
 
+  var markerPositions = editedPositions(data);
+
   var canvas = document.getElementById("chart-entropy");
   chartEntropy = new Chart(
     canvas.getContext("2d"),
@@ -5590,7 +5622,9 @@ function renderEntropyChart(data) {
       // Marker before hover so the pointer's white guide lays over
       // the edit tint rather than under it.
       plugins: [
-        substitutionMarkerPlugin(editedPositions(data)),
+        substitutionMarkerPlugin(
+          markerPositions, editedPositionColors(data, markerPositions)
+        ),
         entropyHoverPlugin,
         compareBlendPlugin,
         tokenLinkPlugin,
