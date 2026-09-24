@@ -65,6 +65,23 @@ function overlaysEditColor(frame, maxFrame) {
   return OVERLAYS_EDIT_COLOR;
 }
 
+// Whether a token's text renders with no horizontal extent, so the
+// cross-highlight has to stand a marker where it sits instead of
+// tinting a box that is zero pixels wide.
+//
+// Decided from the text rather than measured, because measuring means
+// reading a layout box inside a hover handler. Line breaks and the
+// empty string are the cases that occur: a space and a tab both have
+// width, so they are deliberately not included.
+var OVERLAYS_ZERO_WIDTH_TEXT = /^[\r\n]*$/;
+
+function overlaysTokenIsZeroWidth(text) {
+  if (typeof text !== "string") {
+    return false;
+  }
+  return OVERLAYS_ZERO_WIDTH_TEXT.test(text);
+}
+
 // Divergence coloring: changed tokens glow magenta, unchanged tokens
 // fade to a dim neutral so an intervention's footprint stands out.
 function diffColor(changed) {

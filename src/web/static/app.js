@@ -4149,7 +4149,9 @@ var tokenHighlightPos = null;
 
 // Light the token(s) at a position. There are two while the diff
 // overlay is stacked, and lighting both keeps the mark visible
-// whichever layer is on top.
+// whichever layer is on top. A token that renders to nothing, a line
+// break, gets the extra class that stands a marker in its place,
+// since the tint alone would have no box to fill.
 function setTokenHighlight(pos) {
   if (tokenHighlightPos === pos) {
     return;
@@ -4164,6 +4166,9 @@ function setTokenHighlight(pos) {
   );
   for (var i = 0; i < spans.length; i++) {
     spans[i].classList.add("token-cross-highlight");
+    if (overlaysTokenIsZeroWidth(spans[i].textContent)) {
+      spans[i].classList.add("token-zero-width");
+    }
   }
 }
 
@@ -4177,6 +4182,7 @@ function clearTokenHighlight() {
   );
   for (var i = 0; i < lit.length; i++) {
     lit[i].classList.remove("token-cross-highlight");
+    lit[i].classList.remove("token-zero-width");
   }
 }
 

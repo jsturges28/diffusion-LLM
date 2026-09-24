@@ -3135,6 +3135,39 @@ input[type="checkbox"].app-checkbox:checked::after {
   background: rgba(255, 255, 255, 0.16);
   border-radius: 2px;
   box-shadow: 0 0 6px rgba(255, 255, 255, 0.22);
+  /* Anchors the marker below. Harmless on a token with width, and
+     the only way the marker can be positioned without giving the
+     span a layout box of its own. */
+  position: relative;
+}
+
+/* A token with no width still has a position. A newline renders as
+   zero horizontal extent, so background and box-shadow paint nothing
+   and sweeping the entropy profile onto it lit nothing at all: the
+   column was clearly pointing somewhere and the somewhere looked
+   empty, which reads as a bug in the profile rather than as a
+   property of the token.
+
+   A pseudo-element rather than min-width, which does not apply to a
+   non-replaced inline element. Reaching for display: inline-block to
+   make it apply would give every highlighted token a box of its own
+   and reflow the paragraph on each hover, a visible jolt while
+   sweeping. This paints outside the flow instead, so nothing moves.
+
+   Only for tokens the page has marked as zero-width: over a token
+   with glyphs this bar would sit on top of its first character.
+   Sized in em so it tracks the font, a thin bar a line tall standing
+   where the invisible character is. */
+.token-cross-highlight.token-zero-width::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.08em;
+  width: 0.3em;
+  height: 1em;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.4);
+  pointer-events: none;
 }
 
 /* Visual-overlay picker: a glassy drawer tucked against the output

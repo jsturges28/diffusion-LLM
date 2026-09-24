@@ -4151,7 +4151,9 @@ var tokenHighlightPos = null;
 
 // Light the token(s) at a position. There are two when the run is
 // layered, and lighting both keeps the mark visible wherever the
-// crossfade happens to sit.
+// crossfade happens to sit. A token that renders to nothing, a line
+// break, gets the extra class that stands a marker in its place,
+// since the tint alone would have no box to fill.
 function setTokenHighlight(pos) {
   if (tokenHighlightPos === pos) {
     return;
@@ -4166,6 +4168,9 @@ function setTokenHighlight(pos) {
   );
   for (var i = 0; i < spans.length; i++) {
     spans[i].classList.add("token-cross-highlight");
+    if (overlaysTokenIsZeroWidth(spans[i].textContent)) {
+      spans[i].classList.add("token-zero-width");
+    }
   }
 }
 
@@ -4179,6 +4184,7 @@ function clearTokenHighlight() {
   );
   for (var i = 0; i < lit.length; i++) {
     lit[i].classList.remove("token-cross-highlight");
+    lit[i].classList.remove("token-zero-width");
   }
 }
 
