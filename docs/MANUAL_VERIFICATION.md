@@ -3028,13 +3028,26 @@ change is that nothing observable moves.
     step, on a card already carrying 17 GiB of weights. At the 1024
     the registry allows it was 513 MiB.
 
-    Watch `nvidia-smi` through a LLaDA run, or read
-    `torch.cuda.max_memory_allocated()` around one, and record the
-    before and after. The before is on the commit prior to "Read
-    LLaDA's signals without a canvas-wide softmax". Also note whether
-    the run feels slower: two chunked reductions replace one fused
-    softmax, so a small latency cost would not be surprising and is
-    worth knowing against the memory saved.
+    **The app now reports this, so the before-and-after is no longer
+    needed.** Generate on LLaDA, save the run, and read **Peak VRAM**
+    on its Analytics detail. The figure in brackets is the distance
+    above the baseline, which is what this change moved: expect
+    something near 15 MiB at the default canvas, where the old code
+    would have sat near 96. That is a check against a prediction
+    rather than a comparison against an old commit, which is the
+    better shape: it needs one run, not two builds.
+
+    The absolute peak beside it is mostly the 17 GiB of weights, which
+    is exactly why the bracketed figure exists. `nvidia-smi` shows the
+    reserved pool rather than live tensors, so it will read higher than
+    both; `vram_reserved_peak_bytes` in the saved `metadata.json` is
+    the figure to compare it against if you want to cross-check.
+
+    Also note whether the run feels slower: two chunked reductions
+    replace one fused softmax, so a small latency cost would not be
+    surprising and is worth knowing against the memory saved. Per-frame
+    `elapsed` has always been recorded, so the timing chart already
+    answers this for any two runs.
 
     Worth trying at a large canvas too, since that is where the old
     transient was near a gibibyte. A gen length and steps that used to
@@ -3120,3 +3133,33 @@ change is that nothing observable moves.
     older. The arrows and their tooltips are unchanged, because they
     were already correct; only the numbering direction moved, so that
     the count now reads as which prompt in the order you typed them.
+
+## What a run cost the card
+
+304. **Peak VRAM appears, and only where it was measured.** The row
+    behind item 296, checked as a feature rather than as a
+    measurement. Save a LLaDA run and open its Analytics detail: a
+    **Peak VRAM** row should be there, reading something like
+    `17.01 GiB (15.0 MiB above baseline)`.
+
+    Then the three cases where there is nothing to report, each of
+    which must show **no row at all** rather than a zero. Activate
+    SmolLM3 on CPU, generate, save, and open it: no row, because a CPU
+    run has no VRAM cost. Open any run saved before today: no row,
+    because its worker never measured. And if you have a GPU-less host
+    to hand, a run there should also show none.
+
+    A row reading `0.00 GiB` anywhere is the failure this is looking
+    for. `torch.cuda.max_memory_allocated()` returns 0 quite happily
+    without a card, so zero is what a missing guard produces, and
+    months from now it would be indistinguishable from a real
+    measurement.
+305. **A resume keeps one measurement for the whole run.** Generate on
+    LLaDA, scrub back, remask something and resume to the end, then
+    save. There should be one Peak VRAM row describing the run
+    including the resumed part, not a figure that only covers the
+    tail.
+
+    This follows from the peak restarting where the run token does, so
+    a regression here would most likely show up as an
+    above-baseline figure that looks too small for the work done.

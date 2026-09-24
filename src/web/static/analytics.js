@@ -2357,7 +2357,49 @@ function renderRunMeta(run) {
 
   html += elapsedMetaRows(run);
 
+  html += peakVramMetaRow(run);
+
   return html;
+}
+
+// A gibibyte, past which a figure reads better in the larger unit.
+var BYTES_PER_GIB = 1024 * 1024 * 1024;
+var BYTES_PER_MIB = 1024 * 1024;
+
+// Bytes at a size a reader can hold in their head. Adaptive because
+// the two figures in the row below are three orders of magnitude
+// apart: a peak is tens of gibibytes and what a run added on top of
+// its weights is tens of mebibytes, and forcing either into the
+// other's unit gives "0.01 GiB" or "17408 MiB".
+function formatVramBytes(bytes) {
+  if (bytes >= BYTES_PER_GIB) {
+    return (bytes / BYTES_PER_GIB).toFixed(2) + " GiB";
+  }
+  return (bytes / BYTES_PER_MIB).toFixed(1) + " MiB";
+}
+
+// What the run cost the card. One row carrying two figures, because
+// neither says much alone: the peak is mostly the weights the model
+// had already loaded, and the distance above the baseline is the part
+// a change to the sampler moves. Reporting only the peak is how an
+// improvement of 80 MiB hides inside 17 GiB.
+//
+// Absent for a CPU run, for a run whose worker could not read the
+// device, and for every run saved before this existed. All three are
+// honestly unmeasured, and no row says that without claiming a zero.
+function peakVramMetaRow(run) {
+  var cost = run.resources || {};
+  var peak = cost.vram_allocated_peak_bytes;
+  var start = cost.vram_allocated_start_bytes;
+  if (typeof peak !== "number" || typeof start !== "number") {
+    return "";
+  }
+  return metaRowHtml(
+    "Peak VRAM",
+    formatVramBytes(peak)
+      + " (" + formatVramBytes(peak - start)
+      + " above baseline)"
+  );
 }
 
 // A summary's prompt is cut to a fixed length, and saying so beats

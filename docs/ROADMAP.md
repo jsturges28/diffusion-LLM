@@ -1927,6 +1927,32 @@ compete with generation for the GIL, and a decision about whether the samples
 are persisted with the run. Persisting them is what would make it XAI rather
 than a system monitor, since a saved run could then be asked what it cost.
 
+**The cheap half landed on 2026-09-24, and it was the half that mattered.**
+A run now records the peak VRAM its generation held, with the baseline it
+started from, and the Analytics detail reports both on one row. That was
+deliberately taken first because the measurement item above does not need a
+moving line, it needs one number, and the number retires it: the check is now
+a single run read against a prediction rather than two builds compared by eye.
+
+Three things were settled there that the live half inherits. The worker is the
+only process that can see the device cheaply, and `torch.cuda.mem_get_info`
+answers for the whole card with no new dependency, so the existing `nvidia-smi`
+plumbing in `src/web/server.py` is the wrong source: each query is a
+`subprocess.run` with a five-second timeout, fine for a pre-flight probe and
+hopeless at 2 Hz. The supervisor is a transparent WebSocket proxy, so a new
+worker-to-browser message needs no change there and the socket is open for as
+long as the page is, not only during a run. And the sampler awaits
+`asyncio.to_thread` per step, so a timer task on the worker's loop can sample
+while a step computes.
+
+What is left is genuinely the live half, and it is a different instrument
+rather than the same one turned up: a timer keeps moving while idle and during
+a model load, which is when VRAM moves most and when no frames exist to hang a
+sample on. CPU is still open too, and still faces the choice between
+`/proc/<pid>/stat`, which is standard library and Linux-only, and `psutil`,
+which would be a new dependency. A GPU-only meter is blank for exactly the
+people running SmolLM3 on CPU.
+
 Shipped from this backlog (see `README.md`):
 - Token commit-order coloring: tokens are tinted by the step at which they
   resolved (light green early to red-orange late), as a persistent overlay. Now

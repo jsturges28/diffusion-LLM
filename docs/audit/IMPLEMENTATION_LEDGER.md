@@ -1286,6 +1286,16 @@ assert the step's two outputs differ and that their units are the ones declared,
 which is the same class of defect the report found in DiffusionGemma and so worth
 a named guard rather than an assumption.
 
+**The memory claim is now self-verifying, as of 2026-09-24.** This entry's 6.2x
+was a number the maintainer had to confirm with `nvidia-smi` beside a run,
+catching a transient that lasts one denoising step. A run now records the peak
+VRAM it held together with the baseline it started from, and the Analytics detail
+reports both, so manual item 296 became a single run read against a prediction
+rather than two builds compared by eye. The measurement was taken as its own
+small pass rather than folded in here, because the finding was already closed;
+what it changes is the cost of checking it. The live meter that prompted it is
+still open, in the ROADMAP under "A small live GPU and CPU meter".
+
 ### ORG-03
 
 **Half the work was already done, which changed what the rest of it was.** The
