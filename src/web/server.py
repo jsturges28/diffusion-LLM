@@ -98,6 +98,7 @@ from src.web.data_root import (
     RESULTS_DIR_ENV,
     resolve_results_dir,
 )
+from src.web.model_lease import PrimaryModelLease
 from src.web.ui_state import (
     load_ui_state,
     mutate_ui_state_key,
@@ -179,6 +180,39 @@ assert DOWNLOAD_POLL_ITERATIONS_MAX > 0, "sample at least once"
 
 
 # -- Model worker manager --
+
+
+def _residency_refusal(lease: PrimaryModelLease) -> str:
+    """What to tell somebody whose machine is already busy.
+
+    Written to be acted on rather than merely accurate: the
+    instruction is to unload or close the other instance, because
+    that is the only thing that frees the claim.
+
+    Degrades when the note cannot be read. That happens if the holder
+    was mid-rewrite, and naming a wrong process would be worse than
+    naming none: it would send somebody to close a window that is not
+    the one holding the model.
+    """
+    owner = lease.owner()
+    if owner is None:
+        return (
+            "Another instance of this app already has a model"
+            " loaded. Unload it there, or close it, and try again."
+        )
+    launcher = owner.get("launcher") or "another instance"
+    model = owner.get("model")
+    pid = owner.get("pid")
+    who = f"{launcher} (pid {pid})" if pid else launcher
+    holding = (
+        f" has {model} loaded" if model else " has a model loaded"
+    )
+    return (
+        f"{who}{holding}. Only one model can be resident on this"
+        " machine at a time, so unload it there, or close it, and"
+        " try again."
+    )
+
 
 # The two things `ModelManager` does to the outside world that a test
 # cannot afford to do for real: start a process, and read a socket.
@@ -690,6 +724,14 @@ class ModelManager:
         self._port: Optional[int] = None
         self._monitor_task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
+        # The machine-wide claim on having a model loaded. ``_lock``
+        # above only orders this process's own activations; the two
+        # launchers bind different ports on purpose, so without this a
+        # browser and a desktop instance each hold their own manager
+        # and each pass the VRAM pre-flight before the other's
+        # allocation is visible. Held from the activation that claims
+        # it until the worker is finalized.
+        self._residency = PrimaryModelLease()
         # Download-only state (pre-fetch weights without loading into
         # VRAM). Independent of the worker, so it can run alongside a
         # resident model. States: idle | downloading | done | error.
@@ -813,54 +855,91 @@ class ModelManager:
             info = REGISTRY[model_id]
             python = self._validate_target(info, device)
             await self._stop_locked()
-            # CPU placement has no VRAM cost, so skip the GPU
-            # pre-flight (which would otherwise block on nvidia-smi).
-            if device != "cpu":
-                await self._preflight_vram(info)
-            port = self._free_port()
-            env = dict(os.environ)
-            env["PYTHONPATH"] = str(REPO_ROOT)
-            lib_dirs = _venv_cuda_lib_dirs(python)
-            if lib_dirs:
-                existing = env.get("LD_LIBRARY_PATH", "")
-                parts = lib_dirs + (
-                    [existing] if existing else []
+            # After the eviction, which looks wrong for a check that
+            # can refuse, and is not. A refusal here can only happen
+            # when this supervisor holds no claim, and holding no
+            # claim means having no resident worker, so there was
+            # nothing for the eviction to cost. A supervisor that does
+            # have a model already owns the claim, and re-claiming it
+            # is a no-op.
+            #
+            # Before the pre-flight, though, which is the ordering
+            # that matters: the pre-flight is precisely what cannot be
+            # trusted here, because two supervisors both read free
+            # VRAM before either allocation exists.
+            self._claim_residency(model_id, device)
+            try:
+                await self._launch_locked(
+                    info, model_id, device, python
                 )
-                env["LD_LIBRARY_PATH"] = ":".join(parts)
-            logger.info(
-                "spawning worker %s on port %d (device=%s)",
-                model_id,
-                port,
-                device,
-            )
-            proc = self._spawn(
-                worker_command(
-                    python=python,
-                    model_id=model_id,
-                    port=port,
-                    device=device,
-                ),
-                cwd=REPO_ROOT,
-                env=env,
-            )
-            self._proc = proc
-            self._port = port
-            self.active_id = model_id
-            self.active_device = device
-            self.active_versions = {}
-            self.active_tokenizer = {}
-            self.active_context_length = None
-            self.load_state = "starting"
-            self.load_progress = None
-            # Clears the previous failure, which `_finalize` keeps
-            # around so the menu can explain a redirect. Trying again
-            # is the moment it stops being news.
-            self.load_error = None
-            self.activation_id += 1
-            self._monitor_task = asyncio.create_task(
-                self._monitor_startup(proc, port)
-            )
+            except BaseException:
+                # Nothing was left running, so nothing will finalize
+                # and release on this supervisor's behalf. Holding a
+                # claim with no worker behind it would lock the
+                # machine out until this process exited.
+                if self._proc is None:
+                    self._residency.release()
+                raise
             return self.activation_id
+
+    async def _launch_locked(
+        self,
+        info: ModelInfo,
+        model_id: str,
+        device: str,
+        python: Path,
+    ) -> None:
+        """Spawn the worker and record it. Called holding the lock.
+
+        Split from ``activate`` so the claim taken just above it has
+        one failure boundary rather than a release beside every raise
+        between here and the spawn.
+        """
+        # CPU placement has no VRAM cost, so skip the GPU pre-flight
+        # (which would otherwise block on nvidia-smi).
+        if device != "cpu":
+            await self._preflight_vram(info)
+        port = self._free_port()
+        env = dict(os.environ)
+        env["PYTHONPATH"] = str(REPO_ROOT)
+        lib_dirs = _venv_cuda_lib_dirs(python)
+        if lib_dirs:
+            existing = env.get("LD_LIBRARY_PATH", "")
+            parts = lib_dirs + ([existing] if existing else [])
+            env["LD_LIBRARY_PATH"] = ":".join(parts)
+        logger.info(
+            "spawning worker %s on port %d (device=%s)",
+            model_id,
+            port,
+            device,
+        )
+        proc = self._spawn(
+            worker_command(
+                python=python,
+                model_id=model_id,
+                port=port,
+                device=device,
+            ),
+            cwd=REPO_ROOT,
+            env=env,
+        )
+        self._proc = proc
+        self._port = port
+        self.active_id = model_id
+        self.active_device = device
+        self.active_versions = {}
+        self.active_tokenizer = {}
+        self.active_context_length = None
+        self.load_state = "starting"
+        self.load_progress = None
+        # Clears the previous failure, which `_finalize` keeps around
+        # so the menu can explain a redirect. Trying again is the
+        # moment it stops being news.
+        self.load_error = None
+        self.activation_id += 1
+        self._monitor_task = asyncio.create_task(
+            self._monitor_startup(proc, port)
+        )
 
     def _validate_target(
         self, info: ModelInfo, device: str
@@ -1330,6 +1409,27 @@ class ModelManager:
         async with self._lock:
             await self._stop_locked()
 
+    def _claim_residency(self, model_id: str, device: str) -> None:
+        """Take the machine-wide claim, or refuse and say who has it.
+
+        A supervisor that already holds it is switching models rather
+        than competing with itself, which the lease treats as a no-op
+        and a rewrite of the recorded model.
+
+        The note names the launcher rather than only the pid, because
+        "the desktop app has a model loaded" is something a person can
+        act on and "pid 4001" is something they then have to look up.
+        """
+        owner = {
+            "pid": os.getpid(),
+            "launcher": Path(sys.argv[0]).name or "python",
+            "model": model_id,
+            "device": device,
+        }
+        if self._residency.acquire(owner):
+            return
+        raise ActivationRefused(_residency_refusal(self._residency))
+
     async def _stop_locked(self) -> None:
         """Stop the resident worker and prove it is gone.
 
@@ -1388,6 +1488,12 @@ class ModelManager:
             # were asked to end is gone, which was the job; the state
             # now describes somebody else's worker.
             return
+        # Behind the supersede guard above, and for the same reason
+        # the fields are: by the time a slow termination finishes, a
+        # newer activation may already hold the claim, and releasing
+        # here would hand the machine away while this supervisor still
+        # has a worker coming up.
+        self._residency.release()
         self._proc = None
         self._port = None
         self.active_id = None

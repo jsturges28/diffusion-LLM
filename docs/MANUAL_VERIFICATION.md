@@ -3221,3 +3221,56 @@ change is that nothing observable moves.
     run on such a host, the failure to look for is a labelled meter
     sitting flat at the bottom, which is what sending zeros instead
     of sending nothing would produce.
+
+## One model across two supervisors (LIFE-05)
+
+310. **Two supervisors, one model.** The finding, and the one item
+    here that needs two processes. Start the browser launcher
+    (`.venv/bin/python main.py`, port 8000) and the desktop app
+    (`.venv/bin/python desktop.py`, port 8760) at the same time. They
+    bind different ports deliberately, so both will come up.
+
+    Load a model in one. Then try to load one in the other. It should
+    be **refused**, with a message naming which launcher holds the
+    card, its pid, and the model it has loaded, and telling you to
+    unload or close it.
+
+    Before this, both would have passed their own VRAM pre-flight
+    before either allocation was visible and launched two workers into
+    a 24 GB card, so the second load would die of out-of-memory after
+    you had waited for it, or worse, both would fit and neither UI
+    could see the other's worker.
+311. **The refused one is still worth having open.** On the instance
+    that was refused, go to Analytics and open a saved run. It should
+    work completely: the catalog, the detail modal, the charts. Only
+    loading a model is refused.
+
+    That is the point of leasing residency rather than the process. A
+    second window for reading runs while the first one generates is a
+    legitimate thing to want.
+312. **Unloading in one frees the other.** With the first instance
+    still holding its model, unload it there (switch away, or close
+    that instance). Then load a model in the instance that was
+    refused. It should now succeed.
+
+    This is the instruction the refusal message gives, so it needs to
+    be true.
+313. **A crash does not wedge the machine.** The stale-safety clause.
+    With one instance holding a model, kill it uncivilly:
+
+        pkill -9 -f 'desktop.py'
+
+    Then load a model in the other instance. It should succeed
+    immediately, with no file to delete by hand and no waiting.
+
+    The lease is a file lock, so the kernel drops it when the holder
+    dies. If this ever fails, the thing to look at is
+    `$XDG_RUNTIME_DIR/diffusion-llm-primary-model.lock`, but note that
+    its *contents* deliberately outlive a crash: the stale pid in
+    there is expected and is never reported as an owner, because a
+    supervisor only reads it after failing to take the lock.
+314. **Switching models in one instance is not self-refusal.** The
+    obvious way this could have broken normal use. In a single
+    instance, with a model loaded, switch to a different model. It
+    should work exactly as before, because a supervisor that already
+    holds the lease is switching rather than competing with itself.

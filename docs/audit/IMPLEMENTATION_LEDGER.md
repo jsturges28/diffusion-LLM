@@ -357,7 +357,7 @@ on real hardware.
 | PROTOCOL-01 | medium | M | done | none | Two commits: scoped error envelopes, then the client routing |
 | XAI-01 | high | M | done | LIFE-01 (done) | Bounded checkpoints for both diffusion backends; carried the capture change |
 | LIFE-04 | high | L | done | LIFE-03 (done) | Carried RUNTIME-01's queue bound, as its own Direction asks |
-| LIFE-05 | high | M | partial | none | Single-instance the desktop launcher; host lease deferred, see Deviations |
+| LIFE-05 | high | M | done | none | Single-instance launcher, then a host-wide flock lease on residency; a second supervisor is refused and names the owner |
 | TRUST-04 | medium | L | done | LIFE-04 (done) | Download is a child process now; absorbed ORG-02's download client |
 | DATA-02 | high | L | done | none | Lost-update slice, then the semantics: collections are server-owned operations |
 | RUNTIME-01 | medium | L | done | none | Queue bound, then append frames on the wire, in the browser and on disk; 130 MiB to 1 MiB on a 2,048-token run |
@@ -1781,6 +1781,54 @@ What remains open, for whoever picks it up: browser and desktop
 running together, and a deliberately launched `main.py` alongside
 either. Both are two-step acts rather than a slip, which is why they
 wait.
+
+**Closed on 2026-09-24, and it was smaller than the deferral implied.**
+A model is now held under a host-wide lease, so the two cases above are
+refused rather than merely unlikely. Three things made it cheap, and
+each is worth knowing before touching it.
+
+`fcntl.flock` satisfies the report's hardest clause without any code:
+the kernel drops the lock when the holder dies, so "crash the owner and
+prove the lease becomes recoverable without killing an unrelated
+process" needs no pid validation, no liveness probe, and no cleanup path
+that has to survive a crash. What it does not carry is identity, so the
+owner writes that into the file and a loser reads it.
+
+Which exposes the one asymmetry that matters: the kernel releases the
+lock and does not touch the contents, so a crashed owner leaves its pid
+sitting there. Reading the file without having first been refused the
+lock would name a process that died days ago, in a message telling
+somebody to close a window that is not open. Acquiring first and
+rewriting is what makes that impossible, and `owner()` says so.
+
+`ActivationRefused` already existed and already became a 409 carrying
+its message, and `activation_client.js` already surfaced that message,
+so the refusal needed no new error code and no frontend change at all.
+
+**One ordering looked wrong and was not.** The claim is taken *after*
+the resident worker is evicted, which reads like the mistake the
+four-phase activation exists to prevent. It is not: a refusal can only
+happen when this supervisor holds no claim, and holding no claim means
+having no resident worker, so there is nothing for the eviction to cost.
+Taking it before eviction was tried first and was actively wrong, since
+`_stop_locked` routes through `_finalize`, which releases, so the claim
+was dropped the moment it was taken.
+
+**The tests needed isolating from the machine.** A manager keeps its
+claim until its worker is finalized, which is right for a supervisor and
+wrong for a test: tests activate and abandon managers without stopping
+them, so one shared lease file meant the first activation held it for
+the rest of the session and 33 later tests failed for reasons unrelated
+to what they were testing. Worse, running the suite with the app open
+failed the same way. `tests/conftest.py` now points each test at a
+disposable runtime directory, which is the first conftest in this repo
+and says why in its docstring.
+
+What the lease does not cover, recorded so nobody assumes otherwise: a
+second user account, since it is per-user and could not govern another
+account's processes anyway; and the report's "small local broker"
+alternative, which was not needed once the file lock carried both the
+exclusion and the identity.
 
 **Raising the existing window is best-effort and the code says so.**
 Activating another process's window is the window manager's to allow
