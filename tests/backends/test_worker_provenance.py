@@ -172,6 +172,7 @@ class _StubBackend:
         self,
         effective_device: str,
         loaded_revision: Optional[str] = None,
+        vram_start_bytes: Optional[int] = None,
     ) -> None:
         self.model_info = ModelInfo(
             id="stub",
@@ -194,6 +195,11 @@ class _StubBackend:
         )
         self.effective_device = effective_device
         self.loaded_revision = loaded_revision
+        # None means no VRAM measurement is running, which is what a
+        # CPU-placed backend and every stub here honestly is. Named
+        # rather than defaulted silently because the envelope treats
+        # its presence as proof a measurement was taken.
+        self.vram_start_bytes = vram_start_bytes
         self.tokenizer = None
         self.model = None
 

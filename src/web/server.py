@@ -2082,6 +2082,11 @@ class RunProvenance(BaseModel):
     # field ahead of the supervisor, and validating the channels here
     # would reintroduce exactly the coupling that permits.
     signals: List[Dict[str, Any]] = Field(default_factory=list)
+    # What the run cost the device, as the worker measured it. A dict
+    # rather than named fields for the same reason as ``signals``: the
+    # worker owns what it can measure, and a CPU run or an older one
+    # sends nothing at all rather than zeros.
+    resources: Dict[str, Any] = Field(default_factory=dict)
 
 
 class SaveRunRequest(BaseModel):
@@ -2305,6 +2310,26 @@ def _context_metadata(
     return block
 
 
+def _resources_metadata(
+    provenance: Optional[RunProvenance],
+) -> Dict[str, Any]:
+    """What the run cost the device, or empty when unmeasured.
+
+    Its own block, not part of ``_reproducibility_block``, which
+    answers what it would take to run this again. What a run cost is
+    an observation about the run, not an input to reproducing it, and
+    folding the two together is how a block stops having one job.
+
+    Read only from the run's own envelope, with no fall back to the
+    supervisor's view. There is nothing to fall back to: the peak is a
+    measurement of one run over one interval, and the resident model
+    cannot be asked afterwards what a finished run held.
+    """
+    if provenance is None:
+        return {}
+    return dict(provenance.resources)
+
+
 # Request fields copied into metadata verbatim when the client sent
 # them. Absent stays absent: the readers distinguish "this run never
 # recorded it" from "it recorded zero".
@@ -2451,6 +2476,12 @@ def _build_metadata(body: SaveRunRequest) -> Dict[str, Any]:
     context = _context_metadata(body.prompt_len, provenance)
     if context:
         metadata["context"] = context
+    # Absent for a CPU run, for a run saved before this existed, and
+    # for one whose worker could not read the device. All three are
+    # honestly "not measured", which is what no block says.
+    resources = _resources_metadata(provenance)
+    if resources:
+        metadata["resources"] = resources
     # The signal manifest, as its own key rather than folded into
     # ``capture``. That one answers "which files were written" and is
     # read as booleans per sidecar, both by the staging validator and

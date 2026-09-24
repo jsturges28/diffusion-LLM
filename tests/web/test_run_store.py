@@ -187,6 +187,36 @@ def test_an_empty_sidecar_is_still_written(
     assert (tmp_path / run_id / "alternatives.json").is_file()
 
 
+def test_a_metadata_block_survives_the_write(
+    tmp_path: Path,
+) -> None:
+    """Read back rather than assumed.
+
+    The store stamps its own keys onto a copy of whatever it was
+    given, so nothing here filters the caller's blocks. That is worth
+    an assertion on the far side of the write, because a reader months
+    from now is holding the file rather than the dict: it is the same
+    reason the VRAM figures are asserted where they are built and
+    again here.
+    """
+    cost = {
+        "vram_allocated_start_bytes": 17 * 1024**3,
+        "vram_allocated_peak_bytes": 17 * 1024**3 + 15 * 1024**2,
+    }
+    run_id, _ = _save(
+        tmp_path,
+        bundle=_bundle(
+            metadata={"backend": "llada", "resources": cost}
+        ),
+    )
+
+    written = json.loads(
+        (tmp_path / run_id / "metadata.json").read_text()
+    )
+
+    assert written["resources"] == cost
+
+
 def test_history_framing_survives_the_reader(
     tmp_path: Path,
 ) -> None:

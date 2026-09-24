@@ -442,7 +442,44 @@ def provenance_envelope(backend: Backend) -> Dict[str, Any]:
     )
     if context is not None:
         envelope["context_length"] = context
+    resources = _resource_cost(backend)
+    if resources:
+        envelope["resources"] = resources
     return envelope
+
+
+def _resource_cost(backend: Backend) -> Dict[str, Any]:
+    """What the run cost the device, or empty when unmeasured.
+
+    Gated on the baseline alone, which is enough: ``begin_run`` only
+    sets it after both the device check and the availability check
+    passed, so its presence already means a measurement is running.
+
+    All three or none. A block holding a peak without the baseline it
+    should be read against would invite the subtraction it cannot
+    support, and a reader has no way to tell a missing baseline from a
+    run that genuinely started at zero.
+    """
+    start = backend.vram_start_bytes
+    if start is None:
+        return {}
+    peak = vram_peak_bytes()
+    if peak is None:
+        return {}
+    allocated, reserved = peak
+    # Our own plumbing, not torch's: a negative byte count here means
+    # a value was mixed up on the way in. The relationship between the
+    # two peaks is deliberately not asserted, because they are numbers
+    # torch reports rather than an invariant this code maintains, and
+    # crashing a finished run over a best-effort measurement would
+    # cost the user the run to protect a footnote about it.
+    assert start >= 0, "a baseline cannot be negative"
+    assert allocated >= 0, "a peak cannot be negative"
+    return {
+        "vram_allocated_start_bytes": start,
+        "vram_allocated_peak_bytes": allocated,
+        "vram_reserved_peak_bytes": reserved,
+    }
 
 
 def library_versions() -> Dict[str, str]:
@@ -465,6 +502,65 @@ def library_versions() -> Dict[str, str]:
         # problems, and none of them are fixed by refusing to report
         # health. An empty block reads as "not recorded".
         return {}
+
+
+# The two VRAM readings, imported locally for the same reason
+# ``library_versions`` does: the supervisor imports this module and
+# has no business paying for torch, and each venv holds its own.
+#
+# Both answer None rather than zero when there is nothing to measure,
+# and in the reader that distinction is the whole point: on a
+# CUDA-less host ``max_memory_allocated`` returns 0 quite happily, so
+# without its availability check this would report a run that peaked
+# at zero bytes, which is a measurement claim rather than an absence.
+#
+# ``reset_peak_memory_stats`` fails the other way. Without CUDA it
+# raises RuntimeError rather than answering falsely, so what protects
+# a CPU generation is the device check at the call site; the
+# availability check below only keeps an expected failure out of the
+# warning log, and the ``except`` would answer None regardless.
+
+
+def reset_vram_peak() -> Optional[int]:
+    """Start a fresh peak measurement, returning the baseline.
+
+    The baseline is the allocation the reset leaves the peak sitting
+    at, read immediately afterwards so the two describe the same
+    instant.
+    """
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return None
+        torch.cuda.reset_peak_memory_stats()
+        return int(torch.cuda.memory_allocated())
+    except Exception:  # noqa: BLE001 - best-effort measurement
+        logger.warning("could not reset the VRAM peak", exc_info=True)
+        return None
+
+
+def vram_peak_bytes() -> Optional[Tuple[int, int]]:
+    """Peak allocated and peak reserved since the last reset.
+
+    Allocated is the peak of live tensors, which is what a change to
+    how much a step holds at once moves. Reserved is the peak size of
+    the caching pool, the figure ``nvidia-smi`` shows for this
+    process; reported alongside because it is how a reader checks
+    this number against the tool they would otherwise have used.
+    """
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return None
+        return (
+            int(torch.cuda.max_memory_allocated()),
+            int(torch.cuda.max_memory_reserved()),
+        )
+    except Exception:  # noqa: BLE001 - best-effort measurement
+        logger.warning("could not read the VRAM peak", exc_info=True)
+        return None
 
 
 class Backend(ABC):
@@ -496,6 +592,14 @@ class Backend(ABC):
     # the one that describes the run. None for a local checkpoint,
     # which has no commit and attests itself through its manifest.
     loaded_revision: Optional[str] = None
+    # VRAM the allocator held when this run started, set by
+    # ``begin_run`` and left at None on a CPU-placed model. The
+    # baseline matters because resetting the peak resets it to the
+    # current allocation rather than to zero, so a run's peak is
+    # mostly the weights: what a reader wants is the distance between
+    # the two, and one number cannot say it. Its presence is also what
+    # tells ``provenance_envelope`` a measurement is running at all.
+    vram_start_bytes: Optional[int] = None
     # The one run this worker can still answer questions about.
     # Declared here rather than only on each backend because the two
     # members below are what make it safe to read, and the three of
@@ -551,11 +655,26 @@ class Backend(ABC):
         counter advancing mid-edit would refuse the very window that
         asked, and a resume that fails leaves the state untouched, so
         there would be nothing for the new token to name.
+
+        The VRAM measurement restarts here for the same reason and
+        therefore gets the same boundary for free: a peak spans a run
+        and every resume of it, because a resume is the same run
+        continuing. A What If substitution shares its parent's peak on
+        the same grounds, which is a consequence worth naming rather
+        than assuming nobody will ask.
         """
         if not self._run_nonce:
             self._run_nonce = secrets.token_hex(4)
         self.last_run_state = None
         self.run_counter += 1
+        # Asked of where the model actually landed, not of whether the
+        # host has a card: a CPU-placed model on a CUDA machine has no
+        # VRAM cost to report, and the device's numbers would
+        # attribute somebody else's memory to this run.
+        if self.effective_device == "cuda":
+            self.vram_start_bytes = reset_vram_peak()
+        else:
+            self.vram_start_bytes = None
 
     def check_run_token(self, data: Dict[str, Any]) -> None:
         """Refuse a stateful request that names a different run.

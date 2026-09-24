@@ -354,3 +354,69 @@ def test_an_unattested_device_reads_as_unknown() -> None:
 
     assert meta["processor"] == "Unknown"
     assert meta["processor_name"] is None
+
+
+# -- what the run cost the device --
+
+# A resident LLaDA in bf16 with a small per-step transient on top,
+# which is the shape the measurement exists to make legible.
+COST: Dict[str, Any] = {
+    "vram_allocated_start_bytes": 17 * 1024**3,
+    "vram_allocated_peak_bytes": 17 * 1024**3 + 15 * 1024**2,
+    "vram_reserved_peak_bytes": 17 * 1024**3 + 271 * 1024**2,
+}
+
+
+def test_the_cost_reaches_the_saved_metadata() -> None:
+    """Its own block, carried through verbatim.
+
+    The supervisor does not compute any of this and must not reshape
+    it: the worker is the only process that can see the device, and a
+    figure altered in transit would be attributed to a measurement
+    that did not produce it.
+    """
+    meta = _build_metadata(
+        _request(provenance=_provenance(resources=COST))
+    )
+
+    assert meta["resources"] == COST
+
+
+def test_the_cost_is_not_folded_into_reproducibility() -> None:
+    """Two blocks with two jobs.
+
+    ``reproducibility`` answers what it would take to run this again.
+    What a run cost is an observation about the run, not an input to
+    repeating it, and a block that held both would answer neither
+    question cleanly.
+    """
+    meta = _build_metadata(
+        _request(provenance=_provenance(resources=COST))
+    )
+
+    assert "vram_allocated_peak_bytes" not in meta["reproducibility"]
+
+
+def test_a_cpu_run_saves_no_cost_block() -> None:
+    """Absent rather than zeroed, all the way to disk.
+
+    A CPU run has no VRAM cost, and the worker says so by sending
+    nothing. The saved file has to agree, because a block of zeros
+    would read months later as a measurement.
+    """
+    meta = _build_metadata(_request(provenance=_provenance()))
+
+    assert "resources" not in meta
+
+
+def test_an_unattested_run_saves_no_cost_block() -> None:
+    """A run saved before any of this existed.
+
+    There is deliberately no fall back to the supervisor here, unlike
+    the context window: the peak describes one run over one interval,
+    and the resident model cannot be asked afterwards what a finished
+    run held.
+    """
+    meta = _build_metadata(_request(provenance=None))
+
+    assert "resources" not in meta
