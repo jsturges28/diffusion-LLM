@@ -4589,10 +4589,20 @@ function updatePromptHistoryUI() {
   }
 }
 
+// Numbered in the order the prompts were typed, oldest as 1, so the
+// count rises to the right the way the arrows move: browsing opens on
+// the most recent prompt at N / N, the right arrow (newer) climbs
+// back toward it and the left arrow (older) walks down.
+//
+// The store is most-recent-first, so this is not the index plus one.
+// It used to be, which made the newest prompt 1 / N and left the
+// right arrow lowering a number while moving forward in time. The
+// arrows were never the problem; the numbering direction was.
 function _setPromptHistoryCounter() {
   if (promptHistoryCounter) {
     promptHistoryCounter.textContent =
-      (promptHistoryIndex + 1) + " / " + promptHistory.length;
+      (promptHistory.length - promptHistoryIndex)
+      + " / " + promptHistory.length;
   }
 }
 
