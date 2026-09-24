@@ -361,6 +361,16 @@ MSG_COUNT_PROMPT_RESULT = "count_prompt_result"
 # browser is known to be showing the un-edited run, so rewinding
 # there covers every one of those without a message per exit.
 MSG_REWIND = "rewind"
+# What the machine is doing right now, for the generator's footer
+# meter. Purely outbound and purely advisory: the worker volunteers
+# these on a timer, nothing requests one, and a client that drops them
+# loses a readout rather than a capability.
+#
+# Which is why it needs no error scope below. The scopes answer "whose
+# work does this failure belong to", and a sample belongs to nobody's
+# request. A page too old to know this type ignores it, since the
+# browser's dispatch has no default branch.
+MSG_RESOURCE_SAMPLE = "resource_sample"
 
 
 # -- Error envelopes --

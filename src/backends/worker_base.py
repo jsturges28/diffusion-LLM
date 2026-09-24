@@ -44,6 +44,7 @@ from src.backends.protocol import (
     MSG_MODEL_STATUS,
     MSG_PROBE,
     MSG_RESUME,
+    MSG_RESOURCE_SAMPLE,
     MSG_REWIND,
     MSG_SUBSTITUTE,
     MSG_TOKENIZE,
@@ -53,6 +54,13 @@ from src.backends.protocol import (
     request_error,
     request_id_of,
     wire_error,
+)
+from src.backends.resource_sampler import (
+    KIND_CPU,
+    KIND_VRAM,
+    SAMPLE_INTERVAL_SECONDS,
+    CpuSampler,
+    vram_sample,
 )
 from src.backends.text_adapter import TextAdapter
 
@@ -480,6 +488,65 @@ def _resource_cost(backend: Backend) -> Dict[str, Any]:
         "vram_allocated_peak_bytes": allocated,
         "vram_reserved_peak_bytes": reserved,
     }
+
+
+def resource_sample_kind(backend: Backend) -> str:
+    """Which resource this worker's meter should describe.
+
+    Follows where the model actually landed, for the same reason the
+    provenance device does: a CPU-placed model on a CUDA host has no
+    VRAM of its own to report, and the card's figures would describe
+    somebody else.
+
+    Before ``load`` has decided, there is nothing to follow. VRAM wins
+    then, when there is a card at all, because the interval with no
+    ``effective_device`` is the weight load, and watching it fill
+    is the most interesting thing the meter ever shows.
+    """
+    device = backend.effective_device
+    if device == "cuda":
+        return KIND_VRAM
+    if device is not None:
+        return KIND_CPU
+    if vram_sample() is not None:
+        return KIND_VRAM
+    return KIND_CPU
+
+
+async def pump_resource_samples(
+    ws: WebSocket, backend: Backend, cpu: CpuSampler
+) -> None:
+    """Volunteer one sample per interval until cancelled.
+
+    Sampled before sleeping so a card's first reading arrives at once
+    rather than half a second late. A CPU worker's first tick has no
+    interval behind it and reports nothing, which is the sampler's own
+    business rather than a special case here.
+
+    Nothing is sent when there is nothing to measure, so a host with
+    no card and no ``/proc`` is silent and the meter never appears.
+    That is the whole error strategy: a telemetry line must not be
+    able to disturb a run, so a failed read is a missing sample and
+    never an error frame.
+
+    Writing here alongside a streaming generation is safe for the
+    reason set out at the tokenizer handlers below: each send is one
+    complete text frame and the transport writes frames in order, so a
+    sample lands between two frames rather than inside one.
+    """
+    while True:
+        if resource_sample_kind(backend) == KIND_VRAM:
+            sample = vram_sample()
+        else:
+            sample = cpu.sample()
+        if sample is not None:
+            payload = dict(sample)
+            payload["type"] = MSG_RESOURCE_SAMPLE
+            try:
+                await ws.send_json(payload)
+            except Exception:  # noqa: BLE001 - the socket went away
+                return
+        await asyncio.sleep(SAMPLE_INTERVAL_SECONDS)
 
 
 def library_versions() -> Dict[str, str]:
@@ -1378,6 +1445,26 @@ def create_worker_app(
             MSG_PROBE: backend.handle_probe,
             MSG_REWIND: backend.handle_rewind,
         }
+        # This socket's resource meter, started before the readiness
+        # wait so it also runs for a client that arrives while this
+        # worker is still loading.
+        #
+        # That case is narrow, and the comment used to claim more. The
+        # supervisor's proxy refuses a socket until ``load_state`` is
+        # "ready", which it only becomes once this worker reports its
+        # model loaded, so a browser cannot watch a load through it
+        # and the meter does not cover one. Reaching this handler
+        # mid-load means connecting to the worker directly. The
+        # placement is kept because it costs nothing and is honest
+        # about the case it serves; it is not a view of a load.
+        #
+        # Created just before the ``try`` rather than inside it, so
+        # the ``finally`` can stop it without first asking whether it
+        # exists. Nothing can happen in between, and a task needing a
+        # guard would be one the cleanup could miss.
+        meter = asyncio.create_task(
+            pump_resource_samples(ws, backend, CpuSampler())
+        )
         try:
             ready = await _await_model_ready(
                 ws,
@@ -1445,6 +1532,11 @@ def create_worker_app(
         except WebSocketDisconnect:
             logger.info("worker client disconnected")
         finally:
+            # Cancelled without being awaited, unlike the generation
+            # below. Its only await is a sleep, so it stops at once
+            # and holds nothing; waiting on it would add a step to
+            # every disconnect to settle a task that owns no device.
+            meter.cancel()
             # The socket is going away for some reason, and every
             # reason means nothing will read this run's frames
             # again. Stopping and then waiting is what makes the

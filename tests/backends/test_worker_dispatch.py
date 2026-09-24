@@ -248,6 +248,44 @@ def client(backend: _StubBackend) -> Iterator[TestClient]:
         yield c
 
 
+# Enough to step over a burst of advisory samples without hanging a
+# broken test forever. At the worker's real cadence a reply is never
+# behind more than one, so approaching this bound means the thing
+# under test never answered.
+ADVISORY_SKIP_MAX = 16
+
+
+class _Solicited:
+    """A socket that hides the messages nobody asked for.
+
+    The worker volunteers resource samples on a timer, and every
+    assertion in this file reads positionally: "the next message" is
+    taken to be the reply to what was just sent. Those two facts are
+    incompatible unless something filters, and filtering here rather
+    than at twenty call sites keeps each test about dispatch.
+
+    Worth being precise about why this hides no bug. A sample is
+    advisory: it answers no request, carries no run identity, and a
+    client that drops every one of them loses a readout and nothing
+    else. The tests that do care about them live in
+    ``test_resource_pump.py``, including the one pinning that a sample
+    may arrive before the ready handshake.
+    """
+
+    def __init__(self, socket: Any) -> None:
+        self._socket = socket
+
+    def send_json(self, payload: Any) -> None:
+        self._socket.send_json(payload)
+
+    def receive_json(self) -> Any:
+        for _ in range(ADVISORY_SKIP_MAX):
+            message = self._socket.receive_json()
+            if message.get("type") != "resource_sample":
+                return message
+        raise AssertionError("only advisory samples arrived")
+
+
 @contextlib.contextmanager
 def _window(client: TestClient) -> Iterator[Any]:
     """One browser, connected and past the ready handshake.
@@ -256,7 +294,8 @@ def _window(client: TestClient) -> Iterator[Any]:
     assertion still closes the socket; a leaked one keeps its server
     task alive and the client's shutdown waits on it.
     """
-    with client.websocket_connect("/ws") as socket:
+    with client.websocket_connect("/ws") as raw:
+        socket = _Solicited(raw)
         ready = socket.receive_json()
         assert ready["type"] == "model_status", ready
         assert ready["status"] == "ready", ready
@@ -313,7 +352,9 @@ def test_the_handshake_names_the_model(client: TestClient) -> None:
     """The page compares this against the supervisor's own statement,
     which is the only way to catch a proxy pointed at the wrong
     worker."""
-    with client.websocket_connect("/ws") as socket:
+    with client.websocket_connect("/ws") as raw:
+        socket = _Solicited(raw)
+
         assert socket.receive_json()["model"] == MODEL_ID
 
 
