@@ -3984,13 +3984,20 @@ function renderCommitOverlay() {
     overlayOriginalCommitSteps =
       overlaySeriesCommitSteps(baseline);
   }
+  // The ramp's denominator is the last frame index each series can
+  // reach, asked of the series rather than of a frame array: an
+  // append-only run has no array to measure, and the two shapes have
+  // to normalize the same way or the same run would read differently
+  // depending on how it was stored.
   renderOverlayTokens({
     frame: overlayFrameAt(overlayFrameIndex),
     colorFor: commitColorFor(
-      overlayCommitSteps, frames.length - 1
+      overlayCommitSteps,
+      overlaySeriesLength(overlayPrimary()) - 1
     ),
     originalColorFor: commitColorFor(
-      overlayOriginalCommitSteps || [], original.length - 1
+      overlayOriginalCommitSteps || [],
+      overlaySeriesLength(baseline) - 1
     ),
   });
 }
