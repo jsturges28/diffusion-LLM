@@ -12,7 +12,8 @@ oriented toward explainability (XAI). The depth is in **discrete diffusion**
 (LLaDA-8B-Instruct and DiffusionGemma-26B-A4B), with SmolLM3-3B alongside as an
 autoregressive baseline and room for further model classes. It runs in the
 browser (localhost) and as an optional native desktop app (`desktop.py`,
-pywebview). Architecture, features, and the public roadmap live in `README.md`;
+pywebview). The front page and public roadmap live in `README.md`, every
+feature in detail in `docs/GUIDE.md`;
 the deeper living roadmap in `docs/ROADMAP.md`.
 
 ## Environments (never touch system Python)
@@ -153,7 +154,13 @@ everything to whichever one is open.
 - **`docs/ROADMAP.md`** takes durable rationale: settled decisions, deliberate
  stopping points, and the backlog. If a future session would otherwise have
  to rediscover why a line was drawn, write it here.
-- **`README.md`** takes user-visible features and Implementation Status.
+- **`README.md`** is the front page and is bounded by a test
+  (`tests/test_readme_bounded.py`): what the project is, the models,
+  setup, a quickstart, and what exists. It is not where a feature gets
+  explained; it reached 16,240 words that way.
+- **`docs/GUIDE.md`** takes how a user-visible feature works, every
+  parameter, and the mechanics behind an overlay. New feature prose
+  belongs here, with at most a line in the README's capability list.
 - **`docs/MANUAL_VERIFICATION.md`** takes any hardware scenario worth re-running
  later. A one-off confirmation belongs in the session handback instead.
 

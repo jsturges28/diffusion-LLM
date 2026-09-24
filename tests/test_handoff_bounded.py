@@ -38,8 +38,9 @@ def test_the_handoff_fits_in_one_reading() -> None:
     assert count <= LINE_BUDGET, (
         f"HANDOFF.md is {count} lines, over the {LINE_BUDGET} line"
         " budget. Durable rationale belongs in ROADMAP.md, hardware"
-        " scenarios in MANUAL_VERIFICATION.md, shipped features in"
-        " README.md, and session narrative in git history."
+        " scenarios in MANUAL_VERIFICATION.md, how a feature works in"
+        " GUIDE.md, what exists in README.md, and session narrative"
+        " in git history."
     )
 
 

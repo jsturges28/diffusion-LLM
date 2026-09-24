@@ -2,13 +2,13 @@
 
 Orientation for whoever picks this up next, human or agent. Read `AGENTS.md`
 first for the working conventions, this file for what the project is and where
-it stands, then `README.md` and `docs/ROADMAP.md` as needed.
+it stands, then `README.md`, `docs/GUIDE.md` and `docs/ROADMAP.md` as needed.
 
 **This page is deliberately bounded.** It used to be 3,233 lines, most of it
 session-by-session shipment narrative that every future session paid to read
 past. That history is in git, and a test keeps this file under 200 lines so it
-cannot grow back. Put durable rationale in `docs/ROADMAP.md`, hardware scenarios in
-`docs/MANUAL_VERIFICATION.md`, and shipped features in `README.md`.
+cannot grow back, as one now does for `README.md`. Put durable rationale in
+`docs/ROADMAP.md`, hardware scenarios in `docs/MANUAL_VERIFICATION.md`, feature detail in `docs/GUIDE.md`, and what exists in the README.
 
 ## What it is
 

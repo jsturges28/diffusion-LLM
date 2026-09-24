@@ -1,106 +1,61 @@
 # LLM Visualizer
 
-## Project Summary
+A local visual playground and analytics suite for language models, with
+its depth in **discrete diffusion**: models that generate text not
+left-to-right but by **iteratively denoising a corrupted sequence** over
+many steps. A FastAPI server streams every intermediate frame to the
+browser, so you can watch a sequence resolve, scrub back through its
+history, remask tokens and resume from there, colour tokens by the
+model's confidence or by the order they settled in, and compare runs
+afterwards. An autoregressive model runs alongside as a baseline.
 
-This repository is a local **visual playground and analytics suite** for language models, with its depth in **discrete diffusion**: models that generate text not left-to-right (autoregressive decoding) but by **iteratively denoising a corrupted sequence** over many steps. An autoregressive model runs alongside them as a baseline, and the architecture is built to take more model classes over time. A web UI (FastAPI + WebSocket) streams every intermediate frame to the browser so you can watch the sequence resolve, scrub back through the history, remask tokens and resume, color tokens by model confidence or the order in which they resolved, diff an edited run against the original, and compare runs in an analytics suite. The goal is an enjoyable, hands-on tool for building intuition about how these models behave, with a strong lean toward explainability (XAI).
+It is built for building intuition, and it leans hard toward
+explainability: most of what it draws is a signal the model produced,
+not a decoration.
 
-The suite hosts two diffusion models plus a first **autoregressive baseline**, all running locally on a single 24 GB GPU (one resident at a time); the autoregressive model can also run on CPU, so a machine without a GPU can still try the suite:
+![A finished LLaDA run: the scrubber, the entropy-by-position strip, and
+the VRAM meter in the status bar](assets/screenshot-generator.png)
 
-- **[LLaDA-8B-Instruct](https://huggingface.co/GSAI-ML/LLaDA-8B-Instruct):** the first competitive large-scale discrete diffusion language model, pre-trained on 2.3T tokens and instruction-tuned to roughly LLaMA 3 8B quality ([paper](https://arxiv.org/abs/2502.09992)). Masked diffusion over a single canvas, run in bfloat16 (~17 GB VRAM). Supports interactive remasking and resume.
-- **DiffusionGemma-26B-A4B:** Google's block-autoregressive text-diffusion model, a 26B-parameter Mixture-of-Experts (\~4B active) built on Gemma. Run here as a self-quantized 4-bit NF4 checkpoint (\~18 GB VRAM). Denoises 256-token canvases with adaptive stopping and an optional reasoning (thinking) channel. Single-canvas runs now also support interactive remasking and resume (via seed-canvas re-entry); multi-canvas resume is still on the roadmap.
-- **[SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B) (autoregressive baseline):** a 3B decoder-only transformer that generates the ordinary way, left to right. Added as a contrast to the diffusion models: it streams token-by-token, one frame per new token, with per-token sampling confidence, reusing the same scrubber/save/analytics tooling as a left-to-right replay. It has an optional extended-reasoning (thinking) channel and runs in bfloat16 on GPU or CPU (chosen per activation). It carries its own XAI tools rather than the diffusion ones: per-token **entropy** with an Entropy overlay and an entropy profile, an optional top-5 **Alternatives** capture surfaced in a hover popover, and **What If?** substitution (force a position to a token the model nearly chose, then regenerate from there and diff the branch against the original). Diffusion-only affordances (Edit Frames, Commit Order, the convergence chart) stay hidden for it.
+Above, a finished run with the frame scrubber, the per-position entropy
+strip, and the status bar's resource meter. Below, the same app running
+the autoregressive model on CPU, where the meter reports cores instead
+of VRAM.
 
-Because these models depend on incompatible `transformers` versions and a single large model already saturates 24 GB, the app uses a **supervisor plus per-model worker** architecture: a lightweight server spawns exactly one model worker at a time, each in its own virtual environment, and proxies the browser WebSocket to it.
+![The same app mid-run on CPU, the meter reading 50% of 32
+cores](assets/screenshot-cpu-run.png)
 
+## The models
 
-## How It Works
+One is resident at a time; a single large model already saturates a
+24 GB card. Each runs in its own virtual environment, because they need
+mutually incompatible `transformers` versions.
 
-### Autoregressive vs diffusion
+| Model | Kind | Precision | VRAM | Notes |
+|---|---|---|---|---|
+| [LLaDA-8B-Instruct](https://huggingface.co/GSAI-ML/LLaDA-8B-Instruct) | Masked discrete diffusion, single canvas | bf16 | ~17 GB | The first competitive large-scale diffusion LLM ([paper](https://arxiv.org/abs/2502.09992)). Interactive remasking and resume. |
+| DiffusionGemma-26B-A4B | Block-autoregressive diffusion, MoE (~4B active) | self-quantized 4-bit NF4 | ~18 GB | 256-token canvases, adaptive stopping, optional reasoning channel. Single-canvas runs support remask and resume. |
+| [SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B) | Autoregressive baseline | bf16 | ~6 GB | Runs on **GPU or CPU**, so a machine without a card can still use the suite. Per-token entropy, optional top-5 alternatives, What If? substitution. |
 
-Autoregressive LLMs generate one token at a time, left to right:
+## How it works
 
-$p(x_1, \ldots, x_T) = \prod_{t=1}^T p(x_t \mid x_{<t})$
+An autoregressive model samples one token at a time, conditioned on
+what came before. A diffusion LLM starts from a fully corrupted
+sequence and refines all of it in parallel over *N* steps, using
+bidirectional attention, re-masking the positions it is least sure
+about between steps until the sequence converges.
 
-Diffusion LLMs instead start from a corrupted sequence and refine the whole thing in parallel over *N* steps, using **bidirectional** attention (no causal mask), re-corrupting the least certain positions between steps until the sequence converges.
+That difference is what makes the app worth watching: an autoregressive
+run has one frame per token and never revisits a position, while a
+diffusion run re-decides every position at every step, so its frames
+are a trajectory rather than a transcript.
 
-### LLaDA: masked discrete diffusion
-
-- **Forward process (corruption):** independently replace each token with `[MASK]` with probability *t* in [0, 1]. At *t* = 0 the text is clean; at *t* = 1 everything is masked.
-- **Reverse process (generation):** starting from a fully masked canvas, the Transformer predicts all masked positions at once, then **re-masks** the least confident predictions. Repeat for *N* steps until nothing is masked.
-
-The training loss is cross-entropy on masked positions only, weighted by 1/*t*, which provides a variational upper bound on negative log-likelihood. This makes LLaDA a principled generative model, not a fill-in-the-blank system like BERT. In the UI, unresolved positions render as `░`, faded by the model's live predicted confidence for that position: a mask the model has no opinion about is barely visible, and it firms up as the model grows sure of what it will become, then resolves into the token. That confidence is measured on a specific prediction, and **Reveal the mask candidate** in Settings draws it, so the same position shows the word the model is holding, fading in as it commits to it. The fade follows a square-root curve rather than a straight line, because a masked position's confidence is skewed low (median 0.11 to 0.21 across a measured run) and a linear ramp would crowd an entire canvas into one indistinguishable shade.
-
-### DiffusionGemma: block-autoregressive text diffusion
-
-DiffusionGemma denoises a fixed **256-token canvas** on an encoder-decoder MoE backbone. Rather than a `[MASK]` placeholder, unresolved positions carry noisy tokens that the sampler renoises between steps under an entropy bound. Two properties make it distinct from LLaDA:
-
-- **Adaptive stopping:** a canvas can finish in fewer than the configured maximum steps once its predictions stabilize, so simpler prompts run faster.
-- **Block-autoregressive chaining:** for outputs longer than one canvas, it commits a canvas and then seeds the next, chaining multiple canvases. The status readout therefore reads `Step X, Canvas Y` rather than a fixed step total.
-
-An optional **thinking** channel exposes a step-by-step reasoning pass, which the UI separates into a collapsible panel above the answer.
-
-### Confidence and the heatmap
-
-Every resolved token carries a **confidence** value in [0, 1], and every frame carries the mean confidence of its resolved tokens. The source differs per model, cheap by default:
-
-- **LLaDA:** the softmax probability of the token at the moment it was unmasked (fixed thereafter, since resolved tokens are never revisited).
-- **DiffusionGemma:** the max-softmax probability from the model's logits, at every position on every step, settled or not. That is what lets each mask be faded by the model's certainty in the guess behind it. It used to be optional, behind an **Entropy signal** toggle, with a stability proxy (consecutive steps holding the same prediction) standing in when it was off; the toggle is gone, because the measurement now costs a bounded reduction rather than a canvas-sized softmax and a run without it was not a cheaper run, just one with a hole where the number goes. Runs recorded before that change keep whatever they recorded, and their unsettled positions draw solid rather than faded.
-
-Hovering any token reads its position and confidence for that frame into the **metrics strip** above the canvas, and the **Heatmap** overlay recolors resolved tokens by confidence. The strip's left half holds that reading; its right half stays empty until you hover a row of the candidate popover, which fills it with that candidate's probability at full precision, headed by a green chip where the committed token's chip is grey. Per-frame mean confidence and canvas indices are also persisted for the analytics charts.
-
-### Commit order and counterfactual diff
-
-The frame history also drives two explainability overlays:
-
-- **Commit order** colors each resolved token by *when* it settled into its final value, on a gradient from light green (early) to red-orange (late). This exposes the model's resolution trajectory across a run.
-- **Diff vs Original** becomes available after you edit and resume a run. It compares the edited output against a snapshot of the original run, stacking the two with independent opacity sliders and an optional *difference blend* (matching tokens cancel to black, divergences glow), so you can see exactly how an intervention propagated.
-
-Both overlays are derived from the recorded per-token frames. In the live generator they render across every frame; the underlying per-token data (display text, mask flag, vocab id, and confidence) is also persisted with each saved run, so both overlays are reviewable after the fact in the Analytics Suite (see below) rather than being lost on reload. The mask fade is part of that: a saved diffusion run replays with its masks graded exactly as they were live, in every view including both comparison overlays, since the confidence a mask fades by is recorded per position rather than computed for the moment.
-
-### Sampling parameters
-
-**LLaDA**
-
-| Parameter | Description |
-|---|---|
-| Steps | Number of denoising steps. More steps generally mean higher quality and slower generation. |
-| Gen Length | Length of the masked canvas (output token count). Must be divisible by Block Length. |
-| Block Length | Block size for semi-autoregressive sampling. When smaller than Gen Length, blocks resolve left-to-right with diffusion inside each block; set equal to Gen Length for pure diffusion. |
-| Temperature | Gumbel noise temperature for categorical sampling. 0 is greedy (argmax). |
-| CFG Scale | Classifier-free guidance strength. 0 disables it; higher values increase prompt adherence. |
-| Seed | Random seed for reproducibility; -1 is nondeterministic. |
-| Remasking | Strategy: `low_confidence` (default, re-mask least confident tokens) or `random`. |
-
-**DiffusionGemma**
-
-| Parameter | Description |
-|---|---|
-| Max Tokens | Output budget. Generation happens in 256-token canvases; larger budgets chain multiple canvases. |
-| Denoising Steps | Upper bound on steps per canvas. Adaptive stopping may use fewer. |
-| Temp Start / Temp End | Endpoints of a linear temperature schedule across the denoising steps (hotter early, cooler late). |
-| Seed | Random seed for reproducibility; -1 is nondeterministic. |
-| Thinking | Enables the step-by-step reasoning channel, shown in a separate panel. |
-
-**SmolLM3**
-
-| Parameter | Description |
-|---|---|
-| Max Tokens | Number of tokens to generate. The recommended ceiling is lower on CPU, where decoding is slower. |
-| Temperature | Sampling temperature. 0 is greedy (argmax). |
-| Top-p | Nucleus sampling probability mass. |
-| Seed | Random seed for reproducibility; -1 is nondeterministic. |
-| Thinking | Enables the extended reasoning channel, shown in a separate panel. |
-| Top-k | Keep only the k likeliest tokens before Top-p applies. A hard truncation where Top-p's is adaptive, so it caps how far into the tail sampling can reach when the model is torn. Applied before Top-p (matching Hugging Face); -1, the default, disables it, spelled that way because a k of 0 would read as "no candidates at all". Distinct from the five candidates **Alternatives** records. |
-| Alternatives | Captures the top five competing tokens at each position. Powers the hover popover and is required for **What If?** substitution (slightly slower, on by default). |
-
-All parameters are configurable in the web UI with recommended bounds enforced by default. An **Experimental** toggle lifts the bounds for exploratory use.
-
-Hyperparameters, the Experimental toggle, and the prompt draft persist for the life of the app, per model, so navigating to Analytics and back leaves the setup intact; values are stored as typed, so a half-finished number is not rounded off. Closing the app clears them, and a fresh launch starts from the recommended defaults. A **Reset** button on the Experimental row restores every hyperparameter and the toggle for the current model and device, and is disabled while nothing differs from the defaults.
-
+[docs/GUIDE.md](docs/GUIDE.md) covers the mechanics per model, what each
+overlay means, and every sampling parameter.
 
 ## Architecture
 
-The single-model, single-process design has been replaced by a model-agnostic **supervisor plus workers** layout driven by a shared contract.
+A model-agnostic **supervisor plus workers** layout, driven by a shared
+contract in `src/backends/`.
 
 ```
 Browser (shared frontend)
@@ -108,454 +63,139 @@ Browser (shared frontend)
   v
 Supervisor  (.venv, no torch/transformers)
   - static assets + Analytics API + Save endpoint
-  - Model Manager: spawns/stops one worker, VRAM-exclusive, pre-flight VRAM check
+  - Model Manager: spawns/stops one worker, VRAM pre-flight,
+    host-wide lease so two instances cannot both load
   - /ws bidirectional proxy to the active worker
   |
-  |  spawn: <model venv> python -m src.backends.run_worker --model <id>
+  |  spawn: <model venv> python -m src.backends.run_worker
   v
 Model Worker  (exactly one alive)
-  - LLaDA worker          .venv          transformers 4.38.2
-  - DiffusionGemma worker .venv-dgemma   transformers 5.13
-  - SmolLM3 worker        .venv-ar       transformers >= 4.53
+  - LLaDA           .venv          transformers 4.38.2
+  - DiffusionGemma  .venv-dgemma   transformers 5.13
+  - SmolLM3         .venv-ar       transformers >= 4.53
 ```
 
-Pages and entry point: the app opens on a **Main Menu** at `/` (a looping title-screen video over a GPU/VRAM-aware model picker). Selecting a model activates its worker and enters the generator at `/generate`; the generator is gated behind model selection, so hitting it without an active model redirects back to the menu. The Analytics Suite at `/analytics.html` is model-agnostic and always available. The desktop app opens on the same menu.
-
-Why process isolation: LLaDA loads through custom remote modeling that pins `transformers==4.38.2`, while DiffusionGemma requires `transformers` v5. They coexist only in separate virtual environments, and since a single model already saturates the 24 GB GPU, only one worker is ever alive. Switching models stops the current worker (freeing VRAM), runs a pre-flight VRAM check against the target model's requirement, then spawns the next worker and waits for it to report ready (or surfaces a clear error).
-
-The contract lives in `src/backends/`:
-
-- `protocol.py`: typed WebSocket and parameter schema. Per-token shape is `{t, m, id, c?}` where `m` marks an unresolved position and `c` is confidence; each frame also carries optional `canvas_index` and a `mean_conf`, with `total_steps` allowed to be null for adaptive runs.
-- `registry.py`: data-only model registry (id, display name, venv Python, worker module, checkpoint, `min_vram_gib`, capabilities, and the parameter schema). Drives the frontend selector and the dynamic parameter panel.
-- `worker_base.py`: shared worker FastAPI scaffolding (the `/ws` loop, cancel handling, elapsed timing, load-error reporting).
-- `run_worker.py`: generic launcher that imports and serves the selected model's worker module.
-
-
-## Project Structure
-
-```
-.
-├── main.py                           # Supervisor entry point (uvicorn, browser UI)
-├── desktop.py                        # Desktop launcher (pywebview native window)
-├── requirements.txt                  # .venv: supervisor + LLaDA worker (transformers 4.38.2)
-├── requirements-dgemma.txt           # .venv-dgemma: DiffusionGemma worker (transformers 5.13)
-├── requirements-ar.txt               # .venv-ar: SmolLM3 autoregressive worker (transformers >= 4.53)
-├── requirements-desktop.txt          # optional: pywebview[qt] desktop wrapper (installs into .venv)
-├── README.md
-├── LICENSE
-├── src/
-│   ├── backends/
-│   │   ├── protocol.py               # Shared WS/param/model contract
-│   │   ├── registry.py               # Model registry (models, params, capabilities, VRAM)
-│   │   ├── worker_base.py            # Shared worker FastAPI scaffolding
-│   │   ├── run_worker.py             # Generic per-model worker launcher
-│   │   ├── llada_worker.py           # LLaDA backend
-│   │   ├── dgemma_worker.py          # DiffusionGemma backend
-│   │   └── smollm3_worker.py         # SmolLM3 autoregressive backend
-│   ├── inference/
-│   │   ├── llada_sampler.py          # Core LLaDA sampling loop + history recording
-│   │   ├── streaming_sampler.py      # LLaDA live streaming + per-token confidence
-│   │   ├── dgemma_sampler.py         # DiffusionGemma live streaming + confidence
-│   │   ├── dgemma_nf4.py             # NF4 (4-bit) MoE-expert quantization
-│   │   ├── ar_sampler.py             # Autoregressive streaming: confidence, entropy, top-k, substitution
-│   │   └── render_gif.py             # Render diffusion history frames to GIF
-│   ├── analytics/
-│   │   └── metrics.py                # Run parsing, convergence + canvas boundaries
-│   └── web/
-│       ├── server.py                 # Supervisor: model manager, /ws proxy, analytics, save, UI state
-│       ├── ui_state.py               # Durable server-side UI state (Settings, cues) store
-│       └── static/
-│           ├── menu.html             # Main Menu (landing page, model selection)
-│           ├── menu.js               # Menu: model/VRAM fetch + activate + navigate
-│           ├── index.html            # Generator page (gated behind model selection)
-│           ├── style.css             # Dark terminal aesthetic (shared)
-│           ├── app.js                # WebSocket client + frame rendering + heatmap
-│           ├── overlays.js           # Shared overlay math + layered diff builder
-│           ├── analytics.html        # Analytics Suite page
-│           ├── analytics.css         # Analytics-specific styles
-│           ├── analytics.js          # Analytics charts + run browser
-│           ├── custom_select.js      # Shared in-app dropdown widget
-│           ├── detail_requests.js    # Request fencing for the Analytics detail panel
-│           ├── vendor/               # Vendored Chart.js/Hammer.js/zoom plugin + JetBrains Mono (no CDN)
-│           └── assets/               # Title-screen video (title-screen.webm/.mp4)
-├── assets/
-│   ├── icon.svg                      # App icon source (vector; app-menu launcher)
-│   └── icon.png                      # Rasterized window icon (via scripts/render_icon.py)
-├── scripts/
-│   ├── quantize_diffusiongemma_nf4.py # Produce the NF4 checkpoint from the bf16 base
-│   ├── install_desktop_entry.sh      # Generate a Linux .desktop launcher entry
-│   ├── render_icon.py                # Render assets/icon.png from the icon geometry
-│   ├── vendor_assets.py              # Refresh static/vendor/ (chart libraries + font)
-│   ├── spike_diffusiongemma.py       # Standalone load + generate probe
-│   └── ws_smoke_test.py              # End-to-end supervisor/worker smoke test
-├── results/                          # Saved runs from the web UI (Save button)
-│   ├── ui_state.json                 # Durable UI state (Settings, "new run" cue, prompt history, collections)
-│   └── <timestamp>_<model>/
-│       ├── metadata.json
-│       ├── final.txt
-│       ├── frames.jsonl              # Frame text, one JSON object per frame
-│       ├── history.txt               # The same frames as a plain-text transcript
-│       ├── tokens.json               # Per-frame token records (durable overlays)
-│       ├── original_tokens.json      # Pre-edit snapshot (edited runs only)
-│       ├── alternatives.json         # Per-position top-k candidates (when captured)
-│       └── diffusion.gif
-└── archive/                          # Old reference files and notes
-```
-
+The app opens on a **Main Menu** at `/`, a GPU-aware model picker.
+Selecting a model activates its worker and enters the generator at
+`/generate`, which is gated behind having a model. The Analytics Suite
+at `/analytics.html` is model-agnostic and always available.
 
 ## Setup
 
-**Platform.** This app is currently built and tested only on **Ubuntu 24.04** (Linux). The desktop app, launcher script, and GPU/VRAM tooling assume a Linux environment, so other operating systems are unsupported for now; broader cross-OS support (Windows, macOS) is a future goal, not a current guarantee.
+**Platform.** Built and tested on **Ubuntu 24.04** only. The desktop
+app, the launcher script and the GPU tooling assume Linux; other
+operating systems are a future goal rather than a current guarantee.
+Requires **Python 3.12** and, for the diffusion models, a CUDA GPU.
 
-Requires **Python 3.12** and a CUDA GPU. The three models live in separate virtual environments because of their conflicting `transformers` versions, which is why there is no single project interpreter and no single requirements file.
-
-What each environment depends on is declared in one place, `[tool.diffusion-llm]` in [`pyproject.toml`](pyproject.toml): one table per environment listing only the packages that environment is actually asked for. The `requirements*.txt` files below are generated from those lists by `scripts/lock_environments.py`, which resolves each environment independently and writes every transitive pin with a SHA-256 hash. Install from the generated files as usual; regenerate them only when you change a requirements list:
+Each environment's direct dependencies are declared in one place,
+`[tool.diffusion-llm]` in [pyproject.toml](pyproject.toml). The
+`requirements*.txt` files are generated from those lists with every
+transitive pin hashed, so install from them as usual and regenerate
+only when a declared dependency changes:
 
 ```bash
 .venv/bin/python scripts/lock_environments.py            # verify, offline
 .venv/bin/python scripts/lock_environments.py --update   # resolve and write
 ```
 
-**Supervisor and LLaDA (`.venv`, transformers 4.38.2):**
+**Supervisor and LLaDA** (`.venv`, required):
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+.venv/bin/pip install -r requirements.txt
 ```
 
-LLaDA weights (~16 GB) download automatically from Hugging Face on first use, at the commit the registry pins, so the same app version always loads the same weights and remote code. The supervisor itself runs in this environment and never imports torch or transformers.
+Weights (~16 GB) download on first use, at the commit the registry
+pins, so the same app version always loads the same weights and remote
+code. The supervisor runs here and never imports torch.
 
-**DiffusionGemma (`.venv-dgemma`, transformers 5.13), optional:**
-
-```bash
-python3 -m venv .venv-dgemma
-.venv-dgemma/bin/pip install -r requirements-dgemma.txt
-```
-
-DiffusionGemma is gated on Hugging Face. Accept its license, then download the bf16 base at a specific commit so the artifact you build can name what it was built from:
-
-```bash
-.venv-dgemma/bin/huggingface-cli download \
-    google/diffusiongemma-26B-A4B-it \
-    --revision <commit> \
-    --local-dir ~/models/diffusiongemma-26B-A4B-it-bf16
-```
-
-Then produce the local 4-bit checkpoint (only the MoE experts are quantized to NF4, which is what makes it fit in 24 GB):
-
-```bash
-.venv-dgemma/bin/python scripts/quantize_diffusiongemma_nf4.py \
-    --base-revision <commit>
-```
-
-This writes the NF4 checkpoint to the path referenced by the registry (`~/models/diffusiongemma-26B-A4B-it-nf4`). The build happens in a `.incomplete` sibling directory and is moved into place with a single rename, so an interrupted run never leaves something that looks installed. The finished directory carries an `artifact_manifest.json` naming the base checkpoint and its revision, this repository's commit, and the state dict's size and SHA-256; the app requires that manifest before it treats the checkpoint as present.
-
-If you built this checkpoint before manifests existed, attest it in place rather than rebuilding it. This needs no GPU and no base checkpoint:
-
-```bash
-.venv/bin/python scripts/quantize_diffusiongemma_nf4.py --adopt \
-    --out ~/models/diffusiongemma-26B-A4B-it-nf4
-```
-
-If you only want LLaDA, you can skip this environment entirely; the model selector will still list DiffusionGemma but activation will fail gracefully with a clear message.
-
-**SmolLM3 (`.venv-ar`, transformers >= 4.53), optional:**
+**SmolLM3** (`.venv-ar`, optional, the GPU-less path):
 
 ```bash
 python3 -m venv .venv-ar
 .venv-ar/bin/pip install -r requirements-ar.txt
 ```
 
-SmolLM3-3B weights (~6 GB) download automatically from Hugging Face on first activation, at a pinned commit as with LLaDA. The pinned torch is the standard CUDA build, so this environment runs the model on the GPU when one is present and on CPU otherwise; the Main Menu row for SmolLM3 carries a CPU/GPU toggle. On a machine with no GPU, this is the model you can still run.
+**DiffusionGemma** (`.venv-dgemma`, optional) needs a license
+acceptance on Hugging Face and a local 4-bit build step. See
+[docs/GUIDE.md](docs/GUIDE.md) for the download, the quantize script,
+and the artifact manifest it writes. Skipping it is fine: the selector
+still lists the model and activation fails with a clear message.
 
-If you have no GPU and want to avoid downloading the large CUDA libraries, install the CPU-only torch wheel first, then the rest:
-
-```bash
-.venv-ar/bin/pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
-.venv-ar/bin/pip install -r requirements-ar.txt
-```
-
-**Desktop app (`.venv`, optional).** The same UI can run in a native window instead of a browser tab via [pywebview](https://pywebview.flowrl.com/). It is not part of the core install; add it into `.venv` with the optional requirements file, which pulls the Qt/QtWebEngine (Chromium) backend that renders most smoothly:
+**Desktop app** (optional) runs the same UI in a native window through
+pywebview:
 
 ```bash
 .venv/bin/pip install -r requirements-desktop.txt
 ```
 
-`desktop.py` automatically prefers the Qt backend when present and gracefully falls back to GTK/WebKit otherwise. If you prefer the lighter GTK/WebKit backend, install its system libraries and binding instead (`sudo apt install libgirepository1.0-dev libcairo2-dev gir1.2-webkit2-4.1` then `.venv/bin/pip install "pywebview[gtk]"`). To add an app-menu launcher with an icon on Linux, run `scripts/install_desktop_entry.sh` (it generates a `.desktop` entry with the correct absolute paths for your checkout).
-
-On an X11 session (rather than Wayland), the Qt backend needs the `xcb` platform plugin's runtime dependency, which Qt 6.5+ does not bundle: if the app aborts on launch with "xcb-cursor0 or libxcb-cursor0 is needed to load the Qt xcb platform plugin," install it with `sudo apt install libxcb-cursor0`. This is easy to hit after an NVIDIA driver update, which can flip the login session from Wayland to X11.
-
-
 ## Quickstart
 
 ```bash
-python3 main.py            # or: python3 main.py --port 8000
+.venv/bin/python main.py        # then open http://localhost:8000
+.venv/bin/python desktop.py     # or the native window
 ```
 
-The app binds to `127.0.0.1`, so it is reachable only from this machine. You can serve it to your network with `--host 0.0.0.0`, and it will warn you when you do: there is no authentication, so anyone who can reach the port can load and unload models, save runs, and permanently delete them. Treat that as a trusted-network convenience rather than a supported deployment.
+It binds to `127.0.0.1`. Serving to your network with `--host 0.0.0.0`
+works and warns you, because there is no authentication: anyone who can
+reach the port can load models, save runs and delete them.
 
-Saved runs and durable UI state go to this repository's `results/` no matter which directory you start from, so launching by absolute path, from a service, or from a desktop entry all reach the same data. Point somewhere else with `--results-dir /path/to/runs` (or the `DIFFUSION_LLM_RESULTS_DIR` environment variable, which the flag overrides); the resolved path is logged at startup and shown in full wherever the UI names it.
+Saved runs and durable UI state go to this repository's `results/`
+whatever directory you start from. Point elsewhere with
+`--results-dir`.
 
-Open [http://localhost:8000](http://localhost:8000). You land on the **Main Menu** (titled **LLM Visualizer**): a looping title screen over a model picker that shows the detected GPU (with free VRAM) and CPU (with free RAM). Each row carries a family glyph (diffusion vs autoregressive) beside its name and a device tag on the right: a static **GPU** for the diffusion models, and a **GPU / CPU** toggle for the autoregressive model. A small pill extending left of each tag shows the signed **VRAM headroom** (green `+X.X GiB` if it fits, red `-X.X GiB` if it is short); hovering it details required vs available VRAM. Available counts memory reclaimed from unloading the current model, so switching accounts for the resident one freeing up.
+## What works
 
-Selecting a model contracts the menu to that row and asks you to **confirm** (green check to load, red X to go back); picking the model that is already loaded asks *Go back to the Generation page?* instead, since nothing needs loading and the run you left is still there. **On the first activation its weights download from Hugging Face** (LLaDA ~16 GB, SmolLM3 ~6 GB, cached under `~/.cache/huggingface`); a model whose weights are not cached yet is gated behind a **Click to Download** veneer with a progress bar so you can pre-fetch it (its description stays hidden until the download finishes and is then revealed, and a success/error message with **Ok** confirms the result). A row reading **Resident** is the model currently loaded in memory. Type a prompt, adjust parameters, and click **Generate** to watch generation stream live. To switch models (or the autoregressive model's device) later, use the **Model** selector in the generator header, which confirms the switch the same way; its collapsed tag tickers between the device and VRAM headroom (a "Device tag ticker" Setting toggles this off), and hovering a listed model shows its full VRAM readout (only one model is resident at a time).
+Diffusion generation for both diffusion models, streamed frame by
+frame, with a scrubber over the full history. Autoregressive generation
+alongside it, replayed through the same tooling. Interactive
+**remasking and resume**: pick tokens at any frame, remask them, and
+regenerate from there, keeping the pre-edit run for comparison.
+**What If?** substitution for the autoregressive model. Four token
+overlays: a confidence heatmap, commit order, entropy, and a diff
+against the pre-edit run, with an Original/Edited crossfade between
+them.
 
-After a run completes, a **Save** button appears and a **frame scrubber** slides into view below the output area. While a save is in progress the status bar shows "Saving original run…" and the scrubber is dimmed and frozen until it finishes.
+Per-token **confidence** and **entropy** on every model, declared by
+the unit and the axes they vary over, so a reader knows whether a
+signal belongs to a position or to a position at a frame. Optional
+top-5 **alternatives** capture with a hover popover and true ranks.
 
-**Stopping a run.** While a run is in flight, **Generate** becomes **Stop**. The samplers check between decode steps, so a run ends within roughly one step of the click rather than having to reach its token budget. A stopped run keeps everything it produced: the frames stay on the scrubber, and Save, Edit Frames and What If? all still apply. What it does not do is claim it finished. The status line reads "Stopped.", and a saved stopped run is recorded as partial, showing its duration in Analytics as `12.3s (stopped)` with a **Completion** row in its detail panel, so a truncated answer cannot later be mistaken for one the model chose to end. Leaving the page mid-run stops it the same way, rather than leaving the model computing for a page that is no longer watching.
+An **Analytics Suite** with a run browser, collections and favourites,
+a detail modal carrying the token canvas and four charts, run
+comparison, and GIF export. Runs are published whole or not at all,
+versioned, and carry the provenance the worker attested, including what
+each run cost in VRAM.
 
-**Run readouts.** The status bar's left side carries the current **Step**, the **Elapsed** wall-clock time, and **T/s** (tokens per second). Both totals count the run as a whole, so an edit continues from where the run had reached rather than restarting the clock. T/s is the one interactive readout: it shows the run average by default, and clicking it (or focusing it and pressing Enter) switches to the last step alone, a noisier reading that tracks throughput as it changes. The choice is persisted and is not affected by **Reset** on the Settings page, since its control is the readout itself.
+A **desktop app**, durable server-side UI state, a host-wide lease so
+two instances cannot both load a model, and a lint ratchet plus roughly
+2,300 tests over the Python and browser code.
 
-**Resource meter.** Beside them, a small bordered **sparkline** holding the last minute of what the machine is doing, sampled by the worker twice a second rather than per frame, so it keeps moving between runs as well as during them. It shows one resource, chosen by where the model was placed: on a GPU it is **VRAM**, the whole card's memory in use against its total, so it answers whether you are near the limit rather than what this run alone holds; on a model running on **CPU** it is instead how hard the worker is working as a share of every core, since there is no VRAM of its own to report and the useful question on a slow CPU run is whether it is progressing. Full height always means all of the resource, so the two read on one scale. It is absent rather than flat on a machine that can report neither figure, since an empty meter would read as an idle one, and it disappears while the connection to a model is down (which is what switching models looks like) rather than leaving a stale reading up, starting a fresh line when the new model is serving. It does not cover a model *loading*, because the page is not connected to a model until that model can answer. Nothing here is saved; what a finished run cost is recorded separately as **Peak VRAM** (see Analytics).
+## Documentation
 
-**Status row.** The status bar's right side separates what is *happening* from where the run *stands*. The rightmost slot holds the resting line, "Done.", "Stopped.", where a save landed, or the full error text, which is also the one persisted across a trip to Analytics and back. Work in flight appears to its left as short dot-separated messages that animate while their operation runs and then leave, newest nearest the resting line, so concurrent operations stay readable instead of overwriting each other. That is what makes entering **What If?** on an unsaved run legible: it saves the original in the background, and picking a candidate immediately leaves "Saving original run" and "Running edit from frame 81 to end" up side by side. Results are spelled out only in the resting line, so a message just disappears when its work succeeds rather than restating what is next to it. Messages name their subject as well as their verb: a save says whether it is writing the *original* or the *edited* run, and a resume names the stretch it regenerates ("from frame 12 to 40", or "to end"). Saved runs always report a path relative to the repository, however the save reached disk. Each message rises in from the bottom of the window and slips left on its way out, and the ones already up glide aside to make room rather than jumping, all of which reduces to plain fades if your system asks for reduced motion. The row stops short of the readouts on the left, fading its oldest message out against that edge, and the resting line never yields its own space to make room.
+| File | What it is for |
+|---|---|
+| [docs/GUIDE.md](docs/GUIDE.md) | The manual: every feature, every parameter, and the mechanics behind them |
+| [docs/HANDOFF.md](docs/HANDOFF.md) | A bounded cold start: what this is, how it fits together, where it stands |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Settled decisions, deliberate stopping points, and the backlog |
+| [docs/TIGERSTYLE.md](docs/TIGERSTYLE.md) | The coding standard this repo is held to |
+| [docs/MANUAL_VERIFICATION.md](docs/MANUAL_VERIFICATION.md) | Hardware scenarios worth re-running, since CI has no GPU |
+| [AGENTS.md](AGENTS.md) | Working conventions for anyone, human or agent, picking this up |
 
-**Prompt history.** A small history icon at the top-right of the prompt box (shown once you have run at least one prompt) recalls earlier prompts, persisted per-browser. Click it to browse: `‹` steps to older prompts and `›` back to newer ones, the green check keeps the shown prompt for editing, and the red cross restores what you had typed. The counter numbers them in the order you typed them, oldest as 1, so browsing opens on your most recent prompt at `N / N` and the count rises as you move right, the way the arrows do. Prompts are recorded automatically each time you Generate.
-
-**New Run.** Once you have finalized a run by saving an edit (see Interactive remasking below), the **Generate** button becomes **New Run** in the same spot. Clicking it clears the canvas and prompt for a fresh start (the prompt box shows its "Enter a prompt" placeholder) and restores the **Generate** button.
-
-**Desktop window.** To run the UI in a native window instead of a browser (after the optional pywebview setup in Setup):
-
-```bash
-.venv/bin/python desktop.py
-```
-
-This owns the server lifecycle: it starts the supervisor on a private localhost port, opens the window, and gracefully stops the active model worker (freeing its VRAM) when you close it. The browser path (`main.py`) still works and serves the same app.
-
-**Freeing stuck GPU memory.** A worker is normally stopped when you switch models or close the app, and the supervisor sweeps stray workers on startup (plus a `PR_SET_PDEATHSIG` guard). If a hard crash ever leaves one behind holding VRAM, list GPU processes with `nvidia-smi` and clear them with `pkill -f "src.backends.run_worker"`, then relaunch.
-
-#### Interactive remasking and resume
-
-The scrubber steps through every intermediate frame. Navigate with the slider, the arrow buttons, or the keyboard (Left / Right arrows, Home / End). The remasking and resume tools work for LLaDA and for single-canvas DiffusionGemma runs; on multi-canvas DiffusionGemma runs the **Edit Frames** button is disabled (multi-canvas resume is on the roadmap).
-
-**Guided multi-frame editing.** Click **Edit Frames** to chain edits across one or more frames:
-
-1. **Select a frame:** the scrubber starts at frame 0 and only allows forward navigation. Navigate to the frame you want to edit and click **Select Frame**.
-2. **Remask tokens:** click resolved tokens to remask them (they turn orange). Click again to deselect. When satisfied, click **Lock In**. For LLaDA the tokens are set back to `[MASK]`; for DiffusionGemma they are *renoised*, so committed neighbours may also shift on resume.
-3. **Choose next action:**
-   - **Edit Another Frame:** enters target selection mode. A faded preview of the original run is shown at each frame as a reference, noting that output will diverge from your edits. Navigate to the target frame and click **Run to Here**; the model resumes up to that frame and places you into edit mode on it.
-   - **Resume to End:** resumes the model through all remaining steps to produce the final output.
-
-A single edit followed by **Resume to End** is the simple case; you can also chain as many edits as you like. Each partial resume generates only the frames between your last edit and the next target, so earlier edits propagate forward. The scrubber enforces forward-only navigation; later edits cannot precede earlier ones. Clicking **Exit** discards the in-progress edits and restores the original run. All remask edits (frame indices and token positions) are recorded and saved with the run.
-
-**Confirming an edit.** Saving is yours to trigger: entering **Edit Frames** no longer writes a run behind your back, and the pre-edit snapshot travels with the edited run rather than needing a separate entry. After **Resume to End** completes, the editor stays open on the final frame and offers two choices in place of **Select Frame**: a green **Confirm** (checkmark), which saves the edited run, and a blue **Retry** (counter-clockwise arrow), which discards the edits and restarts editing from frame 0. Once an edited run has been saved, **Edit Frames** is disabled for that run (with a "this run already has a saved edit" tooltip) until you **Generate** again, so a single run cannot accrue two conflicting saved edits.
-
-**An edited branch reports what the model actually said.** Resuming used to hand every token the edit did not touch a confidence of 1.0, so the Heatmap over an edited run showed a wall of certainty the model never expressed, and its mean confidence averaged those invented numbers. Each surviving position now keeps the probability it was really revealed at, and the positions you remasked carry none until a step reveals them again. The worker also retains the random state of the frame you branch from, so repeating the same edit on the same frame gives the same branch even if you generated something else in between. That is a claim about repeating an *edit*: a resumed branch is not expected to match the original run frame for frame, because it re-enters the generation region as a single block rather than the original block schedule.
-
-**What If? (autoregressive counterfactuals).** Left-to-right models get a different intervention in place of Edit Frames. After a SmolLM3 run generated with **Alternatives** on, a **What If?** button appears beside the scrubber. Clicking it arms substitution: every position that captured candidates gets a dotted underline, hovering one opens the candidate popover, and clicking a candidate replaces the token there and regenerates the rest of the run from that point. There is no frame-selection step, because for a left-to-right model the frame and the position are the same choice. The continuation is decoded greedily so the divergence you see is the intervention's effect rather than fresh sampling noise. The result lands in the same **Confirm** / **Retry** review as a diffusion edit, after which **Diff vs Original** becomes available for the branch.
-
-**Typing your own token.** Below the five candidates, an **Enter your own** field forces a token the model never weighed. Clicking into it slides a green check and a red cross out from behind its right edge; confirming turns the text into a row you click to run exactly like a candidate, with a small retry icon beside it. Escape, the cross, or a click outside all cancel, and while a draft is live the popover pins itself: it stops following the pointer and ignores scroll, so reaching for the buttons cannot destroy what you have written.
-
-As you type, the field shows what the text actually resolves to: its **token pieces**, each with its vocabulary id, in alternating tints so a split inside a word is visible. This is where tokenization stops being an abstraction, since `unfortunately` is likely one token while `unfortunatelyy` is likely three. Confirm is enabled only at exactly one piece, and the count turns orange otherwise, because a replacement of any other length would shift every position after it and the diff, the entropy profile, and the edit marker all read positionally. The preview is a standalone encode against the loaded tokenizer, answered by the worker outside the generation lock; it is honest about context because substitution keeps the prefix ids verbatim rather than re-encoding the sequence, so no boundary effects can arise.
-
-The field is pre-seeded with a leading space when the token being replaced carries one, read off that token rather than guessed from sentence position, since most tokenizers keep the space inside the word token and dropping it would weld the replacement onto the previous word. A single backspace removes it. Empty or holding only that seeded space, the field shows a placeholder that spells the space out as a `·` dot, so the automatic seeding is visible rather than mysterious.
-
-A typed token reports its **true** probability, read from the model's distribution at that position (at no extra compute during a substitution: the prefill stops just short of the forced token, so the last position's logits are that distribution), which lets the readout honestly show that you forced something the model gave 0.003 to. Its entropy is unchanged, because entropy describes the distribution at that position and not the token pushed into it. A candidate picked from the five keeps the probability its own run recorded.
-
-Confirming also **probes** that position: one forward pass measures the token's probability and its **rank** among everything the model could have said, and the solidified row shows the percentage (floored at `<0.1%`, since a typed token is most interesting where it is improbable and a bare `0.0%` would be a lie). The probe reads the same distribution the substitution will, so the odds shown before you run cannot contradict what the run then reports. Rank is what stays legible when the percentage has collapsed: `#41,203 of 128,256` says what a rounded zero cannot, and it costs a comparison and a sum on a distribution already in hand.
-
-Typing a token the position already listed skips the probe entirely and reports the stored figure, which is better information and not merely cheaper. A run samples position *n* from a single decode step against an incrementally built cache, and a probe that rebuilds the same prefix as one fresh prefill lands about an ulp away in bf16, which is enough to show a candidate as 39.8% in one place and 38.3% in another. Where the run's own KV cache has been retained the probe reproduces the sampled figure exactly, because it makes the same call the run made rather than a reconstruction of it: a one-token decode against the cache sliced to everything before that position. The retained cache also removes the prefix prefill from a **What If?** substitution, which was that operation's dominant cost. It is sliced through fresh views rather than `crop`, which transformers implements in place and would consume the cache a later probe needs, and every disagreement between the cache and the prefix being asked about falls back to a fresh prefill rather than answering confidently from the wrong sequence.
-
-**Every row shows its rank on hover**, not only the typed one. The captured five come out of `torch.topk` in descending order, so a row's position in the list *is* its rank, and the denominator is the model's output width rather than the tokenizer's vocabulary: those differ wherever a checkpoint pads its embedding (128,256 against 128,000 for SmolLM3), and a rank is a place among the tokens that could have been ranked. And when a position committed a token from *outside* the five, which a warm temperature does routinely, that token is appended as a sixth row carrying its own unrounded probability and explicit rank, ruled off from the list above it. It never displaces the fifth, because the five are a statement about what the model preferred and dropping one to make room would break it; and it is not a substitution target, since forcing the token already sitting there would spend a full regeneration arriving back where it started.
-
-#### Visual overlays and settings
-
-A collapsible **Overlay** drawer in the top-right of the output area recolors the frame you are viewing. Collapsed, its handle can be dragged up and down the right edge to move it clear of whatever the run has drawn there; the position is remembered per page. Dragged low, its picker opens upward so the choices stay inside the output area rather than being clipped by its border. It defaults to **None** and offers:
-
-- **Heatmap:** recolor resolved tokens by confidence (dim, desaturated tones for low, bright green for high).
-- **Entropy:** recolor resolved tokens by the entropy of the distribution they were sampled from, on a cool blue (decisive) to hot amber (torn) ramp. This answers a different question than the Heatmap: confidence is how likely the chosen token was, entropy is how spread the model's whole distribution was. Listed for any run that carries the signal (autoregressive runs today, where it is always captured).
-- **Commit Order:** tint resolved tokens by the step at which they settled, from light green (early) to red-orange (late), with a matching gradient legend in the status bar (diffusion runs only).
-- **Diff vs Original:** compare an edited run against the original. Diffusion runs list it up front (disabled until you have edited and resumed a run); autoregressive runs list it once a **What If?** substitution has produced a branch. When active, a slim control row below the scrubber provides independent **Original** / **Edited** opacity sliders and a **Difference blend** toggle, alongside a `Diverged N/total` readout.
-
-Once a run has a branch, an **Original** / **Edited** crossfade appears below the scrubber, the same control the Analytics detail modal carries. It stacks the retained pre-edit run under the branch and mixes between them in *any* overlay, so the two can be faded against each other while reading a Heatmap or an Entropy view rather than only inside Diff. Each layer is colored from its own run's values (at full Original the Heatmap shows the original run's confidence, not the branch's colors under the original text), and the more opaque side takes the pointer, so hovering, the tooltip, and the candidate popover read the run on screen, with the popover opening on that run's page. The entropy profile follows the same slider. **Diff vs Original** keeps its own two sliders instead, because a difference blend needs both layers up at once rather than traded off. The crossfade hides while a run is being edited, where the tokens are a click target rather than something to read, and resets to **Edited** whenever a run completes.
-
-Runs that captured **Alternatives** also get two XAI affordances. Hovering any token opens a **candidate popover** listing the top five tokens the model weighed at that position, with a proportional bar and probability each, and the one it actually chose marked. After a **What If?** branch, positions at or past the substitution get a small **Original** / **Edited** pager in the popover's heading, so you can flip between what the two runs were weighing at the same position; each page marks the token its own run drew, and only the Edited page is clickable while substitution is armed. Below the scrubber, an **entropy profile** draws one column per position, tall and hot where the model was torn, with the column for the frame under the scrubber highlighted and its value read out in nats. Columns past the scrubber dim to a fraction of their weight, so the chart agrees with the canvas above it about which tokens exist at the frame you are looking at rather than showing the whole run's shape at every step. Once a run has been edited, each edited position is marked with a dashed line and a faint tint, the same marker the Analytics entropy chart uses, so the place the branch was forced stays visible while scrubbing and crossfading, and the edited positions themselves keep a soft orange wash in the output for as long as the run is on screen. Each marker is colored by the **frame its edit was made at**, on the same green-to-warm scale as Commit Order, so a run remasked in several rounds shows the order of its interventions rather than one flat color and a marker's hue can be read against a token's; a position remasked twice takes the color of its most recent edit, and a run saved before this keeps the flat orange it always had. The markers sit below full strength, since they annotate the entropy bars rather than compete with them. That tint is deliberately quieter than the one an in-progress edit uses and means a different thing: the bright mark says "selected, about to be redrawn", the wash says "this run was intervened here", which stays true afterwards. It is a background, so it composes under the Heatmap and Entropy overlays instead of competing with them for the token's color. Because an autoregressive model samples each position exactly once, this is a profile across the sequence, not a trajectory of one position over time.
-
-The profile and the tokens **cross-highlight** in both directions: hovering a token lights its column, and hovering a column lights the token it belongs to. A token lit from the profile looks identical to one under the cursor, since both mean "this token". A token that renders to nothing, a line break, gets a thin upright bar standing where it sits instead, because a highlight with no width to fill would leave a column plainly pointing at an empty space. Sweeping the profile lights tokens regardless of the **Highlight tokens** setting, because reading a column back to its word is an analysis affordance rather than a comfort preference.
-
-After a **What If?** branch the profile carries both runs, the pre-edit columns underneath and the branch's on top, mixed by the run crossfade. It spans whichever run ran longer so the columns stay aligned by position even when the branch came out a different length, and the nats readout reports whichever run the crossfade favors.
-
-**Highlight tokens** itself is a checkbox in the **Overlay** drawer, on the generator and in the Analytics detail modal, rather than a Settings row: it acts on the tokens the drawer sits over, applies immediately without a Save step, and is on by default. The value is still server-persisted and shared between the two pages.
-
-The remaining persistent preferences live on a shared **Settings page** (`/settings.html`), reached from a **gear icon** in the header of the generator, the Main Menu, and Analytics. It has a left tab rail and stages changes behind **Save** / **Reset**; all settings are server-persisted and shared across pages:
-
-- **Appearance** tab: **Render diffusion-style text** (dynamic status messages resolve from scrambled block-glyph noise, like a denoising pass, in the green palette, skipped automatically under `prefers-reduced-motion`; a **Mode** sub-setting picks **Default** to resolve once or **Cycle** to keep re-diffusing while the status is active, and the same effect drives small button interactions) and **Token birth glow** (each token flashes a soft white halo at full strength the instant it is generated and then fades, so a run leaves a visible trail; live generation only, never on the scrubber, and skipped under `prefers-reduced-motion`). The glow has three sub-settings: **Tune for** selects the model class, then **Brightness** (50-200%) and **Fade time** (200-2000ms) are stored per class, since visible trail length is roughly generation rate times fade and an autoregressive run outpaces a diffusion step by an order of magnitude. A **Preview** token replays the flash as you drag, because nothing generates on the Settings page. Last on the tab is **Reveal the mask candidate** (off by default), which draws the token a diffusion model is currently holding at each unsettled position instead of the `░` glyph, so the canvas reads as a draft firming up rather than as blocks dissolving. The position still reads as unsettled: it keeps the mask tint and the confidence fade, so a dim word is a guess the model is not committed to. It applies live, on the scrubber, in both comparison overlays, and retroactively to saved runs in Analytics.
-- Sub-settings are indented under the preference they depend on, with no separator between them, and are dimmed rather than hidden when that preference is off, so what exists and what it belongs to stay visible.
-- **Interface** tab: **Device tag ticker** (the scrolling GPU/device readout).
-
-#### Metrics strip
-
-A single always-present row directly above the token canvas, on both the generator and the Analytics detail modal, reads out the hovered position: the token (with visible stand-ins for whitespace), `position / total`, confidence and entropy with a small bar each on the overlays' own ramps, the overlay-specific extra (`Resolved at step N` under Commit Order, `was: X` under Diff), and an `Original` / `Edited` tag while both runs are stacked. It replaced the native `title` tooltip, which the browser delayed, would not let us style or place, and could only ever be bound to one element, so it fed nothing from the entropy chart.
-
-Two sources drive it: a token hover, and an entropy hover (the generator's profile, the Analytics chart), so a tall bar can be read back to a word without moving the pointer to the text. It also follows the frame, so a held position updates while scrubbing and during live generation. Absent is distinguished from zero: a dash means the run does not carry the value, rather than that the model measured nothing. Every model records entropy now; on the diffusion models it is the current step's, so it moves as you scrub. Height is reserved permanently rather than shown on hover, which would push the canvas down every time the pointer crossed into it.
-
-#### Analytics Suite
-
-Click **Analytics** in the header (or navigate to `/analytics.html`) to open the Analytics Suite. It reads saved runs from `results/` and provides interactive charts for comparing behavior across configurations and models.
-
-Every page works with no outbound network. The chart libraries (Chart.js, Hammer.js, the zoom plugin) and the JetBrains Mono webfont are vendored under `src/web/static/vendor/` with their licenses and a manifest of source URLs and SHA-256 hashes, rather than pulled from a CDN, so a blocked or absent network cannot take the run browser down with it and no third-party origin runs code alongside the model and deletion APIs. Refresh or bump them with `.venv/bin/python scripts/vendor_assets.py`.
-
-- **Run browser:** group runs by date, model, prompt, or whether a run was edited. Columns are shared across models and ordered Date, Model, Prompt, Time, and a sortable **Edited** column (a checkmark, textured from the diffusion mask glyph, marks runs that carry a pre-edit snapshot for a Diff vs Original; blank otherwise). The leading Date column carries the pulsing green "new run" dot. Clicking a row opens a wide **detail modal** (fades in like About/Help; close with the X or by clicking outside) laid out with the token overlay canvas as the centerpiece on the left and the run's info plus the convergence, timing, confidence, and entropy charts stacked on the right. For an edited run saved with its pre-edit snapshot, the **Token overlay** heading row carries a run-level **Original** / **Edited** crossfade, sitting directly above the text it blends, that governs the token view, which stacks the two runs and blends between them in whichever overlay is active, and the entropy chart's bar layers follow the same slider. The timing and confidence charts follow it only while it is being dragged, since those two carry their own pins. The more opaque side takes the pointer, so hovering, the candidate popover, and cross-highlighting all read the run you are actually looking at.
-- **Manage runs:** delete a saved run with the row's red trashcan action. Select rows with the checkboxes to enable **bulk delete** (a trashcan with the selected count appears in the actions header) and highlight the selected rows. Either path opens a confirmation modal ("Delete this run?" / "Delete N runs?") showing the folder path or count, and a toast confirms the deletion.
-- **Convergence chart:** percentage of resolved tokens per frame, counted from the per-token records the run saved, so it measures positions rather than text. That distinction matters: an earlier version divided mask glyphs by decoded characters, which made a position resolving into a long token look like ten times the progress of one resolving into a short token, and two runs with the same schedule could disagree purely on word length. A run saved without those records (the older ones, and a few that stored bare token ids) still gets a curve from the character count, captioned above the chart to say so. User remask edits are highlighted as blue segments with hover details.
-
-  Which record it counts depends on the model, because "resolved" does not mean the same thing for both. LLaDA masks a position with a real vocabulary token, so its mask flag is ground truth and the curve counts it directly. DiffusionGemma has no mask token: it renoises unsettled positions to fresh real tokens, and the sampler infers resolution from a position holding still. That is stability rather than settlement, and the two part company badly early in a canvas, where the model fills the whole thing with its highest-frequency token and that filler is perfectly stable. Measured on a real run, a canvas reading 90.2% resolved held only 8.6% of what it eventually committed, at a mean model confidence of 0.165. So for DiffusionGemma the curve counts positions already holding what their canvas committed, per canvas, which is exact and needs nothing the run did not already save. A **?** icon beside the heading explains which measure a run got, and appears only where there is something to explain: a LLaDA run's heading stays clean. For a run old enough to have no token records at all the curve falls back to counting mask characters, and that icon is tinted amber, so an approximate reading is visible as one without hovering for it.
-- **Timing charts (two pages, one slot):** pager arrows beside the heading flip between **Elapsed Time**, cumulative elapsed per frame (accumulating across resumes, with remask transitions highlighted in green), and **Tokens per Second**, the same run read as a rate: tokens produced by each frame over the seconds taken to get there. The rate is a running average rather than a per-step reading, which on a diffusion run would mostly trace the sampler's reveal schedule; it needs no new stored data, so it works on runs saved long before the metric existed. The numerator counts each canvas against its own size and adds it to what came before, which is what makes a multi-canvas DiffusionGemma run read correctly: it previously subtracted from a single first-frame baseline, so committing one canvas and starting the next sent the curve back toward zero and lost a whole canvas of production. It also means the chart and the generator's live **T/s** footer now count the same thing, which they did not. The pre-edit comparison is offered for autoregressive runs only, since a saved run keeps the original's timings but not its canvas and a rate needs both. The run summary above the charts lists the processor and the elapsed total; an edited run lists two, **Elapsed (original)** and **Elapsed (edited)**, so the cost of the intervention is visible.
-- **Compare runs:** tick two or more rows and press **Compare** to overlay their convergence curves. Every selection is accounted for: a run that cannot contribute a curve is named above the chart with the reason, whether it was deleted, unreadable, saved by a newer build, or autoregressive and so has no masked canvas to converge. It used to simply not appear, so three ticked runs could draw one line with nothing saying where the others went. Legend labels are built from each model's own parameters, so a DiffusionGemma or SmolLM3 run reads properly instead of showing LLaDA field names it does not have. A comparison is capped at twelve runs, and opening a new one supersedes the last, so a slow response cannot repaint a panel you have already closed.
-- **Confidence chart:** mean per-token confidence per frame, which climbs as a canvas converges. Shown for runs saved with confidence data.
-- **Two-run comparison on the line charts:** an edited run saved with its pre-edit snapshot draws both runs on the timing and confidence charts at once, the original solid in grey and the branch dashed in the chart's own color, so the point where the dashes leave the solid line is the cost or the confidence the intervention actually changed. The area **between** the two curves is washed in, colored by whichever run bounds it from above: the branch's own hue where the branch leads, the original's grey where it does not. Because the runs share their prefix exactly, the band is empty until the edit and opens up only where the intervention reached, and the rule reads the same on both charts without calling either direction good or bad (higher means slower on timing but better on confidence). Two **pins** in each chart header, **1** for the original and **2** for the branch, choose which are drawn and light green when showing; both are on when a run opens, and the last lit pin cannot be turned off since a chart drawing neither run has nothing to read. The band fades with whichever run is closer to invisible, since a band bounded by a line that is not drawn has no reading in it. Dragging the token view's Original / Edited crossfade borrows these two charts for the length of the drag so the whole modal moves together, then eases them back to their pins on release.
-- **Entropy chart:** per-token entropy, indexed by **position** rather than by frame (and drawn as bars for that reason: an autoregressive model decides each position once, so entropy is a property of the position, not a point in a time series). One bar per generated token on the Entropy overlay's cool-blue to hot-amber ramp, hover lighting the column and naming the token alongside its value in nats. Bars and tokens **cross-highlight**: hovering a bar lights the matching token in the overlay above, and hovering a token lights its bar. Edited runs get a dashed marker and tint on each edited position, colored by the frame that edit was made at on the Commit Order scale, exactly as the generator's entropy profile marks them; from there rightward the tooltip splits into labeled **Original** and **Edited** rows (at the marked position itself the nats match and only the token differs, since forcing a token changes what was drawn, not the distribution it was drawn from), and the token view's crossfade blends the pre-edit run's bars against the branch's. Shown for runs saved with the entropy signal.
-- **Canvas boundaries:** for multi-canvas DiffusionGemma runs, dashed amber markers on the charts mark where one canvas commits and the next begins. Single-canvas runs show none.
-- **Token overlay + per-frame scrubber:** a scrubbable view of the run's tokens inside the detail modal, with a corner **Overlay** drawer mirroring the generator's. A frame scrubber (prev / slider / next, `Frame i / N`) replays every saved frame through the active overlay, opening on the final frame. The drawer offers **None** and **Heatmap** for every run with token records (Heatmap recolors resolved tokens by their persisted confidence), plus **Commit Order** and **Diff vs Original** for diffusion runs. Commit Order tints each token by when it settled (early-to-late gradient legend); Diff vs Original (available only for edited runs with a saved snapshot) stacks the original and edited runs with independent **Original** / **Edited** opacity sliders and a **Difference blend** toggle, plus a `Diverged N/total` readout, matching the generator's layered diff (the original layer clamps to its final frame past its end). Runs saved with entropy add the **Entropy** overlay, and runs saved with captured candidates get the same hover popover as the generator, so a What If branch and the decision behind it are both replayable post-hoc. Autoregressive runs, which have no masked canvas, omit Commit Order. Hovering a token shows its position, persisted confidence, and entropy where saved. This makes the generator's explainability overlays durable and scrubbable post-hoc; runs saved before durable overlays (or without token data) show a short unavailable note.
-- **Chart controls:** scroll-wheel zoom and +/-/Reset on every chart. Tooltip boxes park in whichever corner of the plot area is free of both the data and the pointer (preferring top-left, then top-right, bottom-left, bottom-right) and stay fully inside the plot area rather than spilling onto the axes; each chart has a toggle to hide/show its box. When no corner is free, the covered segment and the hovered point glow through the box.
-
-#### Saving and reproducibility
-
-Clicking **Save** writes a timestamped folder under `results/` containing `metadata.json`, `final.txt`, `frames.jsonl` (frame text, one JSON object per frame), `history.txt` (the same frames as a plain-text transcript, for reading by eye), `tokens.json` (per-frame, per-token records: display text, mask flag, vocab id, confidence, and entropy where captured), and `diffusion.gif`. Edited runs also write `original_tokens.json`, the pre-edit snapshot that powers the durable Diff vs Original overlay. Runs that captured competing candidates write `alternatives.json`, indexed by token position rather than by frame, since a position's candidate set is fixed the moment it is sampled.
-
-A run is published whole or not at all: everything is written to a staging directory, checked against the run's own manifest, and moved into place with `metadata.json` last, since that file is what makes a directory a run. Each run carries a `schema_version` and a `capture` block naming the signals it recorded, so a reader is told what a run holds instead of inferring it from which files happen to be present. Runs saved before versioning still load, through an adapter for their era. A run this build cannot read is listed in Analytics as its own row explaining why, rather than disappearing or taking the catalog down with it.
-
-The metadata captures the model, prompt, hyperparameters, any remask edits, per-frame timing, canvas indices, mean confidence, what the run cost the card, and reproducibility info: seed, GPU name, git commit, the worker's torch/transformers versions, and the tokenizer that produced the run's ids (class, checkpoint path, vocabulary size, and whether it is a fast tokenizer). The cost block holds the peak VRAM the run's generation held together with the allocation it started from, which Analytics reports on one **Peak VRAM** row as the peak and, in brackets, how far above the baseline it reached. The pair is given because the peak is mostly the weights the model had already loaded, so the bracketed figure is the part that moves when generation settings or the sampler change. A run on CPU has no such cost and saves no block at all, rather than a block of zeros that would read later as a measurement. All of that is attested by the worker at the moment the run finishes and travels with the run, including the device the model actually loaded onto, which is not always the one requested. That matters because two browser windows share one supervisor: a run finished in one window and saved after the other switched models used to be described by the model that replaced it. Analytics shows the tokenizer on the run's detail panel; runs saved before a field existed simply omit its row.
-
-
-## Implementation Status
-
-- [x] Supervisor plus per-model worker architecture with process isolation (separate venvs)
-- [x] Shared backend contract: protocol, model registry, worker scaffolding, generic launcher
-- [x] Model selector with schema-driven dynamic parameter panel and per-model capabilities
-- [x] LLaDA-8B-Instruct: masked diffusion, low-confidence remasking, CFG, semi-autoregressive blocks
-- [x] DiffusionGemma-26B-A4B: self-quantized NF4 experts, 256-token canvases, adaptive stopping
-- [x] DiffusionGemma thinking (reasoning) channel with split-panel view
-- [x] Live diffusion visualization (FastAPI + WebSocket) with recommended bounds and Experimental mode
-- [x] Real-time client-side validation (bounds, divisibility, negative values)
-- [x] Interactive remasking and resume: frame scrubber, click-to-remask, resume from any frame (LLaDA and single-canvas DiffusionGemma via seed-canvas re-entry)
-- [x] Guided multi-frame editing with faded original-run previews and partial resumes
-- [x] Per-token confidence: softmax at reveal (LLaDA), max-softmax probability per step (DiffusionGemma), read off the logits by a chunked reduction rather than a canvas-sized softmax, so it is always measured rather than offered as a toggle
-- [x] Grouped overlay picker (None / Heatmap / Commit Order / Diff vs Original, the latter two diffusion-only), per-token hover readouts, and token-hover highlight option
-- [x] Commit-order (resolution-step) token coloring; counterfactual "Diff vs Original" overlay with opacity sliders and difference blend
-- [x] Durable overlays: per-token records (text, mask, id, confidence) plus the pre-edit snapshot persisted per run, and a static commit-order / Diff-vs-Original viewer in the Analytics Suite
-- [x] Analytics run detail as a wide fade-in modal with a corner overlay drawer, a sortable Edited column, and streamlined grouping
-- [x] Analytics per-frame token scrubber and durable Heatmap: the detail modal's overlay replays every saved frame (None / Heatmap / Commit Order / Diff), Heatmap recoloring by persisted confidence, with Commit Order and Diff gated to diffusion runs (autoregressive runs get None + Heatmap)
-- [x] Guided-edit confirm/retry review step and Edit-Frames lock after an edited run is saved
-- [x] Shared tabbed Settings page (`/settings.html`) reached from a gear icon in the generator, Main Menu, and Analytics headers (Appearance: diffusion-style text + Mode, highlight tokens; Interface: device-tag ticker) with staged Save/Reset, server-persisted and shared across pages; Commit Order moved from a Settings toggle to the overlay picker
-- [x] Analytics Suite: model-aware run browser, convergence, timing, confidence, canvas-boundary markers
-- [x] Analytics run deletion (confirmation modal + toast) and contained, toggleable chart tooltips with line burn-through
-- [x] Reproducibility metadata (seed, GPU, app commit, model commit, library versions) and deterministic seeding
-- [x] Pinned model artifacts: Hub checkpoints load a fixed commit, the local quantized checkpoint carries a completion manifest
-- [x] One declared dependency manifest per environment, locked with hashes and guarded against drift
-- [x] Signals described by unit and axes, so a view knows whether a value is one per position or one per frame; per-token entropy on every model
-- [x] Graceful VRAM handling: pre-flight free-memory check and worker load-error reporting
-- [x] Save runs (metadata, history, final text, GIF) with per-frame timing and confidence
-- [x] Optional desktop app: pywebview native window that owns the server lifecycle (graceful shutdown frees VRAM) plus a Linux app-menu launcher; launching it a second time joins the window already open instead of starting a rival server, since two servers each enforce "one model at a time" over a GPU neither knows it shares and the second load dies of out-of-memory after you have waited for it
-- [x] **"One model at a time" now holds across processes, not just within one server.** The check above is port-based, and the browser launcher and the desktop app bind different ports on purpose, so running both gave two servers that each passed their own VRAM pre-flight before the other's allocation existed. A model is now held under a host-wide **lease**, so the second instance is refused with a message naming which one has the card and what to do about it. It stays completely usable otherwise: it serves its pages and browses Analytics, it simply cannot load a model until the other releases one. The lease is a file lock, which means the kernel drops it if the owner crashes, so there is no stale state to clear and no pid to validate. It is per-user, so it does not claim to govern a second account's processes
-- [x] Prompt history (persisted per-browser) with a browse control, and a New Run flow that clears the canvas after a finalized run
-- [x] Main Menu landing page: looping title-screen video (WebM/MP4) over a GPU/VRAM-aware model picker (Available / Insufficient VRAM) that greys out models that will not fit; generation gated behind model selection
-- [x] Analytics layered "Diff vs Original" overlay (Original/Edited opacity sliders + difference blend) mirroring the generator
-- [x] Opt-in "diffusion-style text" effect (scramble-to-resolve on status messages) with a Default/Cycle mode, honoring reduced motion, reused for Shuffle/Generate/Lock-In button micro-interactions
-- [x] Confidence-driven mask rendering: masks use the accent color and their opacity tracks the model's predicted confidence per position, firming up from near-invisible as a token nears its reveal, on both diffusion models and every unsettled position. One square-root curve shared by the generator and Analytics, chosen against the measured confidence distribution; a position with no recorded confidence draws solid, since unmeasured is not the same claim as measured and hopeless
-- [x] **Reveal the mask candidate** (Settings, off by default): an unsettled position draws the token the model currently holds there instead of `░`, keeping the mask tint and confidence fade so a guess never reads as an answer. LLaDA computed that prediction every step and discarded it; it is now recorded in the frame, which also makes the metrics strip name a candidate for a masked position as it already did for DiffusionGemma. Applies live, on the scrubber, in both comparison overlays, and retroactively to saved runs
-- [x] Randomize-remasks control (slider + N-of-M + Shuffle) in Edit Frames; Edit Frames opens on the first editable frame
-- [x] Analytics "new run" cue: an unseen-run count badge on the Analytics link and Main Menu plus per-row green dots cleared when a run is opened; deleting a run decrements it, and the cue self-heals against runs that no longer exist
-- [x] In-place edited-run save: an edited/bundled run updates its pre-edit folder so it is a single Analytics row rather than a duplicate
-- [x] Robust GPU detection (resolves nvidia-smi across launch environments, with a driver/library-mismatch message)
-- [x] Durable server-side UI state (`results/ui_state.json` via `/api/ui-state`): Settings, the "new run" cue, prompt history, and the generate teaser survive restarts and are shared across the browser and desktop app, independent of the window origin
-- [x] Analytics table rework: reordered columns (Date, Model, Prompt, Time, Edited), a diffusion-textured Edited checkmark, checkbox row highlighting, and multi-select bulk delete
-- [x] Desktop launcher persistence: a stable window port (with ephemeral fallback) and a persistent web-storage profile
-- [x] First autoregressive model (SmolLM3-3B) in a dedicated `.venv-ar`: token-by-token streaming with per-token confidence, per-activation CPU/GPU device selection (CPU-capable for GPU-less hosts), and a `model_type` gate that hides diffusion-only UI (Edit Frames, Diff, Commit Order, convergence) while keeping timing, confidence, and the Heatmap
-- [x] Non-blocking activation with a menu progress bar and Cancel; a startup sweep + `PR_SET_PDEATHSIG` guard so a crashed supervisor cannot orphan a VRAM-holding worker
-- [x] Signed VRAM-headroom pill on each device tag (green/red, accounting for the reclaimable resident model); menu GPU + CPU readout; model-family glyphs; select-to-confirm on the menu and dropdown
-- [x] "Click to Download" veneer that pre-fetches an uncached model's weights (with a progress bar, no VRAM) before selection; Analytics **Processor** column and per-run timing header (GPU/CPU name)
-- [x] Smooth download progress via a cache disk-size poller (repo total from Hub metadata, polling the `blobs/` directory including in-progress parts), with Xet disabled before the first Hub import so the classic downloader is used
-- [x] Model dropdown polish: fixed-width device pill (the signed headroom is shrunk to fit), a collapsed-width option list with ellipsized names, and a hover VRAM side-popup whose trailing +/-X is tinted green (fits) or red (short)
-- [x] Loaded model highlighted (and inert) in the dropdown with its loaded device locked while the other device stays switchable; the device-tag ticker is gated off on CPU (headroom is GPU-only)
-- [x] Autoregressive step counter is 1-based, so a full N-token run reads "Step N/N" (matching the diffusion convention)
-- [x] Main Menu model list paginated (prev/next + `i/N` indicator, styled like prompt history) instead of scrolling, with the Settings gear pinned to the panel corner
-- [x] Cross-page download navigation: a model download keeps running server-side while the user browses pagination, Analytics, and Settings; a shared draggable toast (snap-to-corner, persisted) surfaces progress/completion when the inline veneer is off-screen and returns to it on click
-- [x] Partial-cache resume: a download interrupted with `*.incomplete` parts is detected as not-downloaded, so the veneer reappears and `snapshot_download` resumes instead of the model bricking on load
-- [x] Saved runs live in `results/` (lowercase), matching the rest of the repo's directory naming
-- [x] Autoregressive entropy signal: always captured per token, persisted as `tokens.json`'s `e` field, with an **Entropy** overlay (cool/decisive to hot/torn) and a per-position entropy profile under the scrubber, in both the generator and Analytics
-- [x] Autoregressive top-k alternatives: an opt-in **Alternatives** capture (top 5 per position) shown in a hover popover with per-candidate probability bars and the chosen token marked, sent once per position rather than on every snapshot, and persisted as `alternatives.json`
-- [x] Autoregressive **What If?** substitution: force a position to a captured candidate and greedily regenerate from there, via a `supports_substitution` capability and a `substitute` message that keeps the diffusion remask/resume UI out of the way; recorded as an ordinary remask edit so the Analytics Edited column and the durable **Diff vs Original** (now un-gated for edited autoregressive runs) work unchanged
-- [x] Analytics **Entropy by Position** chart: the first chart indexed by token position instead of frame (bars, on the Entropy overlay's ramp, hover lighting the column and naming the token), with edit-orange markers and tint at edited positions, a divergence-aware tooltip that splits into Original and Edited rows where a What If branch stops sharing its prefix, and the token view's Original/Edited crossfade blending the two runs' bars; restores a meaningful third chart for autoregressive runs, whose per-frame mean is a cumulative average and therefore flat by construction
-- [x] Collision-aware chart tooltips: the box picks the plot-area corner free of both the trendline and the pointer (top-left first, then top-right, bottom-left, bottom-right) with hysteresis so it settles instead of hopping, replacing the "diagonally opposite the hovered point" rule that aimed the box straight at any rising trend
-- [x] What If lifecycle fixes: the button locks the moment Confirm is clicked and stays locked through the save, and Retry no longer desynchronizes the worker's run state (picking a candidate after a Retry used to fail with "not among the captured candidates")
-- [x] Edited-run timing alignment: a branch's `per_frame_elapsed` is cut at the splice like its sibling arrays and offset so it stays cumulative, putting the Timing chart on the same x axis as every other chart and making Elapsed the whole run rather than the branch; legacy runs are repaired at read time, and the pre-edit run's timing, confidence, and candidate sets are persisted for comparison
-- [x] Shared comparison layer: one token-span builder behind every path on both pages, so stacked layers are interactive (this repaired hover, the candidate popover, and entropy highlighting in Diff mode) with the more opaque layer owning the pointer; in Analytics a run-level Original/Edited crossfade on the token overlay's heading row drives the token view in every overlay mode and the entropy chart at once, each layer colored by its own run's values
-- [x] Entropy cross-highlighting in both directions on both pages (hover a bar or profile column to light its token, hover a token to light its bar), with the entropy-driven direction independent of the Highlight tokens preference
-- [x] Candidate-popover pagination: positions at or past a What If substitution get Original/Edited arrows over the two runs' top-k sets, each page marking the token its own run drew
-- [x] One token-highlight look for both the pointer hover and the entropy-driven highlight, in neutral white so it survives the overlays' arbitrary backgrounds; Analytics gained the direct hover it never applied
-- [x] Highlight tokens moved out of Settings into each page's Overlay drawer, next to the tokens it acts on: applies immediately, defaults on, still server-persisted and shared across pages
-- [x] Session-scoped form state: hyperparameters, the Experimental toggle, and the prompt draft survive navigation and a model switch (per model, stored as typed) but reset when the app closes, with a Reset button that restores the defaults and disables itself when they already hold
-- [x] Concurrent status messages: work in flight gets a transient chip extending leftward from the footer's resting line (which keeps the outcome), so an auto-save and the edit it triggered are both visible instead of one overwriting the other; chips rise in, step aside going out, and their neighbours ease rather than snap
-- [x] Fresh slate on a model switch: the run snapshot is keyed by device as well as model, and both activation paths drop it on the way out, so switching between a model's CPU and GPU builds no longer restores the other one's output
-- [x] Draggable collapsed overlay drawer: the handle moves vertically along its container's right edge, distinguishing a drag from the toggle click, clamped to the container and remembered per page
-- [x] Determinate model-load progress bar: memory-counter sampling (resident set size and CUDA allocated) against a target read from the checkpoint's shard index and scaled to the requested dtype, with an explicit indeterminate fallback rather than a guessed bar, covering the boot load as well as switches
-- [x] Re-selecting the model that is already loaded is navigation, not a load: the menu offers to return to the Generation page and the run on screen survives, since nothing is unloaded and no weights are read again
-- [x] Dropdowns open upward when the box they live in would clip them, so the overlay picker stays usable with the drawer dragged to the bottom edge
-- [x] Load-bar corrections: a reserved tail for the one checkpoint that fills host RAM before copying to the GPU (so its copy phase has somewhere to go), the device phase named as soon as the copy starts, and a faster poll plus a held completion so a short load finishes on screen instead of cutting off partway
-- [x] Per-frame **reveal signal** (`revealed`) from all three samplers: the positions resolved in that frame and not in any earlier frame of the same canvas, monotone per canvas so a position is reported born exactly once; a resume seeds from the canvas it inherited and DiffusionGemma clears the set per canvas, so neither the surviving prefix nor a churning draft can re-report
-- [x] Live generation renders reusable **token** spans instead of per-character spans rebuilt every frame, a constant ~160 nodes updated only where they differ rather than ~640 laid out from scratch per step, with one shared span-sync function behind the builder and the live path
-- [x] **Token birth glow:** a constant-blur white halo whose alpha decays with no fade in, attribute-keyed so a class rewrite cannot cut it short, capped in concurrency, reduced-motion aware, and toggleable in Settings
-- [x] Per-model-class glow tuning: **Brightness** and **Fade time** stored per `model_type` behind a class picker, delivered to the keyframes as whole-shadow custom properties (so no `var()` sits inside an `rgba()`), with brightness scaling the blur radii as well as the alphas for real headroom, and the concurrency cap derived from the fade so the queue rather than the timer can never be what ends a flash
-- [x] Sub-setting grouping in Settings: indented rows with the separator moved to the top of the next preference (no `:has()`, no "I am last" marker in the markup), dimmed and inert instead of hidden when the parent preference is off
-- [x] Indeterminate **sweep** for the phases of an activation that cannot be measured, labeled **Starting worker** while the worker process spawns and imports its libraries: the shared reducer went from a determinate flag to a three-way mode, so the track is on screen from click to ready on both the menu and the generator instead of appearing partway through
-- [x] Pager arrows read by brightness rather than hue: bright when actionable, dim when already at that end, dropping the accent green that previously marked the *disabled* arrow and camouflaged it against the green chart title beside it
-- [x] Analytics crossfade separator removed: the row inherited `border-top` from the generator's stacked-layout rule after it moved onto the Token overlay heading row
-- [x] **Tokens per Second:** a click-to-toggle footer readout (run average or last step, persisted) plus an Analytics chart sharing the Timing slot behind a pager, both derived from data every saved run already carries; the footer's Elapsed was fixed in the same pass to report the cumulative total rather than the segment-local time that reset after an edit
-- [x] Both elapsed totals in the Analytics run summary for an edited run, original and edited, instead of one combined figure
-- [x] `ruff` pinned and configured (config-only `pyproject.toml` at 70 columns for both ruff and black, with `C901` and `PLR1702` selected), establishing a 159-finding baseline rather than mass-fixing
-- [x] **Token metrics strip:** one always-present readout above each token canvas, fed by both token hover and entropy hover, replacing the native `title` tooltip that could not be styled, placed, or bound to more than one element; deleting it removed the whole `titleFor` plumbing on both pages, gave live generation a readout it never had, and stopped a missing signal from rendering as a confident zero
-- [x] **Tokenizer identity** read off the loaded object in the worker's `/health` payload (class, checkpoint path, vocabulary size, fast flag), cached by the supervisor and written into every run's `reproducibility` block, so Analytics can name the vocabulary a run's ids came from and an old run keeps its own answer after its checkpoint moves on; deliberately not sourced from `ModelCapabilities`, which is static registry data served with no worker running
-- [x] **Typed token for What If:** force any vocabulary entry, not only one of the five captured candidates, with a debounced live tokenizer preview (a new lock-free `tokenize` message answered outside the generation lock) showing the pieces the text resolves to and gating confirm at exactly one; required first making the candidate popover *pinnable*, since it was hover-scoped and tore itself down on four separate events that would each have erased a half-typed word
-- [x] Typed tokens report their **true** probability rather than a placeholder, at no extra compute: the substitution prefill now stops just short of the forced token, so the last position's logits are the distribution that position was sampled from, and the forced token is forwarded against that cache instead of being prefilled alongside the prefix
-- [x] **Top-k** sampling for autoregressive runs, applied before top-p (matching Hugging Face) and defaulting to -1 (off) so every prior run's behavior is byte-identical; distinct from the fixed five candidates the Alternatives capture records
-- [x] A **probe** message that measures a token's probability and its rank across the model's whole output at one position of the last run, so a typed token has a figure to show before you commit to it, and one that cannot disagree with the substitution because both read the same distribution
-- [x] **Candidate readout in the metrics strip:** hovering a row of the popover fills the strip's empty right half with that candidate's full-precision probability, headed by a green chip against the grey chip of the committed token, plus the rank for a typed one; the popover row is 320px wide and cannot hold five significant figures, while the strip had half its length standing idle
-- [x] A **rank on every candidate row**, not only the typed one: the captured set is ordered by `torch.topk`, so a row's index *is* its rank, and the denominator is the model's output width rather than the tokenizer's vocabulary (128,256 against 128,000 for SmolLM3, a padded embedding), now reported alongside the tokenizer through the plumbing that already existed for it
-- [x] **A row for the token the run actually chose** when a warm temperature or a typed edit reached outside the captured five: appended as a sixth entry with an unrounded probability and an explicit rank, never displacing the fifth, which turns the popover's existing chosen-mark from silently inert into the thing it was written for
-- [x] **A persistent tint on edited positions** on both pages, a softer wash than the transient in-edit selection and distinct in meaning: one says "selected, about to be redrawn", the other "this run was intervened here", which stays true forever. Background only, so it composes under the overlays instead of fighting them for the token's color
-- [x] **Entropy bars dim past the scrubber** on both pages, so the chart says the same thing the canvas above it does about which tokens exist at this frame; per-bar alpha baked into the fill on the Analytics chart, since Chart.js has no per-bar opacity and it has to multiply with the crossfade's whole-dataset alpha
-- [x] **The run's KV cache is retained** and reused by both the probe and the substitution, which makes a probe *exactly* reproduce a recorded probability rather than land a bf16 rounding step away from it, and removes the prefix prefill that was a substitution's dominant cost; sliced through non-destructive views (not `crop`, which transformers implements in place) with a prefix check and a fresh prefill behind every disagreement
-- [x] **Context-window readout under the prompt** (`1,240 / 65,536`), turning amber when the prompt plus the output budget would exceed the window: the count is of the *templated* sequence, answered by the worker through a new lock-free `count_prompt` message so it is the same encode the sampler will run rather than a character estimate, and the window is read off the loaded model rather than declared in the registry; the authoritative count rides the `done` frame into every saved run's `context` block and two Analytics detail rows that stay absent for older runs
-- [x] **Import a prompt from a `.txt` or `.md` file**, by button or by dropping it on the textarea, read entirely client-side with a byte cap checked before reading and a character cap on what is inserted, confirming first when the box is not empty; markdown goes in raw, and the readout above immediately says what fraction of the window the file costs
-- [x] **Analytics collections:** star any run to file it, tabs beside Group by to browse what was filed (All is a view, Favorites is created on first star, the rest are yours to name, rename, and delete), and a per-row caret for filing one run into several at once; tick several rows and a **star and caret appear beside the bulk trashcan** to file the whole selection in one request, which either files all of it or none; inside a collection, **Show all runs** relaxes the membership filter so runs can be filed into it from where you are standing, dimming the ones already there, and the bulk star then files into that collection rather than Favorites; membership is a set the **server** owns, changed by one bounded operation per gesture rather than by the page writing back its own copy of the list, so two windows can file different runs at the same time and neither erases the other; it survives a restart under either the browser or the desktop app, and the server prunes ids for deleted runs so a tab can never show a row that will not open
-- [x] **A saved run is a transaction, not a pile of files:** run storage moved out of the supervisor into `src/web/run_store.py`, which reserves a unique id, writes to a staging directory, validates the bundle against its own manifest, and publishes by moving `metadata.json` in last, so a failure anywhere leaves the previous run untouched instead of a half-written one that Analytics lists as real; an in-place edit is a compare-and-swap against the run's revision, so two windows editing one run cannot silently overwrite each other
-- [x] **Versioned saved runs:** every run declares a `schema_version` and a `capture` manifest, and carries `frames.jsonl` (one JSON object per frame) so a frame boundary cannot be forged by model output the way the plain-text transcript's delimiter could; the transcript stays for reading by eye, reads dispatch through an adapter per era so all 182 existing runs load unchanged, and a run that cannot be read appears in Analytics as a row saying why, with a distinct message for one saved by a newer version of the app
-- [x] **Provenance attested by the worker, not inferred at save time:** the model, checkpoint, tokenizer, library versions, context window, and the device the model *actually* loaded onto ride the run's terminal frame, survive a trip to Analytics in the session snapshot, and are submitted with the save, so a run finished in one window and saved after another window switched models is no longer described by the model that replaced it, and a CUDA request that fell back to CPU is no longer recorded as a GPU run
-- [x] **Two windows no longer act on each other's model loads:** every activation carries an operation id, so a window only navigates when the load *it* started becomes ready and its Cancel refuses (with a reason naming what is loading) rather than stopping somebody else's; the WebSocket opens with the supervisor naming the resident model, so a generator whose worker was swapped out from another window says so, saves an unsaved run, and reloads onto what is actually there instead of labelling requests for a model that is gone. Activation transport moved behind one shared client, replacing four separate readers of the same endpoint across the two pages
-- [x] **A model switch that cannot work costs you nothing:** the interpreter, the device the model actually supports, a local checkpoint's presence, and whether it could fit even after unloading are all checked *before* the resident model is evicted, so a refused switch leaves the loaded model and the run on screen exactly where they were; a worker that fails to load or never answers is now terminated and waited for rather than left holding VRAM while the supervisor reports an error, and the generator page turns away a model that is not actually serving instead of opening against a dead one
-- [x] **Bounded GIF rendering:** frames stream into the encoder one at a time and a run past 300 frames is sampled evenly down to 300, keeping the first and last, which takes a long run's peak memory from gigabytes to a flat ceiling; the heading now names the model and paradigm that produced the run, and says so when it is showing a sample
-- [x] **Orthogonal model axes:** the single `model_type` that drove the family glyph, the canvas affordances, the Analytics chart gating *and* CPU capability is now a `family` (diffusion / autoregressive / state space) and a `generation_shape` (`append_only` / `iterative_canvas`), with the devices a model can load onto declared rather than inferred from either. Each of those is separately true of a state-space model, which appends like an autoregressive one and needs a GPU like a diffusion one, so the next model class needs no special case. Both diffusion models now declare GPU-only honestly: the menu never offered LLaDA on CPU, but the supervisor would have accepted a direct request for a 17 GB host allocation that the VRAM pre-flight skips. Saved runs keep their `model_type`, derived from the shape, so no run needs migrating. No UI decision reads a model id any more, including the one that did
-- [x] **Per-model text adapters:** the autoregressive sampler, which exists to be reused by the next append-only model, carried SmolLM3's chat template, its ChatML turn terminator, its control tokens and its `<think>` channel, and the DiffusionGemma sampler carried its own near-copies with a byte-identical input builder. All of it moved behind one adapter per model, so neither sampler knows a template or a vocabulary. The two reasoning channels stayed separate methods rather than one function with configurable delimiters, because they are different algorithms: one partitions on the first close tag, the other on the last and strips a literal label. A model also now declares whether its prompt is **chat** or **completion**, and the prompt box says which, so a base checkpoint that continues your text is not presented as something that answers it
-- [x] **The context window is enforced, not just reported:** a prompt already longer than the model's window is refused before inference with a message naming both numbers, where it used to be a warning beside the counter and nothing more. A prompt that only overflows once the output budget is added still runs and gets truncated, which is the distinction the warning already drew and a shorter answer somebody may have asked for. Counting a prompt also moved off the socket's event loop, since that request is bounded at 200,000 characters and every frame and every Cancel used to queue behind one keystroke's readout
-- [x] **One parameter resolver** in place of three: each worker used to coerce and clamp the same request fields with its own pair of clamp helpers and its own defaults written out beside every read, and LLaDA's had drifted, so a request that omitted a field generated 128 tokens in blocks of 32 where the registry advertised 160 in one block, a different decoding regime rather than a shorter run. The registry is now the single authority for defaults, device overrides, types, select options and bounds, tested as one matrix that omits every field of every model on every device it supports
-
+The in-app **Help** modal covers the same ground as the guide, more
+briefly, and is the right thing to reach for while using the app.
 
 ## Roadmap
 
-Detailed, living notes for each item (technical hooks, files to touch, open questions) live in [ROADMAP.md](docs/ROADMAP.md). Development conventions for agents and contributors live in [AGENTS.md](AGENTS.md), the coding standard in [TIGERSTYLE.md](docs/TIGERSTYLE.md), and a bounded cold-start orientation in [HANDOFF.md](docs/HANDOFF.md). Scenarios that need a GPU or a display are collected in [MANUAL_VERIFICATION.md](docs/MANUAL_VERIFICATION.md).
-
-**Phase 2 (shipped for single-canvas): DiffusionGemma interactive remask and resume.** Single-canvas runs can now be re-entered via `decoder_input_ids` as a seed canvas: remasked positions are renoised and denoising continues under a reduced step budget. The remaining work is multi-canvas resume, which must target the correct canvas while preserving already-committed prior canvases (encoder-decoder KV-cache and adaptive stopping make this the hard part).
-
-**Phase 3: Multimodal image input.** Requires `AutoProcessor` plus torchvision and additional vision-tower VRAM, so it is deferred until the text foundations are solid.
-
-**Experimental and XAI ideas (open for deliberation).** The suite is shaping up as an explainability playground. Shipped so far: commit-order (resolution-step) coloring, the counterfactual "Diff vs Original" comparison, and the autoregressive trio of entropy, top-k alternatives, and What If substitution. Future sessions can explore per-position uncertainty trajectories for diffusion runs (where a position is re-decided across steps, unlike the autoregressive case), cross-model comparisons on identical prompts, or attention-based attribution. These are intentionally open and to be scoped together.
-
-### Possible extensions
-
-- [x] **Entropy on the diffusion models**, where a position is re-decided every step so the signal is a trajectory rather than a single value. Both diffusion backends now record per-token entropy, and every signal is declared by its **unit** and the **axes it varies over**, so a reader knows whether a channel is a property of a position or of a position at a frame instead of inferring it. The Analytics entropy chart follows the scrubber for a diffusion run and stays put for an autoregressive one, because those are different facts. Landed with a 6.2x cut to LLaDA's per-step memory: reading one probability per position no longer builds a softmax over the whole canvas
-- [ ] Top-k alternatives for the diffusion models: left downstream deliberately, with a measured budget (42 bytes per candidate record, so 4 MiB at the defaults and 212 MiB at the experimental ceiling) and a field in the signal manifest to carry it
-- [x] Real download cancellation: the fetch runs as its own process, so **Cancel** on the downloading row ends it, and closing the app takes it with it instead of leaving a multi-gigabyte transfer running. Deliberately **without** cache cleanup, which the original wording promised: the partial `.incomplete` parts are exactly what lets the next attempt resume, and the cache may be shared with another process
-- [x] **A run reports what it cost the card:** the peak VRAM its generation held, with the allocation it started from, on one **Peak VRAM** row in Analytics. The baseline is there because the peak alone answers nothing: it is mostly the model's resident weights, so a change to how much a denoising step holds at once moves it by a fraction of a percent, and the distance between the two is the part that moves. Absent rather than zeroed for a CPU run and for runs saved before it existed. A resume keeps one measurement for the whole run, since the peak restarts where the run's identity does
-- [x] **A live resource meter** in the status bar: a bordered sparkline holding the last minute, showing VRAM against the card's total on a GPU or the worker's share of every core on a CPU run, whichever the model was placed on. Sampled by the worker on a timer rather than per frame, so it moves between runs as well as during them, and it hides rather than showing a stale reading when the connection to a model drops. Deliberately not a view of a model *loading*, since the page is not connected to a model until that model can answer
-- [x] **Edit markers carry their frame:** the dashed markers over the entropy profile and the Analytics entropy chart are colored by the frame each edit was made at, on the Commit Order scale, so a run remasked in several rounds shows the order of its interventions rather than one flat orange. Fixing this also repaired Analytics **Commit Order**, which had been reading two variables the page never declared and so painting every token the same color
-- [ ] Side-by-side comparison with autoregressive generation
-- [ ] Alignment experiments (RLHF / DPO) or fine-tuning on custom instruction data
-
+Next up: multimodal image input, a live GPU and CPU meter that persists
+its samples, top-k alternatives for the diffusion models, and
+side-by-side comparison against autoregressive generation.
+[docs/ROADMAP.md](docs/ROADMAP.md) carries the reasoning and the
+backlog.
 
 ## References
 
 - **LLaDA paper:** Nie et al., "Large Language Diffusion Models," NeurIPS 2025. [arXiv:2502.09992](https://arxiv.org/abs/2502.09992)
-- **LLaDA model:** [GSAI-ML/LLaDA-8B-Instruct](https://huggingface.co/GSAI-ML/LLaDA-8B-Instruct) on Hugging Face
-- **DiffusionGemma model:** [google/diffusiongemma-26B-A4B-it](https://huggingface.co/google/diffusiongemma-26B-A4B-it) on Hugging Face
+- **LLaDA model:** [GSAI-ML/LLaDA-8B-Instruct](https://huggingface.co/GSAI-ML/LLaDA-8B-Instruct)
+- **DiffusionGemma model:** [google/diffusiongemma-26B-A4B-it](https://huggingface.co/google/diffusiongemma-26B-A4B-it)
+- **SmolLM3 model:** [HuggingFaceTB/SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B)
