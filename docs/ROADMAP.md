@@ -19,807 +19,37 @@ the parts worth keeping out of the chats.
 
 ## Current status (orientation)
 
-Phase 1 is complete: both models run locally with live visualization and the
-analytics suite.
+Three models run locally with live visualization and the analytics
+suite. LLaDA-8B-Instruct and DiffusionGemma-26B-A4B are the discrete
+diffusion models, masked and block-autoregressive respectively;
+SmolLM3-3B is an autoregressive baseline that also runs on CPU, so a
+machine with no card can still use the suite. One model is resident at
+a time, each in its own virtual environment, because they need
+incompatible `transformers` versions.
 
-- Shipped: multi-model supervisor/worker architecture (process isolation),
-  LLaDA (bf16) and DiffusionGemma (self-quantized NF4), per-token confidence and
-  the confidence heatmap, analytics (convergence, timing, confidence, plus
-  canvas-boundary markers), reproducibility metadata, graceful VRAM handling, and
-  the DiffusionGemma thinking-mode split view.
-- Shipped (latest session): DiffusionGemma single-canvas remask/resume (Phase 2
-  below, via seed-canvas re-entry); two XAI overlays: commit-order
-  (resolution-step) token coloring and the counterfactual "Diff vs Original"
-  comparison (opacity sliders + difference blend); a grouped overlay picker
-  (None / Heatmap / Diff) with persistent per-browser settings (highlight tokens,
-  commit order) behind staged Save/Reset; and analytics run deletion (confirm
-  modal + toast) with contained, toggleable chart tooltips (line burn-through).
-- Shipped (this session): durable XAI overlays. Per-token records (display
-  text, mask flag, vocab id, confidence) and the pre-edit snapshot are now
-  persisted per run (`tokens.json` / `original_tokens.json`), the overlay math
-  is shared between pages (`src/web/static/overlays.js`), and the Analytics
-  Suite gained a static commit-order / Diff-vs-Original token viewer gated on
-  data availability. Persisting confidence also makes a future durable Heatmap
-  render a data-free follow-up.
-- Shipped (analytics + edit-flow refinements): the run detail is now a wide
-  fade-in modal (X or click-outside to close) with a corner overlay drawer
-  (None / Commit Order / Diff vs Original) mirroring the generator; a sortable
-  `Diff vs Original?` column marks runs that carry a pre-edit snapshot; the
-  Group By options were pruned to the shared columns; and the guided editor now
-  ends on a Confirm/Retry review step, locking Edit Frames once an edited run is
-  saved (until the next Generate).
-- Shipped (desktop wrapper): an optional pywebview launcher (`desktop.py`) runs
-  the UI in a native window and owns the server lifecycle (starts uvicorn on an
-  ephemeral localhost port, graceful shutdown frees worker VRAM on close), plus
-  a Linux app-menu entry generator (`scripts/install_desktop_entry.sh`) and an
-  app icon (`assets/icon.svg`). The browser path (`main.py`) is unchanged, so
-  there is no dual maintenance. Cross-platform packaging (AppImage / Windows /
-  macOS) remains deferred and is gated more by the CUDA/torch stack than by the
-  webview layer.
-- Shipped (menu + shell): a **Main Menu** landing page at `/` (a looping
-  title-screen video, WebM with an MP4 fallback, over a GPU/VRAM-aware model
-  picker that greys out models that will not fit). Generation moved to
-  `/generate` and is now **gated behind model selection**: a direct hit with no
-  active model redirects to the menu, and the `/ws` proxy no longer auto-boots a
-  default worker. Consistent header nav across pages (Menu / Generation /
-  Analytics; the Generation link surfaces only when a model is resident), the
-  analytics layered **Diff vs Original** overlay (Original/Edited opacity sliders
-  + difference blend, from the #1 backlog item), and removal of the old
-  idle-animation feature (ASCII scene + donut + the Idle Display setting) in
-  favor of a plain output placeholder.
-- Shipped (this session, continued): the remaining backlog polish plus a round
-  of refinements. An opt-in **diffusion-style text** effect (status messages
-  resolve from block-glyph noise; a Default/Cycle Mode sub-setting; honors
-  reduced motion) reused for button micro-interactions (Shuffle press, the
-  Generate/New Run idle cycle with a one-time discovery teaser, and Lock In
-  dissolving into mask glyphs). **Confidence-driven mask rendering**: masks are
-  the accent green and their opacity tracks the model's live predicted confidence
-  for LLaDA (`streaming_sampler.py` emits per-masked-position confidence), rising
-  from a solid floor to full as a token nears its reveal. A **randomize-remasks**
-  control (slider + N-of-M + Shuffle) in Edit Frames, which now opens on Frame 1.
-  An Analytics **"new run" cue**: a persisted set of unseen runs drives a count
-  badge on the generator's Analytics link and a per-row green dot cleared on open.
-  **In-place edited-run save** so an edited run replaces its pre-edit original
-  (one Analytics row, not two), with the session persisting canvas/confidence
-  arrays + the last run id. **GPU/desktop robustness**: robust `nvidia-smi`
-  resolution with logging, a driver/library-mismatch message on the menu, and a
-  documented `libxcb-cursor0` (Qt/X11) dependency.
-- Shipped (persistence + analytics polish): **durable server-side UI state**.
-  Settings, the analytics "new run" cue, prompt history, and the generate
-  teaser now persist in `results/ui_state.json` via `GET`/`PUT /api/ui-state`
-  (`src/web/ui_state.py`), hydrated into localStorage on boot (`persistHydrate`
-  / `persistSet` in `overlays.js`). This fixes desktop-app persistence, which
-  the QtWebEngine profile keyed by the launcher's varying window origin/port; it
-  also unifies state across the browser and desktop entry points. The cue is
-  reconciled against existing runs on read, so a deleted run cannot inflate the
-  count. Plus an **analytics table rework**: reordered columns (Date, Model,
-  Prompt, Time, Edited), the renamed **Edited** marker as a diffusion-textured
-  SVG checkmark (blank when unedited), the "new run" dot moved to the leading
-  column, checkbox row highlighting, and multi-select **bulk delete**. Desktop
-  launcher now uses a stable port (ephemeral fallback) and a persistent
-  web-storage profile.
-- Shipped (this session): the **first autoregressive model**, SmolLM3-3B, in a
-  dedicated `.venv-ar` (Phase A below). Token-by-token streaming with per-token
-  sampling confidence (`src/inference/ar_sampler.py`,
-  `src/backends/smollm3_worker.py`); a `model_type` capability flag
-  (`protocol.py`) that gates diffusion-only UI (Edit Frames, Diff overlay,
-  Commit Order, convergence) off while keeping timing, confidence, and the
-  Heatmap; per-activation CPU/GPU device selection threaded from the Main Menu
-  through `run_worker.py` into `Backend.load(device=...)`, with the GPU
-  pre-flight skipped on CPU and a CPU-capable torch wheel so GPU-less hosts can
-  run it.
-- Shipped (this session): the **menu + model-switch UX pass** on top of Phase A,
-  validated on hardware. Non-blocking activation with a menu progress bar +
-  Cancel; signed VRAM-headroom pills (accounting for the reclaimable resident
-  model); a "Click to Download" veneer that pre-fetches uncached weights with a
-  smooth **disk-size progress poller** (`hf_download.py`, replacing the tqdm hook
-  that `snapshot_download` never routes to per-file byte downloads; Xet disabled
-  before the first Hub import); select-to-confirm on the menu and dropdown; the
-  rename to **LLM Visualizer**; model-family glyphs (diffusion D+F superposition
-  with a crisp reversed epsilon; autoregressive @-to-R with a feedback loop); an
-  Analytics **Processor** column + per-run timing device name; dropdown polish
-  (fixed-width device pill, collapsed-width list with ellipsized names, green/red
-  headroom tint, CPU-gated ticker, loaded-model highlight with a locked device);
-  a 1-based AR step counter; and orphaned-worker guards (startup sweep +
-  `PR_SET_PDEATHSIG`).
-- Shipped (this session): the **analytics per-frame scrubber + durable
-  Heatmap**, and the **app icon redesign**. The detail modal's token overlay
-  gained a frame scrubber that replays every saved frame through the overlays
-  (None / Heatmap / Commit Order / Diff), reusing the shared overlay math
-  (`src/web/static/overlays.js`) and mirroring the generator; the new
-  **Heatmap** recolors by persisted confidence, while Commit Order and Diff
-  stay gated to diffusion runs (autoregressive runs get None + Heatmap). This
-  was frontend-only, since the frames endpoint already shipped every frame
-  (`analytics.js` / `analytics.html` / `analytics.css`). The app icon is now
-  three CP437 diffusion shade blocks (`░ ▒ ▓`) as vector dither patterns under
-  a corner-to-corner dark-to-bright green denoise gradient (`assets/icon.svg`,
-  plus `assets/icon.png` via `scripts/render_icon.py`; `desktop.py` prefers the
-  PNG, the launcher keeps the SVG).
-- Shipped (this session): the **Settings page + Commit Order overlay**, **menu
-  pagination**, and **cross-page download navigation**. Commit Order moved from a
-  persistent Settings toggle to a generator overlay-picker option (diffusion-only,
-  `app.js`), matching analytics. The generator's Settings modal became a shared
-  **`/settings.html`** page (left tab rail: Appearance / Interface) with a gear
-  icon in the generator, Main Menu, and Analytics headers; the settings schema
-  now lives in `overlays.js` (`SETTINGS_DEFAULTS` / `parseSettings` /
-  `settingsEqual`), shared by `app.js` and `settings.js`. The Main Menu model
-  list is paginated (`i/N` pager, `menu.js`). A model download now runs as a
-  global task the user can navigate away from: a shared draggable, corner-snapping
-  toast (`download_toast.js`, persisted via `diffusion_download_toast_corner`)
-  surfaces progress/completion when the inline veneer is off-screen; the menu
-  re-attaches the veneer on return, `POST /api/models/download/ack` clears the
-  terminal state, and `is_repo_cached` / `_has_incomplete` (`hf_download.py`)
-  make a partial (`*.incomplete`) cache resume instead of bricking. The
-  non-functional Cancel button was removed (real cancellation deferred).
-- Shipped (this session): the **`results/` rename** and **autoregressive Phase
-  C** in full. Saved runs now live in lowercase `results/` (one functional line,
-  `RESULTS_DIR` in `src/web/server.py`, plus copy). Per-token **entropy** is
-  captured on every AR run (`_entropy_nats` in `src/inference/ar_sampler.py`,
-  off the untempered softmax the sampler already computes), persisted as
-  `TokenRecord.e`, and drawn by a new **Entropy** overlay (`entropyColor` in
-  `overlays.js`, on a cool-to-hot ramp normalized against
-  `OVERLAYS_ENTROPY_REF_NATS = 5.0` rather than `log(vocab)`), plus a
-  per-position **entropy profile** canvas under the scrubber. An opt-in
-  **Alternatives** capture (top 5 per position) feeds a hover popover in both
-  the generator and Analytics; each candidate set travels once, on the frame
-  that introduces its position, so the wire cost is O(n·k) instead of O(n²·k),
-  and it persists to `alternatives.json` indexed by position. **What If?**
-  substitution closes the loop: a `supports_substitution` capability plus a
-  `substitute` message (deliberately separate from `supports_resume`, which
-  unlocks the diffusion remask UI), `streaming_substitute` +
-  `Smollm3Backend.last_run_state` for a greedy re-decode from a forced position,
-  and the branch recorded as an ordinary `RemaskEdit` so the Analytics Edited
-  column and the durable **Diff vs Original** (now un-gated for edited AR runs)
-  work with no schema change.
-- Shipped (this session): the Analytics **Entropy by Position** chart, a
-  follow-on to Phase C. The first chart in the suite indexed by token position
-  rather than by frame, which is also why it is bars rather than a line: an AR
-  model decides each position once, so its entropy is a property of the position
-  and not a point in a time series. This is the chart the per-frame axis could
-  not give us, since AR `mean_conf` is a cumulative mean (`conf_sum / count` in
-  `ar_sampler.py`) and therefore flat by construction. Frontend only, off the
-  frames payload `loadRunOverlays` already fetches; per-bar color from
-  `entropyColor`, hover naming the token, and dashed markers at edited positions
-  so a What If branch shows where its shared prefix ends. It also restores a
-  third chart for AR runs, which hide Convergence.
-- Shipped (this session): the counterfactual layer on that chart, plus a
-  collision-aware tooltip positioner. The chart now carries a hover column
-  matching the generator's profile, edit-orange markers and tint (`#ff9f1c`,
-  the `.token-remasked` color) rather than accent green, a tooltip that splits
-  into labeled **Original** / **Edited** rows from the divergence point
-  rightward, and an **Original** / **Edited** crossfade slider over two
-  superimposed `grouped: false` bar datasets, blended with canvas
-  `globalAlpha` rather than by rewriting several hundred color strings per
-  slider step. The original layer reads the pre-edit snapshot that
-  `original_tokens.json` already carries, gated on the snapshot actually
-  holding `e` so pre-Phase-C branches degrade to the single layer. Because a
-  branch copies its prefix verbatim, both the second tooltip row and the
-  visible crossfade start at the marker, which makes the divergence point
-  legible without drawing anything extra. `Chart.Tooltip.positioners.smart`
-  now scores the four plot-area corners against the pointer and the drawn
-  data (bar bodies as rects, trendlines segment by segment via Liang-Barsky,
-  so a sparse run's long segment cannot slip across a corner box unnoticed)
-  and keeps its standing corner while it stays clear; `burnThroughPlugin`
-  becomes the genuine last resort it was meant to be.
-- Shipped (this session): the **shared comparison layer**, which turns the
-  pre-edit run from a mode into a layer. `overlays.js` now owns one token-span
-  builder (`overlaysBuildTokenSpan` / `overlaysBuildTokenLayer`) behind every
-  path on both pages, so a stacked layer finally carries `token-span` and
-  `data-pos` and is interactive; that alone repaired hover, the popover, and
-  entropy highlighting in Diff mode, where they had never worked. Pointer
-  ownership between exactly overlapping layers is now stated once
-  (`overlaysEditedOwnsPointer`: the more opaque layer takes it, ties to
-  edited) rather than falling out of sibling order. In Analytics the entropy
-  chart's slider was promoted to a run-level crossfade on the token overlay's
-  heading row, gated on the snapshot rather than on the entropy series, and
-  `renderOverlayTokens` takes a `colorFor(index, token)` so **every** overlay
-  mode stacks and blends the two runs, each layer colored by its own values.
-  Commit Order needs a second memoized steps array, since a commit step is a
-  property of a frame stream rather than of a token. Entropy bars and tokens
-  cross-highlight in both directions on both pages (`setActiveElements` one
-  way, a `token-cross-highlight` class the other; on the generator the missing
-  half was a `mousemove` on `#entropy-profile` inverting its own layout math).
-  The bar-to-token direction had to become a plugin `afterEvent` hook rather
-  than `options.onHover`, which Chart.js only fires inside `chartArea`, so
-  exiting through the axis gutter left the last token lit. The candidate
-  popover pages between the two runs' top-k sets from the divergence point
-  rightward, each page marking the token its own run drew. The generator's own
-  crossfade and two-layer stack are deferred.
-- Shipped (this session): **two persistence changes on opposite tiers.** The
-  pointer hover and the entropy cross-highlight collapsed into one neutral
-  white look (an accent tint disappears on an orange remask or the Heatmap's
-  warm end), and `highlightTokens` moved out of the Settings page into a
-  checkbox in each page's Overlay drawer: on by default, applied on tick, still
-  in the shared `diffusion_settings` blob so both pages agree across a restart.
-  `settings.js` keeps round-tripping the field it no longer shows, since Save
-  writes the blob wholesale. Separately, hyperparameters, the Experimental
-  toggle, and the prompt draft became **session**-scoped in a new
-  `diffusion_param_state` sessionStorage key keyed by model id, deliberately
-  outside `PERSIST_KEYS` so a fresh launch still starts from the recommended
-  defaults, with a `#btn-param-defaults` Reset on the Experimental row that
-  disables itself while everything already matches.
-- Shipped (this session): the **line-chart comparison layer**, which finally
-  consumes `original_per_frame_elapsed` / `original_mean_conf`. Both were
-  already saved by `addOriginalRunSignals` and served by the metrics route,
-  but the timing and confidence charts had stayed single-series, so an edited
-  run could only ever show its branch. They now draw both runs, the original
-  solid in grey and the branch dashed in the chart's own hue, sharing a prefix
-  and separating at the edit. Which runs are drawn is owned by two **pins**
-  per chart header (1 / 2, lit accent green, both on at open) as a three-state
-  control rather than two independent checkboxes: the last lit pin is locked,
-  because a chart drawing neither run has no reading. The run crossfade stays
-  the token view's control and only *borrows* these two for the length of a
-  pointer drag, easing back over 180ms on release (`scrubWeight` lerped
-  against the pin answer in `seriesBlendPlugin`), which keeps the modal moving
-  together without tying two frame-indexed charts to a slider that lives four
-  hundred pixels away. Keyboard adjustments are deliberately excluded: arrow
-  keys produce input events with no press to end them. Also moved the zoom
-  controls into a segmented pill docked in each chart's bottom-left axis
-  gutter (freeing the header for the pins, `layout.padding.bottom` reserving
-  the strip), and the processor name from the timing header into its own run
-  summary row, correctly labelled GPU or CPU from the run's own metadata.
-  Fixed a long-standing bug the two-series tooltips made obvious: Chart.js
-  paints a white backing behind each tooltip swatch and fills it with the
-  dataset's `backgroundColor`, which on the line charts is an area wash at
-  0.08 alpha (`"transparent"` on the compare panel), so every swatch read
-  white with a colored rim. A shared `lineLabelColor` now paints them with
-  the line's own color, which is what tells Original from Edited in a
-  two-row tooltip.
-- Shipped (this session): the **generator crossfade and two-layer token
-  stack**, closing the last gap between the two pages. The generator had the
-  layered diff since the counterfactual overlay landed, but its other four
-  overlays stayed single-layer, so a branch could only be compared against its
-  original inside Diff. A `#run-blend-row` below the scrubber (beside the diff
-  sliders it is mutually exclusive with) now stacks the pre-edit run under the
-  branch in every non-diff overlay, gated on `runBlendActive()`
-  (`diffAvailable() && remaskMode === null`). That gate is what makes the
-  stack safe rather than merely hidden: `token-clickable` needs
-  `remaskMode === "edit"` and `token-substitutable` implies
-  `remaskMode === "substitute"`, so a clickable affordance can never appear on
-  a layer belonging to the run you cannot edit. Layer opacity is restyled in
-  place on drag rather than rebuilt, since several hundred spans per slider
-  step would also drop the candidate popover mid-drag.
-- Also this session: **one span builder for the whole app**. The generator had
-  built its spans inline since before `overlays.js` existed, because the
-  shared builder could not express a remask selection, the edit-mode classes,
-  or a mask graded by live predicted confidence. Three optional callbacks
-  (`maskedFor`, `classFor`, `opacityFor`, all defaulting to today's behavior
-  so Analytics passes none) closed that gap, and `applyTokenColor`, which both
-  tinted a span and appended to its tooltip, split into a pure `tokenColorAt`
-  and `tokenTitleExtra`. `maskedFor` is deliberately consulted only for a
-  token that exists, so a hook can add masking but never strip it off a hole
-  and leave `tok.t` read from null. Commit steps are now memoized per run
-  (`originalCommitSteps` beside `commitSteps`, both cleared by one
-  `invalidateRunMemos`), because a ghost layer painted from the branch's
-  settle schedule would have misreported every position past the edit. The
-  entropy profile gained the same treatment, stepping off the longer of the
-  two runs so the drawing and the pointer-to-position inverse agree.
-- Also this session: three finishing passes on the comparison surfaces. The
-  generator's entropy profile gained the **edit marker** Analytics already
-  had (tint under the bars, dashed orange line over them, hover glow last, so
-  the pointer's guide lays over the tint rather than under it), drawn from a
-  flattened `editedProfilePositions()` rather than a single index so
-  sequential What If rounds each stay marked. It is deliberately the one
-  standing mark on a strip whose scrub position is carried by bar opacity: it
-  names a semantic fact about the run, not the cursor. The line charts got
-  their **area fill back as a band between the two curves** (`fill: {target:
-  0}` on the branch) instead of two washes to the axis, colored by whichever
-  run bounds the region from above, which needs no legend and stays neutral
-  across two charts that disagree about whether higher is good. Its alpha is
-  `min` of the two series alphas and is baked into the color by a scriptable
-  `fill`, not set as canvas state: Filler is registered globally, so it draws
-  on `beforeDatasetDraw` ahead of `seriesBlendPlugin`'s inline hook and would
-  never see a `globalAlpha` set there. Every path that moves a pin or the
-  scrub already calls `chart.update`, which re-resolves the scriptable.
-  Finally the tooltip swatch fix from the previous session was completed:
-  `lineLabelColor` had painted the fill correctly but Chart.js resolves the
-  swatch stroke as `borderWidth || 1`, so a colored ring survived, and the
-  white backing showed as a half-pixel band inside it because the stroke is
-  centered on a one-pixel inset. Transparent `borderColor` plus a global
-  transparent `multiKeyBackground` leaves just the fill.
-- Shipped (this session): the **status message stack**, the last item that
-  had no dependency on the comparison-surface work. `#status-message` was a
-  single overwritten span, so two operations at once lost one of them: the
-  auto-save of the pre-edit run on entering What If, then picking a candidate,
-  left only "Resuming". The split is by lifetime rather than by category.
-  Work in flight raises a transient chip; the run's resting state (Done, the
-  saved path, an error) stays in the footer, which is also what
-  `saveSessionState` persists, so chips are free to expire without taking a
-  record with them. That split is why session persistence needed no changes
-  at all. The enabling refactor was small and had its precedent one function
-  above it: `denoiseReveal` already kept its timer on the element so
-  independent targets could animate at once, but `startStatusDots` kept
-  module-level singletons, so two chips could not animate their own dots.
-  Chips render inside the footer's own slot (a bottom-anchored column whose
-  last row is the resting message, which collapses when empty), so a single
-  chip lands exactly where the message alone used to and the common case
-  looks unchanged. Bounded at four rather than made scrollable, since the
-  real ceiling is two (one run, and `saveRun` guards itself with `isSaving`).
-  The one trap: `resetStatus()` runs immediately before every resume, which
-  is exactly when a save may be in flight, so it clears the footer only.
-- And a third pass, after seeing it on screen a second time: **the column
-  became a row.** Chips now extend leftward from the resting message rather
-  than stacking above it, separated by a faint middle dot, clipped and faded
-  against the gutter the footer's own gap already leaves before the readouts.
-  Two details carried the change. The separators need no JavaScript: chips are
-  inserted directly before the message, so `.status-chip + #status-message`
-  matches exactly when a chip is up, and keying their opacity on `is-visible`
-  makes them fade in and out with the neighbor they belong to. And the message
-  keeps `flex-shrink: 0` with `max-width: 100%`, so it truncates only against
-  the row itself and never to make room for a chip; overflow spills off the
-  left, where the fade is, so the oldest chip is always what gives way. The
-  clamp is cosmetic regardless: `saveSessionState` persists `textContent`. The
-  same pass split each chip into a word span and a fixed-width dots span
-  (`3ch` plus the footer's letter-spacing), which is what finally let the
-  ellipsis tick continuously in every text mode, cycle included, since
-  re-diffusing the word no longer rewrites the dots.
-- Also this session, after seeing the stack rendered: **chips went quiet, and
-  the messages got specific.** Letting a chip report its own outcome put
-  "Done" on top of "Done." and "Saved" on top of "Saved to results/...",
-  which read as stutter and was the only thing that ever pushed a second line
-  into an already crowded corner. Chips now say only what is happening and
-  simply leave when it is over, with the footer filling in as the handoff, so
-  the whole `statusResolve` path, the hold timer, and the chip error style
-  deleted themselves. Messages also name their subject rather than just their
-  verb: a save reads "Saving original run" or "Saving edited run" off the
-  `wasEdited` flag it already computed, and a resume reads "Running edit from
-  frame X to Y" (or "to end"), which for `doGuidedResume` comes from a single
-  `resumeTarget` shared with the request's `max_frames` so the text and the
-  wire cannot drift. A layout fix rode along: `#status-stack` had been sized
-  by `margin-left: auto` while its only child was absolutely positioned,
-  leaving it zero-wide, so a long saved path ran left across "Elapsed:" and
-  `max-width` had nothing to resolve against; `flex: 1; min-width: 0` gives it
-  real width and the text now ellipsizes at the footer's own gutter.
-- And a fourth pass on the same row, this one about **motion, which was the
-  last thing still wrong.** A chip now rises in from the window's bottom edge
-  and steps *left* on the way out, rather than sharing one rule with its
-  entrance and so drifting back into the resting line it was handing off to.
-  The exit is shortened to 150ms, since the footer already carries the outcome
-  by then. Getting the rise meant trading `overflow: hidden` for a negative
-  `clip-path` inset, because only the left and right clamps are wanted, with
-  the rise distance held in one custom property that both the clip and the
-  offset read. Flex offers no transition for a neighbour changing width, so
-  `statusRowReflow` wraps every mutation that reshapes the row (a chip
-  arriving, a chip's node leaving, the resting line filling in) in a
-  first-last-invert-play, gated on `prefers-reduced-motion`. The row's
-  entrances use the `translate` longhand precisely so that FLIP can own
-  `transform` and the two compose. One backend fix rode along: the save
-  endpoint reaches its folder two ways, and only one of them resolves, so the
-  same message read `results/...` after a fresh save and an absolute path
-  after an in-place update. `_display_run_path` normalizes where the branches
-  meet, leaving the traversal guard alone.
-- Shipped (this session): a **polish pass** plus the **model-load progress
-  bar**. The polish, briefly: a model switch now clears the run snapshot
-  (keyed by device as well as model, and dropped by both activation paths,
-  since switching away and back lands on a matching pair that no identity
-  check can reject); the output placeholder names the resident model; the
-  Analytics "Edited" check lost its dot-pattern stroke and the three orphaned
-  rules behind it; the prompt label gained 3px, which is what sets the
-  clearance under the absolutely-positioned history control; the docs read as
-  an LLM visualizer with the depth in discrete diffusion, and `xAI` is `XAI`
-  throughout; the collapsed overlay drawer drags vertically via one shared
-  helper in `overlays.js`, moving `top` because the group already animates
-  `transform`, and owning the handle's click as well as its drag because at
-  the target node listeners fire in registration order regardless of the
-  capture flag; and AR **Alternatives** defaults on, with `smollm3_worker`
-  now reading every absent-key fallback from the registry spec instead of
-  keeping a second copy of each default.
-- The bar itself is `src/inference/load_progress.py`, the companion to
-  `hf_download.py`: getting weights onto disk had a readout, reading them into
-  memory did not, and it is often the longer wait. There is no hook to borrow,
-  so it samples memory counters the way `hf_download` samples the cache
-  directory. Two findings shaped it. LLaDA loads with `device_map="auto"`, so
-  accelerate streams shards straight to the GPU and RSS barely moves, while
-  SmolLM3 fills RAM and copies after: sequential CPU-then-GPU phases would
-  leave the bar at zero through half of one of them, so it reports
-  `max(rss_delta, cuda_allocated)` over one target and names whichever counter
-  it is reading. And LLaDA on CPU passes `torch_dtype=None`, which means
-  fp32 from a BF16 checkpoint, so the target is scaled by the **requested**
-  dtype, not the on-disk one. Anything unmeasurable (mixed dtypes, an
-  unreadable header, an unfamiliar layout) returns a zero target and renders
-  as the phase label with a spinner, because a confidently wrong bar is worse
-  than none. The reading is floored at its previous peak, since the CPU
-  allocator returns pages mid-load. The sampler runs on the helper thread and
-  the load stays on the caller's, the opposite of `download_with_progress`:
-  moving a heavyweight library-driven load between threads for a progress bar
-  would trade real risk for a cosmetic one. The boot path polls too, which is
-  what finally gave the slowest load of a session a bar.
-- Shipped (this session): the four items left open by the pass above.
-  **Re-selecting the resident model is navigation**: the server always treated
-  that activation as a no-op, so the only damage was the clear the pass above
-  had just added, which wiped the run on a path that spawns nothing. The menu
-  now reads `active_device` (it was being discarded), asks *Go back to the
-  Generation page?*, and uses the activate response's `state` as the
-  discriminator, so a worker that died since the menu was drawn still gets the
-  loading UI. **Dropdowns flip up when clipped**: the occluded rows were the
-  Overlay picker's list, not the drawer, and the flip lives in the shared
-  factory so every dropdown inherits it, flipping only when the list does not
-  fit below and there is more room above. **A reserved tail for the pickled
-  checkpoint**: DiffusionGemma unpickles the whole state dict into RAM before
-  copying, so its read filled the bar and left the copy nowhere to go. The
-  trap is that clamping is not enough, since the monotonic floor would jump
-  the tail in one step; the read is compressed into `[0, ceiling]` and the copy
-  scaled into the rest. Opt-in, defaulting to 1.0, so the two loads that
-  already tracked their wait are provably untouched. **The bar finishes**: the
-  closing 100% never reached the browser (the worker goes ready in the same
-  breath and `_apply_health` drops progress), so the reducer names `ready` and
-  both pages hold a full bar briefly, and three stacked 500ms polls came down
-  to 250ms.
-- Shipped (this session): the **reveal signal**, the **token birth glow**, and
-  **Tokens per Second**. One missing piece of data gated both features, so it
-  landed first: every sampler now stamps `revealed` on each frame, the
-  positions that became resolved in that frame and had not been resolved
-  earlier in the same canvas. The monotonicity is the whole design (see
-  `src/inference/reveal.py`): "resolved right now" would re-fire on every
-  settled token every frame, and "changed since last frame" would flicker on
-  DiffusionGemma, whose drafts churn before they settle. Each sampler owns that
-  differently: a **resume** seeds the set from the canvas it inherited, or the
-  entire surviving prefix reports as newborn on frame 0; DiffusionGemma clears
-  it per canvas, since the next one is fresh noise; and the autoregressive
-  sampler needs no state at all, because left-to-right decoding means the frame
-  that reaches *n* tokens produced position *n-1*.
-  The rendering change that consumed it is a **net performance win**: the live
-  path built one span per *character* and tore the whole output down every
-  frame, roughly 640 inline boxes at LLaDA's default length, where the token
-  view keeps a constant ~160 and writes only where something differs. That is
-  also what made the glow possible, since an animation needs a node that
-  survives the next frame. The glow itself animates a **constant-blur** shadow's
-  alpha (animating the radius re-rasterizes a different-sized blur every tick,
-  which is what the `.token-mask` scroll note warns about) and is keyed off a
-  **data attribute** rather than a class, because the span-sync function owns
-  `className` and would otherwise cut a glow short the moment its position
-  changed.
-  **Tokens per Second** needed no new storage and has no backfill gap: a masked
-  token renders as exactly one mask glyph, so `compute_convergence`'s
-  `mask_count` already is a token count, and every run ever saved carries its
-  frame timings. In Analytics it shares the Timing slot behind a pager rather
-  than claiming a chart of its own, since it is the same two numbers read as a
-  ratio. The footer's **Elapsed** was wrong and was fixed alongside it: it
-  printed the raw segment-local `data.elapsed`, so it jumped backwards after an
-  edit. `ruff` was pinned and configured in the same pass (config-only
-  `pyproject.toml`, 70 columns for both ruff and black, `C901` and `PLR1702`
-  selected), establishing a **159-finding baseline** that this session's work
-  did not add to; the findings were deliberately left unfixed.
-- Shipped (this session): **per-class glow tuning, sub-setting grouping, the
-  load sweep**, and two CSS corrections. Frontend-only, no Python touched.
-  The glow's **Brightness** and **Fade time** are stored per model family
-  (per `model_type` when shipped, before `ROADMAP-01` split the axes) behind a
-  class picker, because the trail an eye can follow is roughly rate
-  times fade and an autoregressive GPU run outpaces a diffusion step by an
-  order of magnitude: the default that reads perfectly on LLaDA is gone before
-  it registers on SmolLM3. Three details carry the design. The values reach the
-  keyframes as **whole shadow lists** in custom properties rather than as
-  numbers nested inside `rgba()`, which keeps each keyframe a plain
-  substitution. Brightness scales the **blur radii as well as the alphas**,
-  because alpha alone tops out barely above the default 0.9 and there is no
-  headroom in that. And the concurrency cap is now **derived from the fade**
-  (`clamp(round(fadeSeconds * 96), 48, 192)`, with 96 chosen so the 500ms
-  default still lands on the 48 it was fixed at): left fixed, a long fade at
-  autoregressive speeds would have the FIFO rather than the timer decide when a
-  flash ends, so the trail would stop growing exactly when the user lengthened
-  it and its tail would look cut rather than faded.
-  **Sub-settings** are indented and dimmed-when-inactive rather than hidden,
-  which is what makes the indent mean anything, and the group's closing
-  hairline moved to the `border-top` of the next preference. That avoids both
-  `:has()` (thin support on WebKitGTK) and an "I am last" class in the markup
-  that would rot; a group ending the panel correctly gets no line at all.
-  **The load sweep** closes the dead time the maintainer noticed between the
-  loading UI appearing and the bar starting. The gap is real work, not a
-  rendering delay: a worker process spawning, importing torch and transformers
-  in its own virtualenv, uvicorn coming up so `/health` answers at all, and
-  only then `load_target_bytes` reading the shard headers. Nothing can measure
-  it, so the fix is not a bar parked at 0% (which reads as hung, and is the
-  thing `load_progress.py` refuses to draw); it is a sweeping track plus the
-  honest label **Starting worker**. No backend change was needed: `starting`
-  was already set in `activate()` and already returned by
-  `/api/models/activation`; the shared reducer just fell through to its generic
-  branch. That reducer went from a boolean `determinate` to a three-way `mode`
-  (`hidden` / `sweep` / `fill`), since there are now three outcomes rather than
-  two. One consequence worth knowing: both `finish*Progress` functions used
-  `container.hidden` to mean "a bar was never shown", so an unmeasurable
-  checkpoint used to end with no bar at all; with a track always present, every
-  activation now closes on a brief full bar, and the menu in particular went
-  from showing *nothing* during the gap to showing the sweep.
-  The two corrections: the **Analytics crossfade separator** was a cascade
-  leak, not an Analytics style at all (the row kept `margin-top`,
-  `padding-top`, and `border-top` from `style.css`, where the generator still
-  stacks it on its own line and still wants them), and the **pager arrows** now
-  read by brightness instead of hue, since the accent green was on the
-  *disabled* arrow: backwards twice over, being both the brightest thing in the
-  row and camouflaged against the green chart title beside it.
-- Shipped (this session): the **token metrics strip**, one always-present
-  readout above each token canvas on both pages, replacing the native `title`
-  tooltip. Frontend-only, no Python touched. Three things were wrong with the
-  tooltip and only one of them was cosmetic: the browser delays it by around
-  half a second with no way to configure that, it cannot be styled or placed
-  (`overlaysPopoverTop` preferred above the token purely to dodge it, and now
-  takes the canvas's top edge as a ceiling so it clears the strip instead), and
-  it is
-  bound to one element, so the entropy chart could never feed it however
-  obviously it should have. The strip is fed by both hover sources on both
-  pages, which is the feature the tooltip structurally could not have.
-  It is a net deletion. The tooltip text was written in exactly one place
-  (`overlaysSyncTokenSpan`), and everything upstream existed only to feed it:
-  `tokenTitleFn`, `tokenTitleExtra`, `tokenExtraLabel`, `tokenLabel`, `confLabel`
-  and an inline `titleFor` on the generator; `overlayTitleFn`, `commitExtraFor`,
-  `overlayConfText`, `overlayEntropyText` and the `extraFor` / `originalExtraFor`
-  parameter chain on Analytics. The strip computes the same values at hover time
-  from the same memoized state, so none of that was rerouted.
-  Three decisions carry it. **Always present**, because anything that appears on
-  hover moves the canvas out from under the pointer that summoned it. **Its own
-  hover variable** (`metricsHoverPos`), because `setEntropyHoverPosition` forces
-  `entropyHoverPos` to null whenever the profile row is hidden, which is exactly
-  the live-generation case where the strip has something to say; they answer
-  different questions with different lifetimes. And **absent is not zero**: the
-  tooltip printed `Confidence: 0` for a run that never recorded the signal, which
-  is a claim about the model rather than about the record. A dash says the run
-  does not carry it. Live generation gained a readout it never had for free:
-  `LIVE_TOKEN_OPTIONS = {}` meant streaming tokens carried no title, but they
-  always carried `data-pos`.
-- Shipped (this session): **tokenizer identity, the typed token, and an AR
-  top-k knob**, in that order, as three commits.
+An audit remediation campaign is the current work, tracked finding by
+finding in `docs/audit/IMPLEMENTATION_LEDGER.md`.
 
-  The identity is read off the loaded object in `worker_base._health`
-  (`describe_tokenizer`: class, `name_or_path`, `is_fast`, `vocab_size`),
-  cached by the supervisor into `manager.active_tokenizer` on the same
-  ready transition that caches `active_versions`, and written into
-  `metadata["reproducibility"]["tokenizer"]` at save time. It deliberately
-  does **not** ride `ModelCapabilities`: that is static registry data,
-  served with no worker running, so a name there would be a hand-maintained
-  string free to drift from whatever the checkpoint loads, which is exactly
-  the failure a pedagogical readout cannot afford. `vocab_size` rather than
-  `len(tokenizer)` because the base figure, not the one inflated by added
-  special tokens, is what the entropy ceiling of ln(vocab) refers to.
-  `tokenizerMetaRow` returns `""` when the key is absent, so the runs saved
-  before it existed render unchanged; no endpoint changed, because
-  `list_runs` returns raw metadata dicts and a new key flows through on its
-  own.
+**What answers what**, because this is one document of five and this
+section previously tried to be three of them:
 
-  The typed token's real cost was **making the popover pinnable**, which was
-  a change to what the popover *is* rather than a detail of the text field.
-  It was hover-scoped and destructive: `hideAltsPopover` blanks
-  `textContent` and fired on the popover's `mouseleave`, the output area's
-  `mouseleave`, any capture-phase `scroll`, and `resize`, while
-  `renderAltsPopover` rebuilds every child on each hover and page flip. Four
-  separate ways to erase a half-typed word. The fix has two halves that
-  matter independently: the closers stand down while `altsPopoverPinned()`,
-  and the entry's state lives *outside* the DOM so `buildTypedRow` rehydrates
-  it after any rebuild, which is what makes a re-render harmless rather than
-  merely rare. Two traps found while building it. The pin cannot test "the
-  draft is non-empty", because the field arrives pre-seeded with a leading
-  space and that would pin the popover the instant the pointer crossed a
-  mid-sentence token; it tests an `active` flag set on focus and cleared only
-  by a deliberate exit, since blur is not an exit (clicking confirm blurs the
-  input). And a cancel has to decide what to leave behind by where the
-  pointer is: over the popover it re-renders to the candidates, anywhere else
-  it closes, because nothing will ever come along to close a box the pointer
-  has already left.
+| Question | Where |
+|---|---|
+| What does a feature do, and what do its parameters mean? | `docs/GUIDE.md` |
+| Where does the project stand today? | `docs/HANDOFF.md` |
+| Why was something decided, and what is deliberately not built? | this document |
+| What changed, and when? | git history |
+| How do I work on this repository? | `AGENTS.md`, `docs/TIGERSTYLE.md` |
 
-  The preview is a new `tokenize` / `tokenize_result` pair dispatched
-  **outside** `gen_lock`, since it is a microsecond vocabulary lookup and the
-  lock exists to serialize generation; taking it would stall typing behind a
-  running model. The client carries a monotonic `request_id` and also
-  compares the echoed text, because debouncing does not guarantee ordering.
-  `Backend.handle_tokenize` is a default on the base class using
-  `getattr(self, "tokenizer", None)`, so diffusion What If inherits a working
-  preview whenever it arrives. Server-side re-resolution in
-  `_check_typed_token` is the contract behind the client's disabled confirm
-  button, and requiring the id to match the text is what stops a preview that
-  went stale mid-keystroke from forcing a token the user never saw. The
-  captured-candidate branch was left strict rather than loosened, so an
-  unflagged request still cannot smuggle in an arbitrary id.
-
-  The **true confidence** turned out to need no extra compute, only a moved
-  boundary. `_substitute_loop` used to prefill prompt + prefix + the forced
-  token in one pass; it now stops just short of the forced token, so the last
-  position's logits *are* the distribution that position was sampled from and
-  `probs[forced_id]` is the honest answer. The forced token is then forwarded
-  against that cache via a new optional `past` on `_stream_tokens`. Same
-  total work, two calls instead of one, and it survives `budget == 0` where
-  `_stream_tokens` never runs. The seed frame had to move after the probe to
-  carry the measured value. `forced_conf` is `None` only for a typed token; a
-  captured candidate keeps the probability its own run recorded.
-  `forced_entropy` stays `state["entropies"][position]` in both branches,
-  because entropy describes the distribution at that position and does not
-  change with the token forced into it. That is the line someone would
-  plausibly "fix" by mistake.
-
-  Top-k is distinct from `TOP_K_ALTERNATIVES = 5`, which is the capture count
-  and stays fixed. It is applied before top-p, matching Hugging Face, so the
-  two compose as a truncation with a nucleus taken inside it; the order is
-  observable, since top-k renormalizes over what it kept and a nucleus
-  measured against that inflated distribution bites harder. The default is
-  `-1`, not `0`: both disable the filter, but `0` reads as "no candidates at
-  all", which is the one thing a sampling truncation cannot mean. `0` still
-  disables it, so runs saved under the older default replay unchanged.
-- Shipped (this session): **the probe, the rank, and the strip's candidate
-  readout**, closing the gap left by the typed row having no figure to show.
-
-  A new `probe` / `probe_result` pair, dispatched **inside** `gen_lock`,
-  unlike the `tokenize` pair beside it: a probe is a real forward pass, so
-  admitting one alongside a generation would put two passes on the same
-  device. `Backend.handle_probe` raises by default rather than being
-  implemented on the base class the way `handle_tokenize` is, because
-  answering needs a committed prefix to prefill up to, and a diffusion run
-  reveals positions out of order and has no such thing.
-
-  `probe_token` shares its prefill with the substitution path through
-  `_position_distribution`, which is what makes the promise keepable: the
-  strip quotes a figure before you run, the branch reports one after, and
-  they cannot diverge because they are the same read of the same
-  distribution. `test_probe_agrees_with_a_typed_substitution` pins that
-  directly. Rank comes from `(probs > p).sum() + 1`, a comparison and a sum
-  on a distribution already in hand, so it is free next to the pass that
-  produced it; its denominator is `probs.numel()`, the model's output width,
-  deliberately not the tokenizer's `vocab_size`, since a padded embedding
-  makes those differ (128,256 against 128,000 for SmolLM3) and what was
-  ranked is what could have been ranked.
-
-  The **precision problem** is why the readout landed in the strip. A typed
-  token is most interesting where it is improbable, and the popover row is
-  320px wide: it can hold `<0.1%` and no more. The strip had half its length
-  idle, so hovering any candidate row now fills its right half with the
-  probability to three significant figures plus, for a typed token, the rank.
-  The left group keeps reporting the committed token throughout rather than
-  going idle, since the longest left readings barely reach the midpoint and
-  holding both makes the two chips a legend: grey for what the run
-  committed, green for what it merely weighed. The right group hides
-  entirely when nothing is hovered, unlike the left, which stays visible as
-  a key to what the strip reports.
-
-  Two subtleties in the wiring. Rows bind `mouseenter` / `mouseleave` rather
-  than `mouseover`, so crossing the bar and the percentage inside one row
-  does not retrigger the readout. And `renderAltsPopover` clears the
-  candidate before discarding its rows, because a removed node never fires
-  the `mouseleave` that would have cleared it, which would leave a readout
-  for a row that no longer exists.
-
-  `overlaysBuildAltRow` was lifted into `overlays.js` in the same pass: both
-  pages had a copy identical but for returning a row against a fragment, and
-  both needed the same hover wiring. While ruff was to hand,
-  `create_worker_app` came down from complexity 23 to 20 and `_ws` below the
-  gate entirely, by lifting the load gate into `_await_model_ready` and
-  collapsing the three byte-identical streaming branches into one dispatch
-  through a dict. Adding the probe branch had pushed both further over a gate
-  they were already past.
-- Shipped (this session): **rank everywhere, the chosen row, the edit tint,
-  scrub dimming, and the retained KV cache.**
-
-  The trigger was a discrepancy worth recording, because the wrong fix was
-  available and cheap. A typed token that the position *had* captured
-  measured at 38.3% against a recorded 39.8%. Neither number was wrong.
-  A run samples position *n* from one decode step against a cache built
-  incrementally; a probe rebuilt the same prefix as a single prefill. Those
-  are different orders of accumulation over the same values, and in bf16
-  (8 mantissa bits) they part company by roughly an ulp, which is a
-  percentage point down here. Rounding the display to hide it would have
-  been a lie about a real arithmetic difference, so the two paths were made
-  the same call instead.
-
-  Two fixes, in that order. First, `requestTypedProbe` consults
-  `positionAlts` before sending anything: if the token is one of the five
-  the position recorded, the stored probability *is* the answer, and it is
-  better information than a measurement as well as free. Second, the run's
-  KV cache is retained on `last_run_state` and handed to both the probe and
-  the substitution, so a measurement makes the same call the run made rather
-  than a reconstruction of it.
-
-  The cache work has four traps in it. `DynamicCache.crop` mutates in place,
-  so slicing with it would consume the cache that a later probe needs; the
-  slice is built as fresh views (`_sliced_cache`) and the record is never
-  handed out directly. Reuse is gated on the prefix ids matching what the
-  cache was built from, and *any* disagreement falls back to a fresh
-  prefill: answering confidently from the wrong sequence is the failure that
-  still returns a plausible number. Position 0 has no cached token to decode
-  against and prefills unconditionally. And residency is bounded
-  (`AR_CACHE_BYTES_MAX`, 512 MiB): a cache large enough to pass the ceiling
-  is dropped rather than trimmed, since a run that big was never worth
-  holding for the session. Invalidation rides `last_run_state = None` in
-  `handle_generate`, which is the only place the pinned run changes.
-
-  Rank turned out to need the *model's* output width, not the tokenizer's
-  vocabulary: 128,256 against 128,000 for SmolLM3, because the embedding is
-  padded for alignment. A rank is a place among the tokens that could have
-  been ranked, so `describe_tokenizer` now also reports `model_vocab_size`
-  from `model.config.vocab_size`, riding the plumbing the tokenizer identity
-  already had rather than growing a second path. The captured five need no
-  stored rank at all, since `torch.topk` returns them in order and a row's
-  index is its rank; `rank` is set on exactly one entry, the sixth, and
-  `_dump_alternatives` uses `exclude_none` so the other five do not each
-  carry a null into a file already running to tens of kilobytes.
-
-  The sixth row is appended, never substituted for the fifth: the five are a
-  statement about what the model preferred, and dropping one to make room
-  would quietly break it. It is excluded from being a substitution target
-  (`alt-row-outside`), because forcing the token already sitting there would
-  spend a full regeneration to arrive where it started.
-
-  The edit tint and the scrub dimming are both about agreement between what
-  two parts of the page say. `.token-edited` is a background rather than a
-  color, so it composes under the Heatmap and Entropy overlays instead of
-  fighting them, and it is softer than `.token-remasked` because the two
-  mean different things: one is "selected, about to be redrawn", the other
-  is "this run was intervened here", which stays true afterwards. Both pages
-  memoize the edit positions into a lookup map keyed on the edit log's
-  identity, since the class function runs per token per render and a
-  diffusion run can carry many edits. Dimming past the scrubber needed two
-  different mechanisms: the generator's canvas profile takes a third
-  emphasis tier, while Chart.js has no per-bar opacity, so the Analytics
-  chart bakes alpha into each bar's fill color (`entropyDimColor`, returning
-  `hsla`) and multiplies with the crossfade's whole-dataset alpha.
-- Shipped (this session): **context-window metrics, prompt import, and
-  Analytics collections.** Three independent arcs, three commits, in that
-  order, because the import control's "this fits" promise is only honest
-  once the counting exists.
-
-  The context readout under the textarea (`1,240 / 65,536`, amber when the
-  prompt plus the output budget would overflow) rests on two decisions. The
-  window is **read off the loaded object**, not declared in the registry:
-  `describe_context_length` in `worker_base.py` prefers
-  `model.config.max_position_embeddings` and falls back to
-  `tokenizer.model_max_length`, which is frequently a sentinel of `int(1e30)`
-  and therefore needs an upper bound (`CONTEXT_LENGTH_SANE_MAX`); neither
-  being sane returns `None` rather than a guess. Same reasoning as
-  `describe_tokenizer`: registry data is static and served with no worker
-  running, so a declared number is free to drift from the checkpoint. And the
-  count is of the **templated** sequence, produced by the code that builds
-  the real inputs: `Backend.prompt_token_count` mirrors `_build_inputs`
-  (SmolLM3 and DiffusionGemma inherit it), and the LLaDA worker overrides it
-  through a newly extracted `build_llada_inputs` that its sampler and
-  `_store_state` now share, so the counted tokens are provably the generated
-  tokens. Counting raw text would understate: the chat template adds role
-  markers, and `enable_thinking` changes them.
-
-  `MSG_COUNT_PROMPT` is a separate message rather than a flag on `tokenize`,
-  dispatched outside `gen_lock` the same way, because `tokenize` caps at 200
-  characters and answers with one object per token; a 40 KB import would be
-  tens of thousands of objects to answer with a single integer. The client's
-  request has its own id counter rather than sharing `requestTypedPreview`'s,
-  which is bound to What If state, and it re-requests when the `thinking`
-  flag changes, since that changes the template. The authoritative count
-  rides `prompt_len` on the `done` frame from all three samplers into a
-  `context` block in `metadata.json`, so a saved run records what the model
-  received rather than what the client estimated; the two Analytics detail
-  rows stay absent for older runs, as the tokenizer rows already do.
-
-  Prompt import is client-side end to end (`file.text()`), by button or by
-  drop on the textarea, with a byte cap checked **before** reading and a
-  character cap on what is inserted. `#prompt-history` is absolutely
-  positioned and hidden when history is empty, so the import button could not
-  live inside it: both now sit in a `#prompt-actions` flex container that is
-  always present. Markdown goes in raw, since the model reads it fine and
-  stripping it would misrepresent the file. A non-empty box confirms first,
-  through the generator's first confirm modal, following the Analytics
-  `#modal-delete` pattern.
-
-  Collections **reuse `ui_state.py`** rather than a new file: one
-  `diffusion_collections` key holding `[{id, name, runs: [run_id]}]` at the
-  same 262,144 cap as `diffusion_new_runs`, which widened that module's
-  docstring, because this is the first key that is durable user intent rather
-  than a cache. Membership is a **set**, so a run sits in several collections
-  without a later migration. Ids are folder names, and `_reconcile_collections`
-  prunes ones whose folder is gone on every `GET /api/ui-state`, following
-  `_reconcile_new_runs`: a collection is a list the user reads, so a stale id
-  would show as a row that cannot be opened and a tab count that overstates.
-  Malformed entries pass through untouched, since repairing a shape the client
-  wrote is not this endpoint's job. "All" is a view rather than a stored
-  collection; Favorites is created on the first star. Filtering happens before
-  `sortRuns` in `renderTable`, and three things had to follow the active tab
-  or they would act on invisible rows: `onSelectAll`, `checkedRunIds`, and
-  `applyDeletions`, which also drops deleted ids from every collection so the
-  table does not wait for the next hydrate to agree with itself. Storage
-  eviction stayed out of scope: 175 runs occupy 440 MB against 189 GB free,
-  so the pressure it would relieve is roughly 75,000 runs away, and bulk
-  delete already exists.
-- For the feature overview and architecture, see `README.md`. For the build
-  history, see `.cursor/plans/`.
-
----
+Everything below is that reasoning: the accepted directions, the
+phases not yet taken, the stopping points chosen on purpose, the
+backlog still to deliberate, and a build record of what each pass
+decided and the traps it found.
 
 ## Next session (accepted directions)
 
-Agreed with the maintainer (deliberate each in Ask mode before Plan). (The
-`results/` rename and all of AR Phase C shipped this session; see above.)
+Agreed with the maintainer (deliberate each in Ask mode before Plan). What has
+since shipped is noted on the item rather than left for a reader to infer.
 
 1. **State-space models: Mamba-3 (new model class).** Integrate a 1.5B Mamba-3
    SISO / MIMO checkpoint (`state-spaces` HF org, arXiv 2603.15569) as the first
@@ -838,16 +68,20 @@ Agreed with the maintainer (deliberate each in Ask mode before Plan). (The
    state-write intensity, state-norm sparkline, fixed-state forgetting probes),
    which need kernel-intermediate capture. Now unblocked, since the AR tools
    have shipped and the axes have landed.
-2. **Entropy and top-k for the diffusion models.** The AR signals generalize, but
-   the shape does not: a diffusion position is re-decided every step, so entropy
-   becomes a per-position trajectory over steps rather than the single value the
-   AR case yields. Needs a decision on payload (a trajectory per position is
-   O(n·steps)) and on whether it rides DiffusionGemma's existing
-   `entropy_signal` toggle. Also on what the position-indexed views become when
-   a position has a history: both the profile under the scrubber and the new
-   Analytics **Entropy by Position** chart read the final frame today, which for
-   diffusion would show only each position's last value, so they would want a
-   frame selector or a different shape entirely.
+2. **Entropy and top-k for the diffusion models.** The entropy half **shipped
+   with `ROADMAP-03`**, in `a26b8c3`, `455b2ef` and `ffed5b6`. Top-k is still
+   open and was left downstream on purpose, with a budget field reserved for it.
+   Kept here because the shape argument below is why the entropy that shipped
+   reads the way it does, and top-k will meet the same argument.
+
+   The AR signals generalize, but the shape does not: a diffusion position is
+   re-decided every step, so entropy becomes a per-position trajectory over
+   steps rather than the single value the AR case yields. That is why a signal
+   now declares its axes and unit rather than being assumed per-position, and
+   why the views that read it follow the scrubber for diffusion runs and stay
+   fixed for autoregressive ones. What top-k still needs a decision on is
+   payload, since a trajectory per position is O(n·steps), and whether it rides
+   DiffusionGemma's existing `entropy_signal` toggle.
 3. **An elapsed readout that ticks on a clock.** Accepted on 2026-08-28
    and **shipped the same day**, in `52b0968`. Kept here rather than
    deleted because the wrinkle below is the reason it works the way it
@@ -2105,6 +1339,743 @@ Still candidate directions:
   core AR generation feature.
 
 ---
+
+## Build record: what each pass decided
+
+**A record, not a description of the present.** These bullets are in
+the order they were written and each was true when written, the way
+the build plans in `.cursor/plans/` are. Where one names something
+since renamed or replaced, the reason it gives is still why the
+current thing looks the way it does. For what the app does now, read
+`docs/GUIDE.md`; for where it stands, `docs/HANDOFF.md`.
+
+They live here rather than under *Settled decisions* above because
+that section is curated short-form: one drawn line per entry. This is
+the long form those were distilled from, kept because the traps in it
+are expensive to rediscover and cheap to store.
+
+- Desktop wrapper: an optional pywebview launcher (`desktop.py`) runs
+  the UI in a native window and owns the server lifecycle (starts uvicorn on an
+  ephemeral localhost port, graceful shutdown frees worker VRAM on close), plus
+  a Linux app-menu entry generator (`scripts/install_desktop_entry.sh`) and an
+  app icon (`assets/icon.svg`). The browser path (`main.py`) is unchanged, so
+  there is no dual maintenance. Cross-platform packaging (AppImage / Windows /
+  macOS) remains deferred and is gated more by the CUDA/torch stack than by the
+  webview layer.
+- Persistence and analytics polish: **durable server-side UI state**.
+  Settings, the analytics "new run" cue, prompt history, and the generate
+  teaser now persist in `results/ui_state.json` via `GET`/`PUT /api/ui-state`
+  (`src/web/ui_state.py`), hydrated into localStorage on boot (`persistHydrate`
+  / `persistSet` in `overlays.js`). This fixes desktop-app persistence, which
+  the QtWebEngine profile keyed by the launcher's varying window origin/port; it
+  also unifies state across the browser and desktop entry points. The cue is
+  reconciled against existing runs on read, so a deleted run cannot inflate the
+  count. Plus an **analytics table rework**: reordered columns (Date, Model,
+  Prompt, Time, Edited), the renamed **Edited** marker as a diffusion-textured
+  SVG checkmark (blank when unedited), the "new run" dot moved to the leading
+  column, checkbox row highlighting, and multi-select **bulk delete**. Desktop
+  launcher now uses a stable port (ephemeral fallback) and a persistent
+  web-storage profile.
+- the **first autoregressive model**, SmolLM3-3B, in a
+  dedicated `.venv-ar` (Phase A below). Token-by-token streaming with per-token
+  sampling confidence (`src/inference/ar_sampler.py`,
+  `src/backends/smollm3_worker.py`); a `model_type` capability flag
+  (`protocol.py`) that gates diffusion-only UI (Edit Frames, Diff overlay,
+  Commit Order, convergence) off while keeping timing, confidence, and the
+  Heatmap; per-activation CPU/GPU device selection threaded from the Main Menu
+  through `run_worker.py` into `Backend.load(device=...)`, with the GPU
+  pre-flight skipped on CPU and a CPU-capable torch wheel so GPU-less hosts can
+  run it.
+- the **menu + model-switch UX pass** on top of Phase A,
+  validated on hardware. Non-blocking activation with a menu progress bar +
+  Cancel; signed VRAM-headroom pills (accounting for the reclaimable resident
+  model); a "Click to Download" veneer that pre-fetches uncached weights with a
+  smooth **disk-size progress poller** (`hf_download.py`, replacing the tqdm hook
+  that `snapshot_download` never routes to per-file byte downloads; Xet disabled
+  before the first Hub import); select-to-confirm on the menu and dropdown; the
+  rename to **LLM Visualizer**; model-family glyphs (diffusion D+F superposition
+  with a crisp reversed epsilon; autoregressive @-to-R with a feedback loop); an
+  Analytics **Processor** column + per-run timing device name; dropdown polish
+  (fixed-width device pill, collapsed-width list with ellipsized names, green/red
+  headroom tint, CPU-gated ticker, loaded-model highlight with a locked device);
+  a 1-based AR step counter; and orphaned-worker guards (startup sweep +
+  `PR_SET_PDEATHSIG`).
+- the **Settings page + Commit Order overlay**, **menu
+  pagination**, and **cross-page download navigation**. Commit Order moved from a
+  persistent Settings toggle to a generator overlay-picker option (diffusion-only,
+  `app.js`), matching analytics. The generator's Settings modal became a shared
+  **`/settings.html`** page (left tab rail: Appearance / Interface) with a gear
+  icon in the generator, Main Menu, and Analytics headers; the settings schema
+  now lives in `overlays.js` (`SETTINGS_DEFAULTS` / `parseSettings` /
+  `settingsEqual`), shared by `app.js` and `settings.js`. The Main Menu model
+  list is paginated (`i/N` pager, `menu.js`). A model download now runs as a
+  global task the user can navigate away from: a shared draggable, corner-snapping
+  toast (`download_toast.js`, persisted via `diffusion_download_toast_corner`)
+  surfaces progress/completion when the inline veneer is off-screen; the menu
+  re-attaches the veneer on return, `POST /api/models/download/ack` clears the
+  terminal state, and `is_repo_cached` / `_has_incomplete` (`hf_download.py`)
+  make a partial (`*.incomplete`) cache resume instead of bricking. The
+  non-functional Cancel button was removed (real cancellation deferred).
+- the **`results/` rename** and **autoregressive Phase
+  C** in full. Saved runs now live in lowercase `results/` (one functional line,
+  `RESULTS_DIR` in `src/web/server.py`, plus copy). Per-token **entropy** is
+  captured on every AR run (`_entropy_nats` in `src/inference/ar_sampler.py`,
+  off the untempered softmax the sampler already computes), persisted as
+  `TokenRecord.e`, and drawn by a new **Entropy** overlay (`entropyColor` in
+  `overlays.js`, on a cool-to-hot ramp normalized against
+  `OVERLAYS_ENTROPY_REF_NATS = 5.0` rather than `log(vocab)`), plus a
+  per-position **entropy profile** canvas under the scrubber. An opt-in
+  **Alternatives** capture (top 5 per position) feeds a hover popover in both
+  the generator and Analytics; each candidate set travels once, on the frame
+  that introduces its position, so the wire cost is O(n·k) instead of O(n²·k),
+  and it persists to `alternatives.json` indexed by position. **What If?**
+  substitution closes the loop: a `supports_substitution` capability plus a
+  `substitute` message (deliberately separate from `supports_resume`, which
+  unlocks the diffusion remask UI), `streaming_substitute` +
+  `Smollm3Backend.last_run_state` for a greedy re-decode from a forced position,
+  and the branch recorded as an ordinary `RemaskEdit` so the Analytics Edited
+  column and the durable **Diff vs Original** (now un-gated for edited AR runs)
+  work with no schema change.
+- the Analytics **Entropy by Position** chart, a
+  follow-on to Phase C. The first chart in the suite indexed by token position
+  rather than by frame, which is also why it is bars rather than a line: an AR
+  model decides each position once, so its entropy is a property of the position
+  and not a point in a time series. This is the chart the per-frame axis could
+  not give us, since AR `mean_conf` is a cumulative mean (`conf_sum / count` in
+  `ar_sampler.py`) and therefore flat by construction. Frontend only, off the
+  frames payload `loadRunOverlays` already fetches; per-bar color from
+  `entropyColor`, hover naming the token, and dashed markers at edited positions
+  so a What If branch shows where its shared prefix ends. It also restores a
+  third chart for AR runs, which hide Convergence.
+- the counterfactual layer on that chart, plus a
+  collision-aware tooltip positioner. The chart now carries a hover column
+  matching the generator's profile, edit-orange markers and tint (`#ff9f1c`,
+  the `.token-remasked` color) rather than accent green, a tooltip that splits
+  into labeled **Original** / **Edited** rows from the divergence point
+  rightward, and an **Original** / **Edited** crossfade slider over two
+  superimposed `grouped: false` bar datasets, blended with canvas
+  `globalAlpha` rather than by rewriting several hundred color strings per
+  slider step. The original layer reads the pre-edit snapshot that
+  `original_tokens.json` already carries, gated on the snapshot actually
+  holding `e` so pre-Phase-C branches degrade to the single layer. Because a
+  branch copies its prefix verbatim, both the second tooltip row and the
+  visible crossfade start at the marker, which makes the divergence point
+  legible without drawing anything extra. `Chart.Tooltip.positioners.smart`
+  now scores the four plot-area corners against the pointer and the drawn
+  data (bar bodies as rects, trendlines segment by segment via Liang-Barsky,
+  so a sparse run's long segment cannot slip across a corner box unnoticed)
+  and keeps its standing corner while it stays clear; `burnThroughPlugin`
+  becomes the genuine last resort it was meant to be.
+- the **shared comparison layer**, which turns the
+  pre-edit run from a mode into a layer. `overlays.js` now owns one token-span
+  builder (`overlaysBuildTokenSpan` / `overlaysBuildTokenLayer`) behind every
+  path on both pages, so a stacked layer finally carries `token-span` and
+  `data-pos` and is interactive; that alone repaired hover, the popover, and
+  entropy highlighting in Diff mode, where they had never worked. Pointer
+  ownership between exactly overlapping layers is now stated once
+  (`overlaysEditedOwnsPointer`: the more opaque layer takes it, ties to
+  edited) rather than falling out of sibling order. In Analytics the entropy
+  chart's slider was promoted to a run-level crossfade on the token overlay's
+  heading row, gated on the snapshot rather than on the entropy series, and
+  `renderOverlayTokens` takes a `colorFor(index, token)` so **every** overlay
+  mode stacks and blends the two runs, each layer colored by its own values.
+  Commit Order needs a second memoized steps array, since a commit step is a
+  property of a frame stream rather than of a token. Entropy bars and tokens
+  cross-highlight in both directions on both pages (`setActiveElements` one
+  way, a `token-cross-highlight` class the other; on the generator the missing
+  half was a `mousemove` on `#entropy-profile` inverting its own layout math).
+  The bar-to-token direction had to become a plugin `afterEvent` hook rather
+  than `options.onHover`, which Chart.js only fires inside `chartArea`, so
+  exiting through the axis gutter left the last token lit. The candidate
+  popover pages between the two runs' top-k sets from the divergence point
+  rightward, each page marking the token its own run drew. The generator's own
+  crossfade and two-layer stack are deferred.
+- **two persistence changes on opposite tiers.** The
+  pointer hover and the entropy cross-highlight collapsed into one neutral
+  white look (an accent tint disappears on an orange remask or the Heatmap's
+  warm end), and `highlightTokens` moved out of the Settings page into a
+  checkbox in each page's Overlay drawer: on by default, applied on tick, still
+  in the shared `diffusion_settings` blob so both pages agree across a restart.
+  `settings.js` keeps round-tripping the field it no longer shows, since Save
+  writes the blob wholesale. Separately, hyperparameters, the Experimental
+  toggle, and the prompt draft became **session**-scoped in a new
+  `diffusion_param_state` sessionStorage key keyed by model id, deliberately
+  outside `PERSIST_KEYS` so a fresh launch still starts from the recommended
+  defaults, with a `#btn-param-defaults` Reset on the Experimental row that
+  disables itself while everything already matches.
+- the **line-chart comparison layer**, which finally
+  consumes `original_per_frame_elapsed` / `original_mean_conf`. Both were
+  already saved by `addOriginalRunSignals` and served by the metrics route,
+  but the timing and confidence charts had stayed single-series, so an edited
+  run could only ever show its branch. They now draw both runs, the original
+  solid in grey and the branch dashed in the chart's own hue, sharing a prefix
+  and separating at the edit. Which runs are drawn is owned by two **pins**
+  per chart header (1 / 2, lit accent green, both on at open) as a three-state
+  control rather than two independent checkboxes: the last lit pin is locked,
+  because a chart drawing neither run has no reading. The run crossfade stays
+  the token view's control and only *borrows* these two for the length of a
+  pointer drag, easing back over 180ms on release (`scrubWeight` lerped
+  against the pin answer in `seriesBlendPlugin`), which keeps the modal moving
+  together without tying two frame-indexed charts to a slider that lives four
+  hundred pixels away. Keyboard adjustments are deliberately excluded: arrow
+  keys produce input events with no press to end them. Also moved the zoom
+  controls into a segmented pill docked in each chart's bottom-left axis
+  gutter (freeing the header for the pins, `layout.padding.bottom` reserving
+  the strip), and the processor name from the timing header into its own run
+  summary row, correctly labelled GPU or CPU from the run's own metadata.
+  Fixed a long-standing bug the two-series tooltips made obvious: Chart.js
+  paints a white backing behind each tooltip swatch and fills it with the
+  dataset's `backgroundColor`, which on the line charts is an area wash at
+  0.08 alpha (`"transparent"` on the compare panel), so every swatch read
+  white with a colored rim. A shared `lineLabelColor` now paints them with
+  the line's own color, which is what tells Original from Edited in a
+  two-row tooltip.
+- the **generator crossfade and two-layer token
+  stack**, closing the last gap between the two pages. The generator had the
+  layered diff since the counterfactual overlay landed, but its other four
+  overlays stayed single-layer, so a branch could only be compared against its
+  original inside Diff. A `#run-blend-row` below the scrubber (beside the diff
+  sliders it is mutually exclusive with) now stacks the pre-edit run under the
+  branch in every non-diff overlay, gated on `runBlendActive()`
+  (`diffAvailable() && remaskMode === null`). That gate is what makes the
+  stack safe rather than merely hidden: `token-clickable` needs
+  `remaskMode === "edit"` and `token-substitutable` implies
+  `remaskMode === "substitute"`, so a clickable affordance can never appear on
+  a layer belonging to the run you cannot edit. Layer opacity is restyled in
+  place on drag rather than rebuilt, since several hundred spans per slider
+  step would also drop the candidate popover mid-drag.
+- Also: **one span builder for the whole app**. The generator had
+  built its spans inline since before `overlays.js` existed, because the
+  shared builder could not express a remask selection, the edit-mode classes,
+  or a mask graded by live predicted confidence. Three optional callbacks
+  (`maskedFor`, `classFor`, `opacityFor`, all defaulting to today's behavior
+  so Analytics passes none) closed that gap, and `applyTokenColor`, which both
+  tinted a span and appended to its tooltip, split into a pure `tokenColorAt`
+  and `tokenTitleExtra`. `maskedFor` is deliberately consulted only for a
+  token that exists, so a hook can add masking but never strip it off a hole
+  and leave `tok.t` read from null. Commit steps are now memoized per run
+  (`originalCommitSteps` beside `commitSteps`, both cleared by one
+  `invalidateRunMemos`), because a ghost layer painted from the branch's
+  settle schedule would have misreported every position past the edit. The
+  entropy profile gained the same treatment, stepping off the longer of the
+  two runs so the drawing and the pointer-to-position inverse agree.
+- Also: three finishing passes on the comparison surfaces. The
+  generator's entropy profile gained the **edit marker** Analytics already
+  had (tint under the bars, dashed orange line over them, hover glow last, so
+  the pointer's guide lays over the tint rather than under it), drawn from a
+  flattened `editedProfilePositions()` rather than a single index so
+  sequential What If rounds each stay marked. It is deliberately the one
+  standing mark on a strip whose scrub position is carried by bar opacity: it
+  names a semantic fact about the run, not the cursor. The line charts got
+  their **area fill back as a band between the two curves** (`fill: {target:
+  0}` on the branch) instead of two washes to the axis, colored by whichever
+  run bounds the region from above, which needs no legend and stays neutral
+  across two charts that disagree about whether higher is good. Its alpha is
+  `min` of the two series alphas and is baked into the color by a scriptable
+  `fill`, not set as canvas state: Filler is registered globally, so it draws
+  on `beforeDatasetDraw` ahead of `seriesBlendPlugin`'s inline hook and would
+  never see a `globalAlpha` set there. Every path that moves a pin or the
+  scrub already calls `chart.update`, which re-resolves the scriptable.
+  Finally the tooltip swatch fix from the previous session was completed:
+  `lineLabelColor` had painted the fill correctly but Chart.js resolves the
+  swatch stroke as `borderWidth || 1`, so a colored ring survived, and the
+  white backing showed as a half-pixel band inside it because the stroke is
+  centered on a one-pixel inset. Transparent `borderColor` plus a global
+  transparent `multiKeyBackground` leaves just the fill.
+- the **status message stack**, the last item that
+  had no dependency on the comparison-surface work. `#status-message` was a
+  single overwritten span, so two operations at once lost one of them: the
+  auto-save of the pre-edit run on entering What If, then picking a candidate,
+  left only "Resuming". The split is by lifetime rather than by category.
+  Work in flight raises a transient chip; the run's resting state (Done, the
+  saved path, an error) stays in the footer, which is also what
+  `saveSessionState` persists, so chips are free to expire without taking a
+  record with them. That split is why session persistence needed no changes
+  at all. The enabling refactor was small and had its precedent one function
+  above it: `denoiseReveal` already kept its timer on the element so
+  independent targets could animate at once, but `startStatusDots` kept
+  module-level singletons, so two chips could not animate their own dots.
+  Chips render inside the footer's own slot (a bottom-anchored column whose
+  last row is the resting message, which collapses when empty), so a single
+  chip lands exactly where the message alone used to and the common case
+  looks unchanged. Bounded at four rather than made scrollable, since the
+  real ceiling is two (one run, and `saveRun` guards itself with `isSaving`).
+  The one trap: `resetStatus()` runs immediately before every resume, which
+  is exactly when a save may be in flight, so it clears the footer only.
+- And a third pass, after seeing it on screen a second time: **the column
+  became a row.** Chips now extend leftward from the resting message rather
+  than stacking above it, separated by a faint middle dot, clipped and faded
+  against the gutter the footer's own gap already leaves before the readouts.
+  Two details carried the change. The separators need no JavaScript: chips are
+  inserted directly before the message, so `.status-chip + #status-message`
+  matches exactly when a chip is up, and keying their opacity on `is-visible`
+  makes them fade in and out with the neighbor they belong to. And the message
+  keeps `flex-shrink: 0` with `max-width: 100%`, so it truncates only against
+  the row itself and never to make room for a chip; overflow spills off the
+  left, where the fade is, so the oldest chip is always what gives way. The
+  clamp is cosmetic regardless: `saveSessionState` persists `textContent`. The
+  same pass split each chip into a word span and a fixed-width dots span
+  (`3ch` plus the footer's letter-spacing), which is what finally let the
+  ellipsis tick continuously in every text mode, cycle included, since
+  re-diffusing the word no longer rewrites the dots.
+- Also, after seeing the stack rendered: **chips went quiet, and
+  the messages got specific.** Letting a chip report its own outcome put
+  "Done" on top of "Done." and "Saved" on top of "Saved to results/...",
+  which read as stutter and was the only thing that ever pushed a second line
+  into an already crowded corner. Chips now say only what is happening and
+  simply leave when it is over, with the footer filling in as the handoff, so
+  the whole `statusResolve` path, the hold timer, and the chip error style
+  deleted themselves. Messages also name their subject rather than just their
+  verb: a save reads "Saving original run" or "Saving edited run" off the
+  `wasEdited` flag it already computed, and a resume reads "Running edit from
+  frame X to Y" (or "to end"), which for `doGuidedResume` comes from a single
+  `resumeTarget` shared with the request's `max_frames` so the text and the
+  wire cannot drift. A layout fix rode along: `#status-stack` had been sized
+  by `margin-left: auto` while its only child was absolutely positioned,
+  leaving it zero-wide, so a long saved path ran left across "Elapsed:" and
+  `max-width` had nothing to resolve against; `flex: 1; min-width: 0` gives it
+  real width and the text now ellipsizes at the footer's own gutter.
+- And a fourth pass on the same row, this one about **motion, which was the
+  last thing still wrong.** A chip now rises in from the window's bottom edge
+  and steps *left* on the way out, rather than sharing one rule with its
+  entrance and so drifting back into the resting line it was handing off to.
+  The exit is shortened to 150ms, since the footer already carries the outcome
+  by then. Getting the rise meant trading `overflow: hidden` for a negative
+  `clip-path` inset, because only the left and right clamps are wanted, with
+  the rise distance held in one custom property that both the clip and the
+  offset read. Flex offers no transition for a neighbour changing width, so
+  `statusRowReflow` wraps every mutation that reshapes the row (a chip
+  arriving, a chip's node leaving, the resting line filling in) in a
+  first-last-invert-play, gated on `prefers-reduced-motion`. The row's
+  entrances use the `translate` longhand precisely so that FLIP can own
+  `transform` and the two compose. One backend fix rode along: the save
+  endpoint reaches its folder two ways, and only one of them resolves, so the
+  same message read `results/...` after a fresh save and an absolute path
+  after an in-place update. `_display_run_path` normalizes where the branches
+  meet, leaving the traversal guard alone.
+- a **polish pass** plus the **model-load progress
+  bar**. The polish, briefly: a model switch now clears the run snapshot
+  (keyed by device as well as model, and dropped by both activation paths,
+  since switching away and back lands on a matching pair that no identity
+  check can reject); the output placeholder names the resident model; the
+  Analytics "Edited" check lost its dot-pattern stroke and the three orphaned
+  rules behind it; the prompt label gained 3px, which is what sets the
+  clearance under the absolutely-positioned history control; the docs read as
+  an LLM visualizer with the depth in discrete diffusion, and `xAI` is `XAI`
+  throughout; the collapsed overlay drawer drags vertically via one shared
+  helper in `overlays.js`, moving `top` because the group already animates
+  `transform`, and owning the handle's click as well as its drag because at
+  the target node listeners fire in registration order regardless of the
+  capture flag; and AR **Alternatives** defaults on, with `smollm3_worker`
+  now reading every absent-key fallback from the registry spec instead of
+  keeping a second copy of each default.
+- The bar itself is `src/inference/load_progress.py`, the companion to
+  `hf_download.py`: getting weights onto disk had a readout, reading them into
+  memory did not, and it is often the longer wait. There is no hook to borrow,
+  so it samples memory counters the way `hf_download` samples the cache
+  directory. Two findings shaped it. LLaDA loads with `device_map="auto"`, so
+  accelerate streams shards straight to the GPU and RSS barely moves, while
+  SmolLM3 fills RAM and copies after: sequential CPU-then-GPU phases would
+  leave the bar at zero through half of one of them, so it reports
+  `max(rss_delta, cuda_allocated)` over one target and names whichever counter
+  it is reading. And LLaDA on CPU passes `torch_dtype=None`, which means
+  fp32 from a BF16 checkpoint, so the target is scaled by the **requested**
+  dtype, not the on-disk one. Anything unmeasurable (mixed dtypes, an
+  unreadable header, an unfamiliar layout) returns a zero target and renders
+  as the phase label with a spinner, because a confidently wrong bar is worse
+  than none. The reading is floored at its previous peak, since the CPU
+  allocator returns pages mid-load. The sampler runs on the helper thread and
+  the load stays on the caller's, the opposite of `download_with_progress`:
+  moving a heavyweight library-driven load between threads for a progress bar
+  would trade real risk for a cosmetic one. The boot path polls too, which is
+  what finally gave the slowest load of a session a bar.
+- the four items left open by the pass above.
+  **Re-selecting the resident model is navigation**: the server always treated
+  that activation as a no-op, so the only damage was the clear the pass above
+  had just added, which wiped the run on a path that spawns nothing. The menu
+  now reads `active_device` (it was being discarded), asks *Go back to the
+  Generation page?*, and uses the activate response's `state` as the
+  discriminator, so a worker that died since the menu was drawn still gets the
+  loading UI. **Dropdowns flip up when clipped**: the occluded rows were the
+  Overlay picker's list, not the drawer, and the flip lives in the shared
+  factory so every dropdown inherits it, flipping only when the list does not
+  fit below and there is more room above. **A reserved tail for the pickled
+  checkpoint**: DiffusionGemma unpickles the whole state dict into RAM before
+  copying, so its read filled the bar and left the copy nowhere to go. The
+  trap is that clamping is not enough, since the monotonic floor would jump
+  the tail in one step; the read is compressed into `[0, ceiling]` and the copy
+  scaled into the rest. Opt-in, defaulting to 1.0, so the two loads that
+  already tracked their wait are provably untouched. **The bar finishes**: the
+  closing 100% never reached the browser (the worker goes ready in the same
+  breath and `_apply_health` drops progress), so the reducer names `ready` and
+  both pages hold a full bar briefly, and three stacked 500ms polls came down
+  to 250ms.
+- the **reveal signal**, the **token birth glow**, and
+  **Tokens per Second**. One missing piece of data gated both features, so it
+  landed first: every sampler now stamps `revealed` on each frame, the
+  positions that became resolved in that frame and had not been resolved
+  earlier in the same canvas. The monotonicity is the whole design (see
+  `src/inference/reveal.py`): "resolved right now" would re-fire on every
+  settled token every frame, and "changed since last frame" would flicker on
+  DiffusionGemma, whose drafts churn before they settle. Each sampler owns that
+  differently: a **resume** seeds the set from the canvas it inherited, or the
+  entire surviving prefix reports as newborn on frame 0; DiffusionGemma clears
+  it per canvas, since the next one is fresh noise; and the autoregressive
+  sampler needs no state at all, because left-to-right decoding means the frame
+  that reaches *n* tokens produced position *n-1*.
+  The rendering change that consumed it is a **net performance win**: the live
+  path built one span per *character* and tore the whole output down every
+  frame, roughly 640 inline boxes at LLaDA's default length, where the token
+  view keeps a constant ~160 and writes only where something differs. That is
+  also what made the glow possible, since an animation needs a node that
+  survives the next frame. The glow itself animates a **constant-blur** shadow's
+  alpha (animating the radius re-rasterizes a different-sized blur every tick,
+  which is what the `.token-mask` scroll note warns about) and is keyed off a
+  **data attribute** rather than a class, because the span-sync function owns
+  `className` and would otherwise cut a glow short the moment its position
+  changed.
+  **Tokens per Second** needed no new storage and has no backfill gap: a masked
+  token renders as exactly one mask glyph, so `compute_convergence`'s
+  `mask_count` already is a token count, and every run ever saved carries its
+  frame timings. In Analytics it shares the Timing slot behind a pager rather
+  than claiming a chart of its own, since it is the same two numbers read as a
+  ratio. The footer's **Elapsed** was wrong and was fixed alongside it: it
+  printed the raw segment-local `data.elapsed`, so it jumped backwards after an
+  edit. `ruff` was pinned and configured in the same pass (config-only
+  `pyproject.toml`, 70 columns for both ruff and black, `C901` and `PLR1702`
+  selected), establishing a **159-finding baseline** that this session's work
+  did not add to; the findings were deliberately left unfixed.
+- **per-class glow tuning, sub-setting grouping, the
+  load sweep**, and two CSS corrections. Frontend-only, no Python touched.
+  The glow's **Brightness** and **Fade time** are stored per model family
+  (per `model_type` when shipped, before `ROADMAP-01` split the axes) behind a
+  class picker, because the trail an eye can follow is roughly rate
+  times fade and an autoregressive GPU run outpaces a diffusion step by an
+  order of magnitude: the default that reads perfectly on LLaDA is gone before
+  it registers on SmolLM3. Three details carry the design. The values reach the
+  keyframes as **whole shadow lists** in custom properties rather than as
+  numbers nested inside `rgba()`, which keeps each keyframe a plain
+  substitution. Brightness scales the **blur radii as well as the alphas**,
+  because alpha alone tops out barely above the default 0.9 and there is no
+  headroom in that. And the concurrency cap is now **derived from the fade**
+  (`clamp(round(fadeSeconds * 96), 48, 192)`, with 96 chosen so the 500ms
+  default still lands on the 48 it was fixed at): left fixed, a long fade at
+  autoregressive speeds would have the FIFO rather than the timer decide when a
+  flash ends, so the trail would stop growing exactly when the user lengthened
+  it and its tail would look cut rather than faded.
+  **Sub-settings** are indented and dimmed-when-inactive rather than hidden,
+  which is what makes the indent mean anything, and the group's closing
+  hairline moved to the `border-top` of the next preference. That avoids both
+  `:has()` (thin support on WebKitGTK) and an "I am last" class in the markup
+  that would rot; a group ending the panel correctly gets no line at all.
+  **The load sweep** closes the dead time the maintainer noticed between the
+  loading UI appearing and the bar starting. The gap is real work, not a
+  rendering delay: a worker process spawning, importing torch and transformers
+  in its own virtualenv, uvicorn coming up so `/health` answers at all, and
+  only then `load_target_bytes` reading the shard headers. Nothing can measure
+  it, so the fix is not a bar parked at 0% (which reads as hung, and is the
+  thing `load_progress.py` refuses to draw); it is a sweeping track plus the
+  honest label **Starting worker**. No backend change was needed: `starting`
+  was already set in `activate()` and already returned by
+  `/api/models/activation`; the shared reducer just fell through to its generic
+  branch. That reducer went from a boolean `determinate` to a three-way `mode`
+  (`hidden` / `sweep` / `fill`), since there are now three outcomes rather than
+  two. One consequence worth knowing: both `finish*Progress` functions used
+  `container.hidden` to mean "a bar was never shown", so an unmeasurable
+  checkpoint used to end with no bar at all; with a track always present, every
+  activation now closes on a brief full bar, and the menu in particular went
+  from showing *nothing* during the gap to showing the sweep.
+  The two corrections: the **Analytics crossfade separator** was a cascade
+  leak, not an Analytics style at all (the row kept `margin-top`,
+  `padding-top`, and `border-top` from `style.css`, where the generator still
+  stacks it on its own line and still wants them), and the **pager arrows** now
+  read by brightness instead of hue, since the accent green was on the
+  *disabled* arrow: backwards twice over, being both the brightest thing in the
+  row and camouflaged against the green chart title beside it.
+- the **token metrics strip**, one always-present
+  readout above each token canvas on both pages, replacing the native `title`
+  tooltip. Frontend-only, no Python touched. Three things were wrong with the
+  tooltip and only one of them was cosmetic: the browser delays it by around
+  half a second with no way to configure that, it cannot be styled or placed
+  (`overlaysPopoverTop` preferred above the token purely to dodge it, and now
+  takes the canvas's top edge as a ceiling so it clears the strip instead), and
+  it is
+  bound to one element, so the entropy chart could never feed it however
+  obviously it should have. The strip is fed by both hover sources on both
+  pages, which is the feature the tooltip structurally could not have.
+  It is a net deletion. The tooltip text was written in exactly one place
+  (`overlaysSyncTokenSpan`), and everything upstream existed only to feed it:
+  `tokenTitleFn`, `tokenTitleExtra`, `tokenExtraLabel`, `tokenLabel`, `confLabel`
+  and an inline `titleFor` on the generator; `overlayTitleFn`, `commitExtraFor`,
+  `overlayConfText`, `overlayEntropyText` and the `extraFor` / `originalExtraFor`
+  parameter chain on Analytics. The strip computes the same values at hover time
+  from the same memoized state, so none of that was rerouted.
+  Three decisions carry it. **Always present**, because anything that appears on
+  hover moves the canvas out from under the pointer that summoned it. **Its own
+  hover variable** (`metricsHoverPos`), because `setEntropyHoverPosition` forces
+  `entropyHoverPos` to null whenever the profile row is hidden, which is exactly
+  the live-generation case where the strip has something to say; they answer
+  different questions with different lifetimes. And **absent is not zero**: the
+  tooltip printed `Confidence: 0` for a run that never recorded the signal, which
+  is a claim about the model rather than about the record. A dash says the run
+  does not carry it. Live generation gained a readout it never had for free:
+  `LIVE_TOKEN_OPTIONS = {}` meant streaming tokens carried no title, but they
+  always carried `data-pos`.
+- **tokenizer identity, the typed token, and an AR
+  top-k knob**, in that order, as three commits.
+
+  The identity is read off the loaded object in `worker_base._health`
+  (`describe_tokenizer`: class, `name_or_path`, `is_fast`, `vocab_size`),
+  cached by the supervisor into `manager.active_tokenizer` on the same
+  ready transition that caches `active_versions`, and written into
+  `metadata["reproducibility"]["tokenizer"]` at save time. It deliberately
+  does **not** ride `ModelCapabilities`: that is static registry data,
+  served with no worker running, so a name there would be a hand-maintained
+  string free to drift from whatever the checkpoint loads, which is exactly
+  the failure a pedagogical readout cannot afford. `vocab_size` rather than
+  `len(tokenizer)` because the base figure, not the one inflated by added
+  special tokens, is what the entropy ceiling of ln(vocab) refers to.
+  `tokenizerMetaRow` returns `""` when the key is absent, so the runs saved
+  before it existed render unchanged; no endpoint changed, because
+  `list_runs` returns raw metadata dicts and a new key flows through on its
+  own.
+
+  The typed token's real cost was **making the popover pinnable**, which was
+  a change to what the popover *is* rather than a detail of the text field.
+  It was hover-scoped and destructive: `hideAltsPopover` blanks
+  `textContent` and fired on the popover's `mouseleave`, the output area's
+  `mouseleave`, any capture-phase `scroll`, and `resize`, while
+  `renderAltsPopover` rebuilds every child on each hover and page flip. Four
+  separate ways to erase a half-typed word. The fix has two halves that
+  matter independently: the closers stand down while `altsPopoverPinned()`,
+  and the entry's state lives *outside* the DOM so `buildTypedRow` rehydrates
+  it after any rebuild, which is what makes a re-render harmless rather than
+  merely rare. Two traps found while building it. The pin cannot test "the
+  draft is non-empty", because the field arrives pre-seeded with a leading
+  space and that would pin the popover the instant the pointer crossed a
+  mid-sentence token; it tests an `active` flag set on focus and cleared only
+  by a deliberate exit, since blur is not an exit (clicking confirm blurs the
+  input). And a cancel has to decide what to leave behind by where the
+  pointer is: over the popover it re-renders to the candidates, anywhere else
+  it closes, because nothing will ever come along to close a box the pointer
+  has already left.
+
+  The preview is a new `tokenize` / `tokenize_result` pair dispatched
+  **outside** `gen_lock`, since it is a microsecond vocabulary lookup and the
+  lock exists to serialize generation; taking it would stall typing behind a
+  running model. The client carries a monotonic `request_id` and also
+  compares the echoed text, because debouncing does not guarantee ordering.
+  `Backend.handle_tokenize` is a default on the base class using
+  `getattr(self, "tokenizer", None)`, so diffusion What If inherits a working
+  preview whenever it arrives. Server-side re-resolution in
+  `_check_typed_token` is the contract behind the client's disabled confirm
+  button, and requiring the id to match the text is what stops a preview that
+  went stale mid-keystroke from forcing a token the user never saw. The
+  captured-candidate branch was left strict rather than loosened, so an
+  unflagged request still cannot smuggle in an arbitrary id.
+
+  The **true confidence** turned out to need no extra compute, only a moved
+  boundary. `_substitute_loop` used to prefill prompt + prefix + the forced
+  token in one pass; it now stops just short of the forced token, so the last
+  position's logits *are* the distribution that position was sampled from and
+  `probs[forced_id]` is the honest answer. The forced token is then forwarded
+  against that cache via a new optional `past` on `_stream_tokens`. Same
+  total work, two calls instead of one, and it survives `budget == 0` where
+  `_stream_tokens` never runs. The seed frame had to move after the probe to
+  carry the measured value. `forced_conf` is `None` only for a typed token; a
+  captured candidate keeps the probability its own run recorded.
+  `forced_entropy` stays `state["entropies"][position]` in both branches,
+  because entropy describes the distribution at that position and does not
+  change with the token forced into it. That is the line someone would
+  plausibly "fix" by mistake.
+
+  Top-k is distinct from `TOP_K_ALTERNATIVES = 5`, which is the capture count
+  and stays fixed. It is applied before top-p, matching Hugging Face, so the
+  two compose as a truncation with a nucleus taken inside it; the order is
+  observable, since top-k renormalizes over what it kept and a nucleus
+  measured against that inflated distribution bites harder. The default is
+  `-1`, not `0`: both disable the filter, but `0` reads as "no candidates at
+  all", which is the one thing a sampling truncation cannot mean. `0` still
+  disables it, so runs saved under the older default replay unchanged.
+- **the probe, the rank, and the strip's candidate
+  readout**, closing the gap left by the typed row having no figure to show.
+
+  A new `probe` / `probe_result` pair, dispatched **inside** `gen_lock`,
+  unlike the `tokenize` pair beside it: a probe is a real forward pass, so
+  admitting one alongside a generation would put two passes on the same
+  device. `Backend.handle_probe` raises by default rather than being
+  implemented on the base class the way `handle_tokenize` is, because
+  answering needs a committed prefix to prefill up to, and a diffusion run
+  reveals positions out of order and has no such thing.
+
+  `probe_token` shares its prefill with the substitution path through
+  `_position_distribution`, which is what makes the promise keepable: the
+  strip quotes a figure before you run, the branch reports one after, and
+  they cannot diverge because they are the same read of the same
+  distribution. `test_probe_agrees_with_a_typed_substitution` pins that
+  directly. Rank comes from `(probs > p).sum() + 1`, a comparison and a sum
+  on a distribution already in hand, so it is free next to the pass that
+  produced it; its denominator is `probs.numel()`, the model's output width,
+  deliberately not the tokenizer's `vocab_size`, since a padded embedding
+  makes those differ (128,256 against 128,000 for SmolLM3) and what was
+  ranked is what could have been ranked.
+
+  The **precision problem** is why the readout landed in the strip. A typed
+  token is most interesting where it is improbable, and the popover row is
+  320px wide: it can hold `<0.1%` and no more. The strip had half its length
+  idle, so hovering any candidate row now fills its right half with the
+  probability to three significant figures plus, for a typed token, the rank.
+  The left group keeps reporting the committed token throughout rather than
+  going idle, since the longest left readings barely reach the midpoint and
+  holding both makes the two chips a legend: grey for what the run
+  committed, green for what it merely weighed. The right group hides
+  entirely when nothing is hovered, unlike the left, which stays visible as
+  a key to what the strip reports.
+
+  Two subtleties in the wiring. Rows bind `mouseenter` / `mouseleave` rather
+  than `mouseover`, so crossing the bar and the percentage inside one row
+  does not retrigger the readout. And `renderAltsPopover` clears the
+  candidate before discarding its rows, because a removed node never fires
+  the `mouseleave` that would have cleared it, which would leave a readout
+  for a row that no longer exists.
+
+  `overlaysBuildAltRow` was lifted into `overlays.js` in the same pass: both
+  pages had a copy identical but for returning a row against a fragment, and
+  both needed the same hover wiring. While ruff was to hand,
+  `create_worker_app` came down from complexity 23 to 20 and `_ws` below the
+  gate entirely, by lifting the load gate into `_await_model_ready` and
+  collapsing the three byte-identical streaming branches into one dispatch
+  through a dict. Adding the probe branch had pushed both further over a gate
+  they were already past.
+- **rank everywhere, the chosen row, the edit tint,
+  scrub dimming, and the retained KV cache.**
+
+  The trigger was a discrepancy worth recording, because the wrong fix was
+  available and cheap. A typed token that the position *had* captured
+  measured at 38.3% against a recorded 39.8%. Neither number was wrong.
+  A run samples position *n* from one decode step against a cache built
+  incrementally; a probe rebuilt the same prefix as a single prefill. Those
+  are different orders of accumulation over the same values, and in bf16
+  (8 mantissa bits) they part company by roughly an ulp, which is a
+  percentage point down here. Rounding the display to hide it would have
+  been a lie about a real arithmetic difference, so the two paths were made
+  the same call instead.
+
+  Two fixes, in that order. First, `requestTypedProbe` consults
+  `positionAlts` before sending anything: if the token is one of the five
+  the position recorded, the stored probability *is* the answer, and it is
+  better information than a measurement as well as free. Second, the run's
+  KV cache is retained on `last_run_state` and handed to both the probe and
+  the substitution, so a measurement makes the same call the run made rather
+  than a reconstruction of it.
+
+  The cache work has four traps in it. `DynamicCache.crop` mutates in place,
+  so slicing with it would consume the cache that a later probe needs; the
+  slice is built as fresh views (`_sliced_cache`) and the record is never
+  handed out directly. Reuse is gated on the prefix ids matching what the
+  cache was built from, and *any* disagreement falls back to a fresh
+  prefill: answering confidently from the wrong sequence is the failure that
+  still returns a plausible number. Position 0 has no cached token to decode
+  against and prefills unconditionally. And residency is bounded
+  (`AR_CACHE_BYTES_MAX`, 512 MiB): a cache large enough to pass the ceiling
+  is dropped rather than trimmed, since a run that big was never worth
+  holding for the session. Invalidation rides `last_run_state = None` in
+  `handle_generate`, which is the only place the pinned run changes.
+
+  Rank turned out to need the *model's* output width, not the tokenizer's
+  vocabulary: 128,256 against 128,000 for SmolLM3, because the embedding is
+  padded for alignment. A rank is a place among the tokens that could have
+  been ranked, so `describe_tokenizer` now also reports `model_vocab_size`
+  from `model.config.vocab_size`, riding the plumbing the tokenizer identity
+  already had rather than growing a second path. The captured five need no
+  stored rank at all, since `torch.topk` returns them in order and a row's
+  index is its rank; `rank` is set on exactly one entry, the sixth, and
+  `_dump_alternatives` uses `exclude_none` so the other five do not each
+  carry a null into a file already running to tens of kilobytes.
+
+  The sixth row is appended, never substituted for the fifth: the five are a
+  statement about what the model preferred, and dropping one to make room
+  would quietly break it. It is excluded from being a substitution target
+  (`alt-row-outside`), because forcing the token already sitting there would
+  spend a full regeneration to arrive where it started.
+
+  The edit tint and the scrub dimming are both about agreement between what
+  two parts of the page say. `.token-edited` is a background rather than a
+  color, so it composes under the Heatmap and Entropy overlays instead of
+  fighting them, and it is softer than `.token-remasked` because the two
+  mean different things: one is "selected, about to be redrawn", the other
+  is "this run was intervened here", which stays true afterwards. Both pages
+  memoize the edit positions into a lookup map keyed on the edit log's
+  identity, since the class function runs per token per render and a
+  diffusion run can carry many edits. Dimming past the scrubber needed two
+  different mechanisms: the generator's canvas profile takes a third
+  emphasis tier, while Chart.js has no per-bar opacity, so the Analytics
+  chart bakes alpha into each bar's fill color (`entropyDimColor`, returning
+  `hsla`) and multiplies with the crossfade's whole-dataset alpha.
+- **context-window metrics, prompt import, and
+  Analytics collections.** Three independent arcs, three commits, in that
+  order, because the import control's "this fits" promise is only honest
+  once the counting exists.
+
+  The context readout under the textarea (`1,240 / 65,536`, amber when the
+  prompt plus the output budget would overflow) rests on two decisions. The
+  window is **read off the loaded object**, not declared in the registry:
+  `describe_context_length` in `worker_base.py` prefers
+  `model.config.max_position_embeddings` and falls back to
+  `tokenizer.model_max_length`, which is frequently a sentinel of `int(1e30)`
+  and therefore needs an upper bound (`CONTEXT_LENGTH_SANE_MAX`); neither
+  being sane returns `None` rather than a guess. Same reasoning as
+  `describe_tokenizer`: registry data is static and served with no worker
+  running, so a declared number is free to drift from the checkpoint. And the
+  count is of the **templated** sequence, produced by the code that builds
+  the real inputs: `Backend.prompt_token_count` mirrors `_build_inputs`
+  (SmolLM3 and DiffusionGemma inherit it), and the LLaDA worker overrides it
+  through a newly extracted `build_llada_inputs` that its sampler and
+  `_store_state` now share, so the counted tokens are provably the generated
+  tokens. Counting raw text would understate: the chat template adds role
+  markers, and `enable_thinking` changes them.
+
+  `MSG_COUNT_PROMPT` is a separate message rather than a flag on `tokenize`,
+  dispatched outside `gen_lock` the same way, because `tokenize` caps at 200
+  characters and answers with one object per token; a 40 KB import would be
+  tens of thousands of objects to answer with a single integer. The client's
+  request has its own id counter rather than sharing `requestTypedPreview`'s,
+  which is bound to What If state, and it re-requests when the `thinking`
+  flag changes, since that changes the template. The authoritative count
+  rides `prompt_len` on the `done` frame from all three samplers into a
+  `context` block in `metadata.json`, so a saved run records what the model
+  received rather than what the client estimated; the two Analytics detail
+  rows stay absent for older runs, as the tokenizer rows already do.
+
+  Prompt import is client-side end to end (`file.text()`), by button or by
+  drop on the textarea, with a byte cap checked **before** reading and a
+  character cap on what is inserted. `#prompt-history` is absolutely
+  positioned and hidden when history is empty, so the import button could not
+  live inside it: both now sit in a `#prompt-actions` flex container that is
+  always present. Markdown goes in raw, since the model reads it fine and
+  stripping it would misrepresent the file. A non-empty box confirms first,
+  through the generator's first confirm modal, following the Analytics
+  `#modal-delete` pattern.
+
+  Collections **reuse `ui_state.py`** rather than a new file: one
+  `diffusion_collections` key holding `[{id, name, runs: [run_id]}]` at the
+  same 262,144 cap as `diffusion_new_runs`, which widened that module's
+  docstring, because this is the first key that is durable user intent rather
+  than a cache. Membership is a **set**, so a run sits in several collections
+  without a later migration. Ids are folder names, and `_reconcile_collections`
+  prunes ones whose folder is gone on every `GET /api/ui-state`, following
+  `_reconcile_new_runs`: a collection is a list the user reads, so a stale id
+  would show as a row that cannot be opened and a tab count that overstates.
+  Malformed entries pass through untouched, since repairing a shape the client
+  wrote is not this endpoint's job. "All" is a view rather than a stored
+  collection; Favorites is created on the first star. Filtering happens before
+  `sortRuns` in `renderTable`, and three things had to follow the active tab
+  or they would act on invisible rows: `onSelectAll`, `checkedRunIds`, and
+  `applyDeletions`, which also drops deleted ids from every collection so the
+  table does not wait for the next hydrate to agree with itself. Storage
+  eviction stayed out of scope: 175 runs occupy 440 MB against 189 GB free,
+  so the pressure it would relieve is roughly 75,000 runs away, and bulk
+  delete already exists.
 
 ## Where things live (quick map)
 
