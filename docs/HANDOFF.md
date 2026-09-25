@@ -66,7 +66,8 @@ in an analytics suite.
   already-downloaded model activates with no network.
 - **Samplers**: `src/inference/{streaming_sampler,dgemma_sampler,ar_sampler}`;
   NF4 in `dgemma_nf4.py`. Analytics metrics: `src/analytics/metrics.py`.
-  `llada_sampler.py` holds live helpers plus a dormant reference program.
+  LLaDA's algorithm is `llada_kernel.py`, its old twin quarantined under
+  `reference/llada/` behind a differential test (`ORG-03`).
 - **Frontend** (shared, schema-driven, no framework or bundler):
   `src/web/static/` holds `menu`, `index`/`app`, `analytics`, `settings`, plus
   `overlays.js` for the shared color ramps, the layered-diff builder, the "new
@@ -85,10 +86,10 @@ in an analytics suite.
   shutdown frees worker VRAM on close; persistent web-storage profile; prefers
   Qt/QtWebEngine, falls back to GTK).
   `scripts/install_desktop_entry.sh` generates a Linux `.desktop` entry.
-  **Single-instance**: a launch asks `/api/app` who holds 8760. Our own
-  supervisor means stand down and try to raise that window; anything else
-  keeps the ephemeral fallback. Two supervisors used to mean two workers on
-  one GPU, which is `LIFE-05`.
+  **Single-instance**: a launch asks `/api/app` who holds 8760, standing down
+  to raise that window if our own supervisor answers. Two supervisors may now
+  coexist but only one may hold a model, by the `src/web/model_lease.py` flock
+  (`LIFE-05`).
 
 ## Where things stand
 
@@ -193,8 +194,7 @@ still full canvases, which denoising one makes inherent.
 
 ## Where to pick up
 
-`docs/audit/IMPLEMENTATION_LEDGER.md` answers this during the campaign. After it, the
-agreed feature order is **Mamba-3** as a new model class, then extending
-entropy and top-k to the diffusion models; both have prerequisites the ledger
-lists, and both want deliberating before Plan. `docs/ROADMAP.md` carries the
-settled decisions, the deliberate stopping points, and the longer backlog.
+`docs/audit/IMPLEMENTATION_LEDGER.md` answers this during the campaign. After
+it: **Mamba-3** as a new model class, then top-k for the diffusion models,
+whose entropy half shipped with `ROADMAP-03`. Both want deliberating before
+Plan. `docs/ROADMAP.md` carries the settled decisions and the longer backlog.

@@ -2079,22 +2079,61 @@ are expensive to rediscover and cheap to store.
 
 ## Where things live (quick map)
 
-- Backend contract: `src/backends/{protocol,registry,worker_base,run_worker}.py`
-- Model backends: `src/backends/{llada_worker,dgemma_worker}.py`
-- Samplers: `src/inference/{streaming_sampler,dgemma_sampler,dgemma_nf4}.py`
-- Supervisor and API: `src/web/server.py`
-- Frontend: `src/web/static/{index.html,app.js,analytics.html,analytics.js,style.css}`
-- Analytics metrics: `src/analytics/metrics.py`
-- Adding a model: add a `ModelInfo` to `registry.py` plus a worker module; the
-  frontend and analytics are schema-driven, so most UI follows automatically.
-- Environments: LLaDA and the supervisor run in `.venv` (transformers 4.38.2);
-  DiffusionGemma runs in `.venv-dgemma` (transformers 5.13). Always use each
-  environment's own Python explicitly.
-- Dependency files: `requirements.txt` (core `.venv`), `requirements-dgemma.txt`
-  (the `.venv-dgemma` env), and `requirements-desktop.txt` (optional pywebview
-  desktop add-on for `.venv`). These are flat, fully-pinned freezes, which is
-  idiomatic for an ML repo and encodes real structure (two incompatible
-  `transformers` universes plus an optional feature layer).
+**Seams, not an inventory.** The previous version of this section listed
+filenames, which meant it was wrong the day after any of them moved, and it
+was: it named two model backends against three and five frontend files against
+twenty-three. A list of files also goes stale silently, because nothing fails
+when a file is added and the list is not. So this names the entry point of each
+seam and what the seam is for; `ls` is better than any list at the rest, and
+`tests/test_docs_inventory.py` fails if a model, an environment or a package
+appears that this map does not mention.
+
+**Four packages under `src/`**, each with one job:
+
+- `src/backends/` is the **contract between the supervisor and a worker**, plus
+  one worker per model. `protocol.py` holds the shared types, `registry.py`
+  declares every model, `worker_base.py` is the scaffolding each worker fills
+  in, and `run_worker.py` is the process entry point. The workers are
+  `llada_worker.py`, `dgemma_worker.py` and `smollm3_worker.py`. Around them:
+  `params.py` resolves a request against a model's schema, `text_adapter.py`
+  owns per-model prompt conventions, `environments.py` maps an environment name
+  to its interpreter, and `resource_sampler.py` feeds the generator's meter.
+- `src/inference/` is the **model-facing half**: the samplers
+  (`streaming_sampler.py` over `llada_kernel.py` for LLaDA, `dgemma_sampler.py`
+  with `dgemma_nf4.py`, `ar_sampler.py`), and the machinery they share, such as
+  `reveal.py`, `logit_signals.py`, `checkpoint.py` and `frame_queue.py`.
+  Getting weights onto disk and into memory lives here too (`hf_download.py`,
+  `download_main.py`, `load_progress.py`, `artifact_manifest.py`).
+- `src/web/` is the **supervisor**. `server.py` serves the pages and the API and
+  owns the worker; the modules beside it each took one responsibility out of it,
+  which is why they exist rather than being sections of `server.py`:
+  `worker_process.py` (the operating-system process), `run_store.py` (the saved
+  runs), `collections.py`, `ui_state.py`, `data_root.py` and `model_lease.py`
+  (which of this machine's launchers may hold a model).
+- `src/analytics/` computes the intrinsic metrics in `metrics.py`.
+
+**The frontend** is `src/web/static/`: four pages (`menu.html`, `index.html`,
+`analytics.html`, `settings.html`) with a script each, over shared modules of
+which `overlays.js` is the important one, since the overlay and settings math
+has to agree across pages. No framework, no bundler, no build step.
+
+**Adding a model**: add a `ModelInfo` to `src/backends/registry.py` plus a
+worker module, and name it here. The frontend and analytics are schema-driven,
+so most of the UI follows from the registry.
+
+**Environments and their locks** are declared once, in `[tool.diffusion-llm]`
+in `pyproject.toml`: `core` (`.venv`, the supervisor, the LLaDA worker, the
+tests and the tooling), `dgemma` (`.venv-dgemma`), `ar` (`.venv-ar`), and
+`desktop`, an overlay into `.venv` rather than an environment of its own. Each
+names its own lock: `requirements.txt`, `requirements-dgemma.txt`,
+`requirements-ar.txt`, `requirements-desktop.txt`. **The locks are generated,
+not hand-written**; see the section below before editing one. Always invoke an
+environment's Python by path.
+
+**Also worth knowing**: `scripts/` holds the tooling the repo is gated by
+(`lint_ratchet.py`, `lock_environments.py`) and one-off builders such as
+`quantize_diffusiongemma_nf4.py`. `tests/` mirrors `src/`, with the browser
+tests under `tests/web/static/` loaded into a `vm` context.
 
 ## Dependency management: consolidated, 2026-09-23
 

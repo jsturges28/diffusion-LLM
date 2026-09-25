@@ -33,6 +33,35 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 _MARKDOWN_LINK = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
 _BACKTICK_PATH = re.compile(r"`([A-Za-z0-9_.][A-Za-z0-9_./-]*)`")
 
+# Shell-style shorthand for sibling files, as in
+# `src/backends/{llada_worker,dgemma_worker}.py`. The pattern above
+# cannot match a brace, so it extracted *nothing at all* from these
+# spans, and the roadmap's quick map was written entirely in them.
+# That is how it came to name two model backends while three shipped:
+# every path in it was invisible to this test.
+_BRACE_SHORTHAND = re.compile(
+    r"`([A-Za-z0-9_./-]+)\{([^}]*)\}([A-Za-z0-9_.]*)`"
+)
+
+# A bare module name, which the heuristic below deliberately skips.
+# Run-folder artifacts are named bare all through these docs
+# (`metadata.json`, `frames.jsonl`) and live in a gitignored tree, so
+# skipping bare names is right. But none of those is a `.py`, and
+# `docs/HANDOFF.md` named `llada_sampler.py` for weeks after `ORG-03`
+# renamed it, because nothing looked.
+_BARE_MODULE = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*\.py)`")
+
+# Documents that describe something other than this tree as it stands,
+# exempt from the bare-module rule for the reason the unchecked list
+# above gives: holding a record to the present tense means never
+# writing one. The campaign ledger cites files by the name they had
+# when a finding was raised, and `reference/` describes the upstream
+# project it was lifted from, whose `generate.py` was never ours.
+_RECORD_DOC_PREFIXES = (
+    "docs/audit/",
+    "reference/",
+)
+
 # Prose that looks like a path but is not one of ours.
 _IGNORED_PREFIXES = (
     "http://",
@@ -175,7 +204,89 @@ def _candidate_paths(
         if _is_repo_path(candidate, roots):
             found.add(candidate)
 
+    found |= _shorthand_paths(text, roots)
+
+    # A bare module name, resolved by name rather than by location,
+    # since the prose says `run_worker.py` without repeating the
+    # directory it was just given in.
+    if not _is_record(doc):
+        found |= _unresolved_modules(text, tracked)
+
     return found
+
+
+def _shorthand_paths(text: str, roots: Set[str]) -> Set[str]:
+    """Every member of every sibling-shorthand span.
+
+    A comma is required, which is what keeps route templates out:
+    `/runs/{id}/metadata` has one member and names a route, not a
+    file. The prefix must be a tracked root for the same reason the
+    heuristic above anchors there.
+    """
+    found: Set[str] = set()
+    for prefix, group, suffix in _BRACE_SHORTHAND.findall(text):
+        if "," not in group:
+            continue
+        if prefix.split("/", 1)[0] not in roots:
+            continue
+        for path in _expand_shorthand(prefix, group, suffix):
+            if not _is_allowed_absent(path):
+                found.add(path)
+    return found
+
+
+def _unresolved_modules(text: str, tracked: Set[str]) -> Set[str]:
+    """Bare module names this tree has none of.
+
+    Reported through the same channel as every other claim, so the
+    failure message names the file rather than the rule.
+    """
+    return {
+        f"a module named {name}"
+        for name in _BARE_MODULE.findall(text)
+        if not _module_exists(name, tracked)
+    }
+
+
+def _is_record(doc: Path) -> bool:
+    """Whether this document describes the past or another project."""
+    relative = doc.relative_to(REPO_ROOT).as_posix()
+    return relative.startswith(_RECORD_DOC_PREFIXES)
+
+
+def _module_exists(name: str, tracked: Set[str]) -> bool:
+    """Whether a module of this name is tracked anywhere.
+
+    By name across the whole tree rather than under a fixed list of
+    roots, because `main.py` and `desktop.py` are entry points at the
+    repository root and the prose names them constantly.
+    """
+    return any(
+        path.rsplit("/", 1)[-1] == name for path in tracked
+    )
+
+
+def _expand_shorthand(
+    prefix: str, group: str, suffix: str
+) -> List[str]:
+    """`dir/{a,b}.py` as the paths a reader takes it to mean.
+
+    Three shapes are in use and all have to work: the extension after
+    the group (`{a,b}.py`), the whole name inside it
+    (`{a.html,b.js}`), and neither (`{a,b,c}`, which still means
+    modules). The last is why a name with no dot gains `.py` rather
+    than being checked as a directory.
+    """
+    expanded: List[str] = []
+    for part in group.split(","):
+        part = part.strip()
+        if part == "":
+            continue
+        path = f"{prefix}{part}{suffix}"
+        if "." not in path.rsplit("/", 1)[-1]:
+            path += ".py"
+        expanded.append(path)
+    return expanded
 
 
 def _is_allowed_absent(path: str) -> bool:
@@ -322,3 +433,91 @@ def test_a_directory_counts_as_present_when_it_has_content() -> None:
 
     assert _is_satisfied("src/web/", tracked)
     assert _is_satisfied("scripts", tracked)
+
+
+# -- the shorthand that used to hide a whole section --
+
+
+def test_shorthand_expands_with_the_extension_outside() -> None:
+    found = _expand_shorthand("src/backends/", "a,b", ".py")
+
+    assert found == ["src/backends/a.py", "src/backends/b.py"]
+
+
+def test_shorthand_expands_with_whole_names_inside() -> None:
+    found = _expand_shorthand("src/web/static/", "a.html,b.js", "")
+
+    assert found == ["src/web/static/a.html", "src/web/static/b.js"]
+
+
+def test_shorthand_with_no_extension_means_modules() -> None:
+    """`src/inference/{streaming_sampler,ar_sampler}` in HANDOFF.
+    Checking those as directories would pass on nothing existing."""
+    found = _expand_shorthand("src/inference/", "a,b", "")
+
+    assert found == ["src/inference/a.py", "src/inference/b.py"]
+
+
+def test_shorthand_in_a_real_document_is_checked() -> None:
+    """Against the live example, because the unit tests above would
+    pass on an expander nothing calls.
+
+    `docs/HANDOFF.md` lists the three workers as shorthand and has to
+    keep doing so: it sits at exactly its 200-line budget, so writing
+    them out is not available. The roadmap's quick map used the same
+    notation, which is how it came to name two of the three workers
+    while every path in it stayed invisible to this test.
+    """
+    handoff = REPO_ROOT / "docs" / "HANDOFF.md"
+    tracked = _tracked_files()
+
+    found = _candidate_paths(
+        handoff, handoff.read_text(encoding="utf-8"), tracked
+    )
+
+    assert "src/backends/smollm3_worker.py" in found, (
+        "shorthand paths are not reaching the check"
+    )
+
+
+def test_a_route_template_is_not_mistaken_for_a_path() -> None:
+    """`/runs/{id}/metadata` names a route. One member and no comma is
+    the discriminator, and it has to hold or the check invents files
+    called `id`."""
+    text = "see `/api/analytics/runs/{id}/frames` for the payload"
+    tracked = _tracked_files()
+    doc = REPO_ROOT / "docs" / "ROADMAP.md"
+
+    assert _candidate_paths(doc, text, tracked) == set()
+
+
+# -- and the bare name nothing was looking at --
+
+
+def test_a_bare_module_resolves_by_name() -> None:
+    tracked = _tracked_files()
+
+    assert _module_exists("server.py", tracked)
+    # At the repository root, which is why the search is not confined
+    # to a list of package directories.
+    assert _module_exists("main.py", tracked)
+
+
+def test_a_bare_module_that_was_renamed_is_caught() -> None:
+    """The live example. `ORG-03` renamed `llada_sampler.py` to
+    `llada_kernel.py` and moved its twin to `reference/llada/`, and
+    HANDOFF went on naming the old one, because a bare filename was
+    skipped as prose."""
+    tracked = _tracked_files()
+
+    assert _module_exists("llada_kernel.py", tracked)
+    assert not _module_exists("llada_sampler.py", tracked)
+
+
+def test_a_record_may_name_a_file_that_has_since_moved() -> None:
+    """The exemption, asserted rather than assumed. The campaign
+    ledger cites files by the name they had when a finding was
+    raised."""
+    assert _is_record(REPO_ROOT / "docs" / "audit" / "x.md")
+    assert _is_record(REPO_ROOT / "reference" / "llada" / "README.md")
+    assert not _is_record(REPO_ROOT / "docs" / "HANDOFF.md")

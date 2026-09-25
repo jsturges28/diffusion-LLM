@@ -187,9 +187,8 @@ briefly, and is the right thing to reach for while using the app.
 
 ## Roadmap
 
-Next up: multimodal image input, a live GPU and CPU meter that persists
-its samples, top-k alternatives for the diffusion models, and
-side-by-side comparison against autoregressive generation.
+Next up: a state-space model (Mamba-3) as a new model class, top-k
+alternatives for the diffusion models, and multimodal image input.
 [docs/ROADMAP.md](docs/ROADMAP.md) carries the reasoning and the
 backlog.
 
