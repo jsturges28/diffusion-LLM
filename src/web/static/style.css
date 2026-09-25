@@ -1853,6 +1853,92 @@ button {
   scrollbar-color: var(--border) transparent;
 }
 
+/* Help is the one modal with enough in it to need navigating, so it
+   gets side tabs, mirroring the Settings page rather than inventing a
+   second idiom. Fifteen sections in one scrolling body had stopped
+   being findable.
+
+   Wider than a plain modal because a tab rail plus prose needs it,
+   and the scrolling moves from the box to the panel: with the box
+   scrolling, reading to the end of a long panel took the tabs off
+   screen, which defeats the point of having them. */
+.modal-box-tabbed {
+  max-width: 880px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.help-layout {
+  display: flex;
+  gap: 20px;
+  margin-top: 8px;
+  /* Without this a flex child refuses to shrink below its content, so
+     the panel below would grow the box instead of scrolling. */
+  min-height: 0;
+}
+
+/* A fixed width, not a minimum: the rail sizing to its longest label
+   let one tab name set how much room the prose got, and the prose is
+   what the modal is for. */
+#help-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+  width: 180px;
+  padding-right: 16px;
+  border-right: 1px solid var(--border);
+}
+
+.help-tab {
+  background: none;
+  border: none;
+  text-align: left;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.help-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-surface);
+}
+
+.help-tab.is-active {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.help-body {
+  flex: 1;
+  min-width: 0;
+  max-height: 62vh;
+  overflow-y: auto;
+  padding-right: 8px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+/* Stated rather than left to the attribute: a panel that ever gains a
+   display value in a later rule would start showing through. */
+.help-panel[hidden] {
+  display: none;
+}
+
+/* The panel's own title, which the tab already names. Kept in the
+   markup for a reader who lands on a panel with the rail scrolled or
+   collapsed, and for anyone reading the HTML. */
+.help-panel > h3:first-child {
+  margin-top: 0;
+}
+
 .modal-box::-webkit-scrollbar {
   width: 6px;
 }

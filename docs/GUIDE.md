@@ -145,6 +145,18 @@ A single always-present row directly above the token canvas, on both the generat
 
 Two sources drive it: a token hover, and an entropy hover (the generator's profile, the Analytics chart), so a tall bar can be read back to a word without moving the pointer to the text. It also follows the frame, so a held position updates while scrubbing and during live generation. Absent is distinguished from zero: a dash means the run does not carry the value, rather than that the model measured nothing. Every model records entropy now; on the diffusion models it is the current step's, so it moves as you scrub. Height is reserved permanently rather than shown on hover, which would push the canvas down every time the pointer crossed into it.
 
+### Reading an entropy profile
+
+A profile is easy to glance at and easy to misread, so these are the
+three readings worth having in mind. They came out of using the tool
+rather than out of theory.
+
+**A long flat stretch near zero is mostly about subject matter, not mastery.** Some domains are intrinsically low-entropy: in code, most tokens are forced by syntax even the first time, so the profile sits low however varied the content is. We tested this here, asking for 2,048 tokens of Python recipes that never reused a module or a structure; the content really was varied, and the profile flatlined anyway. The same prompt in prose, under the same length demand, stayed high throughout.
+
+**Repetition then pushes it lower still**, and shows up as a decline rather than a flat line. Ask for more tokens than a subject can fill and a model pads by looping a structure it has already produced; copying its own earlier text is close to free. So a profile that is spiky early and sparse later is usually showing you where the model ran out of things to say, even while the words keep changing: the scaffolding has become fixed. A run that is both, code padded with repeated bodies, is how the profile gets to near zero.
+
+Reading it the other way is often more useful. **The spikes are the decisions**, the points where the model genuinely had a choice about what to say next, with the troughs on the syntax it had no choice about. That is a reading the profile gives you and the output alone does not, since the padding is fluent and looks deliberate. Entropy also drifts down as context grows, for the ordinary reason that more context leaves fewer continuations open, but that effect is gentle.
+
 ### Confidence and the heatmap
 
 Every resolved token carries a **confidence** value in [0, 1], and every frame carries the mean confidence of its resolved tokens. The source differs per model, cheap by default:
@@ -224,6 +236,17 @@ Every page works with no outbound network. The chart libraries (Chart.js, Hammer
 - **Canvas boundaries:** for multi-canvas DiffusionGemma runs, dashed amber markers on the charts mark where one canvas commits and the next begins. Single-canvas runs show none.
 - **Token overlay + per-frame scrubber:** a scrubbable view of the run's tokens inside the detail modal, with a corner **Overlay** drawer mirroring the generator's. A frame scrubber (prev / slider / next, `Frame i / N`) replays every saved frame through the active overlay, opening on the final frame. The drawer offers **None** and **Heatmap** for every run with token records (Heatmap recolors resolved tokens by their persisted confidence), plus **Commit Order** and **Diff vs Original** for diffusion runs. Commit Order tints each token by when it settled (early-to-late gradient legend); Diff vs Original (available only for edited runs with a saved snapshot) stacks the original and edited runs with independent **Original** / **Edited** opacity sliders and a **Difference blend** toggle, plus a `Diverged N/total` readout, matching the generator's layered diff (the original layer clamps to its final frame past its end). Runs saved with entropy add the **Entropy** overlay, and runs saved with captured candidates get the same hover popover as the generator, so a What If branch and the decision behind it are both replayable post-hoc. Autoregressive runs, which have no masked canvas, omit Commit Order. Hovering a token shows its position, persisted confidence, and entropy where saved. This makes the generator's explainability overlays durable and scrubbable post-hoc; runs saved before durable overlays (or without token data) show a short unavailable note.
 - **Chart controls:** scroll-wheel zoom and +/-/Reset on every chart. Tooltip boxes park in whichever corner of the plot area is free of both the data and the pointer (preferring top-left, then top-right, bottom-left, bottom-right) and stay fully inside the plot area rather than spilling onto the axes; each chart has a toggle to hide/show its box. When no corner is free, the covered segment and the hovered point glow through the box.
+
+### How collections are stored
+
+Worth knowing if you are looking at the files on disk or wondering why
+two windows agree about a collection.
+
+A collection is a filter rather than a container, so a collection view has nothing to add by construction: it shows exactly what it holds. **Show all runs**, beside the tab strip while a collection is open, relaxes that one filter. The tab stays selected, every run appears, and the ones already filed here are dimmed so you can see what is left to add. The bulk star then files into the collection you are standing in rather than into Favorites, and its tooltip names the target either way. The toggle lasts for the visit: switching tabs turns it off, because a collection view that quietly showed non-members next time would no longer be telling you what it holds.
+
+The server does not merely store it, it **owns** it. Filing a run sends what you did rather than a new copy of the whole list, and the answer is the list as it stands afterwards. That is what lets two windows be open at once: file one run in each and both survive, where a page that wrote back its own copy would have had the second erase the first. It also means a change that fails did not happen, rather than appearing to work here until something else overwrote it. A window left open while another files something is behind until it acts or you press **Refresh**, which now asks the server rather than re-reading what this window last saw.
+
+Filing a run is written to disk straight away rather than a moment later, so navigating immediately afterwards cannot lose it. It is the one preference here that cannot be worked out again from anything on disk, which is also why a failure to save it says so, rather than leaving the change looking saved in this window until something else overwrites it.
 
 ### Saving and reproducibility
 

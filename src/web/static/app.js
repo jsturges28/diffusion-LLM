@@ -8359,6 +8359,56 @@ var allModals = [
   modalAbout, modalHelp, modalImport,
 ];
 
+// ---- Help tabs ----
+//
+// Mirrors the Settings page's rail rather than inventing a second
+// idiom: same data attributes, same is-active class, same shape of
+// toggle. Duplicated here rather than extracted, because it is twenty
+// lines with two callers and a shared module would cost a third file
+// plus a load-order change on four pages.
+//
+// One thing this does that Settings does not: it sets aria-selected.
+// Settings declares role="tab" and then marks the active one with a
+// class alone, which is invisible to a screen reader.
+var helpTabs =
+  document.querySelectorAll(".help-tab");
+var helpPanels =
+  document.querySelectorAll(".help-panel");
+
+function selectHelpTab(name) {
+  for (var i = 0; i < helpTabs.length; i++) {
+    var active = helpTabs[i].getAttribute("data-help-tab") === name;
+    helpTabs[i].classList.toggle("is-active", active);
+    helpTabs[i].setAttribute("aria-selected", active ? "true" : "false");
+  }
+  for (var j = 0; j < helpPanels.length; j++) {
+    helpPanels[j].hidden =
+      helpPanels[j].getAttribute("data-help-panel") !== name;
+  }
+}
+
+function wireHelpTabs() {
+  for (var i = 0; i < helpTabs.length; i++) {
+    (function (tab) {
+      tab.addEventListener("click", function () {
+        selectHelpTab(tab.getAttribute("data-help-tab"));
+        // Back to the top of the new panel. The body is what scrolls,
+        // so without this a reader who was deep in one panel lands
+        // mid-way down the next one with no idea why.
+        var body = tab.closest(".help-layout");
+        if (body) {
+          var pane = body.querySelector(".help-body");
+          if (pane) {
+            pane.scrollTop = 0;
+          }
+        }
+      });
+    })(helpTabs[i]);
+  }
+}
+
+wireHelpTabs();
+
 // Raising the loading curtain has to clear the modals first. They are
 // native dialogs now, so an open one is in the top layer, which sits
 // above every z-index including this overlay's 100. That is reachable

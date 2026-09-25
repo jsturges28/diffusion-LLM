@@ -2161,9 +2161,51 @@ The registry no longer spells out interpreter paths. A model names an
 environment and `src/backends/environments.py` resolves it, which removes the
 fourth independent copy of each environment's identity.
 
+## Where the documentation lives: settled 2026-09-24
+
+The README had reached 16,240 words and Help 11,315, and both were fixed in
+the same pass because they were failing in opposite ways. Recording the
+difference here because the obvious remedy is wrong for one of them.
+
+**The README was misplacement, so the prose moved.** Three quarters of it sat
+in two sections: a 6,979-word "Quickstart" that was the user manual under the
+wrong heading, and 5,018 words of Implementation Status that was a changelog
+in checkbox form. `docs/GUIDE.md` now carries the manual and the README keeps
+the 1,249 words a stranger needs in five minutes. Nothing was rewritten, and
+the old README is deliberately not archived: two descriptions of the app with
+nothing saying which is current go stale immediately, where a live guide stays
+maintained and gives the in-app Help somewhere to point.
+
+**Help was organisation, and cutting it would have been the wrong fix.** It
+had fifteen sections in one scrolling body and its headings had stopped
+describing their contents, because each new feature appended prose under
+whichever heading happened to be last. The section titled "Stopping a run"
+held 21 paragraphs and three were about stopping a run; the resource meter's
+copy had landed there the same way. So Help is now eight tabbed panels
+mirroring the Settings rail.
+
+The measurement that settled it: of 19 rationale-shaped paragraphs in Help,
+only 2 were already in the guide, so cutting would have lost the other 17.
+Inspecting the largest sections showed why. They are usage instructions, not
+essays: which control does what, and what the number beside it means. Help is
+the only documentation a user with a hand on the mouse has, and it works
+offline with zero outbound links by `TRUST-02`. Only about 570 words were
+honestly non-usage prose, a 5 percent cut, and those six paragraphs moved to
+the guide. **Do not come back to this expecting to halve the word count.** The
+fix for a wall of Help text is a better grouping, not a shorter one.
+
+Two tests hold the shape. `tests/test_readme_bounded.py` bounds the README at
+1,600 words and checks the orientation survives, since a bound alone produces
+a short file that fails the reader. `tests/web/test_help_organised.py` bounds
+each panel rather than the modal, because a total can hold steady while one
+panel quietly becomes where everything gets dropped, which is the failure that
+happened the first time. It caught a 2,902-word panel in the commit that
+introduced it.
+
 ## References
 
-- `README.md`: feature overview, architecture, and the short public roadmap.
+- `README.md`: what the project is, setup, and the short public roadmap.
+- `docs/GUIDE.md`: the feature manual, and how each model generates.
 - `.cursor/plans/`: the per-milestone build plans (multi-model architecture,
   interactive remasking, Milestone 4 visualization + VRAM handling).
 - Chat transcripts: the detailed design rationale behind the decisions above.

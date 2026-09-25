@@ -3274,3 +3274,38 @@ change is that nothing observable moves.
     instance, with a model loaded, switch to a different model. It
     should work exactly as before, because a supervisor that already
     holds the lease is switching rather than competing with itself.
+
+## Help, reorganised into tabs
+
+The structure is covered by `tests/web/test_help_organised.py` and the
+switching by `tests/web/static/help_tabs.test.js`. What no test can
+answer is whether the rail reads as navigation at a glance and whether
+the copy still lands where a reader would look for it, which is worth
+a pass before showing the project to anyone.
+
+315. **The rail reads as navigation.** Open Help from the generator
+    header. It should open on **Getting started** with eight tabs down
+    the left, only the active one highlighted, and the panel beside it
+    scrolling on its own. Scroll a panel to the bottom: the tabs must
+    stay put. If the whole box scrolls instead, reading to the end of
+    a panel takes the rail off screen, which defeats the point of
+    having it.
+316. **Switching lands at the top.** Scroll well down one panel, then
+    click another tab. The new panel should start at its own top. The
+    body is what scrolls, so without the reset you arrive partway down
+    a panel you have not read, which looks like missing copy rather
+    than like a scroll position.
+317. **Nothing was lost in the regrouping.** The panels were assembled
+    by moving whole paragraphs, so this is a spot-check rather than a
+    proof. Pick two or three things you know the app does and look for
+    them where the tabs say they should be. The ones most likely to
+    have gone astray are the **resource meter** (now under *Running*,
+    previously filed under "Stopping a run"), **switching models**
+    (under *Models*), and the **entropy chart** (under *Detail
+    modal*).
+318. **The pointer to the rest is visible.** At the bottom of *Getting
+    started*, Help should name `docs/GUIDE.md` and `docs/ROADMAP.md`.
+    Six paragraphs of interpretation moved out of Help into the guide,
+    so a reader in the app needs to be told where they went. It is
+    text, not a link, deliberately: Help works with no network by
+    `TRUST-02` and carries no outbound hrefs.
