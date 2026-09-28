@@ -41,7 +41,17 @@ GOOD_CONFIG: Dict[str, Any] = {
     "scale_factor": 3,
     "vision_config": {"image_size": 384, "patch_size": 14},
 }
+# The three fields that choose the processor's path, as both real
+# checkpoints set them. Kept apart so a test writing its own bounds
+# still describes a checkpoint the reader accepts, and fails for the
+# one defect it is about rather than for these.
+PATH_FIELDS: Dict[str, Any] = {
+    "image_processor_type": "Idefics3ImageProcessor",
+    "do_resize": True,
+    "do_image_splitting": True,
+}
 GOOD_PREPROCESSOR: Dict[str, Any] = {
+    **PATH_FIELDS,
     "size": {"longest_edge": 1536},
     "max_image_size": {"longest_edge": 384},
 }
@@ -147,7 +157,8 @@ def test_the_geometry_comes_from_the_files_not_a_default(
         reader,
         {"scale_factor": 4,
          "vision_config": {"image_size": 512, "patch_size": 16}},
-        {"size": {"longest_edge": 2048},
+        {**PATH_FIELDS,
+         "size": {"longest_edge": 2048},
          "max_image_size": {"longest_edge": 512}},
     )
 
@@ -193,11 +204,53 @@ def test_a_bound_without_longest_edge_is_reported(
 ) -> None:
     _write(
         reader, GOOD_CONFIG,
-        {"size": {"height": 1536},
+        {**PATH_FIELDS,
+         "size": {"height": 1536},
          "max_image_size": {"longest_edge": 384}},
     )
 
     with pytest.raises(EncoderUnavailable, match="size"):
+        load_geometry(FAKE)
+
+
+@pytest.mark.parametrize(
+    "named", ["SmolVLMImageProcessor", "", None, "idefics3"]
+)
+def test_an_unverified_processor_is_refused(
+    reader: Path, named: Any
+) -> None:
+    """Refused rather than drawn, because the arithmetic is held to
+    one processor's source and another class is another program. The
+    SmolVLM one is identical today and still refused, since nothing
+    compares against it. `None` stands for the key being absent."""
+    preprocessor = dict(GOOD_PREPROCESSOR)
+    if named is None:
+        del preprocessor["image_processor_type"]
+    else:
+        preprocessor["image_processor_type"] = named
+    _write(reader, GOOD_CONFIG, preprocessor)
+
+    with pytest.raises(EncoderUnavailable, match="verified against"):
+        load_geometry(FAKE)
+
+
+@pytest.mark.parametrize("key", ["do_resize", "do_image_splitting"])
+@pytest.mark.parametrize("value", [False, None, 1, "true"])
+def test_a_path_the_geometry_does_not_describe_is_refused(
+    reader: Path, key: str, value: Any
+) -> None:
+    """With either switch off the processor squares the image or skips
+    the rescale, and the grid drawn would be wrong. `None` stands for
+    the key being absent; `1` and `"true"` are truthy values JSON
+    permits that are not `true`."""
+    preprocessor = dict(GOOD_PREPROCESSOR)
+    if value is None:
+        del preprocessor[key]
+    else:
+        preprocessor[key] = value
+    _write(reader, GOOD_CONFIG, preprocessor)
+
+    with pytest.raises(EncoderUnavailable, match=key):
         load_geometry(FAKE)
 
 

@@ -192,6 +192,8 @@ kept when these were written:
   never fetched the vision configs.
 - **326**: **outstanding**, `META-03`'s README walkthrough, followed cold
   on both setup paths.
+- **327**: **outstanding**, the Vision page's hover on the 2.2B, after
+  the fix that made it hit-test only the part of a tile tokens cover.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -3499,3 +3501,21 @@ and 323 and 324 were confirmed by the maintainer on 2026-09-27.
     consulted beyond the README. Write down every place you had to know
     something it did not say, since that list is the finding. A host
     with genuinely no card is item 309's problem, not this one's.
+
+## The Vision page's hover, corrected
+
+327. **On the 2.2B, the hover and the drawn blocks agree.** Item 323
+    passed while this was wrong, because the error is too small to see
+    by eye: the hover divided the whole 384px tile into nine cells,
+    while the fused blocks cover only the 378px that patches reach, so
+    its cells drifted up to about 5 canvas pixels from the blocks drawn
+    and the red strip lit the last token. Open `/vision.html`, pick
+    **SmolVLM-Instruct** in step 3, and check three things:
+
+    - Hovering the red strip at the right or bottom edge lights nothing,
+      and the readout falls back to "Hover the tile".
+    - Moving the pointer slowly rightwards across the left edge of the
+      last column, the orange block jumps to that column as the pointer
+      crosses the drawn line, not a few pixels later.
+    - The 500M behaves as before. It was always right, since 512
+      divides by 16 and leaves no strip.

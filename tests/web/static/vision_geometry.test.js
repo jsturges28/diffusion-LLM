@@ -1,7 +1,7 @@
 // The tokeniser page's own arithmetic.
 //
 // Strategy: load `vision.js` into the shared stub with a narrowed
-// script list, then drive the four pure functions it exposes. Passing
+// script list, then drive the pure functions it exposes. Passing
 // proves a drawn grid lands where the geometry says, that a pointer
 // maps to the token under it, and that the sentence under the cost
 // table cannot contradict the table.
@@ -258,6 +258,200 @@ test("a hover maps to the block the geometry names", () => {
     block, { row: 3, col: 9, height: 3, width: 3 }, "hover"
   );
 });
+
+// -- the part of a tile tokens cover, shared by the grid and hover --
+
+test("the covered box is the whole tile when patches fit it", () => {
+  const context = page();
+  const box = context.visionFitBox(512, 512, 360, 360, 10);
+  const covered = context.visionCoveredBox(box, SMALL);
+
+  assert.equal(covered.x, box.x);
+  assert.equal(covered.y, box.y);
+  assert.ok(Math.abs(covered.width - box.width) < 1e-9);
+  assert.ok(Math.abs(covered.height - box.height) < 1e-9);
+});
+
+test("the covered box stops where the last patch does", () => {
+  // 27 patches of 14px cover 378 of the 384px tile. The other 6 are
+  // the strip the page draws in red and calls never seen.
+  const context = page();
+  const box = context.visionFitBox(384, 384, 360, 360, 10);
+  const covered = context.visionCoveredBox(box, LARGE);
+
+  const expected = box.width * (378 / 384);
+  assert.ok(Math.abs(covered.width - expected) < 1e-9);
+  assert.ok(Math.abs(covered.height - expected) < 1e-9);
+});
+
+// The hover's own path: the tile fitted into the real 360px canvas,
+// then narrowed to what tokens cover. The test above this section
+// hands `visionTokenAt` a box that is already the covered span, which
+// is why nothing noticed the page passing the whole tile instead.
+function hoverBox(context, encoder) {
+  const box = context.visionFitBox(
+    encoder.tile, encoder.tile, 360, 360, context.VISION_PAD
+  );
+  return context.visionCoveredBox(box, encoder);
+}
+
+// Where the blocks belong, from the geometry alone: a token is a
+// `scale` by `scale` run of `patch`-pixel patches. Independent of the
+// helper on purpose, so a helper that drifted disagrees with it.
+function blocksFor(context, encoder) {
+  const box = context.visionFitBox(
+    encoder.tile, encoder.tile, 360, 360, context.VISION_PAD
+  );
+  const block = encoder.patch * encoder.scale * box.width /
+    encoder.tile;
+  return {
+    x: box.x, y: box.y, block, span: encoder.token_side * block,
+  };
+}
+
+test("a pointer on the unseen strip is no token", () => {
+  const context = page();
+  const blocks = blocksFor(context, LARGE);
+  const middle = blocks.y + blocks.span / 2;
+  // 2px into the 5.3px strip, on each of its two edges.
+  const right = blocks.x + blocks.span + 2;
+  const bottom = blocks.y + blocks.span + 2;
+  const covered = hoverBox(context, LARGE);
+
+  assert.equal(
+    context.visionTokenAt(right, middle, covered, LARGE.token_side),
+    -1
+  );
+  assert.equal(
+    context.visionTokenAt(middle, bottom, covered, LARGE.token_side),
+    -1
+  );
+});
+
+test("a pointer just inside a drawn block names that block", () => {
+  // Half a pixel either side of the last column's left edge. Divided
+  // over the whole tile, the cells were 6 tile pixels wider in total
+  // than the blocks drawn, so the first of these read as column 7.
+  const context = page();
+  const blocks = blocksFor(context, LARGE);
+  const edge = blocks.x + 8 * blocks.block;
+  const row = blocks.y + blocks.block / 2;
+  const covered = hoverBox(context, LARGE);
+
+  assert.equal(
+    context.visionTokenAt(edge + 0.5, row, covered, LARGE.token_side),
+    8
+  );
+  assert.equal(
+    context.visionTokenAt(edge - 0.5, row, covered, LARGE.token_side),
+    7
+  );
+});
+
+test("a pointer is read in canvas pixels, not page pixels", () => {
+  // CSS shrinks the 360px canvas to 180px on a narrow window, and
+  // the canvas keeps drawing at 360, so 90px in on the page is 180px
+  // in on the canvas.
+  const context = page();
+  const canvas = { width: 360, height: 360 };
+  const bounds = { left: 20, top: 30, width: 180, height: 180 };
+
+  const point = context.visionCanvasPoint(
+    { clientX: 110, clientY: 120 }, bounds, canvas
+  );
+
+  assert.equal(point.x, 180);
+  assert.equal(point.y, 180);
+});
+
+test("bounds with no size are read at scale one", () => {
+  // The fallback the handler uses when getBoundingClientRect is
+  // missing, which has an origin and nothing else.
+  const context = page();
+
+  const point = context.visionCanvasPoint(
+    { clientX: 50, clientY: 60 }, { left: 10, top: 20 },
+    { width: 360, height: 360 }
+  );
+
+  assert.equal(point.x, 40);
+  assert.equal(point.y, 40);
+});
+
+// -- the page's own handler, fed pointer events --
+
+// The 2.2B's answer for a 1920x1080 image, shaped as the endpoint
+// sends it.
+const LARGE_ANSWER = {
+  encoder: Object.assign(
+    { id: "smolvlm-2b", display_name: "SmolVLM-Instruct",
+      longest_edge: 1536 },
+    LARGE
+  ),
+  image: {
+    source_width: 1920, source_height: 1080,
+    resized_width: 1536, resized_height: 864,
+    fitted_width: 1536, fitted_height: 1152,
+    tile_rows: 3, tile_cols: 4, tile_count: 12,
+    aspect_changed: true, total_tokens: 1053,
+  },
+};
+
+// The page booted the way the server serves it, measured through a
+// fetch that answers with the 2.2B, and wired. The size inputs and
+// the canvas are set before boot's first measurement, which waits a
+// microtask, because the stub parses no markup.
+async function wiredPage() {
+  const loaded = loadPage({
+    scripts: ["overlays.js", "vision.js"],
+    bootState: {
+      encoders: [{
+        id: "smolvlm-2b", display_name: "SmolVLM-Instruct",
+        repo_id: "HuggingFaceTB/SmolVLM-Instruct",
+        revision: "0".repeat(40), summary: "", cached: true,
+      }],
+    },
+    fetchImpl: () => Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve(LARGE_ANSWER),
+    }),
+  });
+  const { document } = loaded;
+  document.getElementById("vision-width").value = "1920";
+  document.getElementById("vision-height").value = "1080";
+  const canvas = document.getElementById("vision-canvas-patches");
+  canvas.width = 360;
+  canvas.height = 360;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  return { context: loaded.context, canvas };
+}
+
+test("the page's hover skips the strip and meets drawn edges",
+  async () => {
+    // The composition the unit tests above cannot see: this is the
+    // handler the page registers, fed pointer events.
+    const { context, canvas } = await wiredPage();
+    assert.ok(
+      context.visionGeometry["smolvlm-2b"], "the page never measured"
+    );
+    const blocks = blocksFor(context, LARGE);
+    const row = blocks.y + blocks.block / 2;
+
+    canvas.dispatch("mousemove", {
+      clientX: blocks.x + blocks.block / 2, clientY: row,
+    });
+    assert.equal(context.visionHoverToken, 0);
+
+    canvas.dispatch("mousemove", {
+      clientX: blocks.x + blocks.span + 2, clientY: row,
+    });
+    assert.equal(context.visionHoverToken, -1);
+
+    canvas.dispatch("mousemove", {
+      clientX: blocks.x + 8 * blocks.block + 0.5, clientY: row,
+    });
+    assert.equal(context.visionHoverToken, 8);
+  });
 
 // -- the sentence under the cost table --
 

@@ -18,7 +18,10 @@ the repository, its pinned commit and a name for it are declared. The
 tile size, patch size and scale factor come out of `config.json`,
 because a hand-maintained copy drifts from what the checkpoint holds,
 and a readout whose whole purpose is to be believed cannot afford
-that. The same argument the tokenizer identity was built on.
+that. The same argument the tokenizer identity was built on. So is
+the path the processor takes: which processor the checkpoint names,
+and the two switches that choose between resizing and splitting, are
+checked rather than assumed.
 
 The two differ in every dimension, which is the reason both are here:
 the 500M fuses 16 patches into a token where the 2.2B fuses 9, and
@@ -45,6 +48,13 @@ logger = logging.getLogger(__name__)
 CONFIG_NAME = "config.json"
 PREPROCESSOR_NAME = "preprocessor_config.json"
 REQUIRED_FILES = (CONFIG_NAME, PREPROCESSOR_NAME)
+
+# The image processor whose arithmetic `vision_geometry` reproduces,
+# and the one its differential test lifts from. Both pinned
+# checkpoints name it: they predate SmolVLM's own classes and load as
+# Idefics3. A checkpoint naming any other processor is refused rather
+# than drawn with arithmetic nobody has compared against it.
+VERIFIED_PROCESSOR = "Idefics3ImageProcessor"
 
 
 @dataclass(frozen=True)
@@ -200,6 +210,13 @@ def load_geometry(
             f"{encoder.display_name} declares no vision_config"
         )
 
+    _require_processor(encoder, preprocessor)
+    # The resize-then-split path is the only one the geometry
+    # describes. With either switch off the processor squares the
+    # image or skips the rescale, and the grid drawn would be wrong.
+    _require_enabled(encoder, preprocessor, "do_resize")
+    _require_enabled(encoder, preprocessor, "do_image_splitting")
+
     longest_edge = _longest_edge(encoder, preprocessor, "size")
     tile = _longest_edge(encoder, preprocessor, "max_image_size")
     geometry = EncoderGeometry(
@@ -223,6 +240,36 @@ def load_geometry(
             geometry.tile,
         )
     return geometry
+
+
+def _require_processor(
+    encoder: VisionEncoder, preprocessor: Dict[str, object]
+) -> None:
+    """Refuse a checkpoint whose processor the geometry was not held
+    against, since every number drawn would be borrowed arithmetic."""
+    named = preprocessor.get("image_processor_type")
+    if named != VERIFIED_PROCESSOR:
+        raise EncoderUnavailable(
+            f"{encoder.display_name} names {named!r}; the geometry"
+            f" is verified against {VERIFIED_PROCESSOR} only"
+        )
+
+
+def _require_enabled(
+    encoder: VisionEncoder, section: Dict[str, object], key: str
+) -> None:
+    """A switch that has to be JSON `true` for the geometry to apply.
+
+    Required rather than defaulted, like every other field here: the
+    library defaults both to on, but a default is a guess about a
+    checkpoint, and this module reads the checkpoint instead.
+    """
+    value = section.get(key)
+    if value is not True:
+        raise EncoderUnavailable(
+            f"{encoder.display_name} sets {key} to {value!r}, and"
+            " the geometry describes only the path where it is true"
+        )
 
 
 def _longest_edge(

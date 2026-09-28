@@ -84,6 +84,31 @@ function visionTokenAt(pointX, pointY, box, tokenSide) {
   return row * tokenSide + col;
 }
 
+// The part of a tile's box that tokens cover. Short of the whole tile
+// when its side is not a whole number of patches, as on the 2.2B,
+// whose last 6px complete no patch. The fused grid and the hover both
+// read it, so what is drawn and what is hit cannot disagree; they did
+// when the hover divided the whole tile instead.
+function visionCoveredBox(box, encoder) {
+  var perPixel = box.width / encoder.tile;
+  var span = encoder.token_side * encoder.scale * encoder.patch *
+    perPixel;
+  return { x: box.x, y: box.y, width: span, height: span };
+}
+
+// A pointer event's position in canvas pixels. The canvas draws in
+// its own `width` by `height` while the event reports page pixels,
+// and the two differ once `max-width: 100%` shrinks the canvas on a
+// narrow window. A bounds object without a size is read at scale one.
+function visionCanvasPoint(event, bounds, canvas) {
+  var scaleX = bounds.width ? canvas.width / bounds.width : 1;
+  var scaleY = bounds.height ? canvas.height / bounds.height : 1;
+  return {
+    x: (event.clientX - bounds.left) * scaleX,
+    y: (event.clientY - bounds.top) * scaleY
+  };
+}
+
 // The patch rectangle one token covers, mirroring `patch_block` in
 // src/inference/vision_geometry.py. Duplicated rather than fetched
 // because it is three lines and a hover cannot wait for a request;
@@ -280,9 +305,9 @@ function visionDrawPatches(canvas, answer) {
     context.restore();
   }
 
-  // The fused blocks, one per token.
-  var blockPixels = encoder.patch * encoder.scale * perPixel;
-  var fusedSpan = encoder.token_side * blockPixels;
+  // The fused blocks, one per token, over the covered part only.
+  var fusedSpan = visionCoveredBox(box, encoder).width;
+  var blockPixels = fusedSpan / encoder.token_side;
   context.save();
   context.strokeStyle = "#00ff41";
   context.lineWidth = VISION_LINE_FUSED;
@@ -357,7 +382,8 @@ function visionDescribe(answer) {
   visionText("vision-tiles-text",
     image.tile_rows + " by " + image.tile_cols + " tiles of " +
     encoder.tile + "x" + encoder.tile + ", plus one more tile" +
-    " holding the whole picture shrunk down.");
+    " holding the whole picture squashed into a square, whatever" +
+    " its shape.");
 
   visionText("vision-patches-text",
     "One tile is " + encoder.patch_side + "x" + encoder.patch_side +
@@ -543,13 +569,15 @@ function visionWireHover() {
     var bounds = canvas.getBoundingClientRect
       ? canvas.getBoundingClientRect()
       : { left: 0, top: 0 };
+    var point = visionCanvasPoint(event, bounds, canvas);
     var box = visionFitBox(
       answer.encoder.tile, answer.encoder.tile,
       canvas.width, canvas.height, VISION_PAD
     );
     var found = visionTokenAt(
-      event.clientX - bounds.left, event.clientY - bounds.top,
-      box, answer.encoder.token_side
+      point.x, point.y,
+      visionCoveredBox(box, answer.encoder),
+      answer.encoder.token_side
     );
     if (found !== visionHoverToken) {
       visionHoverToken = found;

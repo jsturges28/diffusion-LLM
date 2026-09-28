@@ -326,6 +326,8 @@ function makeElement(id) {
     closePath: () => {},
     moveTo: () => {},
     lineTo: () => {},
+    // The Vision page dashes the outline of an image's source shape.
+    setLineDash: () => {},
     arc: () => {},
     fill: () => {},
     stroke: () => {},

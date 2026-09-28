@@ -2113,8 +2113,12 @@ inspection is saved or a generation is run, neither of which this slice does.
    **every crop is exactly one tile square**. Verified across 4,112 sizes.
 
 Step 3 corrects a claim worth naming because it is the intuitive one and it is
-wrong: tiles are *not* stretched to fit. The distortion happens once, at step 2,
-to the whole picture. A 1920x1080 photo reaches the encoder as 4:3.
+wrong: tiles are *not* stretched to fit. The tiles' distortion happens once, at
+step 2, to the whole picture, so a 1920x1080 photo reaches them as 4:3. The
+whole-image thumbnail is distorted separately and further: `split_image`
+resizes it to one tile, square whatever the picture's shape, so the same photo
+reaches the thumbnail as 1:1. An earlier version of this entry said the
+distortion happens once, which is true of the tiles only.
 
 **The two checkpoints differ in every dimension**, which is why both are
 declared and compared rather than one being chosen:
@@ -2169,7 +2173,13 @@ interactive view cannot spawn the worker environment per pointer move. So
 `tests/inference/test_vision_geometry.py` holds it to the library by lifting the
 real functions out of the `.venv-ar` source with `ast`. Lifted rather than
 imported because the processor module imports `PILImageResampling`, which is
-gated on Pillow, which no environment here installs.
+gated on Pillow, and `.venv-ar`, the only environment whose `transformers`
+implements these models, does not install it. The source is the Idefics3
+processor, not SmolVLM's: both pinned checkpoints name the Idefics3 classes,
+because they predate SmolVLM's own, and `load_geometry` refuses any checkpoint
+naming another processor. The two copies are identical in `transformers` 4.53,
+so the first version, which lifted from the SmolVLM module, drew no wrong
+number; it was held to a module the checkpoints never load.
 
 **The differential test earned its place twice before this shipped.** It caught
 a clamp applied once at the end rather than between the two resize stages, which
@@ -2212,10 +2222,11 @@ and would have shipped a picture that lies.
 
 Three findings, in the order they landed.
 
-**There is no CLS token and no pooling head.** `SmolVLMVisionTransformer` is
-embeddings, encoder, `post_layernorm`, and the only `head` in the module is the
-language model's `lm_head`. SmolVLM feeds patch hidden states straight to the
-connector, so SigLIP's usual attention-pooling head is never instantiated. That
+**There is no CLS token and no pooling head.** `Idefics3VisionTransformer`, which
+is what both pinned checkpoints load, and of which SmolVLM's own class is a near
+copy, is embeddings, encoder, `post_layernorm`, and the only `head` in the module
+is the language model's `lm_head`. SmolVLM feeds patch hidden states straight to
+the connector, so SigLIP's usual attention-pooling head is never instantiated. That
 removes the signal the readable DINO-style maps come from: there is no probe row
 saying how much each patch contributes to a summary. All that exists is
 patch-to-patch self-attention, so any importance map has to be derived.
@@ -2259,9 +2270,10 @@ forces `sdpa` to fall back to `eager`. One layer pooled over heads is 4.2 MB and
 
 The connector is a single **bias-free** `nn.Linear`, `[960, 12288]` on the 500M,
 mapping `vision_hidden * scale**2` to the text width. Because it has no bias and
-no nonlinearity, each patch position's influence on its token is *exactly* the
-Frobenius norm of its column block. No ablation, no attribution method, no sinks
-to confound it, and no forward pass: it is a property of the weights.
+no nonlinearity, the weight it gives each patch position is *exactly* the
+Frobenius norm of that position's column block. No ablation, no attribution
+method, no sinks to confound it, and no forward pass: it is a property of the
+weights. What it is not, exactly, is each position's influence; see below.
 
 Measured on the 500M, laid out as the 4x4 block it fuses:
 
@@ -2274,9 +2286,21 @@ Measured on the 500M, laid out as the 4x4 block it fuses:
 
 **The fusion is nearly even but measurably lopsided**: a 14.9% spread between
 strongest and weakest, 3.6% relative standard deviation, with the upper-middle of
-every block systematically favoured and the bottom row discounted. So the model
-has a mild learned preference about where in a block to listen, which is a real
-answer to what the page's lede promises.
+every block systematically favoured and the bottom row discounted. So the
+connector's weights carry a mild preference about where in a block to listen.
+
+**What that number is not, recorded on 2026-09-28 before anything is built on
+it.** A block's Frobenius norm is the gain it applies to an input with no
+preferred direction, and the connector's input has several. It is
+`post_layernorm`'s output, γ ⊙ n + β: γ reweights the channels before these
+weights see them, β adds a term that is the same for every image, and vision
+features are far from isotropic. So the 14.9% describes the weights, not how
+much each position contributes to a real image's token, and a 3.6% relative
+spread could shrink, grow or reorder once γ is folded in. That fold is
+weights-only and one more small read, so it comes first. The pattern is also,
+by construction, the same on every image, which is the property that ruled out
+the attention overlay; its honest form is a fact about each checkpoint rather
+than an overlay on the reader's picture.
 
 *How to get at it cheaply.* Safetensors supports byte-range reads, and the file's
 header lists every tensor's offsets. The connector tensor is **23.6 MB** of a

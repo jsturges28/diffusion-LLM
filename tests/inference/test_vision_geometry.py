@@ -1,8 +1,9 @@
 """Our image geometry still agrees with the library that defines it.
 
-Strategy: lift the real sizing functions out of the SmolVLM processor
-in `.venv-ar`, compose them in the order `preprocess` calls them, and
-compare against `src/inference/vision_geometry` over thousands of
+Strategy: lift the real sizing functions out of the Idefics3 image
+processor in `.venv-ar`, which is the class both pinned SmolVLM
+checkpoints name, compose them in the order `preprocess` calls them,
+and compare against `src/inference/vision_geometry` over thousands of
 sizes at both encoder geometries. Passing proves the page's numbers
 are the processor's numbers, which is the only claim that matters for
 a readout whose whole purpose is to be believed.
@@ -15,12 +16,18 @@ constraint would justify guessing, so the arithmetic is reproduced and
 held here instead.
 
 **The functions are lifted with `ast` rather than imported**, because
-`image_processing_smolvlm` imports `PILImageResampling`, which is
-gated on Pillow, which no environment here installs. Only the sizing
+the processor module imports `PILImageResampling`, which is gated on
+Pillow, and `.venv-ar`, the only environment whose `transformers`
+implements these models, does not install it. Only the sizing
 functions are needed and they are pure, so parsing the module and
 executing those definitions gets the authority without the
 dependencies. It reads another environment's tree, so it skips when
 that tree is absent.
+
+**It lifted from the wrong module at first.** The `smolvlm/` copy,
+which the checkpoints never load; identical to `idefics3/` in
+`transformers` 4.53, but nothing held the two together.
+`test_the_lift_reads_the_class_the_checkpoints_name` does now.
 
 **This file has already caught two bugs**, which is the argument for
 its existence over a reading of the source:
@@ -49,6 +56,7 @@ from typing import Any, Callable, Dict, List, Tuple
 
 import pytest
 
+from src.inference.vision_encoders import VERIFIED_PROCESSOR
 from src.inference.vision_geometry import (
     EncoderGeometry,
     fit_to_whole_tiles,
@@ -63,12 +71,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PROCESSOR = (
     REPO_ROOT
     / ".venv-ar/lib/python3.12/site-packages/transformers/models"
-    / "smolvlm/image_processing_smolvlm.py"
+    / "idefics3/image_processing_idefics3.py"
 )
 MODELLING = (
     REPO_ROOT
     / ".venv-ar/lib/python3.12/site-packages/transformers/models"
-    / "smolvlm/modeling_smolvlm.py"
+    / "idefics3/modeling_idefics3.py"
 )
 
 # The two shipping checkpoints, whose values differ in every field.
@@ -257,6 +265,26 @@ def test_there_were_sizes_to_compare() -> None:
     """The test above passes on an empty list, and a `_sizes` that
     quietly returned nothing would look like agreement."""
     assert len(_sizes()) > 1_000
+
+
+def test_the_lift_reads_the_class_the_checkpoints_name() -> None:
+    """The comparison is only as good as its source. `load_geometry`
+    refuses any checkpoint not naming `VERIFIED_PROCESSOR`, so the
+    module lifted from has to be the one defining that class, or the
+    page is held to a program the checkpoints never run."""
+    if not PROCESSOR.is_file():
+        pytest.skip("the worker environment is not in this checkout")
+
+    tree = ast.parse(PROCESSOR.read_text(encoding="utf-8"))
+    classes = {
+        node.name for node in tree.body
+        if isinstance(node, ast.ClassDef)
+    }
+
+    assert VERIFIED_PROCESSOR in classes, (
+        f"{PROCESSOR.name} defines {sorted(classes)}, not"
+        f" {VERIFIED_PROCESSOR}, which is what the checkpoints load"
+    )
 
 
 # -- and each step, so a failure says which one --
@@ -530,8 +558,10 @@ def test_every_image_is_tiled(name: str) -> None:
 
 @pytest.mark.parametrize("name", sorted(ENCODERS))
 def test_a_photograph_has_its_shape_changed(name: str) -> None:
-    """Where the distortion actually happens, now that tiles are known
-    to be square: step 2, once, to the whole picture."""
+    """Where the tiles' distortion happens, now that they are known
+    to be square: step 2, to the whole picture. The thumbnail is
+    distorted separately, squashed to one square tile whatever the
+    shape, which this module counts but does not draw."""
     encoder = ENCODERS[name]
 
     assert geometry(encoder, 1920, 1080).aspect_changed

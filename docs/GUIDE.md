@@ -266,7 +266,7 @@ The pipeline runs in three steps, each drawn in turn. First the whole image is s
 
 Inside one tile, the encoder reads a grid of fixed-size patches, and then fuses a square block of neighbouring patches into a single token. On the 500M that is 32x32 patches of 16px with 16 fusing into each token, leaving 64 tokens per tile. On the 2.2B it is 27x27 patches of 14px with 9 fusing, leaving 81. Hover the tile to light up the patches behind one token. On the 2.2B a red strip marks the last 6 pixels of each edge, which complete no patch and are **never seen**, because 384 does not divide by 14.
 
-Every image also pays for one more tile holding a shrunken copy of the whole picture, on top of the tiles themselves.
+Every image also pays for one more tile holding the whole picture squashed into a single square, on top of the tiles themselves. That thumbnail changes the shape a second time: a 16:9 photo reaches the tiles as 4:3 and the thumbnail as 1:1.
 
 The reading worth taking away is that **resolution is free and shape is what costs**. Because the first two steps normalise everything to the same working resolution, a 64x64 icon costs exactly what a megapixel square costs, and a 1920x1080 photo costs exactly what a 1024x768 one costs despite having 2.6 times the pixels. A wide banner costs under a third of a square. You can confirm all of that by dropping in your own files, which is the point of the page.
 
