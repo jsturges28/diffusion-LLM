@@ -2282,8 +2282,8 @@ was: it named two model backends against three and five frontend files against
 twenty-three. A list of files also goes stale silently, because nothing fails
 when a file is added and the list is not. So this names the entry point of each
 seam and what the seam is for; `ls` is better than any list at the rest, and
-`tests/test_docs_inventory.py` fails if a model, an environment or a package
-appears that this map does not mention.
+`tests/test_docs_inventory.py` fails if a model, an environment, a package or a
+page appears that this map does not mention.
 
 **Four packages under `src/`**, each with one job:
 
@@ -2300,7 +2300,10 @@ appears that this map does not mention.
   with `dgemma_nf4.py`, `ar_sampler.py`), and the machinery they share, such as
   `reveal.py`, `logit_signals.py`, `checkpoint.py` and `frame_queue.py`.
   Getting weights onto disk and into memory lives here too (`hf_download.py`,
-  `download_main.py`, `load_progress.py`, `artifact_manifest.py`).
+  `download_main.py`, `load_progress.py`, `artifact_manifest.py`). So does the
+  Vision page's arithmetic, `vision_geometry.py` and `vision_encoders.py`, which
+  the supervisor imports directly because they read two config files per
+  encoder and never touch weights.
 - `src/web/` is the **supervisor**. `server.py` serves the pages and the API and
   owns the worker; the modules beside it each took one responsibility out of it,
   which is why they exist rather than being sections of `server.py`:
@@ -2309,10 +2312,11 @@ appears that this map does not mention.
   (which of this machine's launchers may hold a model).
 - `src/analytics/` computes the intrinsic metrics in `metrics.py`.
 
-**The frontend** is `src/web/static/`: four pages (`menu.html`, `index.html`,
-`analytics.html`, `settings.html`) with a script each, over shared modules of
-which `overlays.js` is the important one, since the overlay and settings math
-has to agree across pages. No framework, no bundler, no build step.
+**The frontend** is `src/web/static/`: five pages (`menu.html`, `index.html`,
+`analytics.html`, `settings.html`, `vision.html`) with a script each, over
+shared modules of which `overlays.js` is the important one, since the overlay
+and settings math has to agree across pages. `vision.html` is the one page that
+inspects a model without loading it. No framework, no bundler, no build step.
 
 **Adding a model**: add a `ModelInfo` to `src/backends/registry.py` plus a
 worker module, and name it here. The frontend and analytics are schema-driven,

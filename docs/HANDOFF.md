@@ -69,12 +69,12 @@ in an analytics suite.
   LLaDA's algorithm is `llada_kernel.py`, its old twin quarantined under
   `reference/llada/` behind a differential test (`ORG-03`).
 - **Frontend** (shared, schema-driven, no framework or bundler):
-  `src/web/static/` holds `menu`, `index`/`app`, `analytics`, `settings`, plus
-  `overlays.js` for the shared color ramps, the layered-diff builder, the "new
-  run" registry, and the durable-UI-state layer. `detail_requests.js` fences
-  the Analytics detail panel's fetches and, through a second instance, the
-  compare panel's. Third-party chart libraries and the webfont are vendored
-  under `static/vendor/`, so every page works offline.
+  `src/web/static/` holds `menu`, `index`/`app`, `analytics`, `settings` and
+  `vision`, plus `overlays.js` for the shared color ramps, the layered-diff
+  builder, the "new run" registry and the durable-UI-state layer.
+  `detail_requests.js` fences the Analytics detail panel's fetches and, through
+  a second instance, the compare panel's. Third-party chart libraries and the
+  webfont are vendored under `static/vendor/`, so every page works offline.
 - **Analytics reads** are split by cost: `/api/analytics/runs` carries only
   what the table draws (about 326 bytes a run), and the prompt, parameters
   and per-frame arrays are fetched per run from `/runs/{id}/metadata` when

@@ -172,6 +172,8 @@ kept when these were written:
   line**, the renderer did not die, the diagnosis behind that whole change
   was wrong, and the investigation restarts elsewhere. That negative is the
   more informative result and is the reason the log exists.
+- **326**: **outstanding**, `META-03`'s README walkthrough, followed cold
+  on both setup paths.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -3453,3 +3455,29 @@ and 323 and 324 were confirmed by the maintainer on 2026-09-27.
     fetched them, open the page offline. It should report which
     encoder is not downloaded rather than showing an empty diagram or
     an error, since two small JSON files are all it wants.
+
+## The README, followed cold (META-03)
+
+326. **A stranger can get it running from the README alone.** The half
+    of `META-03` no test can do: the documentation inventory checks that
+    the README names every model and every page's route, not that its
+    steps work. Clone into an empty directory and follow only
+    `README.md`, top to bottom, without reaching for anything you
+    already know about this repository. Weights already in
+    `~/.cache/huggingface` are reused, so a fresh clone does not mean a
+    fresh download.
+
+    *The GPU path.* Create `.venv` from `requirements.txt` as Setup
+    says, start `main.py` as Quickstart says, and activate LLaDA from
+    the Main Menu. Skip DiffusionGemma, which the README says is
+    allowed, and check the menu still lists it.
+
+    *The CPU path.* Add `.venv-ar` from `requirements-ar.txt`, pick
+    SmolLM3 with the device set to CPU, and generate. This is the path
+    the README promises a machine with no card, so watch for any step
+    on it that quietly assumed a GPU.
+
+    Either path passes if it ends in a run on screen with nothing
+    consulted beyond the README. Write down every place you had to know
+    something it did not say, since that list is the finding. A host
+    with genuinely no card is item 309's problem, not this one's.

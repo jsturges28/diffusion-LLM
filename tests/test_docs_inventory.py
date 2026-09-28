@@ -1,10 +1,10 @@
 """Tests that the documentation agrees with the code it describes.
 
-Strategy: read the registry and the environment manifest, then require
-the documents that enumerate models, environments and packages to say
-the same thing. Passing proves a reader cannot be told there are two
-models, or sent to a package that does not exist, or left unaware of
-one that does.
+Strategy: read the registry, the environment manifest and the shipped
+pages, then require the documents that enumerate models, environments,
+packages and pages to say the same thing. Passing proves a reader
+cannot be told there are two models, or sent to a package that does
+not exist, or left unaware of one that does.
 
 **This is the gap the other documentation tests leave.**
 `test_lock_environments.py` checks the manifest against itself and
@@ -40,6 +40,9 @@ README = REPO_ROOT / "README.md"
 ROADMAP = REPO_ROOT / "docs" / "ROADMAP.md"
 AGENTS = REPO_ROOT / "AGENTS.md"
 HANDOFF = REPO_ROOT / "docs" / "HANDOFF.md"
+STATIC = REPO_ROOT / "src" / "web" / "static"
+SERVER = REPO_ROOT / "src" / "web" / "server.py"
+INDEX = STATIC / "index.html"
 
 QUICK_MAP = "## Where things live (quick map)"
 
@@ -342,7 +345,145 @@ def test_the_quick_map_names_every_package(package: str) -> None:
     )
 
 
-# -- the matcher the assertions above rely on --
+# -- and every page, so a page cannot ship unmentioned --
+
+
+# Every page the supervisor serves, as (file, header label, route).
+# Written out rather than derived, because two routes are server
+# names for a file: `/` serves the menu and `/generate` the
+# generator. The three tests after it pin the table to the shipped
+# files, the served routes and the header's own words, so it cannot
+# drift from any of them quietly.
+PAGES: Tuple[Tuple[str, str, str], ...] = (
+    ("menu.html", "Menu", "/"),
+    ("index.html", "Generation", "/generate"),
+    ("analytics.html", "Analytics", "/analytics.html"),
+    ("settings.html", "Settings", "/settings.html"),
+    ("vision.html", "Vision", "/vision.html"),
+)
+PAGE_FILES = [page[0] for page in PAGES]
+PAGE_LABELS = [page[1] for page in PAGES]
+PAGE_ROUTES = [page[2] for page in PAGES]
+
+
+def _is_header_link(markup: str, label: str) -> bool:
+    """Whether an element classed `header-link` shows `label`.
+
+    As its text, or as the `aria-label` the icon-only Settings gear
+    carries. `[^>]*` crosses line breaks, which is how the markup
+    wraps a long tag.
+    """
+    opening = r'class="header-link[^"]*"[^>]*'
+    shown = opening + r">\s*" + re.escape(label) + r"\s*<"
+    named = opening + r'aria-label="' + re.escape(label) + r'"'
+    if re.search(shown, markup) is not None:
+        return True
+    return re.search(named, markup) is not None
+
+
+def _help_header_paragraph() -> str:
+    """The one Help paragraph saying what each header link opens.
+
+    The ownership claim a running user navigates by, and the one that
+    went stale: it described four links after a fifth shipped, while
+    the Vision tab itself was accurate.
+    """
+    text = INDEX.read_text(encoding="utf-8")
+    start = text.index('<dialog id="modal-help"')
+    modal = text[start:text.index("</dialog>", start)]
+    found = [
+        paragraph
+        for paragraph in re.findall(r"<p>(.*?)</p>", modal, re.S)
+        if "Header links" in paragraph
+    ]
+    assert len(found) == 1, (
+        "expected one Help paragraph about the header links,"
+        f" found {len(found)}"
+    )
+    return found[0]
+
+
+def test_the_page_table_names_every_shipped_page() -> None:
+    """The table is written by hand, so this is what keeps it honest:
+    a sixth page fails here until it has a row, and the row is what
+    every check below iterates over."""
+    shipped = sorted(path.name for path in STATIC.glob("*.html"))
+
+    assert sorted(PAGE_FILES) == shipped, (
+        f"src/web/static ships {shipped} and the page table lists"
+        f" {sorted(PAGE_FILES)}"
+    )
+
+
+@pytest.mark.parametrize("route", PAGE_ROUTES)
+def test_every_page_route_is_served(route: str) -> None:
+    server = SERVER.read_text(encoding="utf-8")
+
+    assert f'@app.get("{route}")' in server, (
+        f"server.py serves no {route}, so the table would send a"
+        " reader to a page that does not answer"
+    )
+
+
+@pytest.mark.parametrize("label", PAGE_LABELS)
+def test_every_page_label_is_a_header_link(label: str) -> None:
+    """The label is the word a reader clicks, so it has to be the
+    header's own word rather than the table's."""
+    pages = [STATIC / name for name in PAGE_FILES]
+
+    assert any(
+        _is_header_link(page.read_text(encoding="utf-8"), label)
+        for page in pages
+    ), f"no page's header shows a link labelled {label!r}"
+
+
+@pytest.mark.parametrize("page", PAGE_FILES)
+def test_the_quick_map_names_every_page(page: str) -> None:
+    """The assertion the vision page would have failed: the map said
+    "four pages" for three days after a fifth shipped, because every
+    inventory above is derived from the registry and that page is
+    deliberately outside it."""
+    section = _section(ROADMAP, QUICK_MAP)
+
+    assert _mentions(section, page), (
+        f"the quick map does not name {page}"
+    )
+
+
+@pytest.mark.parametrize("page", PAGE_FILES)
+def test_the_handoff_names_every_page(page: str) -> None:
+    """By file, or by the backticked stem HANDOFF's frontend line
+    uses, since that page has no lines to spare."""
+    text = HANDOFF.read_text(encoding="utf-8")
+    stem = page.removesuffix(".html")
+
+    named = _mentions(text, page) or _mentions(text, f"`{stem}`")
+    assert named, f"HANDOFF does not name {page}"
+
+
+@pytest.mark.parametrize("route", PAGE_ROUTES)
+def test_the_readme_names_every_route(route: str) -> None:
+    """The front page says where each page lives, which is what a
+    newcomer navigates by before they have opened the app."""
+    text = README.read_text(encoding="utf-8")
+
+    assert f"`{route}`" in text, (
+        f"README.md never names the route {route}"
+    )
+
+
+@pytest.mark.parametrize("label", PAGE_LABELS)
+def test_help_names_every_header_link(label: str) -> None:
+    """Help is the only documentation a running user has, and this
+    paragraph is its account of what each header link opens."""
+    paragraph = _help_header_paragraph()
+
+    assert f"<strong>{label}</strong>" in paragraph, (
+        f"Help's header-links paragraph never mentions {label}"
+    )
+
+
+# -- the matchers the assertions above rely on --
 
 
 def test_a_name_matches_itself() -> None:
@@ -369,6 +510,30 @@ def test_punctuation_after_a_name_still_matches() -> None:
     assert _mentions("it lives in `.venv-ar`.", ".venv-ar")
     assert _mentions("`.venv`, `.venv-ar` and more", ".venv")
     assert _mentions("run_worker.py takes --device", "run_worker.py")
+
+
+def test_a_header_link_is_found_across_a_wrapped_tag() -> None:
+    """The shapes the pages actually use: a tag wrapped over lines,
+    an active entry written as a span, and the icon-only gear."""
+    wrapped = '<a href="/"\n  class="header-link" title="x">Menu</a>'
+    active = '<span class="header-link header-link-active">\n  X\n'
+    gear = '<a class="header-link header-link-icon" aria-label="S">'
+
+    assert _is_header_link(wrapped, "Menu")
+    assert _is_header_link(active + "</span>", "X")
+    assert _is_header_link(gear, "S")
+
+
+def test_other_elements_with_the_label_do_not_count() -> None:
+    """Help mentions every label in prose, so a text search would pass
+    on a page that had no such link at all."""
+    assert not _is_header_link("<strong>Vision</strong>", "Vision")
+    assert not _is_header_link(
+        '<a class="header-link">Visionary</a>', "Vision"
+    )
+    assert not _is_header_link(
+        '<a class="nav-link">Vision</a>', "Vision"
+    )
 
 
 def test_the_map_does_not_claim_the_locks_are_hand_written() -> None:

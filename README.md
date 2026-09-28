@@ -78,7 +78,10 @@ Model Worker  (exactly one alive)
 The app opens on a **Main Menu** at `/`, a GPU-aware model picker.
 Selecting a model activates its worker and enters the generator at
 `/generate`, which is gated behind having a model. The Analytics Suite
-at `/analytics.html` is model-agnostic and always available.
+at `/analytics.html` is model-agnostic and always available, as are the
+shared preferences at `/settings.html` and the **Vision** page at
+`/vision.html`, which shows how a vision-language model turns an image
+into tokens without loading one.
 
 ## Setup
 
@@ -167,9 +170,13 @@ comparison, and GIF export. Runs are published whole or not at all,
 versioned, and carry the provenance the worker attested, including what
 each run cost in VRAM.
 
+A **Vision** page comparing how two SmolVLM encoders rescale, tile and
+fuse the same image into tokens, read from each checkpoint's
+configuration, so it costs no GPU memory and disturbs nothing loaded.
+
 A **desktop app**, durable server-side UI state, a host-wide lease so
-two instances cannot both load a model, and a lint ratchet plus roughly
-2,300 tests over the Python and browser code.
+two instances cannot both load a model, and a lint ratchet plus over
+2,500 tests over the Python and browser code.
 
 ## Documentation
 

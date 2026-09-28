@@ -229,6 +229,10 @@ came out of testing it cleared on 2026-08-18, items 162 to 166, and
 `TRUST-03`'s offline retest and `LIFE-02`'s two staged-failure items,
 143 and 144, which are awkward to arrange rather than pending.
 
+- **META-03**: the automated half passes, now that the documentation
+  inventory covers pages as well as models, environments and packages.
+  Item 326 is outstanding: the README followed cold on both setup
+  paths, which is the half of the Verification clause no test can do.
 - **ROADMAP-01 and ROADMAP-02**: **cleared on 2026-09-22**, items 267
   to 273 in one sitting. Two are worth keeping rather than ticking.
   Item 269 is the refusal that did not previously exist, and it
@@ -371,7 +375,7 @@ on real hardware.
 | ROADMAP-03 | high | L | needs hardware | none | Signals declared by axis and unit, diffusion entropy added, LLaDA's per-step softmax cut 6.2x; top-k left downstream with a budget field |
 | ORG-03 | medium | M | done | none | One kernel owns the step and the schedule; the dormant loop is a quarantined reference with a differential test, and the lint baseline fell 118 to 70 |
 | ROADMAP-04 | medium | L | ready | none | Unblocked but deliberately last: multimodal is phase 3 |
-| META-03 | medium | M | deferred | milestone boundaries | |
+| META-03 | medium | M | needs hardware | none | Orientation cut, inventory derived from the registry and manifest, then held to the pages; the README walkthrough is item 326 |
 
 ## Stage map
 
@@ -3723,6 +3727,43 @@ checked only when their first segment is a tracked top-level entry or the path
 exists on disk. That second clause is what detects this finding's real shape,
 present locally and absent from every clone, and a first draft that lacked it
 would have skipped the exact reference that was broken.
+
+### META-03
+
+**Closed in three commits, and the third exists because the first two
+missed something.** `ef8999a` cut the roadmap's orientation back to an
+orientation, moving its rationale verbatim into a Build record, and
+`9e9aa59` derived a documentation inventory from the registry and the
+environment manifest in `tests/test_docs_inventory.py`. Neither updated
+this ledger, which is the failure the brief's same-commit rule exists
+for, and the row said `deferred` for four days after both had landed.
+That status never had the Deviations line this file requires of it
+either; this entry is that line, late.
+
+**The inventory could not see a page, and a page shipped.** Three days
+after `9e9aa59` rewrote the quick map, `vision.html` made five pages
+where it said four, and nothing failed: every inventory was derived from
+`src/backends/registry.py`, and the vision encoders are deliberately
+outside the registry because nothing can generate with them yet. Help's
+paragraph on the header links went stale the same way, describing four
+links after a fifth shipped, while the Vision tab itself was accurate.
+The README and the handoff did not mention the page at all.
+
+**"Selected UI ownership claims" was read as pages and the header.**
+The Verification clause names them without saying which, and the
+audit's own example, Highlight tokens placed in Settings by one
+paragraph and in the Overlay drawer by another, has the shape of a
+document saying where a thing lives. Pages are the claim every document
+makes. So a table of them, as file, header label and route, is pinned to
+the shipped files, the served routes and the header's own words, and the
+quick map, the handoff, the README and Help's header paragraph are held
+to it. The table is written out rather than derived because `/` and
+`/generate` are server names for a file; the three anchors are what stop
+it drifting.
+
+**The manual half is item 326**, the README followed cold on the GPU
+path and on the CPU path, so this sits at `needs hardware` rather than
+`done`.
 
 ### QUALITY-02
 
