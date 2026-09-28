@@ -2190,15 +2190,86 @@ advertises something the Main Menu offers to load and generate with, and until
 that is true a separate declaration in `src/inference/vision_encoders.py` keeps
 the picker honest.
 
-**No attention overlay**, which is the natural next slice and the real "how it
-sees it" payoff. The measurement that shapes it: naive `output_attentions=True`
-costs 1.3 to 3.7 GB per step for the full tensor and forces `sdpa` to fall back
-to `eager`. What the feature needs is one row, a generated token's attention over
-the visual span pooled across heads from a chosen layer, which is about **206
-KiB for a 200-token run at a byte per value**. So it wants hooks on chosen
-layers, the same discipline `logit_signals.py` uses to read signals without
-materialising a softmax, and a new `"patch"` value on the signal manifest's
-`Axis`.
+**No attention overlay.** Intended as the next slice and the real "how it sees
+it" payoff, then **probed on 2026-09-27 and abandoned on the evidence**. This is
+the most useful thing in this section, because the feature is obvious, appealing
+and would have shipped a picture that lies.
+
+### The vision tower's attention map is not about the image
+
+Three findings, in the order they landed.
+
+**There is no CLS token and no pooling head.** `SmolVLMVisionTransformer` is
+embeddings, encoder, `post_layernorm`, and the only `head` in the module is the
+language model's `lm_head`. SmolVLM feeds patch hidden states straight to the
+connector, so SigLIP's usual attention-pooling head is never instantiated. That
+removes the signal the readable DINO-style maps come from: there is no probe row
+saying how much each patch contributes to a summary. All that exists is
+patch-to-patch self-attention, so any importance map has to be derived.
+
+**The obvious derivation is dominated by sinks.** Taking mean attention received
+per patch on the 500M tower, over a real photograph: attention is concentrated,
+with about 1% of patches receiving 40% of it and heads agreeing strongly by layer
+10 (cosine 0.74). All of which looks promising until you ask where it lands.
+Layers 8 and 10 produce **identical** top-10 lists, seven of the ten in a single
+column, and the correlation between attention received and how much detail a
+patch actually contains is **+0.05**, which is noise.
+
+**The falsifying test.** A blank grey image shares **12 of its top-20
+attention-receiving patches with the photograph**, while the photograph and a UI
+screenshot share only **8 of 20** with each other. Two real images agree with
+each other less than either agrees with a picture of nothing. This is the known
+attention-sink behaviour, where a few patches at fixed positions become global
+aggregators carrying no information about the content. An overlay built on it
+would draw nearly the same map on every image, including an empty one.
+
+**This damages the cross-modal version too**, which was the fallback. SmolVLM is
+not an encoder-decoder with cross-attention: the visual tokens are inlined into
+one sequence, so a text token attending to image patches is ordinary causal
+self-attention inside the language model, and language model attention is if
+anything more sink-dominated, since early tokens absorb enormous mass. So that
+fork inherits the same risk rather than escaping it, and it needs the full
+checkpoint and a generation path before it can even be probed. Do not plan it
+without probing it first.
+
+What would be needed to rescue a legible map is attention rollout or
+register-style corrections, which are research techniques with contested
+interpretability. That is a different kind of project from drawing what a model
+does, and it would need its own validation before anything reached a reader.
+
+*The capture cost, kept because it still bounds any future attempt.* Naive
+`output_attentions=True` is 604 MB on the 500M tower and 918 MB on the 2.2B, and
+forces `sdpa` to fall back to `eager`. One layer pooled over heads is 4.2 MB and
+1.0 MB as bytes; a single patch's row is about 4 KiB.
+
+### What is measurable instead: the fusion's own weighting
+
+The connector is a single **bias-free** `nn.Linear`, `[960, 12288]` on the 500M,
+mapping `vision_hidden * scale**2` to the text width. Because it has no bias and
+no nonlinearity, each patch position's influence on its token is *exactly* the
+Frobenius norm of its column block. No ablation, no attribution method, no sinks
+to confound it, and no forward pass: it is a property of the weights.
+
+Measured on the 500M, laid out as the 4x4 block it fuses:
+
+```
+ 18.09   17.32   17.22   17.54
+ 19.36   18.44   17.86   18.53
+ 18.07   17.59   17.31   17.86
+ 17.21   16.92   16.86   17.42
+```
+
+**The fusion is nearly even but measurably lopsided**: a 14.9% spread between
+strongest and weakest, 3.6% relative standard deviation, with the upper-middle of
+every block systematically favoured and the bottom row discounted. So the model
+has a mild learned preference about where in a block to listen, which is a real
+answer to what the page's lede promises.
+
+*How to get at it cheaply.* Safetensors supports byte-range reads, and the file's
+header lists every tensor's offsets. The connector tensor is **23.6 MB** of a
+1,020 MB checkpoint, and the entire vision tower is one contiguous **172.9 MB**
+span, which is how the probe above ran without a full download. That technique is
+worth remembering for any future weights-inspection feature.
 
 **No persistence.** Nothing is written, so there is no artifact to expire and no
 provenance to copy.
