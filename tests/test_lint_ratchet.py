@@ -19,8 +19,9 @@ what proves it.
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
 import pytest
 
@@ -225,6 +226,90 @@ def test_a_finding_with_no_rule_code_is_still_counted() -> None:
     assert counts[("src/a.py", "UNKNOWN")] == 1
 
 
+# -- running Ruff, which must fail loudly rather than read as clean --
+
+
+def _fake_ruff(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    returncode: int,
+    stdout: str,
+    stderr: str = "",
+) -> List[List[str]]:
+    """Stand in for the Ruff subprocess, recording each command."""
+    calls: List[List[str]] = []
+
+    def fake_run(
+        command: List[str], **_options: object
+    ) -> "subprocess.CompletedProcess[str]":
+        calls.append(list(command))
+        return subprocess.CompletedProcess(
+            command, returncode, stdout=stdout, stderr=stderr
+        )
+
+    monkeypatch.setattr(lint_ratchet.subprocess, "run", fake_run)
+    return calls
+
+
+def test_a_ruff_crash_is_an_error_not_a_clean_tree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The failure that happened: Ruff exited 2 on a read-only cache
+    directory, printed nothing to stdout, and the gate reported all
+    70 findings fixed and suggested locking that in."""
+    _fake_ruff(
+        monkeypatch,
+        returncode=2,
+        stdout="",
+        stderr="ruff failed: Read-only file system",
+    )
+
+    with pytest.raises(RuntimeError, match="exited 2"):
+        lint_ratchet.run_ruff()
+
+
+def test_no_output_is_an_error_even_on_an_ordinary_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`python -m ruff` with Ruff missing exits 1, the code Ruff
+    itself uses for "findings exist", with nothing on stdout. The exit
+    code cannot tell those apart; the missing output can."""
+    _fake_ruff(
+        monkeypatch,
+        returncode=1,
+        stdout="",
+        stderr="No module named ruff",
+    )
+
+    with pytest.raises(RuntimeError, match="printed nothing"):
+        lint_ratchet.run_ruff()
+
+
+def test_a_clean_tree_still_reads_as_clean(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The boundary from the other side: Ruff's own empty list on a
+    clean exit is a real answer, and refusing it would make a fully
+    paid-down baseline impossible to reach."""
+    _fake_ruff(monkeypatch, returncode=0, stdout="[]\n")
+
+    assert lint_ratchet.run_ruff() == []
+
+
+def test_the_gate_does_not_depend_on_a_writable_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Agent sessions outside Agent mode run read-only, which is where
+    the crash above came from. Skipping the cache lets the gate answer
+    there, rather than now failing loudly every time."""
+    calls = _fake_ruff(monkeypatch, returncode=0, stdout="[]")
+
+    lint_ratchet.run_ruff()
+
+    assert len(calls) == 1
+    assert "--no-cache" in calls[0]
+
+
 def test_the_committed_baseline_matches_the_tree() -> None:
     """The one test that runs Ruff for real.
 
@@ -235,6 +320,11 @@ def test_the_committed_baseline_matches_the_tree() -> None:
     """
     current = lint_ratchet.tally(lint_ratchet.run_ruff())
     baseline = lint_ratchet.load_baseline()
+
+    # An empty reading against a non-empty ceiling means Ruff did not
+    # run, which is how this test once passed without checking a line.
+    if baseline:
+        assert current, "ruff reported nothing against a baseline"
 
     grown = lint_ratchet.regressions(baseline, current)
 

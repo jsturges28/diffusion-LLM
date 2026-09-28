@@ -3873,3 +3873,15 @@ recorded debt starts at a ceiling of zero, so new code has to be clean, which
 is the half of the policy that stops the baseline growing with the
 repository.
 
+**A crash read as a clean pass, fixed on 2026-09-28.** `run_ruff()`
+substituted `[]` for empty output, so when Ruff exited 2 on a read-only cache
+directory, as it does in any agent session outside Agent mode, the gate
+reported all 70 findings fixed and suggested `--update`, and
+`test_the_committed_baseline_matches_the_tree` passed without checking a line.
+It now passes `--no-cache`, refuses any exit code other than 0 or 1, and
+refuses empty output, which also covers Ruff missing from the environment:
+Python then exits 1, exactly as Ruff does when findings exist, so the exit code
+alone could not tell the two apart. The real-tree test additionally requires a
+non-empty reading whenever the baseline is non-empty. Its first run caught two
+long lines in the tests that came with the fix.
+

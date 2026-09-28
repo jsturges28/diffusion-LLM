@@ -40,13 +40,27 @@ BASELINE_PATH = REPO_ROOT / "lint_baseline.json"
 # scope is a decision, not a detail, and it would move the ceiling.
 LINT_PATHS = ("src", "tests")
 
+# Ruff's exit codes that carry an answer: 0 when the tree is clean and
+# 1 when findings exist. 2 is Ruff's own failure, and says nothing
+# about the tree.
+RUFF_ANSWERED = (0, 1)
+
 # A (file, rule) pair and how many times it occurs.
 Cell = Tuple[str, str]
 Counts = Dict[Cell, int]
 
 
 def run_ruff() -> List[Dict[str, object]]:
-    """Ruff's findings for the checked paths, as parsed JSON."""
+    """Ruff's findings for the checked paths, as parsed JSON.
+
+    Raises rather than returning an empty list when Ruff did not run,
+    because an empty list is the one reading the gate cannot tell from
+    a clean tree. It once was: Ruff exited 2 on a read-only cache
+    directory, and the gate reported all 70 findings fixed.
+
+    `--no-cache` so the answer does not depend on whether the checkout
+    is writable, which it is not in an agent's read-only sandbox.
+    """
     completed = subprocess.run(
         [
             sys.executable,
@@ -56,16 +70,28 @@ def run_ruff() -> List[Dict[str, object]]:
             *LINT_PATHS,
             "--output-format",
             "json",
+            "--no-cache",
         ],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         check=False,
     )
-    # Ruff exits non-zero simply because findings exist, so the exit
-    # code says nothing here; unparseable output is the real failure.
+    if completed.returncode not in RUFF_ANSWERED:
+        raise RuntimeError(
+            f"ruff exited {completed.returncode}:\n"
+            + (completed.stderr or completed.stdout)
+        )
+    # Checked apart from the exit code, because Python exits 1 when
+    # Ruff is not installed, the same code Ruff uses for findings.
+    # Ruff's JSON output is never empty; a clean tree prints `[]`.
+    if not completed.stdout.strip():
+        raise RuntimeError(
+            "ruff printed nothing, so it did not run:\n"
+            + completed.stderr
+        )
     try:
-        findings = json.loads(completed.stdout or "[]")
+        findings = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
         raise RuntimeError(
             "could not parse ruff output:\n"
