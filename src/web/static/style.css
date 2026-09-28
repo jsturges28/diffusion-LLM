@@ -180,6 +180,33 @@ body {
   gap: 14px;
 }
 
+/* A division rather than another entry in the list. Analytics and
+   Vision are different kinds of destination: one reads saved runs,
+   the other inspects an encoder and needs no model at all. Run
+   together they read as one group, and the Analytics badge makes it
+   worse by putting a number immediately before a word.
+
+   Drawn slightly taller than the text so it reads as a rule rather
+   than as a stray glyph, and in the border colour so it recedes.
+   Applied to the entry that follows the division, since a separate
+   element would be a thing the keyboard could reach. */
+.header-link-sep {
+  position: relative;
+  margin-left: 7px;
+  padding-left: 17px;
+}
+
+.header-link-sep::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1px;
+  height: 1.55em;
+  background: var(--border);
+}
+
 .header-link {
   font-size: 11px;
   color: var(--text-secondary);

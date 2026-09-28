@@ -92,6 +92,19 @@ from src.backends.environments import (
 )
 from src.backends.registry import DEFAULT_MODEL, REGISTRY
 from src.inference.render_gif import history_to_gif
+from src.inference.vision_encoders import (
+    EncoderUnavailable,
+    VisionEncoder,
+    declared as vision_declared,
+    find as vision_find,
+    is_cached as vision_is_cached,
+    load_geometry as vision_load_geometry,
+)
+from src.inference.vision_geometry import (
+    MAX_DIMENSION as VISION_MAX_DIMENSION,
+    MIN_DIMENSION as VISION_MIN_DIMENSION,
+    geometry as vision_image_geometry,
+)
 from src.web import collections as collection_ops
 from src.web import run_store
 from src.web.data_root import (
@@ -2806,6 +2819,113 @@ async def save_run(body: SaveRunRequest) -> JSONResponse:
 # -- Analytics endpoints --
 
 
+@app.get("/api/vision/encoders")
+async def vision_encoders_list() -> JSONResponse:
+    """The encoders the tokeniser view can compare.
+
+    Whether each one's configuration is on disk is part of the answer,
+    so the page can offer a download before a reader picks one rather
+    than after a request fails. Reading a cache is a filesystem walk,
+    hence the thread.
+    """
+    async def describe(encoder: VisionEncoder) -> Dict[str, Any]:
+        cached = await asyncio.to_thread(vision_is_cached, encoder)
+        return {
+            "id": encoder.id,
+            "display_name": encoder.display_name,
+            "repo_id": encoder.repo_id,
+            "revision": encoder.revision,
+            "summary": encoder.summary,
+            "cached": cached,
+        }
+
+    return JSONResponse(content={
+        "encoders": [
+            await describe(encoder) for encoder in vision_declared()
+        ]
+    })
+
+
+@app.get("/api/vision/geometry")
+async def vision_geometry(
+    encoder: str, width: int, height: int
+) -> JSONResponse:
+    """How this encoder would turn an image of this size into tokens.
+
+    Dimensions rather than an image, which is the whole shape of this
+    feature: the geometry depends on nothing else, so the picture
+    never leaves the browser and there is no upload to own.
+
+    No worker, no residency claim and no eviction either. Only two
+    small JSON files are read, so this answers while a model is
+    resident and mid-run, and a reader can compare both encoders
+    without disturbing it.
+    """
+    found = vision_find(encoder)
+    if found is None:
+        known = [item.id for item in vision_declared()]
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": f"unknown encoder {encoder!r}",
+                "known": known,
+            },
+        )
+
+    for name, value in (("width", width), ("height", height)):
+        if not VISION_MIN_DIMENSION <= value <= VISION_MAX_DIMENSION:
+            return JSONResponse(
+                status_code=400,
+                content={"error": (
+                    f"{name} {value} is outside"
+                    f" {VISION_MIN_DIMENSION}"
+                    f"..{VISION_MAX_DIMENSION}"
+                )},
+            )
+
+    try:
+        encoder_geometry = await asyncio.to_thread(
+            vision_load_geometry, found
+        )
+    except EncoderUnavailable as exc:
+        # Not cached and not fetchable, which is an operating error on
+        # a first run with no network. 503 rather than 500: the
+        # request was fine and may work later.
+        return JSONResponse(
+            status_code=503, content={"error": str(exc)}
+        )
+
+    image = vision_image_geometry(encoder_geometry, width, height)
+    return JSONResponse(content={
+        "encoder": {
+            "id": found.id,
+            "display_name": found.display_name,
+            "longest_edge": encoder_geometry.longest_edge,
+            "tile": encoder_geometry.tile,
+            "patch": encoder_geometry.patch,
+            "scale": encoder_geometry.scale,
+            "patch_side": encoder_geometry.patch_side,
+            "unseen_edge": encoder_geometry.unseen_edge,
+            "token_side": encoder_geometry.token_side,
+            "tokens_per_tile": encoder_geometry.tokens_per_tile,
+            "patches_per_token": encoder_geometry.patches_per_token,
+        },
+        "image": {
+            "source_width": image.source_width,
+            "source_height": image.source_height,
+            "resized_width": image.resized_width,
+            "resized_height": image.resized_height,
+            "fitted_width": image.fitted_width,
+            "fitted_height": image.fitted_height,
+            "tile_rows": image.tile_rows,
+            "tile_cols": image.tile_cols,
+            "tile_count": image.tile_count,
+            "aspect_changed": image.aspect_changed,
+            "total_tokens": image.total_tokens,
+        },
+    })
+
+
 @app.get("/api/analytics/runs")
 async def analytics_list_runs() -> JSONResponse:
     runs = await asyncio.to_thread(list_runs, RESULTS_DIR)
@@ -4006,6 +4126,44 @@ async def serve_settings_page() -> HTMLResponse:
         "settings.html",
         boot={"active_model_family": _active_model_family()},
     )
+
+
+@app.get("/vision.html")
+async def serve_vision_page() -> HTMLResponse:
+    """The image tokeniser view, always available.
+
+    Not gated on a resident model, unlike `/generate`, because it
+    loads no weights: it reads two small config files per
+    encoder and does integer arithmetic. So it works with nothing
+    loaded, and works without disturbing anything that is.
+
+    The encoder list is inlined as boot state for the same reason the
+    other pages inline theirs: it is cheap to produce here and saves
+    the page a round trip before its first paint.
+    """
+    encoders = await asyncio.to_thread(_vision_boot_state)
+    return _serve_stamped_page("vision.html", boot=encoders)
+
+
+def _vision_boot_state() -> Dict[str, Any]:
+    """The encoder list, shaped exactly like `/api/vision/encoders`.
+
+    Same shape so the page feeds it to the same code path, which is
+    the convention `_models_boot_state` established.
+    """
+    return {
+        "encoders": [
+            {
+                "id": encoder.id,
+                "display_name": encoder.display_name,
+                "repo_id": encoder.repo_id,
+                "revision": encoder.revision,
+                "summary": encoder.summary,
+                "cached": vision_is_cached(encoder),
+            }
+            for encoder in vision_declared()
+        ]
+    }
 
 
 class _NoCacheStaticFiles(StaticFiles):

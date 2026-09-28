@@ -39,6 +39,8 @@
             role="listbox" hidden></ul>
         </div>
         <a href="/analytics.html" id="link-analytics" class="header-link">Analytics<span id="analytics-new-dot" class="analytics-new-dot is-empty" aria-hidden="true"></span></a>
+        <a href="/vision.html"
+          class="header-link header-link-sep">Vision</a>
         <a href="#" id="link-about" class="header-link">About</a>
         <a href="#" id="link-help" class="header-link">Help</a>
         <a href="/settings.html" class="header-link header-link-icon"
@@ -369,6 +371,8 @@
           &nbsp;|&nbsp; DiffusionGemma:
           <a href="https://huggingface.co/google/diffusiongemma-26B-A4B-it" target="_blank" rel="noopener">Model</a>
           &nbsp;|&nbsp; SmolLM3:
+        <h3>Seeing how a vision model reads an image</h3>
+        <p>The <strong>Vision</strong> page is a separate lens, and the only part of the app that needs no model loaded. It shows what a vision-language model does to a picture before any of it reaches a language model: scaled to a working resolution, rounded out to whole tiles, which changes its shape, then cut up, read as a grid of fixed-size patches, and finally whole blocks of neighbouring patches fused into single tokens. Two SmolVLM encoders are compared, because they fuse different amounts and so spend different numbers of tokens on the same picture. The result most people do not expect is that resolution is free and shape is what costs: a tiny icon costs what a megapixel square costs. It reads each checkpoint's configuration rather than its weights, so it holds no GPU memory and disturbs nothing that is loaded, and the image never leaves the browser.</p>
           <a href="https://huggingface.co/HuggingFaceTB/SmolLM3-3B" target="_blank" rel="noopener">Model</a>
         </p>
       </div>
@@ -412,6 +416,9 @@
           <button type="button" class="help-tab" role="tab"
             data-help-tab="charts"
             aria-selected="false">Detail modal</button>
+          <button type="button" class="help-tab" role="tab"
+            data-help-tab="vision"
+            aria-selected="false">Vision</button>
         </nav>
         <div class="modal-body help-body">
         <section class="help-panel" role="tabpanel"
@@ -684,6 +691,20 @@
         <p>For multi-canvas DiffusionGemma runs, dashed <strong style="color:#ffb400;">amber</strong> markers on the convergence, timing, and confidence charts mark the frames where one canvas commits and the next begins. Single-canvas runs (including all LLaDA runs) show no markers.</p>
         <h4>Chart controls</h4>
         <p>Every chart supports <strong>scroll-wheel zoom</strong> and a <strong>+</strong> / <strong>&minus;</strong> / <strong>Reset</strong> cluster docked in the chart's bottom-left corner, which brightens on hover. Tooltip boxes park in whichever corner of the plot area is free of both the data and the pointer, preferring top-left and falling back through top-right, bottom-left, and bottom-right, and they stay fully inside the plot area rather than spilling onto the axes. Each chart has an <strong>eye</strong> toggle to hide/show its box. When every corner is occupied and the box has nowhere clear to go, the covered segment and the hovered point glow through it.</p>
+        </section>
+        <section class="help-panel" role="tabpanel"
+          data-help-panel="vision" hidden>
+        <h3>The Vision page</h3>
+        <h4>What it shows</h4>
+        <p>The <strong>Vision</strong> link in the header opens a page answering a question the rest of the app cannot: what happens to an image before any of it reaches a language model. It compares two vision encoders, <strong>SmolVLM-500M-Instruct</strong> and <strong>SmolVLM-Instruct</strong>, on whatever picture you give it.</p>
+        <p>It is available whenever the app is. No model needs to be loaded, nothing is evicted, and it costs no GPU memory, because it reads each checkpoint's own configuration rather than its weights. Your image stays in the browser: only its width and height are sent, which is all the geometry depends on.</p>
+        <h4>The three steps</h4>
+        <p>First the whole image is scaled so its longest edge reaches the encoder's working resolution. This happens whether the image is larger or smaller, so a small picture is scaled <em>up</em>, and nothing is too small to be tiled. Then each side is rounded up to a whole number of tiles, independently of the other, which is where the shape changes: a 16:9 photo reaches the encoder as 4:3, so the model does not see the framing you chose. Only then is it cut into tiles, and because the previous step made both sides a multiple of the tile, every tile is exactly square and none is stretched.</p>
+        <p>Inside one tile the encoder reads a grid of fixed-size patches and fuses a square block of them into each token: 16 patches per token on the 500M, 9 on the 2.2B. Hover the tile to light up the patches behind one token. On the 2.2B a red strip marks the last 6 pixels of each edge, which complete no patch and are never seen, because 384 does not divide by 14. Every image also pays for one extra tile holding a shrunken copy of the whole picture.</p>
+        <h4>Resolution is free, shape is what costs</h4>
+        <p>The reading worth taking away, and the opposite of what most people expect. Because the first two steps normalise everything to one working resolution, pixel count stops mattering: a 64x64 icon costs exactly what a megapixel square costs, and a 1920x1080 photo costs exactly what a 1024x768 one costs despite 2.6 times the pixels. A wide banner costs under a third of a square. Drop in your own files to confirm it.</p>
+        <h4>What it does not do yet</h4>
+        <p>It does not generate text about the image, and it does not yet show which image regions a generated token attended to. That is why neither encoder appears in the model picker: the picker offers models you can run, and these are not that yet. <code>docs/GUIDE.md</code> carries the longer version and <code>docs/ROADMAP.md</code> the measurements behind what comes next.</p>
         </section>
         </div>
       </div>

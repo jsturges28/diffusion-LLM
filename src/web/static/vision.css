@@ -1,0 +1,170 @@
+/* The image tokeniser view.
+   Its own file rather than more of style.css, following settings.css:
+   one page's layout, loaded only by that page. */
+
+/* This page is the one here taller than the window, and `body` is
+   `overflow: hidden` with `#app` pinned to `100vh`, so nothing
+   scrolls unless a child is made to. Same shape as `#settings-main`:
+   take the leftover height, refuse to grow past it, scroll inside.
+   Without `min-height: 0` a flex child will not shrink below its
+   content and the overflow is clipped instead, which is how the first
+   version of this page lost its last two steps. */
+#vision-main {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 18px 20px 40px;
+}
+
+#vision-lede {
+  color: var(--text-secondary);
+  line-height: 1.55;
+  margin: 0 0 22px;
+  max-width: 68ch;
+}
+
+#vision-picker,
+#vision-manual {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.vision-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.vision-hint {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  max-width: 68ch;
+}
+
+#vision-manual input[type="number"] {
+  width: 88px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  padding: 5px 7px;
+}
+
+#vision-cost,
+#vision-pipeline,
+#vision-unavailable {
+  margin-top: 26px;
+}
+
+#vision-main h2 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  margin: 0 0 10px;
+}
+
+#vision-main h3 {
+  font-size: 14px;
+  color: var(--text-primary);
+  margin: 0 0 6px;
+}
+
+#vision-cost-table {
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+#vision-cost-table th,
+#vision-cost-table td {
+  text-align: right;
+  padding: 5px 14px 5px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+#vision-cost-table th:first-child,
+#vision-cost-table td:first-child {
+  text-align: left;
+}
+
+#vision-cost-table th {
+  color: var(--text-secondary);
+  font-weight: normal;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
+#vision-cost-note {
+  margin-top: 10px;
+}
+
+#vision-encoder-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.vision-tab {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 6px 11px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.vision-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-surface);
+}
+
+.vision-tab.is-active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+#vision-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+}
+
+/* A faint frame so a canvas reads as a figure rather than as drawing
+   that has escaped onto the page. Same reasoning as the resource
+   meter's border. */
+#vision-steps canvas {
+  display: block;
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  max-width: 100%;
+}
+
+#vision-canvas-patches {
+  cursor: crosshair;
+}
+
+#vision-token-readout {
+  margin-top: 8px;
+  min-height: 1.5em;
+}

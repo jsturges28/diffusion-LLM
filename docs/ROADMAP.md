@@ -2077,6 +2077,132 @@ are expensive to rediscover and cheap to store.
   so the pressure it would relieve is roughly 75,000 runs away, and bulk
   delete already exists.
 
+## How a vision model sees an image: measured 2026-09-27
+
+The spike behind the `/vision.html` tokeniser view. Recorded because every
+number here cost a measurement, and because two of them contradict what the
+model cards say.
+
+**The geometry is a pure function of (width, height, config).** The processor's
+sizing functions accept an image and read only `get_image_size(image)`, so an
+image's token cost is knowable without the image. That is the whole reason the
+page uploads nothing and needs no artifact lifecycle: the browser sends two
+integers. `ROADMAP-04`'s content-addressed upload becomes necessary only when an
+inspection is saved or a generation is run, neither of which this slice does.
+
+**The pipeline is three steps, and the middle one is easy to miss.**
+
+1. The longest edge is set to the configured bound, **unconditionally**, so a
+   small image is scaled *up*. Nothing is too small to be tiled.
+2. `resize_for_vision_encoder` rounds each side up to a whole number of tiles,
+   **independently of the other**. This is where the aspect ratio changes.
+3. The split then divides an image that is already a multiple of the tile, so
+   **every crop is exactly one tile square**. Verified across 4,112 sizes.
+
+Step 3 corrects a claim worth naming because it is the intuitive one and it is
+wrong: tiles are *not* stretched to fit. The distortion happens once, at step 2,
+to the whole picture. A 1920x1080 photo reaches the encoder as 4:3.
+
+**The two checkpoints differ in every dimension**, which is why both are
+declared and compared rather than one being chosen:
+
+| | SmolVLM-500M | SmolVLM-2.2B |
+|---|---|---|
+| Longest edge | 2048 px | 1536 px |
+| Tile | 512 px | 384 px |
+| Patch | 16 px | 14 px |
+| Patch grid per tile | 32x32 = 1024 | 27x27 = 729 |
+| Patches fused per token | 16 | 9 |
+| Tokens per tile | 64 | 81 |
+| Unseen edge per tile | 0 px | **6 px** |
+
+The 2.2B's 384px tile is not a multiple of 14, so the last 6 pixels of each tile
+edge complete no patch and are never seen by the model.
+
+**Resolution is free; shape is what costs.** The surprising result, and the one
+the page is built around. Steps 1 and 2 normalise everything to the same working
+resolution, so pixel count stops mattering:
+
+| Image | 500M | 2.2B |
+|---|---|---|
+| 64x64 icon | 1,088 | 1,377 |
+| 1000x1000 square | 1,088 | 1,377 |
+| 1920x1080 photo | 832 | 1,053 |
+| 1024x768 photo | 832 | 1,053 |
+| 3000x800 panorama | 576 | 729 |
+| 1500x300 banner | 320 | 405 |
+
+A 64x64 icon costs what a megapixel square costs. A 1920x1080 photo costs what a
+1024x768 one costs, with 2.6 times the pixels. A wide banner costs under a third
+of a square.
+
+**The fusion mapping is a contiguous rectangle.** Token (r,c) fuses exactly the
+`scale x scale` patch block at rows `r*scale`, columns `c*scale`, with no
+interleaving, which is what lets the page highlight a token's image region
+exactly rather than approximately. Derived by running the shipped
+`pixel_shuffle` over a tensor holding patch indices.
+
+**The sequence labels itself.** `_prompt_split_image` emits a literal
+`<row_2_col_3>` marker before each tile's tokens and appends a `<global-img>`
+block for a thumbnail of the whole picture. So mapping a sequence position back
+to a tile is parsing rather than inference, which is the groundwork for the
+attention overlay below.
+
+### Why the geometry is reproduced rather than imported
+
+The supervisor runs `transformers` 4.38.2, which predates SmolVLM, and an
+interactive view cannot spawn the worker environment per pointer move. So
+`src/inference/vision_geometry.py` reproduces the arithmetic and
+`tests/inference/test_vision_geometry.py` holds it to the library by lifting the
+real functions out of the `.venv-ar` source with `ast`. Lifted rather than
+imported because the processor module imports `PILImageResampling`, which is
+gated on Pillow, which no environment here installs.
+
+**The differential test earned its place twice before this shipped.** It caught
+a clamp applied once at the end rather than between the two resize stages, which
+disagreed on 9 of 8,144 sizes at extreme aspect ratios; and it caught step 2
+missing altogether, where every individual function still matched and every tile
+count was wrong. Both failures were in how the steps compose, which is why the
+test compares the composed pipeline rather than the parts.
+
+**Confirmed against the real processor on 2026-09-27**, 16 of 16 agreeing
+across both encoders and eight shapes from 3000x800 down to 7x9 pixels: the
+sub-image count and tile size that `AutoImageProcessor` produces match what
+`geometry()` predicts, every time. That needed Pillow, which is in core `.venv`
+and can be lent to `.venv-ar` by putting `PIL` alone on `PYTHONPATH`; lending
+the whole of `site-packages` does not work, because core's `transformers`
+4.38.2 shadows the 4.53 that implements SmolVLM. Item 319 of
+`docs/MANUAL_VERIFICATION.md` records the recipe.
+
+Two mutants of that module pass every test and are *equivalent rather than
+missed*, which is worth recording so nobody hunts them: `(tile - patch) // patch
++ 1` equals `tile // patch` for every pair, and recomputing the shorter side
+from the aspect gives the same answer as reusing it **while `longest_edge` is a
+whole number of tiles**, which it is for both checkpoints, at exactly four. A
+search over 1.28 million source sizes found no input separating them. The second
+equivalence is an assumption rather than an identity, so
+`test_the_bound_lands_on_a_tile_boundary` fails if a future encoder breaks it.
+
+### Deliberate stopping points for this slice
+
+**No generation, so neither encoder is in the model registry.** A registry entry
+advertises something the Main Menu offers to load and generate with, and until
+that is true a separate declaration in `src/inference/vision_encoders.py` keeps
+the picker honest.
+
+**No attention overlay**, which is the natural next slice and the real "how it
+sees it" payoff. The measurement that shapes it: naive `output_attentions=True`
+costs 1.3 to 3.7 GB per step for the full tensor and forces `sdpa` to fall back
+to `eager`. What the feature needs is one row, a generated token's attention over
+the visual span pooled across heads from a chosen layer, which is about **206
+KiB for a 200-token run at a byte per value**. So it wants hooks on chosen
+layers, the same discipline `logit_signals.py` uses to read signals without
+materialising a softmax, and a new `"patch"` value on the signal manifest's
+`Axis`.
+
+**No persistence.** Nothing is written, so there is no artifact to expire and no
+provenance to copy.
+
 ## Where things live (quick map)
 
 **Seams, not an inventory.** The previous version of this section listed

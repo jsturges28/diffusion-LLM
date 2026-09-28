@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vision - LLM Visualizer</title>
+  <!-- See index.html: preloaded because the faces block on it. -->
+  <link rel="preload" href="/vendor/fonts/jetbrains-mono-latin.woff2"
+    as="font" type="font/woff2" crossorigin />
+  <link rel="stylesheet" href="/vendor/fonts/jetbrains-mono.css" />
+  <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/vision.css" />
+</head>
+<body>
+  <div id="bg-grid"></div>
+  <div id="bg-floaters" aria-hidden="true"></div>
+
+  <div id="app">
+    <header id="header">
+      <h1>
+        <span class="title-accent">LLM</span> Vision
+      </h1>
+      <nav id="header-nav">
+        <a href="/" class="header-link">Menu</a>
+        <a href="/generate" id="link-generation"
+          class="header-link" hidden>Generation</a>
+        <a href="/analytics.html" class="header-link">Analytics</a>
+        <span
+          class="header-link header-link-active header-link-sep"
+          >Vision</span>
+        <a href="/settings.html"
+          class="header-link header-link-icon" title="Settings"
+          aria-label="Settings">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none"
+            stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round"
+            aria-hidden="true">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+        </a>
+      </nav>
+    </header>
+
+    <main id="vision-main">
+      <!-- The claim the page exists to demonstrate, stated before a
+           reader has picked a file so they know what to look for. -->
+      <p id="vision-lede">
+        A vision-language model does not read your image. It rescales
+        it, cuts it into tiles, reads each tile as a grid of patches,
+        and then <strong>fuses whole blocks of patches into single
+        tokens</strong>. Drop a picture in to see what survives, and
+        what it costs.
+      </p>
+
+      <section id="vision-picker">
+        <label for="vision-file" class="vision-label">Image</label>
+        <input type="file" id="vision-file" accept="image/*" />
+        <span id="vision-privacy" class="vision-hint">
+          Stays in your browser. Only its width and height are sent.
+        </span>
+      </section>
+
+      <p id="vision-empty" class="vision-hint">
+        No image yet. Pick one above, or type a size below to see the
+        geometry without a picture.
+      </p>
+
+      <section id="vision-manual">
+        <label for="vision-width" class="vision-label">Width</label>
+        <input type="number" id="vision-width" min="1" max="100000"
+          value="1920" />
+        <label for="vision-height" class="vision-label">Height</label>
+        <input type="number" id="vision-height" min="1" max="100000"
+          value="1080" />
+        <button id="vision-apply" class="btn-secondary">Measure</button>
+      </section>
+
+      <!-- Both encoders, side by side, because the comparison is the
+           lesson: the same picture costs different amounts. -->
+      <section id="vision-cost">
+        <h2>What it costs</h2>
+        <table id="vision-cost-table">
+          <thead>
+            <tr>
+              <th>Encoder</th>
+              <th>Tiles</th>
+              <th>Per tile</th>
+              <th>Visual tokens</th>
+            </tr>
+          </thead>
+          <tbody id="vision-cost-rows"></tbody>
+        </table>
+        <p id="vision-cost-note" class="vision-hint"></p>
+      </section>
+
+      <section id="vision-pipeline">
+        <h2>How it gets there</h2>
+        <div id="vision-encoder-tabs" role="tablist"
+          aria-label="Encoders"></div>
+
+        <ol id="vision-steps">
+          <li id="vision-step-resize">
+            <h3>1. Rescaled to a whole number of tiles</h3>
+            <p id="vision-resize-text" class="vision-hint"></p>
+            <canvas id="vision-canvas-resize" width="520"
+              height="320"></canvas>
+          </li>
+          <li id="vision-step-tiles">
+            <h3>2. Cut into tiles</h3>
+            <p id="vision-tiles-text" class="vision-hint"></p>
+            <canvas id="vision-canvas-tiles" width="520"
+              height="320"></canvas>
+          </li>
+          <li id="vision-step-patches">
+            <h3>3. One tile, as the encoder reads it</h3>
+            <p id="vision-patches-text" class="vision-hint"></p>
+            <canvas id="vision-canvas-patches" width="360"
+              height="360"></canvas>
+            <p id="vision-token-readout" class="vision-hint"></p>
+          </li>
+        </ol>
+      </section>
+
+      <section id="vision-unavailable" hidden>
+        <h2>Not downloaded yet</h2>
+        <p id="vision-unavailable-text" class="vision-hint"></p>
+      </section>
+
+      <p class="vision-hint">
+        This page reads each checkpoint's own configuration and loads
+        no weights, so it costs no GPU memory and leaves a resident
+        model alone. <code>docs/GUIDE.md</code> carries the detail.
+      </p>
+    </main>
+  </div>
+
+  <script src="/overlays.js"></script>
+  <script src="/vision.js"></script>
+</body>
+</html>

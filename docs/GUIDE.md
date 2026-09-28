@@ -256,6 +256,22 @@ A run is published whole or not at all: everything is written to a staging direc
 
 The metadata captures the model, prompt, hyperparameters, any remask edits, per-frame timing, canvas indices, mean confidence, what the run cost the card, and reproducibility info: seed, GPU name, git commit, the worker's torch/transformers versions, and the tokenizer that produced the run's ids (class, checkpoint path, vocabulary size, and whether it is a fast tokenizer). The cost block holds the peak VRAM the run's generation held together with the allocation it started from, which Analytics reports on one **Peak VRAM** row as the peak and, in brackets, how far above the baseline it reached. The pair is given because the peak is mostly the weights the model had already loaded, so the bracketed figure is the part that moves when generation settings or the sampler change. A run on CPU has no such cost and saves no block at all, rather than a block of zeros that would read later as a measurement. All of that is attested by the worker at the moment the run finishes and travels with the run, including the device the model actually loaded onto, which is not always the one requested. That matters because two browser windows share one supervisor: a run finished in one window and saved after the other switched models used to be described by the model that replaced it. Analytics shows the tokenizer on the run's detail panel; runs saved before a field existed simply omit its row.
 
+## How a vision model sees an image
+
+The **Vision** page in the header answers a question the rest of the app cannot: what happens to a picture before any of it reaches a language model. It is available whenever the app is, needs no model loaded, and costs no GPU memory, because it reads each checkpoint's own configuration and loads no weights. Your image never leaves the browser either; only its width and height are sent, since that is all the geometry depends on.
+
+Pick an image, or type a size to see the geometry without one. Two encoders are compared side by side, **SmolVLM-500M-Instruct** and **SmolVLM-Instruct**, because they answer differently and the difference is the point.
+
+The pipeline runs in three steps, each drawn in turn. First the whole image is scaled so its longest edge reaches the encoder's working resolution. This happens **unconditionally**, so a small image is scaled up rather than left alone. Then each side is rounded up to a whole number of tiles, independently of the other, which is where the shape changes: a 16:9 photo arrives at the encoder as 4:3, so the model does not see the framing you chose. Only then is the picture cut into tiles, and because the previous step made both sides a multiple of the tile, **every tile is exactly square and none is stretched**.
+
+Inside one tile, the encoder reads a grid of fixed-size patches, and then fuses a square block of neighbouring patches into a single token. On the 500M that is 32x32 patches of 16px with 16 fusing into each token, leaving 64 tokens per tile. On the 2.2B it is 27x27 patches of 14px with 9 fusing, leaving 81. Hover the tile to light up the patches behind one token. On the 2.2B a red strip marks the last 6 pixels of each edge, which complete no patch and are **never seen**, because 384 does not divide by 14.
+
+Every image also pays for one more tile holding a shrunken copy of the whole picture, on top of the tiles themselves.
+
+The reading worth taking away is that **resolution is free and shape is what costs**. Because the first two steps normalise everything to the same working resolution, a 64x64 icon costs exactly what a megapixel square costs, and a 1920x1080 photo costs exactly what a 1024x768 one costs despite having 2.6 times the pixels. A wide banner costs under a third of a square. You can confirm all of that by dropping in your own files, which is the point of the page.
+
+What it does not do yet: generate text about the image, or show which patches a generated token attended to. `docs/ROADMAP.md` records the measurements behind both, including why attention needs a hook on chosen layers rather than a blanket capture.
+
 ## How the models generate
 
 The mechanics behind the overlays: what a diffusion step actually does, and how each model differs.

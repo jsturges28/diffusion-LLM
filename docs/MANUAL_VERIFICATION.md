@@ -3309,3 +3309,109 @@ a pass before showing the project to anyone.
     so a reader in the app needs to be told where they went. It is
     text, not a link, deliberately: Help works with no network by
     `TRUST-02` and carries no outbound hrefs.
+
+## The image tokeniser view
+
+The geometry is held to the real processor by
+`tests/inference/test_vision_geometry.py`, which lifts its functions
+out of `.venv-ar` and compares. Items 319 to 322 are recorded as done
+rather than pending, each with the method, because none of them could
+be re-run from the description they started with: 319 needs a way to
+borrow Pillow, and 320 to 322 need the canvas instrumented rather than
+counted or sampled. Items 323 onward are the ones only eyes answer,
+and 323 and 324 were confirmed by the maintainer on 2026-09-27.
+
+319. **The token counts match the real processor. Done on 2026-09-27,
+    16 of 16 agreeing.** Kept rather than deleted because it is the
+    only check that the whole chain agrees rather than its parts, and
+    because the way to re-run it is not obvious.
+
+    It needs Pillow, and installing Pillow into `.venv-ar` would put
+    its generated lock out of step with the manifest, which
+    `tests/test_lock_environments.py` reports. It does not need to be
+    installed: core `.venv` already has it for GIF rendering, and it
+    can be lent across. Lending the whole of core's `site-packages`
+    does not work, because its `transformers` 4.38.2 shadows the 4.53
+    that implements SmolVLM, so expose `PIL` alone:
+
+        SITE=$(.venv/bin/python -c "import PIL, pathlib; \
+          print(pathlib.Path(PIL.__file__).parent.parent)")
+        mkdir -p /tmp/pillow-only
+        ln -sf "$SITE/PIL" /tmp/pillow-only/PIL
+        ln -sf "$SITE"/pillow-*.dist-info /tmp/pillow-only/
+
+    Then, with `PYTHONPATH=/tmp/pillow-only .venv-ar/bin/python`, load
+    `AutoImageProcessor` for each encoder at its pinned revision and
+    read `pixel_values.shape`. Its second dimension is the number of
+    sub-images, which is the tile count plus the one thumbnail, and its
+    last is the tile size. Compare against `geometry()` in
+    `src/inference/vision_geometry.py`.
+
+    **Use the image processor, not `AutoProcessor`.** The full
+    processor builds a tokenizer, which needs `tiktoken` or `protobuf`
+    in that environment, and the tokenizer has nothing to do with the
+    geometry. Counting `<image>` ids is a longer road to the same
+    answer.
+
+    What it confirmed, across both encoders and eight shapes from
+    3000x800 down to 7x9: the sub-image count and tile size match
+    exactly every time. A disagreement here means the page is lying
+    and the geometry needs re-deriving; it is a defect, not a
+    tolerance.
+320. **The three diagrams agree with each other. Done on 2026-09-27.**
+    Counting grid lines by eye turned out to be the wrong instrument,
+    and so did sampling canvas pixels: the lines are 1.1 to 1.5px on
+    fractional coordinates, so antialiasing spreads each across two
+    pixels at partial alpha, and the faint patch grid sits at 0.25
+    alpha over an image whose own colours vary. A first attempt at a
+    pixel scan reported missing and spurious lines that were all
+    measurement error.
+
+    What works is instrumenting the canvas: replace `moveTo`,
+    `lineTo`, `stroke` and `fillRect` on
+    `CanvasRenderingContext2D.prototype`, call `visionRender()`, and
+    count the segments by orientation and `globalAlpha`. Exact, with
+    no pixels involved. Against a generated 1920x1080 image:
+
+    | | claimed | drawn |
+    |---|---|---|
+    | tile grid, 3x4 tiles | 5 x 4 lines | 5 x 4 |
+    | fused blocks, 500M | 8+1 lines, 64 blocks | 9 x 9 |
+    | fused blocks, 2.2B | 9+1 lines, 81 blocks | 10 x 10 |
+    | patch grid, 500M | 32+1 lines | 33 x 33 |
+    | patch grid, 2.2B | 27+1 lines | 28 x 28 |
+
+    Re-run it that way rather than by counting, which is what this
+    item originally asked for and is not reliable past about 8x8.
+321. **The shape claim survives real files. Done on 2026-09-27**, with
+    images generated at exact dimensions rather than hunted for.
+    Loaded through the page, a 64x64 icon and a 1000x1000 square both
+    cost **1,088 tokens on the 500M and 1,377 on the 2.2B**, identical
+    despite 244 times the pixels, and a 1500x300 banner cost 320 and
+    405. The numbers also match what the real processor produced in
+    item 319, so the page, the geometry and the library all agree.
+322. **The unseen strip appears only where it should. Done on
+    2026-09-27**, through the same instrumentation. On the 2.2B two
+    red fills are drawn and on the 500M none, which is right because
+    512 divides by 16 exactly and 384 does not divide by 14. Their
+    geometry was checked too, not just their count: each sits at
+    `patch_side * patch` along its axis and is `unseen_edge` wide,
+    5.3px for 6 tile-pixels at the scale drawn.
+323. **Hovering names a token and lights its patches. Confirmed
+    2026-09-27.** Move the
+    pointer over the tile in step 3. The readout should name a token
+    index and the number of patches behind it, and an orange block
+    should follow the pointer, snapping to whole blocks rather than
+    sliding continuously. Leaving the canvas should clear both.
+324. **It costs nothing that is loaded. Confirmed 2026-09-27.** The
+    point of the page being a supervisor capability. Load a model,
+    start a long generation,
+    and open `/vision.html` in a second tab while it runs. The
+    generation should continue undisturbed, the page should answer
+    immediately, and the model should still be resident afterwards.
+    Nothing here should appear in the resource meter.
+325. **A cold cache says so rather than failing.** Hard to arrange
+    once the configs are cached; if you have a machine that has never
+    fetched them, open the page offline. It should report which
+    encoder is not downloaded rather than showing an empty diagram or
+    an error, since two small JSON files are all it wants.
