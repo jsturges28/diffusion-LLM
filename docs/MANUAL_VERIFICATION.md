@@ -127,6 +127,44 @@ kept when these were written:
   machine left idle until the screen blanks, so it costs twenty minutes of
   waiting to force and nothing to catch in passing. The maintainer will run
   it the next time the app happens to sit idle. It blocks nothing.
+- **217 to 266**: **status not recorded here.** These landed across the
+  keyboard, collections and select-lifecycle passes, and their state was
+  reported in chat rather than written down; the per-finding entries in
+  `docs/audit/IMPLEMENTATION_LEDGER.md` are the better record, and 248
+  to 252 are known to have been driven, because doing so turned up four
+  further problems. Treat them as unverified rather than as passing.
+- **267 to 273**: confirmed on 2026-09-22, `ROADMAP-01` and
+  `ROADMAP-02`'s queue.
+- **274 to 283**: confirmed on 2026-09-22, `ROADMAP-05` and
+  `ROADMAP-02`'s context half. **Five of the ten failed first**, and
+  each failure is written up under Deviations in the audit ledger; this
+  was the most productive pass of the campaign.
+- **284 to 295**: **status not recorded here**, spanning `TRUST-03`'s
+  pinned artifacts and `DEPS-01`'s declared environments. Same caveat as
+  217 to 266.
+- **296**: **outstanding.** Read a run's Peak VRAM against the predicted
+  figure, roughly 15 MiB above baseline.
+- **297 to 299**: **status not recorded here**, `ROADMAP-03`'s signal
+  manifest queue.
+- **300 to 308**: confirmed on 2026-09-24, the UI polish, peak VRAM and
+  resource meter queues. **307 failed first**: the meter was reported
+  missing while switching models, because `websocket_proxy` refuses a
+  socket until `load_state` is `ready`, so the page is never connected
+  during a load. The claim that the meter covers a load was wrong and
+  was corrected in the Help copy, in `docs/ROADMAP.md` and in the item
+  itself, and `clearResourceMeter()` was added so a stale line is not
+  shown as live. It was re-checked and confirmed after that.
+- **309**: **not runnable on this hardware.** It wants a machine whose
+  models do not fit the card, and none here qualifies.
+- **310 to 314**: **outstanding**, `LIFE-05`'s two-supervisor queue.
+  Needs two launchers at once.
+- **315 to 318**: confirmed on 2026-09-27, the Help tab reorganisation.
+- **319 to 322**: **done by an agent** on 2026-09-27, not by the
+  maintainer, and each records the method because none could be re-run
+  from its original description. See the items themselves.
+- **323 and 324**: confirmed on 2026-09-27.
+- **325**: **outstanding**, and awkward: it needs a machine that has
+  never fetched the vision configs.
 
   When it fires, the question is not only whether the window recovered. If
   the window is white and
