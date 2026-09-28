@@ -103,12 +103,13 @@ since shipped is noted on the item rather than left for a reader to infer.
      But a single token repeated shares as many of its top 20 positions
      with real text as two passages share with each other, in 17 of 24
      layers on the state and 20 of 24 on the output side, against a
-     chance overlap of about 3. Most of each layer's mass sits in the
-     last 16 tokens whatever the input. Middle layers do keep
-     content-chosen earlier tokens, but a per-position picture would bury
-     them under the same recency window on every input, including one
-     with nothing in it: the attention-sink failure from the Vision page,
-     arriving by another route.
+     chance overlap of about 3. Every input's top 20 includes its most
+     recent several tokens, the repeated token's too, and on real text
+     the last 16 tokens hold over half the mass in most layers. Middle
+     layers do keep content-chosen earlier tokens, but a per-position
+     picture would bury them under the same recency window on every
+     input, including one with nothing in it: the attention-sink failure
+     from the Vision page, arriving by another route.
 
    What the card still has to show is CUDA throughput and VRAM, and the
    real tokenizer reproducing these numbers.
