@@ -2,11 +2,14 @@
 
 `siso_reference.py` is upstream's own PyTorch statement of the Mamba-3
 SISO recurrence, kept so tests can prove this project's implementation
-agrees with it. **Nothing here runs at runtime.** The live model is
+agrees with it. **Nothing here runs in the app.** The live model is
 [`src/inference/mamba3.py`](../../src/inference/mamba3.py), and
 [`tests/inference/test_mamba3.py`](../../tests/inference/test_mamba3.py)
 drives its recurrence and upstream's two forms over identical inputs,
 requiring the same outputs and states from all three.
+[`scripts/probe_mamba3.py`](../../scripts/probe_mamba3.py) makes the
+same comparison on the real checkpoint's activations, swapping the
+parallel form in as the recurrence.
 [`tests/inference/test_mamba3_reference.py`](../../tests/inference/test_mamba3_reference.py)
 holds the copy itself honest: the two forms must agree with each
 other, the shim below must do exactly what `einops` would, and the

@@ -53,23 +53,80 @@ decided and the traps it found.
 Agreed with the maintainer (deliberate each in Ask mode before Plan). What has
 since shipped is noted on the item rather than left for a reader to infer.
 
-1. **State-space models: Mamba-3 (new model class).** Integrate a 1.5B Mamba-3
-   SISO / MIMO checkpoint (`state-spaces` HF org, arXiv 2603.15569) as the first
-   SSM, opening a distinct XAI lens: the fixed-size recurrent state. Key open
-   decision, base vs instruct (the `state-spaces` weights are base LMs, not
-   instruction-tuned). Own `.venv-ssm`; native `mamba-ssm` / `causal-conv1d`
-   CUDA kernels (GPU-only, custom decode loop); ~3 GB VRAM. The streaming
-   baseline reuses the AR frame / token contract and gates on the `append_only`
-   generation shape. The registry can express it now without a special case,
-   which is what `ROADMAP-01` was for: `family="state_space"` keeps its own
-   identity and its own glow pair, `generation_shape="append_only"` gets it the
-   autoregressive affordances and none of the denoising ones, and
-   `supported_devices=("cuda",)` is a declaration the supervisor enforces
-   before it evicts anything rather than a fact buried in a `load()` that
-   raises. The phase-2 payoff is SSM-native state overlays (per-token Δ /
-   state-write intensity, state-norm sparkline, fixed-state forgetting probes),
-   which need kernel-intermediate capture. Now unblocked, since the AR tools
-   have shipped and the axes have landed.
+1. **State-space models: Mamba-3 (new model class). In progress: the model
+   and a hardware probe exist, the worker does not.** The first SSM, and a
+   distinct XAI lens: a fixed-size recurrent state that every token decays
+   and writes into, so what the model keeps can be read off it exactly.
+   **Chosen:** `state-spaces/mamba3-siso-1.5b` (arXiv 2603.15569). It is a
+   base model, as every `state-spaces` checkpoint is, so it takes
+   completions rather than chat. SISO rather than MIMO, whose only kernels
+   are TileLang.
+
+   **Our own PyTorch, not `mamba-ssm`**, decided on 2026-09-28:
+   - upstream decodes every token through a CuTe kernel whose docstring
+     says it is tested only on H100, and this project's RTX 4090 is
+     compute capability 8.9;
+   - installing it needs a newer torch, Triton 3.5, TileLang and QuACK
+     built from git source, which the generated locks cannot express
+     without changing how `scripts/lock_environments.py` declares an
+     environment;
+   - `transformers` has no Mamba-3 at all;
+   - upstream ships two plain PyTorch statements of the recurrence in its
+     tests, a step loop and a parallel form. `reference/mamba3/` vendors
+     them, and `src/inference/mamba3.py` is held to both.
+
+   So there is no `.venv-ssm`. Plain PyTorch runs in `.venv-ar`, which
+   already had everything, and no dependency was added anywhere. It also
+   retires the old claim that state overlays "need kernel-intermediate
+   capture": with the loop in our hands every per-token quantity is an
+   ordinary tensor, and `src/inference/mamba3_memory.py` computes each
+   token's exact weight in the state, proved by rebuilding a stepped
+   state from those weights alone.
+
+   **The tokenizer is gated.** The checkpoint uses Llama 3.1's, which
+   lives in `meta-llama/Llama-3.1-8B` behind a licence acceptance; only
+   its three tokenizer files are fetched. A worker will need the user's
+   Hub token, and the menu will need to explain why.
+
+   **The probe decides the rest.** `scripts/probe_mamba3.py`, manual item
+   328, with its criteria fixed before any run. An agent ran it on
+   2026-09-28 on this machine's CPU, against the real checkpoint, with
+   SmolLM3's tokenizer standing in (the same Llama 3 vocabulary and ids):
+   - **The model is right.** The checkpoint's 291 tensors match the
+     module's names and shapes exactly, our loop and upstream's parallel
+     form agree to a relative 1.9e-7, perplexity on three passages is 3.3
+     to 8.1, and greedy completions read coherently.
+   - **CPU is viable.** 4.5 tokens a second decoding in float32, 11.1 in
+     bfloat16, on a Ryzen 9 7950X3D, against a bar of 3.
+   - **A retention overlay fails.** The weights are exact (3.6e-7), decay
+     does vary with content, and only one layer ranks by position alone.
+     But a single token repeated shares as many of its top 20 positions
+     with real text as two passages share with each other, in 17 of 24
+     layers on the state and 20 of 24 on the output side, against a
+     chance overlap of about 3. Most of each layer's mass sits in the
+     last 16 tokens whatever the input. Middle layers do keep
+     content-chosen earlier tokens, but a per-position picture would bury
+     them under the same recency window on every input, including one
+     with nothing in it: the attention-sink failure from the Vision page,
+     arriving by another route.
+
+   What the card still has to show is CUDA throughput and VRAM, and the
+   real tokenizer reproducing these numbers.
+
+   **After the probe**, as its own plan: a Mamba-3 worker in
+   `src/backends/` and a registry entry. The registry can express it
+   without a special case, which is what `ROADMAP-01` was for:
+   `family="state_space"` keeps its own identity and glow pair,
+   `generation_shape="append_only"` gets it the autoregressive affordances
+   and none of the denoising ones, `input_mode="completion"`,
+   `environment="ar"`, and devices chosen from the probe's speed numbers.
+   The decode loop reuses the helpers in `src/inference/ar_sampler.py`.
+   Per-token signals (delta, decay, state norm) are what the evidence
+   supports, since decay passed the content test; an overlay of what the
+   state retains waits for a way past the recency window. What If waits
+   for state checkpoints: an SSM has no cache to slice, so resuming at a
+   position needs the state as it stood there, 48 MiB a copy, or a replay
+   of the prefix.
 2. **Entropy and top-k for the diffusion models.** The entropy half **shipped
    with `ROADMAP-03`**, in `a26b8c3`, `455b2ef` and `ffed5b6`. Top-k is still
    open and was left downstream on purpose, with a budget field reserved for it.
@@ -2369,8 +2426,9 @@ not hand-written**; see the section below before editing one. Always invoke an
 environment's Python by path.
 
 **Also worth knowing**: `scripts/` holds the tooling the repo is gated by
-(`lint_ratchet.py`, `lock_environments.py`) and one-off builders such as
-`quantize_diffusiongemma_nf4.py`. `tests/` mirrors `src/`, with the browser
+(`lint_ratchet.py`, `lock_environments.py`), one-off builders such as
+`quantize_diffusiongemma_nf4.py`, and hardware probes such as
+`probe_mamba3.py`. `tests/` mirrors `src/`, with the browser
 tests under `tests/web/static/` loaded into a `vm` context.
 
 ## Dependency management: consolidated, 2026-09-23
