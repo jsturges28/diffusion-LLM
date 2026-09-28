@@ -6,6 +6,11 @@ across seven sequenced stages, so this is a campaign rather than a task, and
 the thing that makes a campaign work is that each session starts from an
 accurate picture and leaves one behind.
 
+**As of 2026-09-28 the campaign is complete except for the remainder listed
+at the top of the ledger.** This brief still governs a session that takes one
+of those findings, and the rules that outrank your judgement, below, still
+bind the feature work that follows, Mamba included.
+
 Three files carry the work, and they have different jobs:
 
 - **`docs/audit/AUDIT_REPORT.md`** is the analysis of record, dated 2026-08-10. Treat it
@@ -129,9 +134,12 @@ that was silently reinterpreted is a lie in the record.
 
 ## Verification before handing back
 
-- `.venv/bin/python -m pytest`, currently 265 passing.
-- `.venv/bin/python -m ruff check src tests`, currently 156 known findings.
-  Once `QUALITY-02` installs the ratchet, that number may only go down.
+- `.venv/bin/python -m pytest`. The ledger's opening records the current
+  count, so this file does not keep a second copy to go stale; it said 265
+  here long after the suite passed 2,000.
+- `.venv/bin/python scripts/lint_ratchet.py`, which fails when any file's
+  count for any rule grows. `QUALITY-02` installed it in place of the
+  remembered total that used to sit here.
 - `node --check` on every changed `.js` file, and ReadLints on everything you
   touched.
 - The finding's own Verification clause.

@@ -27,8 +27,10 @@ machine with no card can still use the suite. One model is resident at
 a time, each in its own virtual environment, because they need
 incompatible `transformers` versions.
 
-An audit remediation campaign is the current work, tracked finding by
-finding in `docs/audit/IMPLEMENTATION_LEDGER.md`.
+The audit remediation campaign that ran from 2026-08-10 is complete except
+for a short remainder, tracked finding by finding in
+`docs/audit/IMPLEMENTATION_LEDGER.md`. The next feature is Mamba-3, the first
+of the accepted directions below.
 
 **What answers what**, because this is one document of five and this
 section previously tried to be three of them:
@@ -348,6 +350,17 @@ image-grounded text generation.
 
 **Current state.** Text only. `src/backends/dgemma_worker.py` deliberately loads
 `AutoTokenizer` (not `AutoProcessor`) to avoid pulling in torchvision.
+
+**What has shipped beside it, and what has not (2026-09-28).** The Vision page,
+described under "How a vision model sees an image" below, shows how two SmolVLM
+encoders turn an image into tokens, in the supervisor, with no upload and no
+generation. None of this phase is done by it: no model accepts an image, and
+`ROADMAP-04`'s artifact lifecycle is still untaken, because the page sends only
+an image's dimensions. It does reopen this phase's premise. The goal above
+names DiffusionGemma, while the vision work went to SmolVLM, a small
+Idefics3-architecture model that `.venv-ar`'s `transformers` already
+implements. Which model image-conditioned generation should target is open, and
+so is which checkpoint `ROADMAP-04`'s hardware spike should inventory.
 
 **Requirements and considerations.**
 - `AutoProcessor` plus torchvision for image preprocessing; a vision tower adds

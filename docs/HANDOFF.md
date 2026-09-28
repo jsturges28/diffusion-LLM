@@ -46,7 +46,8 @@ in an analytics suite.
   no model is active; `/index.html` 307s to `/generate`). Model Manager spawns
   ONE worker at a time with a pre-flight VRAM check; proxies `/ws` (no
   auto-boot: it errors and closes if no worker is active); serves analytics +
-  save + run-delete; auto-stamps HTML asset URLs. `/api/models` also returns
+  save + run-delete, and the Vision page's `/api/vision/*`, which needs no
+  worker; auto-stamps HTML asset URLs. `/api/models` also returns
   `gpu_name` + `free_vram_gib` + per-model `fits` for the menu. Durable UI
   state (`src/web/ui_state.py`) is served via `GET`/`PUT /api/ui-state`; the
   GET reconciles both the "new run" cue and the Analytics collections against
@@ -93,93 +94,67 @@ in an analytics suite.
 
 ## Where things stand
 
-**An audit remediation campaign is the current work**, and it overrides the
-normal session cadence. Read `docs/audit/IMPLEMENTATION_BRIEF.md` for how to work it,
-then `docs/audit/IMPLEMENTATION_LEDGER.md` for what is done, ready, and blocked.
-`docs/audit/AUDIT_REPORT.md` is the immutable analysis behind it; read only the findings
-you intend to take, since it is 2,000 lines.
+**The audit remediation campaign is complete except for a short
+remainder**, listed at the top of `docs/audit/IMPLEMENTATION_LEDGER.md`:
+four findings waiting on hardware, `ORG-02`'s module conversion deferred
+with its reason, and `ROADMAP-04` untaken because nothing needs it yet.
+`docs/audit/IMPLEMENTATION_BRIEF.md` no longer governs every session, so
+`AGENTS.md`'s cadence applies again, but the rules the brief quotes from
+the report's sequencing still bind new work, Mamba included, and taking
+`ROADMAP-04` is campaign work that follows it. `docs/audit/AUDIT_REPORT.md`
+is the immutable analysis behind it all; read only the findings you touch.
 
-Stages 1 to 3 are complete. Saved runs publish whole or not at all
-(`DATA-01`) out of an extracted store (`ORG-01`), declare a schema version and
-what they captured (`DATA-05`), carry the worker's own account of what produced
-them (`DATA-04`), and render a bounded GIF (`RUNTIME-02`).
+What the campaign changed that a newcomer trips over:
 
-**Stage 4, explicit process and socket ownership, has landed its three
-passes.** Worker spawning moved to `src/web/worker_process.py` behind a seam
-the manager can be tested through, stopping a worker is a verified transition
-rather than a signal and a hope (`LIFE-02`), and a switch to a model that
-cannot run is refused before the working model is evicted (`LIFE-06`).
-Activation then moved behind one shared client, `src/web/static/activation_client.js`
-(`ORG-04`), and every activation carries an operation id so two windows
-cannot navigate or cancel for each other, with the socket opening on a
-`resident` frame naming the model that answered it (`LIFE-03`). Pass three
-gave every run a token that a stateful follow-up must name, so one window
-cannot resume or probe another's run (`LIFE-01`), and gave every error a
-scope, so a probe refused as busy no longer tears down What If
-(`PROTOCOL-01`). Pass four made a run stoppable (`LIFE-04`): the worker's
-socket loop keeps reading while a generation runs as a task, so Cancel and
-disconnect land while there is still something to stop, producer queues are
-bounded (`RUNTIME-01`'s first step), and every model ends a stopped run with
-one `done` carrying `cancelled`. Generate becomes Stop in the browser. Pass
-five gave both diffusion backends a bounded per-frame checkpoint holding the
-canvas, its confidence state and the generator state (`XAI-01`), so an edited
-branch reports the confidence the model actually gave rather than a flat 1.0
-and one edit repeats across intervening random work. Pass six gave downloads
-an owner (`TRUST-04`): a fetch is a child process the supervisor terminates
-on cancel and on shutdown, leaving its partial parts so the next attempt
-resumes.
+- **Runs are owned.** Saved runs publish whole or not at all, declare a
+  schema version and what they captured, and carry the worker's own
+  account of what produced them (`DATA-01`, `DATA-05`, `DATA-04`). Every
+  run has a token a stateful follow-up must name, so one window cannot
+  resume or probe another's run (`LIFE-01`), and every error has a scope
+  (`PROTOCOL-01`).
+- **Workers are owned.** Spawning sits behind `src/web/worker_process.py`,
+  stopping one is a verified transition (`LIFE-02`), and a switch that
+  cannot work is refused before anything is evicted (`LIFE-06`). Every
+  activation carries an operation id and the socket opens on a `resident`
+  frame (`LIFE-03`). A run is stoppable, and every model ends a stopped run
+  with one `done` carrying `cancelled` (`LIFE-04`). Downloads are child
+  processes the supervisor can terminate (`TRUST-04`).
+- **Edits are faithful.** Both diffusion backends keep a bounded per-frame
+  checkpoint, so an edited branch reports the confidence the model actually
+  gave, and one edit repeats across intervening random work (`XAI-01`).
+- **Models are described rather than special-cased.** `model_type` is a
+  `family`, a `generation_shape` and an `input_mode`, with devices declared,
+  so both diffusion models are honestly GPU-only (`ROADMAP-01`). One
+  resolver answers for every model's parameters (`ROADMAP-02`), a per-model
+  text adapter owns templating and stop tokens (`ROADMAP-05`), and every
+  signal declares its unit and the axes it varies over (`ROADMAP-03`).
+- **The generator's state has owners.** `run_frames.js` and `run_phases.js`
+  refuse a frame family out of step and a phase move no button can make,
+  and pages open with their state inlined as `window.__BOOT__` rather than
+  fetching it (`ORG-02`).
+- **Saving is explicit.** Opening Edit Frames or What If writes nothing.
+  Three things save: the Save button, Confirm, and the rescue when another
+  window takes the model away, each published under the run token so a
+  lost reply cannot become a second Analytics row.
+- **Autoregressive frames are append-only**, on the wire, in the browser
+  and on disk, which took a 2,048-token run from about 130 MiB to 1 MiB
+  (`RUNTIME-01`). Diffusion frames are still full canvases, which
+  denoising one makes inherent.
+- **The documentation is held to the code.** `tests/test_docs_inventory.py`
+  fails when a model, environment, package or page ships that the docs do
+  not name (`META-03`), and this page, the README and the roadmap's
+  orientation are each bounded by a test.
 
-**Stage 6 has started.** `model_type` is now a `family`, a
-`generation_shape` and an `input_mode`, with devices declared rather
-than inferred, so both diffusion models are honestly GPU-only
-(`ROADMAP-01`). One resolver answers for every model's parameters
-(`ROADMAP-02`), and a per-model text adapter owns templating, prompt
-counting, stop tokens and channel splitting (`ROADMAP-05`).
+**The Vision page is the newest surface, and the odd one out.** It runs in
+the supervisor rather than a worker, reads two small config files per
+SmolVLM encoder at a pinned commit, and never loads weights, so it works
+whether or not a model is resident and never disturbs one that is. Its
+measurements, and the evidence that ruled out an attention overlay, are in
+`docs/ROADMAP.md` under "How a vision model sees an image".
 
-**The analytics read path is done** (`ANALYTICS-03`, `ANALYTICS-04`, and
-`ANALYTICS-02`'s repair half, one plan because they shared one seam).
-Convergence measures positions rather than characters, throughput carries
-committed canvases forward, compare accounts for every selection it was
-given, and the catalog stopped shipping whole metadata files. The ledger is
-the authority and is updated in the same commit as each change.
-
-**Stage 5, frontend state, has started.** The generator's run state used to
-be loose variables in a 7,900-line script: six arrays indexed by frame that
-nine separate sites enumerated by hand, a frozen pre-edit copy of four more,
-and an eight-value editing phase that ten sites assigned directly.
-`src/web/static/run_frames.js` and `run_phases.js` own those now, refusing a
-frame family that has fallen out of step and a move between phases that no
-button can make, and `model_client.js` gives four pages one reading of
-`/api/models`. All three are classic scripts driven from a `vm` in
-`tests/web/static/`, like `activation_client.js` before them; the native ES
-module conversion it also asks for is a later step, and the only part of
-`ORG-02` outstanding. Pages no longer fetch their opening state either:
-`_serve_stamped_page` inlines it as `window.__BOOT__` and unhides the
-Generation nav link on the way out, each consumer still falling back to a
-fetch when it is absent. The loading overlay is down at boot as a result.
-
-**Saving is explicit now**, which is a behaviour change worth knowing
-before reading the generator. Opening Edit Frames or What If used to write
-a full save; it writes nothing. Three things save: the Save button,
-Confirm, and the rescue when another window takes the model away. Each
-save is published under the run token from `LIFE-01`, so a save whose
-reply is lost to a navigation cannot become a second Analytics row.
-
-**Hardware debt, down to two entries.** The queue at the top of
-`docs/audit/IMPLEMENTATION_LEDGER.md` holds only the `TRUST-03` offline
-retest and `LIFE-02`'s two staged-failure items, 143 and 144, neither of
-which blocks anything. One item, 148, is recorded as unreachable on this
-hardware rather than pending, because it needs two models resident at once
-on a card that cannot hold both. Separately, items 102 to 126 of
-`docs/MANUAL_VERIFICATION.md` predate the campaign and have never been
-validated.
-
-**Autoregressive frames are append-only now**, on the wire, in the
-browser and on disk, which took a 2,048-token run from about 130 MiB to
-1 MiB and its save from 30 to 45 seconds down to roughly 12
-(`RUNTIME-01`). The sessionStorage quota that used to strip a long run
-of its per-token detail is no longer reached. Diffusion frames are
-still full canvases, which denoising one makes inherent.
+**Hardware debt** is recorded in `docs/MANUAL_VERIFICATION.md` under "What
+has been checked", which states an outcome for every item. Items 102 to 126
+predate the campaign and have never been validated.
 
 ## Conventions
 
@@ -194,7 +169,10 @@ still full canvases, which denoising one makes inherent.
 
 ## Where to pick up
 
-`docs/audit/IMPLEMENTATION_LEDGER.md` answers this during the campaign. After
-it: **Mamba-3** as a new model class, then top-k for the diffusion models,
-whose entropy half shipped with `ROADMAP-03`. Both want deliberating before
-Plan. `docs/ROADMAP.md` carries the settled decisions and the longer backlog.
+**Mamba-3**, as a new model class, is the agreed next feature, and every
+prerequisite the audit set for it has landed. Deliberate it before Plan:
+how its CUDA kernels install into a hashed lock, whether a pure-torch path
+exists (which is also where per-token state is observable), and base versus
+instruct. Then top-k for the diffusion models, whose entropy half shipped
+with `ROADMAP-03`. `docs/ROADMAP.md` carries the settled decisions and the
+longer backlog.

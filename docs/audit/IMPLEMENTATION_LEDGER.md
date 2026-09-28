@@ -5,6 +5,16 @@ immutable analysis; this file is the moving part. Read
 `docs/audit/IMPLEMENTATION_BRIEF.md` for how to work a finding, and update
 this file in the same commit as the change it describes.
 
+**As of 2026-09-28 the campaign is complete except for what follows**, and
+none of it blocks feature work. Four findings wait on hardware: `LIFE-02`'s
+staged failures, items 143 and 144; `LIFE-05`'s two-supervisor queue, 310 to
+314; `ROADMAP-03`'s memory reading, 296; and `META-03`'s README walkthrough,
+326. `ORG-02`'s native module conversion is deferred rather than pending, for
+the reasons in its entry. `ROADMAP-04` is the one finding nobody has taken,
+and nothing needs it yet; see Ready now. `QUALITY-01` stays an obligation
+attached to each new seam. The rules the brief quotes from the report's
+sequencing still bind what comes next, Mamba included.
+
 **Stage 1 is complete and verified on hardware.** All five isolated safety
 fixes landed; the maintainer cleared the whole validation queue on 2026-08-11.
 That pass also turned up an unrelated offline model-loading gap, recorded
@@ -26,32 +36,38 @@ whose decisions were settled with the maintainer before pass one began: no
 migration of the existing corpus, `history.txt` demoted to a human artifact
 with `frames.jsonl` as the machine format, and `DATA-04`'s provenance
 envelope without the validation token that `LIFE-03` now owns. The three
-analytics findings it unlocked are unstarted and belong to no stage of their
-own; see Ready now.
+analytics findings it unlocked belonged to no stage of their own, and are
+done; see their entry below.
 
-**Stage 4's three passes have all landed and cleared hardware.** Pass three
+**Stage 4 is complete, with two findings waiting on hardware.** Pass three
 took `LIFE-01` and `PROTOCOL-01` together, in three commits, because the
 envelope one defines is what carries the token the other issues. It also
 pulled forward the half of `DATA-02` that needs no fork settled, and closed
 the `QUALITY-01` gap those two findings sat on: the worker's message loop had
-no tests at all. What remains of stage 4 is `XAI-01` and `LIFE-04`, both now
-ready, plus `TRUST-04` behind `LIFE-04`.
+no tests at all. `XAI-01`, `LIFE-04` and `TRUST-04` followed, and `LIFE-05`
+added its host-wide lease on 2026-09-24. `LIFE-02`'s staged failures, items
+143 and 144, and the lease's two-supervisor queue, 310 to 314, are the
+hardware still open.
 
-**Stage 5 has started, and its first half is verified.** Clearing the
+**Stage 5 is complete, with its module conversion deferred.** Clearing the
 hardware queue on 2026-08-17 released `ORG-02`, whose state core landed in
 four commits, the aligned frame family, the pre-edit baseline, the phase
 table and the model API client, and cleared hardware on 2026-08-18. The
 download API client went with `TRUST-04`, and the server-rendered boot
-state landed on 2026-09-01, retiring the loading overlay. One piece
-remains: the native ES module conversion its Direction asks for.
+state landed on 2026-09-01, retiring the loading overlay. The native ES
+module conversion its Direction asks for is deferred rather than pending:
+the classic scripts it would replace carry 486 browser tests through a `vm`
+harness, and `ORG-02`'s entry says why that trade is not worth making.
+`RUNTIME-03` and `RUNTIME-01`'s append-only frames closed the rest of the
+stage.
 
 Testing it turned up a save bug the audit had missed, fixed in three
 commits and recorded under Deviations. One item, 148, was reclassified as
 unreachable on this hardware rather than left pending, because its scenario
 needs two models resident at once on a card that cannot hold both.
 
-**Stage 6 has started.** `ROADMAP-01` and `ROADMAP-02` were taken
-together, because both restructure `protocol.py` and `registry.py` from
+**Stage 6 is complete bar one hardware reading.** `ROADMAP-01` and
+`ROADMAP-02` were taken together, because both restructure `protocol.py` and `registry.py` from
 different angles and pairing them migrated those files once.
 `model_type` is now a family and a generation shape, devices are
 declared rather than inferred from the family, and one resolver answers
@@ -59,8 +75,7 @@ for every model's parameters in place of three coercions. Four
 boundaries were drawn deliberately rather than by omission and each has
 an entry under Deviations: LLaDA's device set, the signal axis,
 per-device memory, and `ROADMAP-02`'s context half. Both cleared
-hardware on 2026-09-22, items 267 to 273. The rest of the stage is
-unblocked.
+hardware on 2026-09-22, items 267 to 273.
 
 `ROADMAP-05` and `ROADMAP-02`'s remaining half followed, paired for the
 same reason: both change `prompt_token_count`. Every model's text
@@ -68,10 +83,15 @@ conventions now sit behind one adapter, `input_mode` joined the axes as
 a fourth, and the context budget is enforced before inference with the
 count moved off the event loop.
 
-Baselines: 1,551 tests passing (from 265 at the campaign's start), 375
-browser tests under `node --test`, and Ruff at 119 in `src tests`, gated
-per file and per rule by `scripts/lint_ratchet.py` rather than
-remembered.
+`TRUST-03`, `DEPS-01`, `ORG-03` and `ROADMAP-03` completed the stage, so
+every prerequisite the report sets for the Mamba baseline has landed and
+the two that needed hardware have cleared it. `ROADMAP-03` itself waits
+only on item 296, which does not gate the baseline decode.
+
+Baselines on 2026-09-28: 2,081 tests passing (from 265 at the campaign's
+start), 486 browser tests under `node --test`, and Ruff at 70 in
+`src tests`, gated per file and per rule by `scripts/lint_ratchet.py`
+rather than remembered.
 
 ## How to read this
 
@@ -94,13 +114,19 @@ commit, **M** a short multi-commit change, **L** a staged boundary migration.
 
 ## Ready now
 
-Nothing. Every finding is done, partial with its next step recorded, or
-blocked behind the stage 6 ordering.
+`ROADMAP-04`, in the sense that nothing blocks it. It is the one finding
+nobody has taken, and nothing needs it yet: the Vision page shipped
+without an upload by sending only an image's dimensions, so the artifact
+lifecycle this finding describes becomes necessary the first time an
+image is saved or conditions a generation. Its Direction opens with a
+hardware spike on DiffusionGemma's NF4 artifact, while the vision work
+has since gone to SmolVLM, so which model that spike targets is a
+decision for whoever takes it.
 
-`LIFE-04`, `XAI-01` and `TRUST-04` were the last entries here and are
-done; see their entries below. `ORG-02` was on it too and is now in the hardware queue instead:
-its state core is written and tested, but none of its callers has been
-run.
+Every other finding is done, waiting on hardware, or deferred with its
+reason recorded. `LIFE-04`, `XAI-01` and `TRUST-04` were the last entries
+here before it, and `ORG-02`'s state core cleared hardware on 2026-08-18;
+see their entries below.
 
 `ANALYTICS-03` and `ANALYTICS-04` were the analytics trio and are done,
 as is `ANALYTICS-02`'s repair half. They went together because they
@@ -221,13 +247,16 @@ were cleared on 2026-08-11 in the same sitting: the maintainer confirmed items
 could say least about, the amber invalid row's alignment against its
 neighbours and the two-window model switch.
 
-**As of 2026-09-22 two entries remain**, and neither blocks anything.
-The stage 4 findings cleared on 2026-08-17, which released `XAI-01`,
-`LIFE-04` and `ORG-02`; `ORG-02`'s own state core and the save work that
-came out of testing it cleared on 2026-08-18, items 162 to 166, and
-`XAI-01` cleared on 2026-08-28, items 180 to 184. What is left is
-`TRUST-03`'s offline retest and `LIFE-02`'s two staged-failure items,
-143 and 144, which are awkward to arrange rather than pending.
+**As of 2026-09-28 four entries remain**, and none blocks feature work:
+`LIFE-02`'s two staged-failure items, 143 and 144, which are awkward to
+arrange rather than pending; `LIFE-05`'s two-supervisor queue, items 310
+to 314; `ROADMAP-03`'s memory reading, item 296; and `META-03`'s README
+walkthrough, item 326. The stage 4 findings cleared on 2026-08-17, which
+released `XAI-01`, `LIFE-04` and `ORG-02`; `ORG-02`'s own state core and
+the save work that came out of testing it cleared on 2026-08-18, items
+162 to 166, and `XAI-01` cleared on 2026-08-28, items 180 to 184.
+`TRUST-03`'s offline retest, the other entry left on 2026-09-22, was
+confirmed as item 289.
 
 - **META-03**: the automated half passes, now that the documentation
   inventory covers pages as well as models, environments and packages.
@@ -289,7 +318,8 @@ on real hardware.
   a worker is ever spawned, so the failure mode `LIFE-02` fixes has to be
   staged deliberately. The lever is in item 143. Item 146 was reclassified as
   a log-watch note, since a process wedged in the kernel is not something to
-  arrange on purpose.
+  arrange on purpose. So `LIFE-06` is cleared, its whole claim carried by 142
+  and 145, and `LIFE-02` stays in the queue on 143 and 144.
 - **LIFE-03**: cleared, with one item unreachable rather than pending. Items
   147 and 150 were confirmed on 2026-08-14 and 149 on 2026-08-17, which
   between them carry the finding's user-facing claim: one window does not
@@ -310,8 +340,9 @@ on real hardware.
   that matters because it is the accident that produced the OOM, was
   confirmed on 2026-08-15: a second launch from the icon opens no second
   window. Item 154, the fallback when an unrelated process holds 8760, was
-  confirmed on 2026-08-17. The slice is cleared; the host-level lease it
-  deliberately left out is still deferred, and is described under Deviations.
+  confirmed on 2026-08-17. The slice is cleared. The host-level lease it
+  deliberately left out landed on 2026-09-24 and waits on items 310 to 314,
+  two launchers holding and refusing a model; see the `LIFE-05` entry.
 - **LIFE-01, PROTOCOL-01 and the DATA-02 slice**: cleared on 2026-08-17,
   items 157 to 161. The ordinary single-window path is undisturbed, a run
   survives a reload and stays editable, a second window's generation refuses
@@ -327,10 +358,10 @@ on real hardware.
 - **TRUST-03 (offline slice)**: the automated half asserts that both Hub
   workers pin every `from_pretrained` call to local files, and that being
   offline with nothing cached now reports what happened instead of a urllib3
-  retry dump. Outstanding is the case that found it: turn networking off and
-  activate LLaDA and SmolLM3, both of which are already downloaded. Both
-  should load at their usual speed with no hang and no error.
-  DiffusionGemma needs no retest; it never touched the Hub.
+  retry dump. **Cleared as item 289** of `docs/MANUAL_VERIFICATION.md`,
+  which re-ran the case that found it, activating the already-downloaded
+  LLaDA and SmolLM3 with networking off, after the revision pin landed.
+  DiffusionGemma needed no retest; it never touched the Hub.
 
 ## Status table
 
@@ -354,18 +385,18 @@ on real hardware.
 | ANALYTICS-03 | medium | L | done | DATA-01, DATA-05 (both done) | Catalog 1.33 MiB to 70.6 KiB over 222 runs |
 | ANALYTICS-04 | high | M | done | DATA-01 (done) | Path escape was already closed by DATA-01; see entry |
 | LIFE-02 | high | M | needs hardware | none | Two commits: the process seam, then verified termination |
-| LIFE-06 | medium | M | needs hardware | none | Validate a switch target before evicting the working model |
+| LIFE-06 | medium | M | done | none | Validate a switch target before evicting the working model; cleared by items 142 and 145 |
 | ORG-04 | medium | S | done | none | Two commits: the shared activation client, then the menu |
 | LIFE-03 | critical | L | done | none | Two commits: operation identity, then the resident mismatch |
 | LIFE-01 | high | M | done | none | Name every run and refuse a stateful request that means another |
 | PROTOCOL-01 | medium | M | done | none | Two commits: scoped error envelopes, then the client routing |
 | XAI-01 | high | M | done | LIFE-01 (done) | Bounded checkpoints for both diffusion backends; carried the capture change |
 | LIFE-04 | high | L | done | LIFE-03 (done) | Carried RUNTIME-01's queue bound, as its own Direction asks |
-| LIFE-05 | high | M | done | none | Single-instance launcher, then a host-wide flock lease on residency; a second supervisor is refused and names the owner |
+| LIFE-05 | high | M | needs hardware | none | Single-instance launcher, then a host-wide flock lease on residency; a second supervisor is refused and names the owner. The lease waits on items 310 to 314 |
 | TRUST-04 | medium | L | done | LIFE-04 (done) | Download is a child process now; absorbed ORG-02's download client |
 | DATA-02 | high | L | done | none | Lost-update slice, then the semantics: collections are server-owned operations |
 | RUNTIME-01 | medium | L | done | none | Queue bound, then append frames on the wire, in the browser and on disk; 130 MiB to 1 MiB on a 2,048-token run |
-| ORG-02 | medium | L | partial | none | State core verified, boot state now server-rendered; only the ES module conversion remains |
+| ORG-02 | medium | L | deferred | none | State core verified, boot state server-rendered; the ES module conversion is deferred, see its 2026-08-18 entry |
 | RUNTIME-03 | medium | S | done | none | Taken as unblocked against this table; see Deviations |
 | ROADMAP-01 | high | M | done | none | Family, shape and devices split apart; per-device memory skipped, see Deviations |
 | ROADMAP-05 | high | M | done | none | One text adapter per model; `input_mode` became a fourth axis, see entry |
@@ -374,7 +405,7 @@ on real hardware.
 | DEPS-01 | medium | L | done | none | One manifest, four generated locks with hashes and a drift guard; 2.6 GiB of orphans dropped across two environments, one dgemma generation left for hardware |
 | ROADMAP-03 | high | L | needs hardware | none | Signals declared by axis and unit, diffusion entropy added, LLaDA's per-step softmax cut 6.2x; top-k left downstream with a budget field |
 | ORG-03 | medium | M | done | none | One kernel owns the step and the schedule; the dormant loop is a quarantined reference with a differential test, and the lint baseline fell 118 to 70 |
-| ROADMAP-04 | medium | L | ready | none | Unblocked but deliberately last: multimodal is phase 3 |
+| ROADMAP-04 | medium | L | ready | none | Untaken. The Vision page needed none of it; necessary once an image is saved or conditions a generation, and which model its spike targets is open |
 | META-03 | medium | M | needs hardware | none | Orientation cut, inventory derived from the registry and manifest, then held to the pages; the README walkthrough is item 326 |
 
 ## Stage map
@@ -396,27 +427,30 @@ code-specific Ruff ratchet (`QUALITY-02`), then the portable agent contract
 (`META-02`), then the bounded cold-start page (`META-01`). The last two ran in
 the opposite order to this map on purpose, so the contract's home was settled
 before the page that points at it was rewritten. A documentation layout move
-closed the stage. `QUALITY-01` fixtures still attach to seams as they are cut,
-and `META-03` refreshes at milestone boundaries rather than after every
-commit.
+closed the stage. `QUALITY-01` fixtures still attach to seams as they are cut.
+`META-03` was meant to refresh at milestone boundaries rather than after
+every commit, and was taken instead as holding the documentation to the code;
+see its entry.
 
-**Stage 3, the run-store boundary. Pass one done.** Behavior-preserving
+**Stage 3, the run-store boundary. Done.** Behavior-preserving
 extraction of the storage operations (`ORG-01`) and then unique staged
 publication with complete replacement, revisions, and compare-and-swap
 (`DATA-01`) have landed. Pass two has landed versioned validation and read
 adapters (`DATA-05`, three commits) and immutable worker provenance threaded
 through the terminal run contract (`DATA-04`), leaving GIFs as bounded
 non-authoritative derivatives (`RUNTIME-02`), which publication semantics now
-allow. `ANALYTICS-02`, `ANALYTICS-03` and `ANALYTICS-04` are unblocked;
-`ROADMAP-04` still waits on its own stage.
+allow. `ANALYTICS-02`, `ANALYTICS-03` and `ANALYTICS-04` followed and are
+done. `ROADMAP-04`, the last thing this stage unlocks, is untaken; see Ready
+now.
 
-**Stage 4, explicit process and socket ownership. Passes one and two done.**
+**Stage 4, explicit process and socket ownership. Done, with `LIFE-02` and
+`LIFE-05` waiting on hardware.**
 Pass one extracted and tested the manager process adapter, made termination a
 verified transition and put validation before eviction (`LIFE-02`, `LIFE-06`),
 in three commits. Pass two shared activation orchestration behind one client
 (`ORG-04`) and gave every activation an operation identity, with a resident
-handshake on the socket (`LIFE-03`, the stage's only critical), in four. It is
-much the largest stage, ten findings plus `DATA-02` in parallel, so it is being
+handshake on the socket (`LIFE-03`, the stage's only critical), in four. It was
+much the largest stage, ten findings plus `DATA-02` in parallel, so it was
 worked in passes the way stage 3 was.
 
 `LIFE-01` and `PROTOCOL-01` were deliberately held back from pass two. The
@@ -431,18 +465,20 @@ lifecycle is trustworthy, and move downloads into the same owned-operation
 model (`TRUST-04`). `DATA-02` can run in parallel once its fork is settled,
 and must not reuse model-operation state.
 
-**Stage 5, frontend state around the settled protocol. Started.** The
-aligned frame operations, the pre-edit baseline, the legal workflow phases
-and the model API client are extracted and tested (`ORG-02`, four commits),
-awaiting hardware. The download API client went with `TRUST-04` and the
-server-rendered boot state landed separately; the native ES module
-conversion the Direction asks for is the one piece left. The select
+**Stage 5, frontend state around the settled protocol. Done, with the
+module conversion deferred.** The aligned frame operations, the pre-edit
+baseline, the legal workflow phases and the model API client are extracted
+and tested (`ORG-02`, four commits), and cleared hardware on 2026-08-18. The
+download API client went with `TRUST-04` and the server-rendered boot state
+landed separately; the native ES module conversion the Direction asks for is
+deferred, for the reasons in `ORG-02`'s entry. The select
 lifecycle (`RUNTIME-03`) was taken ahead of that rather than after it,
 since nothing it asks for needs modules; see its entry. Compact
 append-only streams (`RUNTIME-01`) landed once the reducer could
 reconstruct them and the run-store version could distinguish them.
 
-**Stage 6, prepare the existing models before adding Mamba. Started.**
+**Stage 6, prepare the existing models before adding Mamba. Done, bar
+`ROADMAP-03`'s item 296.**
 The family, stream shape and device split (`ROADMAP-01`) and the
 registry-driven parameter validator (`ROADMAP-02`, its parameter half)
 landed together in three commits, against the map's order, which puts
@@ -450,16 +486,16 @@ landed together in three commits, against the map's order, which puts
 the same two files and doing them apart meant migrating
 `ModelCapabilities` and `ParamSpec` handling in separate passes over the
 same call sites. Resource requirements stayed as the single
-`min_vram_gib`; see Deviations. What remains is to extract
-model-specific text adapters (`ROADMAP-05`), migrating and testing the
-three existing models first. Pinning and attesting artifacts (`TRUST-03`)
-and consolidating environment intent (`DEPS-01`) are both done, so
-`.venv-ssm` now lands into a manifest that can hold it: adding a fifth
-environment is one table plus one regeneration. The Mamba baseline comes
-after the two hardware items those left behind. The axis-aware signal
-manifest (`ROADMAP-03`) precedes its native XAI phase and diffusion entropy
-and top-k, though not necessarily the baseline decode. Consolidate the LLaDA
-sampling kernel (`ORG-03`) before adding diffusion entropy and top-k to it.
+`min_vram_gib`; see Deviations. The model-specific text adapters
+(`ROADMAP-05`) followed, with the three existing models migrated and tested
+first. Pinning and attesting artifacts (`TRUST-03`) and consolidating
+environment intent (`DEPS-01`) are both done, so `.venv-ssm` now lands into
+a manifest that can hold it: adding a fifth environment is one table plus
+one regeneration. The two hardware items those left behind have cleared,
+`TRUST-03`'s as item 289 and `DEPS-01`'s as items 292 to 295, so the Mamba
+baseline is unblocked. `ORG-03` consolidated the LLaDA kernel first, and
+`ROADMAP-03` then added the axis-aware signal manifest and diffusion entropy
+on top of it; top-k stays downstream with a budget field reserved for it.
 
 **Stage 7, deferred cleanup.** Continue the Ruff burn-down and the remaining
 documentation cleanup, without mixing formatting churn into behavioral
@@ -1497,6 +1533,11 @@ since there is no display. Everything else was verified in session: core went
 from 119 distributions to 84 and dgemma from 7.2 GiB to 4.9, both matching their
 locks exactly, with the full suite, the ratchet and all 381 browser tests green.
 
+**Cleared.** Item 294, the DiffusionGemma environment, was done and repaired
+on 2026-09-23, and the maintainer reported items 292, 293 and 295 confirmed on
+2026-09-28: all three models activate after the core prune, the desktop window
+still opens, and a hashed install works.
+
 ### LIFE-06
 
 **The VRAM check cannot move, so it was split rather than moved.**
@@ -1840,6 +1881,11 @@ and generally refused under Wayland, so `focus_running_window` tries
 `wmctrl` then `xdotool` and shrugs. The guarantee is that no second
 supervisor starts; the printed message is the part that always works.
 
+**The lease waits on hardware**, items 310 to 314 of
+`docs/MANUAL_VERIFICATION.md`, which need two launchers at once. The row
+said `done` from the commit that queued them until 2026-09-28, which is the
+distinction this file's statuses exist to draw.
+
 ### DATA-02
 
 **The half that needed no decision was taken first.** The finding's
@@ -2015,6 +2061,17 @@ Satisfying it means jsdom, which would be the project's first JS
 dependency, or a browser binary. It is handed to the maintainer as
 manual items instead, the same way every GPU and display clause in
 this campaign has been.
+
+**Deferred as a status on 2026-09-28**, rather than left `partial`, which
+is not a status this file defines. The argument above has only grown:
+the classic scripts now carry 486 browser tests through that harness
+rather than 91, and the state the finding is about has shipped and
+cleared hardware. Converting now would pay for syntax with a rewrite of
+the harness that makes the state core testable, which inverts the
+finding's own purpose. The report lists native modules among the
+cheaper reversible paths, so this is a deviation from its Direction and
+is recorded as one. Reopen it if a page ever needs a dependency graph
+the classic scripts cannot express.
 
 **The first module is the frame family.** Six arrays indexed by frame
 were declared separately and enumerated by hand at nine sites:

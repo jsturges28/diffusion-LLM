@@ -127,6 +127,13 @@ kept when these were written:
   machine left idle until the screen blanks, so it costs twenty minutes of
   waiting to force and nothing to catch in passing. The maintainer will run
   it the next time the app happens to sit idle. It blocks nothing.
+
+  When it fires, the question is not only whether the window recovered. If
+  the window is white and
+  `~/.local/share/llm-xai-visualizer/renderer-crashes.log` has **no new
+  line**, the renderer did not die, the diagnosis behind that whole change
+  was wrong, and the investigation restarts elsewhere. That negative is the
+  more informative result and is the reason the log exists.
 - **217 to 266**: **status not recorded here.** These landed across the
   keyboard, collections and select-lifecycle passes, and their state was
   reported in chat rather than written down; the per-finding entries in
@@ -139,13 +146,31 @@ kept when these were written:
   `ROADMAP-02`'s context half. **Five of the ten failed first**, and
   each failure is written up under Deviations in the audit ledger; this
   was the most productive pass of the campaign.
-- **284 to 295**: **status not recorded here**, spanning `TRUST-03`'s
-  pinned artifacts and `DEPS-01`'s declared environments. Same caveat as
-  217 to 266.
+- **284**: confirmed, as the item records: both Hub models activate at
+  their pinned commits and load no slower.
+- **285**: done on the maintainer's machine on 2026-09-23.
+- **286 and 287**: done against the real checkpoint before item 285 ran,
+  as each item records, and automated since.
+- **288 and 289**: confirmed, as the items record. 289 re-ran the offline
+  activation that `TRUST-03` found, which was that finding's last
+  hardware entry.
+- **290**: exercised against this machine's real filesystem. The end of
+  the path through the UI is **outstanding**, and needs a nearly full disk
+  to reach honestly; see the item.
+- **291**: the failure paths are automated. One real end-to-end rebuild
+  is **outstanding**, to be done whenever the checkpoint is next rebuilt
+  rather than scheduled.
+- **292 and 293**: confirmed, reported by the maintainer on 2026-09-28:
+  all three models activate after the core prune, and the desktop window
+  still opens.
+- **294**: done and repaired on 2026-09-23; see the item for why the
+  uninstall needed a second step.
+- **295**: confirmed, reported by the maintainer on 2026-09-28: a hashed
+  install works.
 - **296**: **outstanding.** Read a run's Peak VRAM against the predicted
   figure, roughly 15 MiB above baseline.
-- **297 to 299**: **status not recorded here**, `ROADMAP-03`'s signal
-  manifest queue.
+- **297 to 299**: confirmed, reported by the maintainer on 2026-09-28,
+  `ROADMAP-03`'s signal manifest queue.
 - **300 to 308**: confirmed on 2026-09-24, the UI polish, peak VRAM and
   resource meter queues. **307 failed first**: the meter was reported
   missing while switching models, because `websocket_proxy` refuses a
@@ -165,13 +190,6 @@ kept when these were written:
 - **323 and 324**: confirmed on 2026-09-27.
 - **325**: **outstanding**, and awkward: it needs a machine that has
   never fetched the vision configs.
-
-  When it fires, the question is not only whether the window recovered. If
-  the window is white and
-  `~/.local/share/llm-xai-visualizer/renderer-crashes.log` has **no new
-  line**, the renderer did not die, the diagnosis behind that whole change
-  was wrong, and the investigation restarts elsewhere. That negative is the
-  more informative result and is the reason the log exists.
 - **326**: **outstanding**, `META-03`'s README walkthrough, followed cold
   on both setup paths.
 
