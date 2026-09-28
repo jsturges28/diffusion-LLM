@@ -191,9 +191,11 @@ kept when these were written:
 - **325**: **outstanding**, and awkward: it needs a machine that has
   never fetched the vision configs.
 - **326**: **outstanding**, `META-03`'s README walkthrough, followed cold
-  on both setup paths.
-- **327**: **outstanding**, the Vision page's hover on the 2.2B, after
-  the fix that made it hit-test only the part of a tile tokens cover.
+  on both setup paths. Deliberately left for a second person on their own
+  machine rather than run by the maintainer, since someone who already
+  knows the repository cannot follow its README cold.
+- **327**: confirmed on 2026-09-28: on the 2.2B the red strip lights
+  nothing, and the hover meets the drawn block edges.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
