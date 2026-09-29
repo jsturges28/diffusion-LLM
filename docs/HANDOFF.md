@@ -171,11 +171,11 @@ predate the campaign and have never been validated.
 
 **Mamba-3** is in progress as a new model class, in our own PyTorch
 (`src/inference/mamba3.py`) held to upstream's references in
-`reference/mamba3/`. Next is `scripts/probe_mamba3.py` on the card:
-manual item 328 says how, and it needs access to the gated Llama 3.1
-tokenizer. An agent's CPU run already found the model correct, CPU
+`reference/mamba3/`. Next is the CUDA run of `scripts/probe_mamba3.py`
+(manual item 328). Its CPU run already found the model correct, CPU
 decoding viable and a retention overlay failing its degenerate test; the
-worker's plan starts from those, and the reasoning is under the Mamba-3
-direction in `docs/ROADMAP.md`. Then top-k for the diffusion models,
+worker's plan starts from those, and the reasoning, including why the
+tokenizer comes from SmolLM3, is under the Mamba-3 direction in
+`docs/ROADMAP.md`. Then top-k for the diffusion models,
 whose entropy half shipped with `ROADMAP-03`. `docs/ROADMAP.md` carries
 the settled decisions and the longer backlog.

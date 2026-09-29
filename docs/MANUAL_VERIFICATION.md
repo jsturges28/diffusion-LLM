@@ -196,10 +196,9 @@ kept when these were written:
   knows the repository cannot follow its README cold.
 - **327**: confirmed on 2026-09-28: on the 2.2B the red strip lights
   nothing, and the hover meets the drawn block edges.
-- **328**: **outstanding**, the Mamba-3 probe on the card and with the
-  real, gated tokenizer. An agent's CPU run with a stand-in tokenizer is
-  recorded in the item; the GPU numbers and the real tokenizer are what
-  remain.
+- **328**: **outstanding**, the Mamba-3 probe's CUDA run. Its CPU half
+  was run by an agent on 2026-09-28 through the script itself, and the
+  numbers are in the item.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -3536,20 +3535,17 @@ script, pinned by `tests/test_probe_mamba3.py`, so they cannot drift
 once a result is in. The reasoning around it is under the Mamba-3
 direction in `docs/ROADMAP.md`.
 
-328. **The probe, on the card and on the CPU.** The tokenizer is Llama
-    3.1's and gated: request access on the Hugging Face page for
-    `meta-llama/Llama-3.1-8B`, then run `.venv-ar/bin/hf auth login`
-    with a token from that account. Then, outside the sandbox:
+328. **The probe, on the card.** Outside the sandbox:
 
         .venv-ar/bin/python scripts/probe_mamba3.py --device cuda \
             --json ~/mamba3-probe-cuda.json
-        .venv-ar/bin/python scripts/probe_mamba3.py --device cpu \
-            --dtype float32 --json ~/mamba3-probe-cpu.json
 
-    The first fetches the checkpoint, about 3 GB, and the three
-    tokenizer files, both pinned; the second reuses them. Each prints
-    its verdicts and writes the whole report as JSON. A gated refusal
-    should print what to do rather than a traceback.
+    It fetches the checkpoint, about 3 GB, and SmolLM3's
+    `tokenizer.json`, both pinned, and needs no Hub login: the
+    tokenizer is Llama 3.1's, taken from SmolLM3's ungated copy and
+    refused unless it matches Llama 3.1's recorded fingerprint. It
+    prints its verdicts and writes the whole report as JSON. The CPU
+    half is the same command with `--device cpu --dtype float32`.
 
     The bar, fixed before any run:
 
@@ -3567,28 +3563,27 @@ direction in `docs/ROADMAP.md`.
       other; a Spearman correlation with position above 0.9; and a
       median coefficient of variation of alpha below 0.05.
 
-    **What an agent already saw**, on 2026-09-28, running every
-    section on this machine's CPU against the real checkpoint, with
-    SmolLM3's tokenizer standing in: the same Llama 3 vocabulary and
-    ids, with Llama's begin-of-text token prepended as its own
-    tokenizer does. The CPU float32 run should reproduce these closely,
-    and a large difference means the two tokenizers differ after all:
+    **The CPU half is done**, run by an agent on 2026-09-28 on this
+    machine, through the script as written, against the real
+    checkpoint:
 
-    - load: 291 bf16 tensors, none missing, unexpected or misshapen;
+    - load: 291 bf16 tensors, none missing, unexpected or misshapen,
+      and the tokenizer matching Llama 3.1's fingerprint;
     - agreement: a relative error of 1.9e-7, and the same top token at
       all 128 positions;
     - perplexity 8.1, 4.4 and 3.3, below the 10 to 20 guessed, and
       coherent completions ("In 1492, Christopher Columbus sailed the
       ocean blue.");
-    - decoding at 4.5 tokens a second in float32 and 11.1 in bfloat16,
-      and prompts at 108 and 141 tokens a second;
+    - decoding at 4.3 tokens a second in float32 and prompts at 104; an
+      earlier run through the same code measured 11.1 and 141 in
+      bfloat16;
     - retention: the weights rebuild every state to 3.6e-7, decay
       varies with content (median 0.12) and one layer ranks by position
       alone, but the repeated token matches real text's top positions
       in 17 of 24 layers on the state and 20 of 24 on the output side,
       against a chance overlap of about 3. That fails the lens.
 
-    What is left is the CUDA run's throughput and peak VRAM, and the
-    real tokenizer confirming the rest. Summarise both reports under
-    the Mamba-3 direction in `docs/ROADMAP.md`, where the worker's plan
-    will look for them.
+    What is left is the CUDA run: its throughput and peak VRAM, and the
+    rest of its report agreeing with the CPU's, allowing for bfloat16.
+    Summarise it under the Mamba-3 direction in `docs/ROADMAP.md`,
+    where the worker's plan will look for it.

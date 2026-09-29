@@ -83,21 +83,34 @@ since shipped is noted on the item rather than left for a reader to infer.
    token's exact weight in the state, proved by rebuilding a stepped
    state from those weights alone.
 
-   **The tokenizer is gated.** The checkpoint uses Llama 3.1's, which
-   lives in `meta-llama/Llama-3.1-8B` behind a licence acceptance; only
-   its three tokenizer files are fetched. A worker will need the user's
-   Hub token, and the menu will need to explain why.
+   **The tokenizer comes from SmolLM3, not Meta.** The checkpoint was
+   trained with Llama 3.1's, whose own repository is gated behind a
+   licence acceptance, and the other sources are worse: Ollama embeds it
+   in a 4.9 GB quantized model, NVIDIA's NGC in a 15 GB archive behind
+   an account. SmolLM3's pinned `tokenizer.json`, already fetched for
+   the SmolLM3 worker, is the same tokenizer in everything that decides
+   ids: the text splitting, all 128,000 vocabulary entries, all 280,147
+   merges, and begin- and end-of-text at 128000 and 128001, checked on
+   2026-09-28 against Meta's own file (its git blob is published even
+   though the file is gated, and an ungated mirror matched it). The only
+   differences are ten reserved special tokens SmolLM3 renamed for its
+   chat format, and that it adds no begin-of-text. So the probe builds
+   its tokenizer from the byte-pair model alone, which means no typed
+   text can become a special token, prepends begin-of-text itself, and
+   refuses to run unless the file matches Llama 3.1's recorded
+   fingerprint. That removes the planned token plumbing: no worker
+   needs a Hub login, and no menu has to explain a gate.
 
    **The probe decides the rest.** `scripts/probe_mamba3.py`, manual item
-   328, with its criteria fixed before any run. An agent ran it on
-   2026-09-28 on this machine's CPU, against the real checkpoint, with
-   SmolLM3's tokenizer standing in (the same Llama 3 vocabulary and ids):
+   328, with its criteria fixed before any run. An agent ran its CPU half
+   on 2026-09-28, through the script as written, against the real
+   checkpoint:
    - **The model is right.** The checkpoint's 291 tensors match the
      module's names and shapes exactly, our loop and upstream's parallel
      form agree to a relative 1.9e-7, perplexity on three passages is 3.3
      to 8.1, and greedy completions read coherently.
-   - **CPU is viable.** 4.5 tokens a second decoding in float32, 11.1 in
-     bfloat16, on a Ryzen 9 7950X3D, against a bar of 3.
+   - **CPU is viable.** 4.3 to 4.5 tokens a second decoding in float32
+     and 11.1 in bfloat16, on a Ryzen 9 7950X3D, against a bar of 3.
    - **A retention overlay fails.** The weights are exact (3.6e-7), decay
      does vary with content, and only one layer ranks by position alone.
      But a single token repeated shares as many of its top 20 positions
@@ -111,8 +124,7 @@ since shipped is noted on the item rather than left for a reader to infer.
      input, including one with nothing in it: the attention-sink failure
      from the Vision page, arriving by another route.
 
-   What the card still has to show is CUDA throughput and VRAM, and the
-   real tokenizer reproducing these numbers.
+   What the card still has to show is CUDA throughput and VRAM.
 
    **After the probe**, as its own plan: a Mamba-3 worker in
    `src/backends/` and a registry entry. The registry can express it

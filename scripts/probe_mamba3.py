@@ -20,10 +20,11 @@ without it. The rest are chosen with --sections:
 - retention: the three tests that retired the attention overlay, run
   on what each layer's state keeps and on its output-side attention.
 
-The tokenizer is Llama 3.1's, which is gated. Request access to
-meta-llama/Llama-3.1-8B on the Hugging Face Hub, then log in with
-`.venv-ar/bin/hf auth login`. Only its three tokenizer files are
-fetched, never its 16 GB of weights.
+The checkpoint was trained with Llama 3.1's tokenizer, whose own
+repository is gated. SmolLM3's, which this project already pins, is
+the same tokenizer in everything that decides a text's ids, so the
+probe takes that one file from SmolLM3 and checks its fingerprint
+against Llama 3.1's before trusting it.
 
 Run it unsandboxed, in the autoregressive environment, once per
 device:
@@ -37,6 +38,7 @@ device:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import platform
@@ -51,6 +53,7 @@ from typing import (
     List,
     NamedTuple,
     Optional,
+    Protocol,
     Sequence,
     Tuple,
 )
@@ -69,6 +72,7 @@ if str(REPO_ROOT) not in sys.path:
 # so the suite can import this file in `.venv` and drive it with a
 # tiny model and a stand-in tokenizer.
 from reference.mamba3 import siso_reference as ref  # noqa: E402
+from src.backends.registry import SMOLLM3  # noqa: E402
 from src.inference import mamba3  # noqa: E402
 from src.inference import mamba3_memory as memory  # noqa: E402
 from src.inference.artifact_manifest import repo_commit  # noqa: E402
@@ -82,12 +86,21 @@ from src.inference.mamba3 import (  # noqa: E402
 MODEL_REPO = "state-spaces/mamba3-siso-1.5b"
 MODEL_REVISION = "5cfc721542ec9ccee768088b2fd6b7e8101219d8"
 MODEL_FILES = (mamba3.CONFIG_NAME, mamba3.WEIGHTS_NAME)
-TOKENIZER_REPO = "meta-llama/Llama-3.1-8B"
-TOKENIZER_REVISION = "d04e592bb4f6aa9cfee91e2e20afa771667e1d4b"
-TOKENIZER_FILES = (
-    "tokenizer.json",
-    "tokenizer_config.json",
-    "special_tokens_map.json",
+# SmolLM3's copy of Llama 3.1's tokenizer, at the revision the
+# registry already runs. Meta's own is gated; this one is not, and
+# differs only in ten reserved special tokens SmolLM3 renamed for its
+# chat format, which `load_codec` drops.
+TOKENIZER_REPO = SMOLLM3.checkpoint
+TOKENIZER_REVISION = SMOLLM3.revision
+TOKENIZER_FILE = "tokenizer.json"
+TOKENIZER_FILES = (TOKENIZER_FILE,)
+BEGIN_OF_TEXT = 128000
+END_OF_TEXT = 128001
+# `bpe_fingerprint` of Meta's tokenizer.json for Llama-3.1-8B at
+# d04e592b, the file whose git blob Meta publishes as f916e710.
+# SmolLM3's pinned file gives the same value.
+LLAMA31_BPE_FINGERPRINT = (
+    "1277bcb60e03df534dfbf92525c92b5979b7613e19c84f821991947e218eb0df"
 )
 
 # The pass criteria, fixed before the first run. Changing one after
@@ -178,11 +191,6 @@ PROMPTS = (
 REPEATED_TEXT = " the"
 
 
-class ProbeRefusal(RuntimeError):
-    """Something the person running the probe can fix, said plainly
-    rather than as a traceback."""
-
-
 class TextCodec(NamedTuple):
     """The tokenizer, reduced to what the probe asks of it."""
 
@@ -190,6 +198,7 @@ class TextCodec(NamedTuple):
     decode: Callable[[Sequence[int]], str]
     vocabulary: int  # every id it can produce, specials included
     end: Optional[int]  # end of text, where a completion stops
+    fingerprint: str  # `bpe_fingerprint` of the file it came from
 
 
 Verdict = Dict[str, str]
@@ -198,7 +207,8 @@ Section = Dict[str, Any]
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """0 when the probe ran, whatever it found; 1 when the checkpoint
-    would not load; 2 when something needs doing before it can run."""
+    would not load or the tokenizer is not Llama 3.1's; 2 when CUDA
+    was asked for and is not there."""
     args = parse_args(argv)
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
@@ -206,18 +216,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "CUDA is not available to this process. Run it outside"
             " the sandbox, or pass --device cpu --dtype float32."
         )
-    try:
-        checkpoint = _resolve(
-            args.checkpoint, MODEL_REPO, MODEL_REVISION, MODEL_FILES
-        )
-        tokenizer = _resolve(
-            args.tokenizer,
-            TOKENIZER_REPO,
-            TOKENIZER_REVISION,
-            TOKENIZER_FILES,
-        )
-    except ProbeRefusal as refusal:
-        return _refuse(str(refusal))
+    checkpoint = _resolve(
+        args.checkpoint, MODEL_REPO, MODEL_REVISION, MODEL_FILES
+    )
+    tokenizer = _resolve(
+        args.tokenizer,
+        TOKENIZER_REPO,
+        TOKENIZER_REVISION,
+        TOKENIZER_FILES,
+    )
     report = run(
         checkpoint=checkpoint,
         codec=load_codec(tokenizer),
@@ -229,7 +236,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print_report(report)
     if args.json is not None:
         write_report(args.json.expanduser(), report)
-    if report["load"]["loadable"]:
+    if report["load"]["runnable"]:
         return 0
     return 1
 
@@ -302,39 +309,109 @@ def fetch(repo: str, revision: str, files: Sequence[str]) -> Path:
     """`files` from `repo` at a pinned commit, from the cache when
     they are already there, and nothing else from the repository."""
     from huggingface_hub import snapshot_download
-    from huggingface_hub.errors import GatedRepoError
 
-    try:
-        path = snapshot_download(
-            repo, revision=revision, allow_patterns=list(files)
-        )
-    except GatedRepoError as error:
-        raise ProbeRefusal(
-            f"{repo} is gated. Request access on its Hugging Face"
-            " page, then run `.venv-ar/bin/hf auth login` with a"
-            " token from the account that was granted access, and"
-            " run the probe again."
-        ) from error
+    path = snapshot_download(
+        repo, revision=revision, allow_patterns=list(files)
+    )
     return Path(path)
 
 
 def load_codec(directory: Path) -> TextCodec:
-    """Llama 3.1's tokenizer from its three files. Encoding adds the
-    begin-of-text token, as the tokenizer's own template asks."""
-    from transformers import AutoTokenizer
+    """Llama 3.1's tokenizer, built from its byte-pair model alone.
 
-    tokenizer = AutoTokenizer.from_pretrained(str(directory))
+    The file's added tokens are dropped, so no typed text can become a
+    special token, and begin-of-text is prepended here, as Llama's own
+    template does. Dropping them also sidesteps the reserved tokens
+    SmolLM3 renamed, the one place its file and Meta's differ.
+    """
+    from tokenizers import Tokenizer
+
+    path = directory / TOKENIZER_FILE
+    data = json.loads(path.read_text(encoding="utf-8"))
+    bare = {**data, "added_tokens": [], "post_processor": None}
+    return codec_from(Tokenizer.from_str(json.dumps(bare)), data)
+
+
+class _Pieces(Protocol):
+    @property
+    def ids(self) -> List[int]: ...
+
+
+class BytePairs(Protocol):
+    """What the codec needs of a `tokenizers.Tokenizer`."""
+
+    def encode(
+        self, sequence: str, add_special_tokens: bool = True
+    ) -> _Pieces: ...
+
+    def decode(self, ids: List[int]) -> str: ...
+
+
+def codec_from(
+    tokenizer: BytePairs, data: Dict[str, Any]
+) -> TextCodec:
+    """The codec around a byte-pair tokenizer built from the file
+    `data` with its added tokens dropped."""
+    ordinary = len(data["model"]["vocab"])
 
     def encode(text: str) -> List[int]:
-        return list(tokenizer(text)["input_ids"])
+        pieces = tokenizer.encode(text, add_special_tokens=False)
+        return [BEGIN_OF_TEXT, *pieces.ids]
 
     def decode(ids: Sequence[int]) -> str:
-        text = tokenizer.decode(list(ids), skip_special_tokens=True)
-        return str(text)
+        return tokenizer.decode([i for i in ids if i < ordinary])
 
     return TextCodec(
-        encode, decode, len(tokenizer), tokenizer.eos_token_id
+        encode,
+        decode,
+        _id_count(data),
+        END_OF_TEXT,
+        bpe_fingerprint(data),
     )
+
+
+def bpe_fingerprint(data: Dict[str, Any]) -> str:
+    """SHA-256 of everything that decides which ids a text becomes:
+    the normalizer, the pre-tokenizer, the decoder, the byte-pair
+    model with its vocabulary and merges, and the begin and end
+    tokens. Other special tokens are left out on purpose; the codec
+    never produces them. Merges compare as pairs, because tokenizer
+    files store them either as "a b" strings or as lists."""
+    model = dict(data["model"])
+    model["merges"] = [_merge_pair(pair) for pair in model["merges"]]
+    special = {
+        token["id"]: token["content"]
+        for token in data["added_tokens"]
+    }
+    essence = {
+        "normalizer": data["normalizer"],
+        "pre_tokenizer": data["pre_tokenizer"],
+        "decoder": data["decoder"],
+        "model": model,
+        "begin": special.get(BEGIN_OF_TEXT),
+        "end": special.get(END_OF_TEXT),
+    }
+    text = json.dumps(
+        essence,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _merge_pair(merge: Any) -> List[str]:
+    if isinstance(merge, str):
+        left, right = merge.split(" ", 1)
+        return [left, right]
+    return list(merge)
+
+
+def _id_count(data: Dict[str, Any]) -> int:
+    """How many ids the file defines: the vocabulary and every added
+    token after it."""
+    added = [token["id"] for token in data["added_tokens"]]
+    return 1 + max([*data["model"]["vocab"].values(), *added])
 
 
 # -- running --
@@ -348,14 +425,16 @@ def run(
     dtype: torch.dtype,
     sections: Sequence[str],
 ) -> Dict[str, Any]:
-    """Every section asked for, after the load report; the report
-    stops at the load report if the checkpoint would not load."""
+    """Every section asked for, after the load report. The report
+    stops there if the checkpoint would not load or the tokenizer is
+    not the one it was trained with, since every number after would
+    describe something else."""
     report: Dict[str, Any] = {
         "run": describe_run(checkpoint, device, dtype)
     }
     _say("load report")
     report["load"] = load_report(checkpoint, codec)
-    if not report["load"]["loadable"]:
+    if not report["load"]["runnable"]:
         return report
     started = time.perf_counter()
     model = mamba3.load(checkpoint, device=device, dtype=dtype)
@@ -374,6 +453,7 @@ def describe_run(
     return {
         "checkpoint": str(checkpoint),
         "model_revision": MODEL_REVISION,
+        "tokenizer_repo": TOKENIZER_REPO,
         "tokenizer_revision": TOKENIZER_REVISION,
         "device": _device_name(device),
         "dtype": str(dtype).removeprefix("torch."),
@@ -399,8 +479,9 @@ def _say(section: str) -> None:
 
 def load_report(checkpoint: Path, codec: TextCodec) -> Section:
     """The checkpoint's names and shapes against the model's, and the
-    tokenizer's vocabulary against the config's, before any weight is
-    used. A tied head may be stored or left out; both are complete."""
+    tokenizer against Llama 3.1's and the config's vocabulary, before
+    any weight is used. A tied head may be stored or left out; both
+    are complete."""
     path = checkpoint / mamba3.CONFIG_NAME
     raw = json.loads(path.read_text(encoding="utf-8"))
     config = mamba3.config_from_json(raw)
@@ -416,6 +497,7 @@ def load_report(checkpoint: Path, codec: TextCodec) -> Section:
     misshapen = _misshapen(wanted, stored)
     vocabulary = raw["vocab_size"]
     loadable = not (missing or unexpected or misshapen)
+    llama = codec.fingerprint == LLAMA31_BPE_FINGERPRINT
     return {
         "tensors": len(stored),
         "head_stored": "lm_head.weight" in stored,
@@ -423,6 +505,8 @@ def load_report(checkpoint: Path, codec: TextCodec) -> Section:
         "unexpected": unexpected,
         "misshapen": misshapen,
         "loadable": loadable,
+        "tokenizer_fingerprint": codec.fingerprint,
+        "runnable": loadable and llama,
         "config_vocabulary": vocabulary,
         "tokenizer_vocabulary": codec.vocabulary,
         "verdicts": [
@@ -430,6 +514,12 @@ def load_report(checkpoint: Path, codec: TextCodec) -> Section:
                 "no missing, unexpected or misshapen tensors",
                 loadable,
                 f"{len(stored)} tensors stored",
+            ),
+            _verdict(
+                "the tokenizer is Llama 3.1's, by fingerprint",
+                llama,
+                f"{codec.fingerprint[:16]}, recorded"
+                f" {LLAMA31_BPE_FINGERPRINT[:16]}",
             ),
             _verdict(
                 "the tokenizer's vocabulary is the config's",

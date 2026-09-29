@@ -2,11 +2,13 @@
 
 Strategy: the probe itself is hardware work, but everything around
 the model is ordinary code. A tiny random checkpoint saved under
-upstream's names, and a word-level stand-in for the gated tokenizer,
-drive `main` through every section on CPU in seconds. The downloads
-are checked for their pins with the Hub client replaced, and the
-verdict logic is fed hand-made lenses whose right answers are known.
-Passing proves the probe cannot pass a broken load, that its criteria
+upstream's names, and a word-level stand-in for the tokenizer, drive
+`main` through every section on CPU in seconds. The downloads are
+checked for their pins with the Hub client replaced, the tokenizer
+fingerprint on hand-made files and on SmolLM3's real one where it is
+cached, and the verdict logic is fed hand-made lenses whose right
+answers are known. Passing proves the probe cannot pass a broken load
+or a tokenizer the checkpoint was not trained with, that its criteria
 are the ones written down before the first run, and that each
 retention test fails the lens it exists to catch.
 """
@@ -16,12 +18,13 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, NamedTuple
 
 import pytest
 import torch
 
 from scripts import probe_mamba3 as probe
+from src.backends.registry import SMOLLM3
 from src.inference.mamba3 import Mamba3LM, config_from_json
 
 TINY: Dict[str, Any] = {
@@ -42,7 +45,9 @@ BEGIN = 1
 HEADS = 3
 
 
-def _codec() -> probe.TextCodec:
+def _codec(
+    fingerprint: str = probe.LLAMA31_BPE_FINGERPRINT,
+) -> probe.TextCodec:
     """Words to ids by their letters, after a begin-of-text id, the
     shape Llama's tokenizer has."""
     size = TINY["vocab_size"]
@@ -55,7 +60,7 @@ def _codec() -> probe.TextCodec:
     def decode(ids: Any) -> str:
         return " ".join(f"w{token}" for token in ids)
 
-    return probe.TextCodec(encode, decode, size, None)
+    return probe.TextCodec(encode, decode, size, None, fingerprint)
 
 
 def _checkpoint(root: Path, extra: bool = False) -> Path:
@@ -79,12 +84,14 @@ def _run(
     monkeypatch: pytest.MonkeyPatch,
     *options: str,
     extra: bool = False,
+    codec: probe.TextCodec | None = None,
 ) -> tuple[int, Dict[str, Any]]:
     def no_fetch(*_: Any) -> Path:
         raise AssertionError("fetched what it was given")
 
+    chosen = _codec() if codec is None else codec
     monkeypatch.setattr(probe, "fetch", no_fetch)
-    monkeypatch.setattr(probe, "load_codec", lambda _: _codec())
+    monkeypatch.setattr(probe, "load_codec", lambda _: chosen)
     report = tmp_path / "report.json"
     code = probe.main([
         "--device", "cpu",
@@ -111,7 +118,7 @@ def test_every_section_runs_on_a_tiny_checkpoint(
 
     assert code == 0
     assert set(report) == {"run", "load", *probe.SECTIONS}
-    assert _results(report["load"]) == ["pass", "pass"]
+    assert _results(report["load"]) == ["pass", "pass", "pass"]
     agreement = report["correctness"]["agreement"]
     assert agreement["relative_error"] < probe.AGREEMENT_MAX
     assert _results(report["correctness"])[0] == "pass"
@@ -141,6 +148,21 @@ def test_an_unexpected_tensor_stops_the_probe_at_the_load_report(
     assert _results(report["load"])[0] == "fail"
 
 
+def test_a_tokenizer_that_is_not_llamas_stops_the_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every number after the load report would describe a model fed
+    ids it was never trained on, so none of them is computed."""
+    stranger = _codec(fingerprint="0" * 64)
+
+    code, report = _run(tmp_path, monkeypatch, codec=stranger)
+
+    assert code == 1
+    assert set(report) == {"run", "load"}
+    assert report["load"]["loadable"] is True
+    assert _results(report["load"])[1] == "fail"
+
+
 def test_an_unknown_section_is_refused() -> None:
     with pytest.raises(SystemExit):
         probe.parse_args(["--sections", "speed,nonsense"])
@@ -152,8 +174,9 @@ def test_an_unknown_section_is_refused() -> None:
 def test_downloads_are_pinned_and_fetch_only_the_named_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Llama's repository also holds 16 GB of weights, so the file
-    list is what keeps the tokenizer download to three small files."""
+    """SmolLM3's repository also holds 6 GB of weights, so the file
+    list is what keeps the tokenizer download to one file. Its
+    revision is the registry's, the one the SmolLM3 worker runs."""
     import huggingface_hub
 
     calls: List[Dict[str, Any]] = []
@@ -171,41 +194,131 @@ def test_downloads_are_pinned_and_fetch_only_the_named_files(
     )
 
     assert calls == [{
-        "repo": "meta-llama/Llama-3.1-8B",
-        "revision": "d04e592bb4f6aa9cfee91e2e20afa771667e1d4b",
-        "allow_patterns": [
-            "tokenizer.json",
-            "tokenizer_config.json",
-            "special_tokens_map.json",
-        ],
+        "repo": "HuggingFaceTB/SmolLM3-3B",
+        "revision": SMOLLM3.revision,
+        "allow_patterns": ["tokenizer.json"],
     }]
     assert probe.MODEL_REVISION == (
         "5cfc721542ec9ccee768088b2fd6b7e8101219d8"
     )
 
 
-def test_a_gated_tokenizer_is_refused_with_what_to_do(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    import huggingface_hub
-    from huggingface_hub.errors import GatedRepoError
+# -- the tokenizer fingerprint --
 
-    def gated(repo: str, **_: Any) -> str:
-        raise GatedRepoError(f"{repo} is gated")
 
-    monkeypatch.setattr(huggingface_hub, "snapshot_download", gated)
-    checkpoint = _checkpoint(tmp_path / "model")
+def _tokenizer_file(strings: bool = False) -> Dict[str, Any]:
+    """The parts of a tokenizer.json the fingerprint reads, small.
+    `strings` writes the merges the way Meta's file does."""
+    merges: List[Any] = [["a", "b"], ["ab", "c"]]
+    if strings:
+        merges = ["a b", "ab c"]
+    begin, end = probe.BEGIN_OF_TEXT, probe.END_OF_TEXT
+    return {
+        "normalizer": None,
+        "pre_tokenizer": {"type": "ByteLevel"},
+        "decoder": {"type": "ByteLevel"},
+        "model": {
+            "type": "BPE",
+            "vocab": {"a": 0, "b": 1, "c": 2, "ab": 3, "abc": 4},
+            "merges": merges,
+        },
+        "added_tokens": [
+            {"id": begin, "content": "<|begin_of_text|>"},
+            {"id": end, "content": "<|end_of_text|>"},
+            {"id": end + 1, "content": "<|reserved_0|>"},
+        ],
+    }
 
-    code = probe.main([
-        "--device", "cpu", "--checkpoint", str(checkpoint),
-    ])
 
-    assert code == 2
-    advice = capsys.readouterr().err
-    assert "meta-llama/Llama-3.1-8B is gated" in advice
-    assert ".venv-ar/bin/hf auth login" in advice
+def test_the_fingerprint_reads_both_merge_formats_alike() -> None:
+    """Meta's file writes merges as "a b" strings and SmolLM3's as
+    lists; the same rules must give the same fingerprint."""
+    strings = probe.bpe_fingerprint(_tokenizer_file(True))
+    lists = probe.bpe_fingerprint(_tokenizer_file(False))
+
+    assert strings == lists
+
+
+def test_the_fingerprint_changes_with_anything_moving_an_id() -> None:
+    base = probe.bpe_fingerprint(_tokenizer_file())
+    reordered = _tokenizer_file()
+    reordered["model"]["merges"].reverse()
+    renumbered = _tokenizer_file()
+    renumbered["model"]["vocab"]["abc"] = 5
+    renamed_end = _tokenizer_file()
+    renamed_end["added_tokens"][1]["content"] = "<|im_end|>"
+
+    for changed in (reordered, renumbered, renamed_end):
+        assert probe.bpe_fingerprint(changed) != base
+
+
+def test_the_fingerprint_ignores_tokens_never_emitted() -> None:
+    """SmolLM3 renamed ten reserved tokens for its chat format. The
+    codec drops every added token, so they must not count."""
+    base = probe.bpe_fingerprint(_tokenizer_file())
+    renamed = _tokenizer_file()
+    renamed["added_tokens"][2]["content"] = "<think>"
+
+    assert probe.bpe_fingerprint(renamed) == base
+
+
+class _Pieces(NamedTuple):
+    ids: List[int]
+
+
+class _BytePairs:
+    """Word lengths as ids, recording whether specials were asked for.
+    Stands in for `tokenizers.Tokenizer`, whose installed version here
+    cannot read SmolLM3's file."""
+
+    def __init__(self) -> None:
+        self.asked_for_specials: List[bool] = []
+
+    def encode(
+        self, sequence: str, add_special_tokens: bool = True
+    ) -> _Pieces:
+        self.asked_for_specials.append(add_special_tokens)
+        return _Pieces([len(word) for word in sequence.split()])
+
+    def decode(self, ids: List[int]) -> str:
+        return ",".join(str(token) for token in ids)
+
+
+def test_the_codec_adds_begin_of_text_and_no_other_special() -> None:
+    """Begin-of-text comes from the codec, once, and the byte pairs
+    are never asked for specials of their own; decoding drops every
+    id past the vocabulary, since only the specials live there."""
+    pairs = _BytePairs()
+    data = _tokenizer_file()
+
+    codec = probe.codec_from(pairs, data)
+
+    begin, end = probe.BEGIN_OF_TEXT, probe.END_OF_TEXT
+    assert codec.encode("ab c") == [begin, 2, 1]
+    assert pairs.asked_for_specials == [False]
+    assert codec.decode([begin, 3, end]) == "3"
+    assert codec.end == end
+    assert codec.vocabulary == end + 2
+    assert codec.fingerprint == probe.bpe_fingerprint(data)
+
+
+def test_the_pinned_smollm3_tokenizer_is_llamas() -> None:
+    """Holds the recorded fingerprint to the real file, on any
+    machine that has run SmolLM3 and so has it cached."""
+    from huggingface_hub import try_to_load_from_cache
+
+    path = try_to_load_from_cache(
+        probe.TOKENIZER_REPO,
+        probe.TOKENIZER_FILE,
+        revision=probe.TOKENIZER_REVISION,
+    )
+    if not isinstance(path, str):
+        pytest.skip("SmolLM3's tokenizer is not cached here")
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    recorded = probe.LLAMA31_BPE_FINGERPRINT
+
+    assert probe.bpe_fingerprint(data) == recorded
+    assert probe._id_count(data) == 128256
 
 
 # -- the bar --
