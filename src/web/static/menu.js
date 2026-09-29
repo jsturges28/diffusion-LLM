@@ -218,37 +218,37 @@
   }
 
   // Model-family glyph pinned right of the name. The wrapper's title
-  // gives a hover tooltip. (Both are first-pass shapes to iterate on
-  // once rendered; the SVG path coordinates are cheap to nudge.)
+  // gives a hover tooltip. All three share one stroke weight and a
+  // plain silhouette, because at 13 px anything finer blurs: the
+  // letter-based first versions of the two below did.
   //
-  // Autoregressive: an "@" that resolves into an "R". An inner "a"
-  // counter sits under a head arch whose stroke loops over the top back
-  // to the filled start node (the autoregressive feedback: build on
-  // what was just emitted), dropping two matched legs (the "R" base).
+  // Autoregressive and diffusion share one vocabulary, a row of token
+  // cells, and differ only in the order the cells fill, which is the
+  // difference between the two families. The cells stay near square:
+  // taller ones made the autoregressive pair read as a pause symbol.
+  //
+  // Autoregressive: filled left to right, the next token arriving at
+  // the end.
   var _AR_ICON =
     '<svg viewBox="0 0 24 24" width="13" height="13" fill="none"'
     + ' stroke="currentColor" stroke-width="1.5" stroke-linecap="round"'
     + ' stroke-linejoin="round" aria-hidden="true">'
-    + '<path d="M7 14 A5 5 0 0 0 17 14" />'
-    + '<path d="M7 14 V19 M17 14 V19" />'
-    + '<path d="M17 14 C 21 8 13 4 10 9" />'
-    + '<path d="M10 10 H14 V13 H10 Z" />'
-    + '<circle cx="10" cy="9" r="1.15" fill="currentColor"'
-    + ' stroke="none" /></svg>';
-  // Diffusion: a "D" and an "F" in superposition. The overlap (the D's
-  // bowl plus the F's mid bar) reads as a backwards epsilon and is drawn
-  // crisp at full opacity; the non-overlapping strokes (stems, the F top
-  // bar, the D top/bottom) stay faint, so both letters still register.
+    + '<rect x="2.5" y="8.75" width="5.5" height="6.5" rx="1.6"'
+    + ' fill="currentColor" stroke="none" />'
+    + '<rect x="9.5" y="8.75" width="5.5" height="6.5" rx="1.6"'
+    + ' fill="currentColor" stroke="none" />'
+    + '<path d="M17.5 8.75 L20.75 12 L17.5 15.25" /></svg>';
+  // Diffusion: every position present at once and resolved in any
+  // order, so a masked cell can sit between two resolved ones.
   var _DIFFUSION_ICON =
     '<svg viewBox="0 0 24 24" width="13" height="13" fill="none"'
-    + ' stroke="currentColor" stroke-linecap="round"'
+    + ' stroke="currentColor" stroke-width="1.5" stroke-linecap="round"'
     + ' stroke-linejoin="round" aria-hidden="true">'
-    + '<path d="M7 5 v14 h4 a7 7 0 0 0 0 -14 z" opacity="0.3"'
-    + ' stroke-width="1.3" />'
-    + '<path d="M7 5 v14 M7 5 h8 M7 12 h6" opacity="0.3"'
-    + ' stroke-width="1.3" />'
-    + '<path d="M11 5 a7 7 0 0 1 0 14 M7 12 h6"'
-    + ' stroke-width="1.9" /></svg>';
+    + '<rect x="2.5" y="8.75" width="5.5" height="6.5" rx="1.6"'
+    + ' fill="currentColor" stroke="none" />'
+    + '<rect x="10" y="9.5" width="4.5" height="5" rx="1.2" />'
+    + '<rect x="16.5" y="8.75" width="5.5" height="6.5" rx="1.6"'
+    + ' fill="currentColor" stroke="none" /></svg>';
   // State space: the block diagram the name comes from, drawn small.
   // A line runs through a box holding the state (the filled node),
   // and a feedback path leaves the output side and climbs back into
