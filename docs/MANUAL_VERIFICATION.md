@@ -231,17 +231,15 @@ kept when these were written:
   all, because the popover sat outside the run detail modal, which
   since 2026-09-15 has been a native dialog painting above everything
   outside it. 346 passed in the desktop app, where by measurement a
-  default run's candidates could not then survive the trip, so 350
-  checks it again.
-- **348 and 349**: confirmed on 2026-09-29.
-- **350 and 351**: **outstanding**. 350 failed on 2026-09-29 in the
-  desktop app, whose session storage holds about 5.2 million
+  default run's candidates could not then survive the trip; 350
+  re-checked it once they could.
+- **348 to 351**: confirmed on 2026-09-29. 350 failed first that day
+  in the desktop app, whose session storage holds about 5.2 million
   characters: a default LLaDA run's snapshot was 6.2 million with its
   candidates, and 10 million with both runs', so a trip to Analytics
-  brought the run back without them. The snapshot packs them since,
-  and 350 was rewritten that day, as its old wording asked for a trip
-  after Confirm without saving, and Confirm saves. 351 was added with
-  it.
+  brought the run back without them. It passed once the snapshot
+  packed them, rewritten, since its old wording asked for a trip after
+  Confirm without saving, and Confirm saves. 351 was added with it.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer

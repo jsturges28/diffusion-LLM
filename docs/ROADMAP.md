@@ -31,8 +31,8 @@ incompatible ones.
 
 The audit remediation campaign that ran from 2026-08-10 is complete except
 for a short remainder, tracked finding by finding in
-`docs/audit/IMPLEMENTATION_LEDGER.md`. Mamba-3, the first of the accepted
-directions below, shipped on 2026-09-28 and waits on its hardware checks.
+`docs/audit/IMPLEMENTATION_LEDGER.md`. Every accepted direction below has
+shipped, Mamba-3 last on 2026-09-28, and the fifth is next to deliberate.
 
 **What answers what**, because this is one document of five and this
 section previously tried to be three of them:
@@ -338,6 +338,13 @@ since shipped is noted on the item rather than left for a reader to infer.
    their shape forever; and `masks_are_real` with the settlement convergence
    basis stays, because DiffusionGemma infers `m` from a token changing
    between steps, which is a property of renoising and not of this switch.
+
+5. **The stack and the flicker.** Chosen on 2026-09-29 as the next to
+   deliberate, once top-k was captured on both diffusion models: two ways
+   of drawing that capture on the canvas itself rather than in a popover.
+   Scoped under "Two renderings, one capture" in the backlog below, whose
+   timing notes predate the capture and assume a live stream it does not
+   have, since the candidates arrive as the run ends.
 
 ---
 
