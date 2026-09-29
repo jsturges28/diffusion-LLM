@@ -22,8 +22,16 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 import torch
 from transformers.generation.streamers import BaseStreamer
 
-from src.backends.protocol import TERMINAL_CANCELLED
+from src.backends.protocol import (
+    CANDIDATES_PER_POSITION,
+    TERMINAL_CANCELLED,
+)
 from src.backends.text_adapter import TextAdapter
+from src.inference.candidate_capture import (
+    CandidateCapture,
+    StepCandidates,
+    step_candidates,
+)
 from src.inference.checkpoint import (
     CheckpointBudget,
     DgemmaFrame,
@@ -37,6 +45,7 @@ from src.inference.logit_signals import (
 )
 from src.inference.logit_signals import (
     entropy_nats,
+    top_candidates,
     top_confidence,
 )
 from src.inference.frame_queue import (
@@ -56,6 +65,12 @@ MASK_CHAR = "\u2591"
 # refer to it. One constant, so the two models cannot drift apart on
 # how much transient memory a signal read is allowed to hold.
 LOGIT_CHUNK_POSITIONS = _LOGIT_CHUNK_POSITIONS
+
+# Where a draft frame carries its candidates across the queue. The
+# consumer pops it before the frame leaves the process, so it never
+# reaches the page; the capture receives it only for frames the page
+# does receive.
+CANDIDATES_KEY = "_candidates"
 
 class FrameQueueStreamer(BaseStreamer):
     """Turns generate's streamer callbacks into protocol frames.
@@ -79,11 +94,18 @@ class FrameQueueStreamer(BaseStreamer):
         out_queue: "queue.Queue[Any]",
         stop_event: Optional[threading.Event] = None,
         budget: Optional[CheckpointBudget] = None,
+        alternatives: bool = False,
     ) -> None:
         self.tokenizer = tokenizer
         self.adapter = adapter
         self._queue = out_queue
         self._stop_event = stop_event
+        # Read on the generate thread only to decide whether to take
+        # a draft's candidates; offered to and flushed on the event
+        # loop only, so one thread ever touches what it holds.
+        self.capture: Optional[CandidateCapture] = None
+        if alternatives:
+            self.capture = CandidateCapture()
         # Present only when a caller intends to collect checkpoints.
         # Without it nothing is recorded, so a run whose frames are
         # never claimed cannot accumulate them.
@@ -143,9 +165,7 @@ class FrameQueueStreamer(BaseStreamer):
         models cannot disagree about what a signal means or about how
         much transient memory reading one is allowed to hold.
         """
-        tensor = logits
-        if hasattr(tensor, "dim") and tensor.dim() > 2:
-            tensor = tensor[0]
+        tensor = FrameQueueStreamer._canvas_logits(logits)
         ids, conf = top_confidence(tensor)
         spread = entropy_nats(tensor)
         return (
@@ -154,6 +174,66 @@ class FrameQueueStreamer(BaseStreamer):
             spread.detach().to("cpu").tolist(),
         )
 
+    @staticmethod
+    def _canvas_logits(logits: torch.Tensor) -> torch.Tensor:
+        """(positions, vocabulary), without a batch dimension."""
+        tensor = logits
+        if hasattr(tensor, "dim") and tensor.dim() > 2:
+            tensor = tensor[0]
+        return tensor
+
+    def _draft_candidates(
+        self, logits: torch.Tensor, ids: List[int]
+    ) -> Optional[StepCandidates]:
+        """This draft's candidates, when the run captures them.
+
+        Off the same processed, temperature-scheduled logits as the
+        frame's confidence and entropy, so the popover and the
+        heatmap describe one distribution. The held token is the
+        draft's argmax, which is what the frame shows, so it ranks
+        first; passed as the frame's own ids so the marked row is the
+        token on screen even where two logits tie.
+        """
+        if self.capture is None:
+            return None
+        tensor = self._canvas_logits(logits)
+        held = torch.tensor(
+            ids, dtype=torch.long, device=tensor.device
+        )
+        found = top_candidates(tensor, CANDIDATES_PER_POSITION, held)
+        return step_candidates(self._index, held, found)
+
+    def offer_forwarded(self, frame: Dict[str, Any]) -> None:
+        """Hand a frame's candidates to the capture as the frame
+        leaves for the page.
+
+        The consumer calls this, not the generate thread, because the
+        thread runs ahead by the queue's depth: offering there would
+        let a stopped run capture frames the page never received.
+        """
+        step = frame.pop(CANDIDATES_KEY, None)
+        if step is None:
+            return
+        assert self.capture is not None, "candidates need a capture"
+        self.capture.offer(step)
+
+    def candidates_message(self) -> Optional[Dict[str, Any]]:
+        """The run's candidates message, or None without a capture.
+
+        The raw decode, control tokens intact, as the autoregressive
+        sampler's candidates are; the popover renders them legibly.
+        """
+        if self.capture is None:
+            return None
+        tokenizer = self.tokenizer
+
+        def decode(token: int) -> str:
+            return str(
+                tokenizer.decode([token], skip_special_tokens=False)
+            )
+
+        return self.capture.flush(decode)
+
     def _emit(
         self,
         ids: List[int],
@@ -161,6 +241,7 @@ class FrameQueueStreamer(BaseStreamer):
         committed: bool,
         conf_override: Optional[List[float]] = None,
         entropy: Optional[List[float]] = None,
+        candidates: Optional[StepCandidates] = None,
     ) -> None:
         count = len(ids)
         tokens: List[Dict[str, Any]] = []
@@ -231,21 +312,22 @@ class FrameQueueStreamer(BaseStreamer):
         # consumer claims its checkpoint, and the thread has not
         # written it yet.
         self._record_checkpoint(ids)
+        frame: Dict[str, Any] = {
+            "type": "frame",
+            "index": self._index,
+            "total_steps": None,
+            "canvas_index": self._canvas_index,
+            "mean_conf": (
+                round(conf_sum / count, 4) if count else 0.0
+            ),
+            "text": text,
+            "tokens": tokens,
+            "revealed": born,
+        }
+        if candidates is not None:
+            frame[CANDIDATES_KEY] = candidates
         delivered = frame_queue_put(
-            self._queue,
-            {
-                "type": "frame",
-                "index": self._index,
-                "total_steps": None,
-                "canvas_index": self._canvas_index,
-                "mean_conf": (
-                    round(conf_sum / count, 4) if count else 0.0
-                ),
-                "text": text,
-                "tokens": tokens,
-                "revealed": born,
-            },
-            stop_event=self._stop_event,
+            self._queue, frame, stop_event=self._stop_event
         )
         if not delivered:
             # Undelivered, so unclaimable. Dropping it here is what
@@ -328,6 +410,7 @@ class FrameQueueStreamer(BaseStreamer):
                 committed=False,
                 conf_override=conf,
                 entropy=spread,
+                candidates=self._draft_candidates(logits, ids),
             )
         elif value is not None:
             self._emit(
@@ -435,6 +518,7 @@ async def _run_streamed(
                 frame_history.append(
                     streamer.take_checkpoint(item["index"])
                 )
+            streamer.offer_forwarded(item)
             yield item
     finally:
         await frame_queue_drain_until_done(out_queue, task)
@@ -442,6 +526,11 @@ async def _run_streamed(
     if "err" in result:
         raise result["err"]
 
+    # Before the terminal frame, stopped or not: what a stopped run
+    # captured covers exactly the frames the page received.
+    message = streamer.candidates_message()
+    if message is not None:
+        yield message
     yield _terminal_frame(
         tokenizer=tokenizer,
         prompt_len=prompt_len,
@@ -510,6 +599,7 @@ async def streaming_generate(
     t_min: float = 0.4,
     thinking: bool = False,
     seed: int = -1,
+    alternatives: bool = False,
     cancel_event: Optional[threading.Event] = None,
     frame_history: Optional[List[FrameCheckpoint]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
@@ -517,6 +607,11 @@ async def streaming_generate(
 
     When ``frame_history`` is provided, each frame's checkpoint is
     appended to it so the worker can support resume-from-frame.
+
+    ``alternatives`` captures each draft's five likeliest tokens per
+    position, sent once as a ``candidates`` message before ``done``.
+    Committed frames arrive without logits and have none of their
+    own; the page shows them their canvas's last draft.
     """
     inputs = adapter.build_inputs(
         tokenizer, model, prompt, thinking=thinking
@@ -530,6 +625,7 @@ async def streaming_generate(
         out_queue,
         stop_event=cancel_event,
         budget=_budget_for(frame_history),
+        alternatives=alternatives,
     )
     streamer._takes_logits = True
 
@@ -567,6 +663,7 @@ async def streaming_resume(
     t_min: float = 0.4,
     thinking: bool = False,
     seed: int = -1,
+    alternatives: bool = False,
     cancel_event: Optional[threading.Event] = None,
     frame_history: Optional[List[FrameCheckpoint]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
@@ -629,6 +726,7 @@ async def streaming_resume(
         out_queue,
         stop_event=cancel_event,
         budget=_budget_for(frame_history),
+        alternatives=alternatives,
     )
     streamer._takes_logits = True
     streamer.restore(base)

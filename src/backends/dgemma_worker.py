@@ -49,6 +49,13 @@ from src.inference.dgemma_sampler import (
 
 logger = logging.getLogger("dgemma_worker")
 
+
+def _wants_alternatives(params: Dict[str, Any]) -> bool:
+    """Whether a run captures candidates. Absent means no, since
+    the registry has not declared the parameter yet."""
+    return bool(params.get("alternatives", False))
+
+
 class DgemmaBackend(Backend):
     # A resume splices the retained history, so an abandoned edit
     # session has to be able to put it back. No step count beside
@@ -173,6 +180,7 @@ class DgemmaBackend(Backend):
                 t_min=params["t_min"],
                 thinking=params["thinking"],
                 seed=params["seed"],
+                alternatives=_wants_alternatives(params),
                 cancel_event=cancel_event,
                 frame_history=frame_history,
             )
@@ -207,6 +215,9 @@ class DgemmaBackend(Backend):
             "t_min": params["t_min"],
             "thinking": params["thinking"],
             "seed": params["seed"],
+            # So an edit captures candidates exactly when the run it
+            # branches from did.
+            "alternatives": _wants_alternatives(params),
             "max_denoising_steps": params[
                 "max_denoising_steps"
             ],
@@ -337,6 +348,7 @@ class DgemmaBackend(Backend):
                 t_min=state["t_min"],
                 thinking=state["thinking"],
                 seed=state["seed"],
+                alternatives=state["alternatives"],
                 cancel_event=cancel_event,
                 frame_history=resume_frames,
             )
@@ -384,6 +396,10 @@ class DgemmaBackend(Backend):
         the ordinary ones do not, because that is what stamps the
         run's provenance. Draining is this method's reason to exist,
         so it cannot hand the generator to ``stream.run``.
+
+        Candidates go out only when every frame did. A guided edit's
+        would name frames past its budget, which the page never
+        receives, so it sends none, as a guided LLaDA edit does.
         """
         sent = 0
         async for frame in generator:
@@ -396,6 +412,8 @@ class DgemmaBackend(Backend):
                     await ws.send_json(frame)
                     sent += 1
                 continue
+            if ftype == "candidates" and max_frames is None:
+                await ws.send_json(frame)
             if ftype == "done" and max_frames is None:
                 await stream.send_done(frame, start)
         if max_frames is not None:
