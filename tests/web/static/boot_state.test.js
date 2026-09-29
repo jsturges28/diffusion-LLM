@@ -487,11 +487,9 @@ for (const [label, value] of MALFORMED) {
 
 // -- the prompt box says which kind of prompt it wants --
 //
-// The three models that exist are all instruction-tuned, so the
-// interesting case is the one that does not exist yet. Built from a
-// synthetic capability rather than waiting for a base checkpoint,
-// because the whole point of declaring the mode is that the page needs
-// no edit when one arrives.
+// Built from a synthetic capability on SmolLM3's entry rather than
+// from Mamba-3's, because the whole point of declaring the mode is
+// that the page reads it and never the model's name.
 
 function withInputMode(mode) {
   const model = Object.assign({}, SMOL, {
@@ -529,9 +527,37 @@ test("a completion model says it continues your text", () => {
   assert.equal(placeholder.includes("Enter a prompt"), false);
 });
 
+test("a completion model labels the box and explains it", () => {
+  // The placeholder is gone once the box holds text, and the prompt
+  // is kept between visits, so the label and its "?" are what a user
+  // actually reads.
+  const page = loadPage({
+    bootState: withInputMode("completion"),
+    fetchImpl: recordingFetch([]),
+  });
+
+  assert.equal(
+    page.registry.get("prompt-label").textContent, "Text to continue"
+  );
+  assert.equal(page.registry.get("prompt-mode-info").hidden, false);
+  const tip = page.registry.get("prompt-mode-tip").textContent;
+  assert.match(tip, /begin it/);
+  assert.match(tip, /A REST API is/);
+});
+
+test("a chat model shows no completion hint", () => {
+  const page = loadPage({
+    bootState: withInputMode("chat"),
+    fetchImpl: recordingFetch([]),
+  });
+
+  assert.equal(page.registry.get("prompt-label").textContent, "Prompt");
+  assert.equal(page.registry.get("prompt-mode-info").hidden, true);
+});
+
 test("an absent mode falls back to chat", () => {
   // A payload from an older server, or one the page could not read.
-  // Chat is the safe reading: it is what every shipped model is.
+  // Chat is the safe reading: every instruction-tuned model takes it.
   const page = loadPage({
     bootState: withInputMode(undefined),
     fetchImpl: recordingFetch([]),

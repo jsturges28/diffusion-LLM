@@ -217,6 +217,8 @@ kept when these were written:
   forgetting predicts uncertainty on all three passages, in the middle
   of sentences and above chance. The overall bar was the narrow one,
   which the item records.
+- **337**: **outstanding**, the completion label and its "?" on
+  screen.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -3786,3 +3788,15 @@ sentence boundaries that raise both.
     drivers forgetting does not see. A correlation, not a direction
     of cause, though both numbers come from the same update of the
     same state.
+
+## Completion mode, said beside the box
+
+337. **The prompt label says what a base model does.** With Mamba-3
+    loaded, the label over the prompt box reads **Text to continue**
+    with a small **?** beside it, on the same line. Hovering the
+    **?** shows the tip, which ends by suggesting you begin the
+    answer yourself ("A REST API is"), in a box that stays inside the
+    window and covers nothing it should not. Empty the box to see the
+    placeholder carry the same example. Switch to SmolLM3: the label
+    reads **Prompt**, the **?** is gone, and the prompt box has not
+    moved by a pixel either way.

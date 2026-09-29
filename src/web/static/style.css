@@ -522,6 +522,18 @@ body {
   margin-bottom: 7px;
 }
 
+/* The label and the completion-mode "?" on one line. The row takes
+   over the label's bottom margin, so the box below does not move. */
+#prompt-label-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 7px;
+}
+
+#prompt-label-row label {
+  margin-bottom: 0;
+}
+
 #prompt-input {
   width: 100%;
   background: var(--bg-surface);

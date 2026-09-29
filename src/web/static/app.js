@@ -34,7 +34,12 @@ var paramTooltips = {}; // name -> tooltip span
 var promptInput =
   document.getElementById("prompt-input");
 var promptLabel =
-  document.querySelector('label[for="prompt-input"]');
+  document.getElementById("prompt-label");
+// The "?" beside the label, shown only for a mode with a hint.
+var promptModeInfo =
+  document.getElementById("prompt-mode-info");
+var promptModeTip =
+  document.getElementById("prompt-mode-tip");
 var promptContextRow =
   document.getElementById("prompt-context");
 var promptContextCount =
@@ -9038,16 +9043,28 @@ function applyModelInfo(info) {
 //
 // Read off the declared input mode, never off a model id, so the next
 // base checkpoint is described correctly without an edit here. The
-// markup ships the chat wording, which is right for every model that
-// exists today and is what a page with no model loaded should say.
+// markup ships the chat wording, which is right for the
+// instruction-tuned models and is what a page with no model loaded
+// should say.
+//
+// The hint rides the "?" beside the label, and is the only place the
+// way out is spelled: a placeholder vanishes once the box has text,
+// and the prompt is kept between visits, so it is rarely seen.
 var PROMPT_MODE_COPY = {
   chat: {
     label: "Prompt",
     placeholder: "Enter a prompt...",
+    hint: "",
   },
   completion: {
-    label: "Prompt (continued)",
-    placeholder: "Enter text for the model to continue...",
+    label: "Text to continue",
+    placeholder:
+      "Text for the model to continue, e.g. \"A REST API is\"",
+    hint:
+      "This is a base model: it writes on from where your text"
+      + " stops rather than replying to it, so a question tends to"
+      + " get more questions. To get an explanation, begin it"
+      + " yourself, for example: \"A REST API is\"",
   },
 };
 
@@ -9062,6 +9079,12 @@ function applyPromptMode() {
   }
   if (promptInput) {
     promptInput.placeholder = copy.placeholder;
+  }
+  if (promptModeTip) {
+    promptModeTip.textContent = copy.hint;
+  }
+  if (promptModeInfo) {
+    promptModeInfo.hidden = copy.hint === "";
   }
 }
 

@@ -250,9 +250,10 @@ def test_the_reasoning_details_is_not_a_flex_container() -> None:
 
 
 def test_the_markup_ships_the_chat_wording() -> None:
-    """Every model today is instruction-tuned, and a page with none
-    loaded should read as chat rather than as a blank the script has
-    to fill before the label makes sense."""
+    """A page with no model loaded should read as chat, the wording
+    of the instruction-tuned models, rather than as a blank the script
+    has to fill before the label makes sense. Completion wording is
+    applied once a base model is known to be resident."""
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 
     assert ">Prompt</label>" in html
