@@ -33,6 +33,7 @@ const { loadPage } = require("./dom_stub.js");
 const ANALYTICS_SCRIPTS = [
   "custom_select.js",
   "overlays.js",
+  "run_candidates.js",
   "detail_requests.js",
   "collections_client.js",
   "download_client.js",

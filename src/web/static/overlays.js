@@ -353,6 +353,26 @@ function overlaysBuildAltHeading(pos, page, onPage) {
   return heading;
 }
 
+// The heading for a diffusion run's candidates: the position, and the
+// step they were read at, where an autoregressive popover has its
+// pager. "As of" when that is an earlier step than the frame on
+// screen, because the capture thinned to a stride on a long run and
+// skipped this one.
+function overlaysBuildStepHeading(pos, step, onScreen) {
+  var heading = document.createElement("div");
+  heading.className = "alt-heading";
+  var title = document.createElement("span");
+  title.textContent = "Position " + (pos + 1) + ": candidates";
+  heading.appendChild(title);
+  var when = document.createElement("span");
+  when.className = "alt-step";
+  when.textContent = step === onScreen
+    ? "Step " + step
+    : "As of step " + step;
+  heading.appendChild(when);
+  return heading;
+}
+
 function overlaysBuildAltPager(target, page, onPage) {
   var label = overlaysAltPageLabel(target) + " run";
   var button = document.createElement("button");

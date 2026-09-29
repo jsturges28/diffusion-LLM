@@ -46,6 +46,7 @@ const GENERATOR_SCRIPTS = [
   "wire_errors.js",
   "model_client.js",
   "run_frames.js",
+  "run_candidates.js",
   "run_phases.js",
   "download_client.js",
   "download_toast.js",

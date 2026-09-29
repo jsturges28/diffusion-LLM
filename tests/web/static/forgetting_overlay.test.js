@@ -32,6 +32,7 @@ const OVERLAYS = path.join(
 const ANALYTICS_SCRIPTS = [
   "custom_select.js",
   "overlays.js",
+  "run_candidates.js",
   "detail_requests.js",
   "collections_client.js",
   "download_client.js",

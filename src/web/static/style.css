@@ -3666,6 +3666,14 @@ input[type="checkbox"].app-checkbox:checked::after {
   cursor: default;
 }
 
+/* The step a diffusion run's candidates were read at, in the place
+   an autoregressive popover has its pager. Dim, because it qualifies
+   the list rather than being something to act on. */
+.alt-step {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+
 .alt-row {
   display: flex;
   align-items: center;

@@ -3654,6 +3654,10 @@ function renderAltsPopover(pos, span) {
   if (!altsPopover) {
     return;
   }
+  if (!overlayIsAutoregressive) {
+    renderCandidatesPopover(pos, span);
+    return;
+  }
   var original = altsPopoverPage === "original";
   var alts = original
     ? overlayOriginalAlternatives()[pos]
@@ -3689,20 +3693,76 @@ function renderAltsPopover(pos, span) {
     altsPopover.appendChild(tokenizer);
   }
   altsPopover.classList.remove("alt-pickable");
-
-  // Unhide before measuring: the height is unknown while hidden.
-  altsPopover.hidden = false;
-  if (span) {
-    var rect = span.getBoundingClientRect();
-    var box = altsPopover.getBoundingClientRect();
-    altsPopover.style.left =
-      overlaysPopoverLeft(rect, box) + "px";
-    altsPopover.style.top =
-      overlaysPopoverTop(
-        rect, box, overlayOutput.getBoundingClientRect().top
-      ) + "px";
-  }
+  placeAltsPopover(span);
   altsPopoverPos = pos;
+}
+
+// A diffusion run's candidates at the scrubbed frame, as the
+// generator shows them: the latest captured frame at or before it,
+// on the same canvas and not from before an edit began. No pager and
+// nothing over the pre-edit layer, whose candidates are not kept.
+function renderCandidatesPopover(pos, span) {
+  var store = overlayData ? overlayData.candidateStore : null;
+  var found = store
+    ? runCandidatesSetAt(
+      store, overlayFrameIndex, pos, overlayCanvasOf
+    )
+    : null;
+  if (found === null || overlayShowsPreEdit()) {
+    hideAltsPopover();
+    return;
+  }
+  setCandidateMetricsHover(null);
+  altsPopover.textContent = "";
+  altsPopover.appendChild(
+    overlaysBuildStepHeading(pos, found.frame, overlayFrameIndex)
+  );
+  for (var i = 0; i < found.set.c.length; i++) {
+    altsPopover.appendChild(
+      overlaysBuildAltRow(
+        found.set.c[i], found.set.h, setCandidateMetricsHover, i
+      )
+    );
+  }
+  var tokenizer = overlaysBuildAltTokenizer(activeRunTokenizer());
+  if (tokenizer) {
+    altsPopover.appendChild(tokenizer);
+  }
+  altsPopover.classList.remove("alt-pickable");
+  placeAltsPopover(span);
+  altsPopoverPos = pos;
+}
+
+// The canvas a saved frame belongs to, 0 for a model with only one.
+function overlayCanvasOf(frame) {
+  var canvases = overlayData ? overlayData.canvas_index : null;
+  if (!canvases || typeof canvases[frame] !== "number") {
+    return 0;
+  }
+  return canvases[frame];
+}
+
+// Whether the crossfade favors the pre-edit run on an edited run.
+function overlayShowsPreEdit() {
+  return compareBlend < 0.5
+    && overlaySeriesLength(overlayBaseline()) > 0;
+}
+
+// Unhide before measuring: the height is unknown while hidden.
+// Without a span it stays where it already sits.
+function placeAltsPopover(span) {
+  altsPopover.hidden = false;
+  if (!span) {
+    return;
+  }
+  var rect = span.getBoundingClientRect();
+  var box = altsPopover.getBoundingClientRect();
+  altsPopover.style.left =
+    overlaysPopoverLeft(rect, box) + "px";
+  altsPopover.style.top =
+    overlaysPopoverTop(
+      rect, box, overlayOutput.getBoundingClientRect().top
+    ) + "px";
 }
 
 // A frame series at the scrubber's index, clamped to its end. The two
@@ -3760,6 +3820,7 @@ function renderRunOverlays(data) {
   // only ever asks a series for a frame.
   overlayData.series = overlaySeriesOf(data, false);
   overlayData.baseline = overlaySeriesOf(data, true);
+  overlayData.candidateStore = runCandidatesFromJson(data.candidates);
   overlayViewer.hidden = false;
   overlayEmpty.hidden = true;
   overlayOutput.hidden = false;

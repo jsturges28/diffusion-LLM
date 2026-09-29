@@ -325,6 +325,11 @@ var originalRun = originalRunCreate();
 // sampled, so each arrives once, on the frame that introduces it.
 // Empty unless the model's Alternatives capture was enabled.
 var positionAlts = [];
+// A diffusion run's candidates, per captured frame rather than per
+// position, since a diffusion position is re-decided at every step.
+// Arrives in one message as the run ends; see run_candidates.js.
+// Replaced rather than mutated, so a snapshot can hold a reference.
+var runCandidates = runCandidatesCreate();
 // Position whose candidate popover is open, or null when closed.
 // The page is "original", "edited", or null where only one run
 // captured candidates and there is nothing to page between.
@@ -1821,6 +1826,9 @@ function handleMessage(data) {
     case "frame":
       handleFrame(data);
       break;
+    case "candidates":
+      handleCandidates(data);
+      break;
     case "done":
       handleDone(data);
       break;
@@ -2125,6 +2133,16 @@ function stepReadout(step, canvasIndex, totalSteps, prefix) {
   var canvas = typeof canvasIndex === "number" ? canvasIndex : 0;
   // canvas_index is 0-based internally; display it 1-based.
   return prefix + step + ", Canvas " + (canvas + 1);
+}
+
+// A diffusion run's candidates, sent once just before its done frame.
+// Their frame numbers are the stream's own, so they go where that
+// stream's frames went: after the point a resume branched from, and
+// from 0 for a fresh run.
+function handleCandidates(data) {
+  runCandidates = runCandidatesAddStream(
+    runCandidates, resumeFrameOffset, data
+  );
 }
 
 // A frame that carries the one position it added rather than the
@@ -3320,6 +3338,10 @@ function renderAltsPopover(pos, span) {
   if (!altsPopover) {
     return;
   }
+  if (!runFramesIsAppend(runFrames)) {
+    renderCandidatesPopover(pos, span);
+    return;
+  }
   var original = altsPopoverPage === "original";
   var alts = original
     ? originalRun.positionAlts[pos] : positionAlts[pos];
@@ -3359,21 +3381,61 @@ function renderAltsPopover(pos, span) {
     altsPopover.appendChild(tokenizer);
   }
   altsPopover.classList.toggle("alt-pickable", pickable);
-
-  // Measure before placing: the popover must be visible for its
-  // height to be known, so unhide first, then correct the position.
-  altsPopover.hidden = false;
-  if (span) {
-    var rect = span.getBoundingClientRect();
-    var box = altsPopover.getBoundingClientRect();
-    altsPopover.style.left =
-      overlaysPopoverLeft(rect, box) + "px";
-    altsPopover.style.top =
-      overlaysPopoverTop(
-        rect, box, outputArea.getBoundingClientRect().top
-      ) + "px";
-  }
+  placeAltsPopover(span);
   altsPopoverPos = pos;
+}
+
+// A canvas run's popover: what the position was weighing at the frame
+// on screen, or at the latest captured frame before it when the
+// stride skipped this one. No pager, because the pre-edit run's
+// candidates are not kept, and nothing over the pre-edit layer, whose
+// tokens they would not describe.
+function renderCandidatesPopover(pos, span) {
+  var found = runCandidatesSetAt(
+    runCandidates, currentScrubFrame, pos, runFrameCanvas
+  );
+  var preEditLayer = runBlendActive() && runBlendFavorsOriginal();
+  if (found === null || preEditLayer) {
+    hideAltsPopover();
+    return;
+  }
+  setCandidateMetricsHover(null);
+  altsPopover.textContent = "";
+  altsPopover.appendChild(
+    overlaysBuildStepHeading(pos, found.frame, currentScrubFrame)
+  );
+  altsPopover.appendChild(buildAltsRows(found.set.c, found.set.h));
+  var tokenizer = overlaysBuildAltTokenizer(activeTokenizer);
+  if (tokenizer) {
+    altsPopover.appendChild(tokenizer);
+  }
+  altsPopover.classList.remove("alt-pickable");
+  placeAltsPopover(span);
+  altsPopoverPos = pos;
+}
+
+// The canvas a frame belongs to, 0 for a model with only one.
+function runFrameCanvas(frame) {
+  var canvas = runFrames.canvasIndex[frame];
+  return typeof canvas === "number" ? canvas : 0;
+}
+
+// Measure before placing: the popover must be visible for its height
+// to be known, so unhide first, then correct the position. Without a
+// span it stays where it already sits.
+function placeAltsPopover(span) {
+  altsPopover.hidden = false;
+  if (!span) {
+    return;
+  }
+  var rect = span.getBoundingClientRect();
+  var box = altsPopover.getBoundingClientRect();
+  altsPopover.style.left =
+    overlaysPopoverLeft(rect, box) + "px";
+  altsPopover.style.top =
+    overlaysPopoverTop(
+      rect, box, outputArea.getBoundingClientRect().top
+    ) + "px";
 }
 
 // ---- Typed token entry ----
@@ -6070,6 +6132,7 @@ function captureEditSnapshot() {
     frames: runFramesSnapshot(runFrames),
     resumeElapsedOffset: resumeElapsedOffset,
     positionAlts: positionAlts.slice(),
+    candidates: runCandidates,
     finalText: lastFinalText,
     remaskEditsLen: remaskEdits.length,
   };
@@ -6112,6 +6175,7 @@ function restoreEditSnapshot() {
   runFramesRestore(runFrames, preEditSnapshot.frames);
   resumeElapsedOffset = preEditSnapshot.resumeElapsedOffset;
   positionAlts = preEditSnapshot.positionAlts.slice();
+  runCandidates = preEditSnapshot.candidates;
   lastFinalText = preEditSnapshot.finalText;
   // Drop any edits committed during this (now-cancelled) session.
   remaskEdits.length = Math.min(
@@ -6136,6 +6200,7 @@ function truncateRunArraysAt(offset) {
     ? (runFrames.elapsed[offset - 1] || 0)
     : 0;
   runFramesTruncate(runFrames, offset);
+  runCandidates = runCandidatesTruncate(runCandidates, offset);
 }
 
 // The last cumulative elapsed reading, or `fallback` when the run has
@@ -7183,6 +7248,7 @@ function resetRunState() {
   activeRunToken = "";
   originalRunClear(originalRun);
   positionAlts = [];
+  runCandidates = runCandidatesCreate();
   entropyHoverPos = null;
   clearTokenHighlight();
   clearTokenMetrics();
@@ -7436,6 +7502,21 @@ function alternativeRecordsFrom(positions) {
   return out;
 }
 
+// A diffusion run's candidates as a save sends them, or null when
+// there are none. Thinned to the budget the server enforces, because
+// each stream arrived within it but an edited run carries several; a
+// store that cannot fit is left out rather than failing the save.
+function candidatesRecordFrom(store) {
+  if (runCandidatesIsEmpty(store)) {
+    return null;
+  }
+  var thinned = runCandidatesThin(store, RUN_CANDIDATES_BUDGET);
+  if (thinned === null || runCandidatesIsEmpty(thinned)) {
+    return null;
+  }
+  return runCandidatesToJson(thinned);
+}
+
 // ---- "New run saved" Analytics cue ----
 
 // The header badge shows how many saved runs have not yet been opened
@@ -7620,6 +7701,10 @@ function saveRun() {
   var altRecords = alternativeRecordsFrom(positionAlts);
   if (altRecords !== null) {
     payload.alternatives = altRecords;
+  }
+  var candidateRecord = candidatesRecordFrom(runCandidates);
+  if (candidateRecord !== null) {
+    payload.candidates = candidateRecord;
   }
 
   if (remaskEdits.length > 0) {
@@ -8712,21 +8797,33 @@ function saveSessionState() {
   var full = Object.assign({}, base, runFramesToJson(runFrames), {
     positionAlts: positionAlts,
   }, originalRunToJson(originalRun));
-  // Prefer the token-rich payload; fall back to a lighter one
-  // if it exceeds the sessionStorage quota (long runs).
-  try {
-    sessionStorage.setItem(
-      SESSION_KEY, JSON.stringify(full)
-    );
-  } catch (_e) {
+  // Most complete first, each tier dropping what the next can live
+  // without when the sessionStorage quota refuses it (long runs).
+  // Candidates go first: a default LLaDA run's are about 4 MiB, which
+  // can be what tips the full payload over, and losing them costs
+  // less than losing the per-token detail it exists to carry.
+  var tiers = [full, base];
+  if (!runCandidatesIsEmpty(runCandidates)) {
+    tiers.unshift(Object.assign({}, full, {
+      candidates: runCandidatesToJson(runCandidates),
+    }));
+  }
+  sessionStoreFirstFitting(tiers);
+}
+
+// Write the first payload the sessionStorage quota accepts, or none.
+function sessionStoreFirstFitting(payloads) {
+  for (var i = 0; i < payloads.length; i++) {
     try {
       sessionStorage.setItem(
-        SESSION_KEY, JSON.stringify(base)
+        SESSION_KEY, JSON.stringify(payloads[i])
       );
-    } catch (_e2) {
-      // Give up silently; state simply won't persist.
+      return;
+    } catch (_e) {
+      // Over the quota; the next payload is lighter.
     }
   }
+  // None fit, so the state simply will not persist.
 }
 
 function clearSessionState() {
@@ -8806,6 +8903,7 @@ function restoreSessionState() {
   remaskEdits = s.remaskEdits || [];
   originalRunRestore(originalRun, s, runFramesLength(runFrames));
   positionAlts = s.positionAlts || [];
+  runCandidates = runCandidatesFromJson(s.candidates);
   editedRunSaved = !!s.editedRunSaved;
   // Restored with the rest, or a stopped run would come back from
   // Analytics looking complete and save itself that way.
