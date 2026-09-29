@@ -220,9 +220,13 @@ kept when these were written:
 - **337 to 339**: confirmed on 2026-09-28: the completion label and
   its "?", saving after browsing the history, and deleting a prompt
   from it.
-- **340 to 346**: **outstanding**, the diffusion candidate popover on
-  both models, live and in Analytics, including the step-time cost
-  that 341 asks to be written down.
+- **340**: **outstanding**, a default LLaDA run's popover and the file
+  it saves.
+- **341**: half done by an agent on 2026-09-28: the step-time cost,
+  measured on the card and recorded in the item. Checking a run with
+  Alternatives off in the app is **outstanding**.
+- **342 to 346**: **outstanding**, the rest of the diffusion candidate
+  popover on both models, live and in Analytics.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -3853,6 +3857,20 @@ records (one default LLaDA run); longer runs keep every few steps.
     with a fixed **Seed** twice, once with **Alternatives** off, and
     note both elapsed times from the footer here. The run with it off
     shows no popover on hover and saves no `candidates.json`.
+
+    The cost was measured by an agent on 2026-09-28, on the RTX 4090,
+    by driving each model's worker load and sampler directly: one
+    prompt, seed 1234, one warm-up, then Alternatives off and on in
+    turn (three pairs on LLaDA, two on DiffusionGemma), timing the
+    whole stream. LLaDA at its defaults took 35.5 ms a step off and
+    37.9 on (+6.7%), and at 512 by 256, 83.2 and 88.1 (+5.9%).
+    DiffusionGemma at 256 tokens took 1,012 ms a frame off and 1,189
+    on (+17.5%), and at 512 over two canvases, 954 and 1,138 (+19.3%).
+    Sending the candidates added 20 to 140 ms once, at the end; VRAM
+    did not move; and every pair produced identical text. DiffusionGemma
+    pays more because its logits reach the streamer on the CPU; the
+    ROADMAP records why and the fix planned for it. The in-app half,
+    the run with Alternatives off, is still to do.
 
 342. **A long run keeps every few steps and says so.** With
     **Experimental** on, run LLaDA at **Gen Length** 512 and **Steps**

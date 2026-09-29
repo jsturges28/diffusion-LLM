@@ -1161,6 +1161,26 @@ blank.
   closes the sampler at the budget before the flush, and DiffusionGemma's
   would name frames past the budget that the page never receives.
 
+**What it costs, measured on 2026-09-28** on an RTX 4090 with one seed,
+Alternatives off against on (manual item 341 has the method). LLaDA took
+35.5 against 37.9 ms a step at its defaults (+6.7%) and 83.2 against 88.1
+at 512 by 256 (+5.9%). DiffusionGemma took 1,012 against 1,189 ms a frame
+(+17.5%), and +19.3% over two canvases. The text was identical either way
+and VRAM did not move.
+
+DiffusionGemma pays three times as much because transformers hands
+`put_draft` its logits already copied to the host
+(`self_conditioning_logits.cpu()`), so every signal it carries is reduced on
+the CPU. At its 256 by 262,144 shape the candidate pass alone takes 170 to
+200 ms, beside about 180 ms that confidence and entropy already cost with
+the capture off. **Next, as a follow-up to plan:** one fused pass for all
+three, with one widening and one exponential per chunk and no rank count,
+since a draft's held token is its own argmax. A throwaway prototype took
+158 ms against the 350 ms of the three separate passes, which would make
+DiffusionGemma with Alternatives on cheaper than it is today with them off.
+Its bfloat16 check tripped on exact ties at the maximum, so the real version
+has to take the displayed token from the same top-five call.
+
 **Two renderings, one capture.** Scoped 2026-08-30. The stack above encodes
 probability share as stacked opacity, which is spatial. The alternative is to
 encode it as a *duty cycle*, cycling a position through its candidates so
