@@ -19,6 +19,9 @@ without it. The rest are chosen with --sections:
 - speed: prompt and decode throughput, and peak memory.
 - retention: the three tests that retired the attention overlay, run
   on what each layer's state keeps and on its output-side attention.
+- forgetting: what reading each token erased, the one per-token
+  signal a Mamba-3 run would draw, held to its own bar (manual item
+  329) before any overlay shows it.
 
 The checkpoint was trained with Llama 3.1's tokenizer, whose own
 repository is gated. SmolLM3's, which this project already pins, is
@@ -107,6 +110,12 @@ CPU_DECODE_MIN = 3.0  # tokens per second
 TOP_POSITIONS = 20
 RECENCY_SPEARMAN = 0.9  # above this, a layer keeps only recency
 CONTENT_VARIATION = 0.05  # below this, decay ignores content
+# The forgetting bar, fixed before its first run (manual item 329).
+# It judges the one per-token signal a Mamba-3 run would draw.
+FORGETTING_WARM_UP = 8  # tokens the repeated input's state settles in
+FORGETTING_FLAT_RATIO = 0.5  # the repeated input's share of variation
+CHANCE_FLOOR = 2.0  # multiples of chance before an overlap counts
+FORGETTING_TOP_TOKENS = 10  # most-forgetting tokens the report shows
 
 AGREEMENT_TOKENS = 128
 RETENTION_TOKENS = 128
@@ -115,7 +124,7 @@ SPEED_DECODE_TOKENS = 128
 COMPLETION_TOKENS = 40
 WARM_UP_TOKENS = 8
 
-SECTIONS = ("correctness", "speed", "retention")
+SECTIONS = ("correctness", "speed", "retention", "forgetting")
 DTYPES: Dict[str, torch.dtype] = {
     "bfloat16": torch.bfloat16,
     "float32": torch.float32,
@@ -678,18 +687,9 @@ def retention(model: Mamba3LM, codec: TextCodec) -> Section:
     comes first: a lens whose weights do not rebuild the state they
     describe is not measuring anything, whatever the tests say.
     """
-    inputs = {
-        "passage_a": _encode_exactly(
-            codec, PASSAGES[0], RETENTION_TOKENS
-        ),
-        "passage_b": _encode_exactly(
-            codec, PASSAGES[1], RETENTION_TOKENS
-        ),
-        "repeated": _repeated(codec, RETENTION_TOKENS),
-    }
     lenses = {
         name: read_lenses(model, _on(model, ids))
-        for name, ids in inputs.items()
+        for name, ids in _falsification_inputs(codec).items()
     }
     rebuild = _worst_rebuild(lenses)
     alpha = alpha_variation(lenses)
@@ -845,6 +845,20 @@ def _worst_rebuild(lenses: Dict[str, List[LayerLens]]) -> float:
     return worst
 
 
+def _falsification_inputs(codec: TextCodec) -> Dict[str, List[int]]:
+    """Two real passages and one repeated token, all the same length:
+    what both retention and forgetting are judged on."""
+    return {
+        "passage_a": _encode_exactly(
+            codec, PASSAGES[0], RETENTION_TOKENS
+        ),
+        "passage_b": _encode_exactly(
+            codec, PASSAGES[1], RETENTION_TOKENS
+        ),
+        "repeated": _repeated(codec, RETENTION_TOKENS),
+    }
+
+
 def _repeated(codec: TextCodec, length: int) -> List[int]:
     """One token over and over, after whatever the tokenizer puts
     first: an input with no content for a lens to find."""
@@ -853,6 +867,123 @@ def _repeated(codec: TextCodec, length: int) -> List[int]:
     assert len(unit) == 1, f"{REPEATED_TEXT!r} is not one token"
     assert len(lead) < length, "the lead fills the whole input"
     return lead + unit * (length - len(lead))
+
+
+# -- forgetting --
+
+
+def forgetting(model: Mamba3LM, codec: TextCodec) -> Section:
+    """Per-token forgetting on the retention inputs, judged by its
+    own bar before any overlay draws it."""
+    inputs = _falsification_inputs(codec)
+    profiles = {
+        name: read_forgetting(model, _on(model, ids))
+        for name, ids in inputs.items()
+    }
+    section = judge_forgetting(profiles)
+    section["top_tokens"] = _most_forgetting(
+        codec, inputs["passage_a"], profiles["passage_a"]
+    )
+    return section
+
+
+def read_forgetting(model: Mamba3LM, ids: Tensor) -> Tensor:
+    """What reading each token erased, (length,), from one forward."""
+    sink: List[Tensor] = []
+    core = memory.recording_core(sink)
+    model(ids, model.empty_states(1), core=core)
+    return memory.forgetting(sink)[0].cpu()
+
+
+def judge_forgetting(profiles: Dict[str, Tensor]) -> Section:
+    """The four tests, on the number a reader would see.
+
+    It varies with content; it is not position; a repeated token
+    stays flat once its state settles; and the repeated token does
+    not share the passages' top positions as much as they share each
+    other's. That last one counts only above twice chance, where the
+    comparison stops being a coin toss.
+    """
+    first = profiles["passage_a"]
+    second = profiles["passage_b"]
+    repeated = profiles["repeated"]
+    positions = torch.arange(first.shape[0], dtype=torch.float64)
+    text = (_variation(first) + _variation(second)) / 2
+    flat = _variation(repeated[FORGETTING_WARM_UP:])
+    trends = [
+        memory.spearman(first, positions),
+        memory.spearman(second, positions),
+    ]
+    passages = memory.top_overlap(first, second, TOP_POSITIONS)
+    shared = (
+        memory.top_overlap(first, repeated, TOP_POSITIONS)
+        + memory.top_overlap(second, repeated, TOP_POSITIONS)
+    ) / 2
+    chance = TOP_POSITIONS**2 / first.shape[0]
+    structural = shared >= passages and shared > CHANCE_FLOOR * chance
+    verdicts = [
+        _verdict(
+            "forgetting varies with content: a coefficient of"
+            f" variation of at least {CONTENT_VARIATION:g}",
+            text >= CONTENT_VARIATION,
+            f"{text:.4f}",
+        ),
+        _verdict(
+            "forgetting is not position: |Spearman with position|"
+            f" at most {RECENCY_SPEARMAN:g} on each passage",
+            all(abs(trend) <= RECENCY_SPEARMAN for trend in trends),
+            ", ".join(f"{trend:.3f}" for trend in trends),
+        ),
+        _verdict(
+            "a repeated token stays flat: at most"
+            f" {FORGETTING_FLAT_RATIO:g} of real text's variation",
+            flat <= FORGETTING_FLAT_RATIO * text,
+            f"{flat:.4f} against {text:.4f}",
+        ),
+        _verdict(
+            "real text shares more top positions than a repeated"
+            " token does, counted above chance",
+            not structural,
+            f"repeated {shared:.1f}, passages {passages},"
+            f" chance {chance:.1f}",
+        ),
+    ]
+    return {
+        "tokens": int(first.shape[0]),
+        "chance_overlap": chance,
+        "variation_text": text,
+        "variation_repeated": flat,
+        "position_spearman": trends,
+        "passages_overlap": passages,
+        "repeated_overlap": shared,
+        "informative": all(v["result"] == "pass" for v in verdicts),
+        "verdicts": verdicts,
+    }
+
+
+def _variation(profile: Tensor) -> float:
+    """A profile's coefficient of variation, as one number."""
+    column = profile.double().reshape(-1, 1)
+    return float(memory.coefficient_of_variation(column)[0])
+
+
+def _most_forgetting(
+    codec: TextCodec, ids: List[int], profile: Tensor
+) -> List[Dict[str, Any]]:
+    """The tokens whose reading erased the most, for a person to look
+    at: the qualitative half of the evidence."""
+    count = min(FORGETTING_TOP_TOKENS, profile.shape[0])
+    top = torch.topk(profile, count)
+    return [
+        {
+            "position": int(position),
+            "text": codec.decode([ids[int(position)]]),
+            "forgetting": round(float(value), 4),
+        }
+        for value, position in zip(
+            top.values.tolist(), top.indices.tolist(), strict=True
+        )
+    ]
 
 
 # -- shared --
@@ -901,6 +1032,7 @@ RUNNERS: Dict[str, Callable[[Mamba3LM, TextCodec], Section]] = {
     "correctness": correctness,
     "speed": speed,
     "retention": retention,
+    "forgetting": forgetting,
 }
 assert tuple(RUNNERS) == SECTIONS, "a runner for every section"
 
@@ -993,11 +1125,30 @@ def _row(row: Dict[str, float]) -> str:
     )
 
 
+def _forgetting_lines(section: Section) -> List[str]:
+    lines = [
+        f"  variation: text {section['variation_text']:.4f},"
+        f" repeated token {section['variation_repeated']:.4f}",
+        f"  top-{TOP_POSITIONS} overlaps: passages"
+        f" {section['passages_overlap']}, repeated"
+        f" {section['repeated_overlap']:.1f}, chance"
+        f" {section['chance_overlap']:.1f}",
+        "  most forgetting in passage A:",
+    ]
+    for entry in section.get("top_tokens", []):
+        lines.append(
+            f"  {entry['position']:5d} {entry['text']!r:>14}"
+            f" {entry['forgetting']:.4f}"
+        )
+    return lines
+
+
 LINES: Dict[str, Callable[[Section], List[str]]] = {
     "load": _load_lines,
     "correctness": _correctness_lines,
     "speed": _speed_lines,
     "retention": _retention_lines,
+    "forgetting": _forgetting_lines,
 }
 
 

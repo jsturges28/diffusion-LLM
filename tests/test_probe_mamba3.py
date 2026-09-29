@@ -132,6 +132,10 @@ def test_every_section_runs_on_a_tiny_checkpoint(
     assert retention["rebuild_error_max"] < probe.AGREEMENT_MAX
     assert len(retention["state"]["layers"]) == TINY["n_layer"]
     assert report["speed"]["peak_vram_mib"] is None
+    forgetting = report["forgetting"]
+    shown = len(forgetting["top_tokens"])
+    assert len(forgetting["verdicts"]) == 4
+    assert shown == probe.FORGETTING_TOP_TOKENS
 
 
 def test_sections_choose_what_runs(
@@ -288,6 +292,9 @@ def test_the_criteria_are_the_ones_registered_in_advance() -> None:
     assert probe.TOP_POSITIONS == 20
     assert probe.RECENCY_SPEARMAN == 0.9
     assert probe.CONTENT_VARIATION == 0.05
+    assert probe.FORGETTING_WARM_UP == 8
+    assert probe.FORGETTING_FLAT_RATIO == 0.5
+    assert probe.CHANCE_FLOOR == 2.0
 
 
 def test_criteria_that_do_not_apply_to_a_run_are_not_judged() -> None:
@@ -385,3 +392,118 @@ def test_a_fixed_decay_fails_the_content_test() -> None:
     assert blind["verdict"]["result"] == "fail"
     assert math.isclose(blind["median"], 0.0, abs_tol=1e-6)
     assert moved["verdict"]["result"] == "pass"
+
+
+# -- the forgetting tests, on profiles with known answers --
+
+TOKENS = 128
+CRITERIA = ("content", "position", "flat", "degenerate")
+
+
+def _noise(seed: int) -> torch.Tensor:
+    """Forgetting that follows the text: its own value at each token,
+    with no trend and no shared structure."""
+    gen = torch.Generator().manual_seed(seed)
+    return 0.1 + 0.05 * torch.rand(TOKENS, generator=gen)
+
+
+def _flat() -> torch.Tensor:
+    """A repeated token: some movement while its state settles, then
+    the same value at every token after."""
+    profile = torch.full((TOKENS,), 0.12)
+    profile[: probe.FORGETTING_WARM_UP] = torch.linspace(0.3, 0.13, 8)
+    return profile
+
+
+def _spikes(positions: List[int]) -> torch.Tensor:
+    """High forgetting at exactly these positions, so they are the
+    profile's top ones, over a faint wobble that keeps it varied."""
+    profile = _noise(9) * 0.01 + 0.1
+    profile[positions] = 1.0
+    return profile
+
+
+def _results_by_name(section: Dict[str, Any]) -> Dict[str, str]:
+    results = _results(section)
+    return dict(zip(CRITERIA, results, strict=True))
+
+
+def test_forgetting_that_follows_the_text_passes() -> None:
+    section = probe.judge_forgetting({
+        "passage_a": _noise(1),
+        "passage_b": _noise(2),
+        "repeated": _flat(),
+    })
+
+    assert _results(section) == ["pass"] * 4
+    assert section["informative"] is True
+
+
+def test_forgetting_that_barely_moves_fails() -> None:
+    """A tint nobody could tell from uniform says nothing about the
+    text, however cleanly it passes the other tests."""
+    section = probe.judge_forgetting({
+        "passage_a": 0.1 + 0.02 * _noise(1),
+        "passage_b": 0.1 + 0.02 * _noise(2),
+        "repeated": _flat(),
+    })
+
+    assert _results_by_name(section)["content"] == "fail"
+
+
+def test_forgetting_that_only_tracks_position_fails() -> None:
+    ramp = torch.linspace(0.1, 0.2, TOKENS)
+
+    section = probe.judge_forgetting({
+        "passage_a": ramp,
+        "passage_b": ramp,
+        "repeated": _flat(),
+    })
+
+    assert _results_by_name(section)["position"] == "fail"
+    assert section["informative"] is False
+
+
+def test_a_repeated_token_that_moves_like_text_fails() -> None:
+    """Variation a contentless input shows too cannot be about the
+    content."""
+    section = probe.judge_forgetting({
+        "passage_a": _noise(1),
+        "passage_b": _noise(2),
+        "repeated": _noise(3),
+    })
+
+    assert _results_by_name(section)["flat"] == "fail"
+
+
+def test_structure_every_input_shares_fails() -> None:
+    """The attention-sink shape: the same positions on top whatever
+    the input, far above chance."""
+    same = list(range(20))
+
+    section = probe.judge_forgetting({
+        "passage_a": _spikes(same),
+        "passage_b": _spikes(same),
+        "repeated": _spikes(same),
+    })
+
+    assert _results_by_name(section)["degenerate"] == "fail"
+
+
+def test_a_coin_toss_below_the_chance_floor_is_no_failure() -> None:
+    """The repeated token shares 3 top positions with each passage
+    while the passages share none, so "as many" holds, but 3 of 20 is
+    what chance gives. Without the floor this would fail."""
+    first = list(range(0, 20))
+    second = list(range(40, 60))
+    repeated = [17, 18, 19, 57, 58, 59, *range(100, 114)]
+
+    section = probe.judge_forgetting({
+        "passage_a": _spikes(first),
+        "passage_b": _spikes(second),
+        "repeated": _spikes(repeated),
+    })
+
+    assert section["passages_overlap"] == 0
+    assert section["repeated_overlap"] == 3
+    assert _results_by_name(section)["degenerate"] == "pass"

@@ -21,6 +21,9 @@ builds.
 
 **Everything here assumes a run from the empty state**, which is how
 the probe runs; a carried state contributes terms no trace can see.
+The exception is `forgetting`, the per-token signal: what reading a
+token erased is 1 - alpha for that token alone, whatever came before,
+so it needs no trace and holds from any state.
 
 The products are sums of logarithms: `StepTerms.adt` is log(alpha), so
 a thousand decays cannot underflow before the subtraction that makes
@@ -32,13 +35,20 @@ reads, kept here so they are tested rather than trusted.
 
 from __future__ import annotations
 
+import functools
 import math
-from typing import NamedTuple, Sequence, Set
+from typing import List, NamedTuple, Sequence, Set, Tuple
 
 import torch
 from torch import Tensor
 
-from src.inference.mamba3 import StepTerms
+from src.inference.mamba3 import (
+    Core,
+    CoreInputs,
+    LayerState,
+    StepTerms,
+    recur_sequence,
+)
 
 
 class LayerTrace(NamedTuple):
@@ -130,6 +140,42 @@ def output_norms(trace: LayerTrace, attention: Tensor) -> Tensor:
     count = attention.shape[0]
     values = torch.linalg.vector_norm(trace.v[:count], dim=-1)
     return attention.abs() * values
+
+
+# -- forgetting, one number per token --
+
+
+def forgetting(adts: Sequence[Tensor]) -> Tensor:
+    """What reading each token erased from the state, (batch, length).
+
+    Every step scales each head's whole state by alpha = exp(A * dt)
+    before writing, so 1 - alpha is the share of that head's memory
+    the token wiped out. Exact, and it needs no recurrence: only the
+    `adt` each layer computed for the token. Averaged over heads and
+    layers it is one number per token, which is what a reader can
+    look at. `adts` holds one (batch, heads, length) tensor per layer,
+    in layer order, as `recording_core` collects them.
+    """
+    assert len(adts) > 0, "no layer's decay was recorded"
+    stacked = torch.stack([adt.float() for adt in adts])
+    # A is clamped below zero and dt is positive: log(alpha) < 0.
+    assert bool((stacked <= 0).all()), "a decay above one"
+    kept = torch.exp(stacked).mean(dim=(0, 2))
+    return 1.0 - kept
+
+
+def recording_core(sink: List[Tensor]) -> Core:
+    """The recurrence, keeping each layer's `adt` as it runs, in layer
+    order: all `forgetting` needs, without the per-step capture that
+    keeps whole query, key and value vectors."""
+    return functools.partial(_record_decay, sink=sink)
+
+
+def _record_decay(
+    inputs: CoreInputs, state: LayerState, *, sink: List[Tensor]
+) -> Tuple[Tensor, LayerState]:
+    sink.append(inputs.adt)
+    return recur_sequence(inputs, state)
 
 
 # -- the statistics the retention falsification reads --

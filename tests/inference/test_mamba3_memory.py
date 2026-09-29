@@ -22,17 +22,21 @@ import torch.nn.functional as F
 from src.inference.mamba3 import (
     CoreInputs,
     LayerState,
+    Mamba3LM,
     StepTerms,
+    config_from_json,
     recur_sequence,
 )
 from src.inference.mamba3_memory import (
     LayerTrace,
     coefficient_of_variation,
     contribution_norms,
+    forgetting,
     head_average,
     output_attention,
     output_norms,
     reconstruct_state,
+    recording_core,
     retention_weights,
     spearman,
     stack_terms,
@@ -296,3 +300,88 @@ def test_the_coefficient_of_variation() -> None:
     # Column two: mean 4, population deviation sqrt(8 / 3).
     expected = torch.tensor([0.0, math.sqrt(8.0 / 3.0) / 4.0])
     _close(variation, expected)
+
+
+# -- forgetting --
+
+
+def test_no_decay_erases_nothing() -> None:
+    adts = [torch.zeros(1, HEADS, LENGTH) for _ in range(3)]
+
+    _close(forgetting(adts), torch.zeros(1, LENGTH))
+
+
+def test_forgetting_is_the_mean_share_erased() -> None:
+    """Over heads and layers alike: two layers of two heads whose
+    alphas are 1, 1/2, 1/4 and 3/4 erase 0, 1/2, 3/4 and 1/4, which
+    averages to 3/8."""
+    alphas = torch.tensor([[1.0, 0.5], [0.25, 0.75]])
+    adts = [
+        torch.log(alphas[layer]).view(1, 2, 1) for layer in (0, 1)
+    ]
+
+    _close(forgetting(adts), torch.tensor([[0.375]]))
+
+
+def test_a_deep_decay_erases_nearly_everything() -> None:
+    adts = [torch.full((1, HEADS, LENGTH), -50.0)]
+
+    _close(forgetting(adts), torch.ones(1, LENGTH))
+
+
+def test_a_growing_decay_is_refused() -> None:
+    """log(alpha) above zero would be a state that grows, which a
+    clamped negative A times a positive dt can never produce."""
+    with pytest.raises(AssertionError):
+        forgetting([torch.full((1, HEADS, LENGTH), 0.1)])
+
+
+TINY_MODEL = {
+    "d_model": 32,
+    "d_intermediate": 64,
+    "n_layer": 2,
+    "vocab_size": 50,
+    "ssm_cfg": {
+        "layer": "Mamba3",
+        "d_state": 16,
+        "expand": 2,
+        "headdim": 8,
+        "rope_fraction": 0.5,
+    },
+    "pad_vocab_size_multiple": 16,
+}
+
+
+def _tiny_model() -> Mamba3LM:
+    torch.manual_seed(0)
+    model = Mamba3LM(config_from_json(TINY_MODEL))
+    with torch.no_grad():
+        for parameter in model.parameters():
+            parameter.copy_(0.3 * torch.randn_like(parameter))
+    return model.eval()
+
+
+def test_recording_changes_nothing_and_keeps_each_layer() -> None:
+    """It runs the same recurrence, so the logits are identical, and
+    what it keeps is exactly the decay the per-step capture sees."""
+    model = _tiny_model()
+    ids = torch.tensor([[3, 17, 5, 9, 30, 2]])
+    sink: List[torch.Tensor] = []
+    capture: List[List[StepTerms]] = [[], []]
+
+    with torch.no_grad():
+        plain, _ = model(ids, model.empty_states(1))
+        recorded, _ = model(
+            ids, model.empty_states(1), core=recording_core(sink)
+        )
+        model(ids, model.empty_states(1), capture=capture)
+
+    assert torch.equal(plain, recorded)
+    assert len(sink) == 2
+    heads = model.config.nheads
+    assert all(adt.shape == (1, heads, 6) for adt in sink)
+    captured = [
+        torch.stack([step.adt for step in layer], dim=-1)
+        for layer in capture
+    ]
+    _close(forgetting(sink), forgetting(captured))
