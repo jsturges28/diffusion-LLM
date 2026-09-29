@@ -1168,18 +1168,29 @@ at 512 by 256 (+5.9%). DiffusionGemma took 1,012 against 1,189 ms a frame
 (+17.5%), and +19.3% over two canvases. The text was identical either way
 and VRAM did not move.
 
-DiffusionGemma pays three times as much because transformers hands
+DiffusionGemma paid three times as much because transformers hands
 `put_draft` its logits already copied to the host
-(`self_conditioning_logits.cpu()`), so every signal it carries is reduced on
-the CPU. At its 256 by 262,144 shape the candidate pass alone takes 170 to
-200 ms, beside about 180 ms that confidence and entropy already cost with
-the capture off. **Next, as a follow-up to plan:** one fused pass for all
-three, with one widening and one exponential per chunk and no rank count,
-since a draft's held token is its own argmax. A throwaway prototype took
-158 ms against the 350 ms of the three separate passes, which would make
-DiffusionGemma with Alternatives on cheaper than it is today with them off.
-Its bfloat16 check tripped on exact ties at the maximum, so the real version
-has to take the displayed token from the same top-five call.
+(`self_conditioning_logits.cpu()`, in bf16), so every signal it carries is
+reduced on the CPU. Three separate passes over its 256 by 262,144 drafts
+cost about 450 ms a draft with the capture on and 245 with it off.
+
+**Fixed on 2026-09-29 with one fused pass**, `draft_signals` in
+`logit_signals.py`. Each chunk is widened and exponentiated once, and the
+candidates need no rank count, because a draft's held token is its own
+argmax and ranks first by construction. The shown token comes from the same
+`topk` call as the list, so an exact tie, which bf16 makes common, cannot
+separate them. Two choices made it fast, and a future change has to keep
+both: chunks of 8 rows, which stay in cache on the host (about 55 ms a
+draft, against 98 at the 32 rows the GPU reductions use), and two scratch
+buffers reused from chunk to chunk, since allocating them per chunk left
+the pass at the allocator's mercy (39 to 53 ms reused, 111 to 149 fresh).
+It takes about 55 ms a draft, with candidates or without. End to end on the
+same card, a DiffusionGemma frame took 833 ms with Alternatives off and 828
+with it on at 256 tokens, and 806 against 787 over two canvases, with
+identical text: the capture now costs nothing measurable, and a step with
+it is faster than one without it was before. LLaDA keeps its separate
+reductions, which run on the card at about 2.4 ms a step and whose held
+token is not always its argmax.
 
 **Two renderings, one capture.** Scoped 2026-08-30. The stack above encodes
 probability share as stacked opacity, which is spatial. The alternative is to

@@ -3868,8 +3868,14 @@ records (one default LLaDA run); longer runs keep every few steps.
     on (+17.5%), and at 512 over two canvases, 954 and 1,138 (+19.3%).
     Sending the candidates added 20 to 140 ms once, at the end; VRAM
     did not move; and every pair produced identical text. DiffusionGemma
-    pays more because its logits reach the streamer on the CPU; the
-    ROADMAP records why and the fix planned for it. The in-app half,
+    paid more because its logits reach the streamer on the CPU; the
+    ROADMAP records why, and the fix.
+
+    Re-measured the same way on 2026-09-29, once DiffusionGemma read
+    all its signals in one pass: at 256 tokens it took 833 ms a frame
+    off and 828 on, and at 512 over two canvases, 806 and 787, with
+    identical text in every pair. The capture no longer costs it
+    anything measurable. LLaDA's path did not change. The in-app half,
     the run with Alternatives off, is still to do.
 
 342. **A long run keeps every few steps and says so.** With
