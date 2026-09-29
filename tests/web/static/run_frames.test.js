@@ -648,3 +648,65 @@ test("a truncate restores the detail flag with the arrays", () => {
 
   assert.equal(api.runFramesLackDetail(light), false);
 });
+
+// -- how much of the baseline can be read as tokens --
+//
+// The gate on every comparison view asks this. It used to read the
+// snapshot array alone, and an append run's baseline keeps positions
+// with that array empty, so an autoregressive branch lost its
+// crossfade and its diff without anything failing.
+
+function appendRun(api, count) {
+  const frames = api.runFramesCreate();
+  for (let i = 0; i < count; i += 1) {
+    api.runFramesAppendPosition(frames, {
+      index: i + 1,
+      token: { t: "t" + i, m: false, id: i },
+      canvasIndex: 0,
+      meanConf: 0.5,
+      elapsed: i * 0.1,
+      revealed: i,
+    });
+  }
+  return frames;
+}
+
+test("an append baseline reads every frame as tokens", () => {
+  const api = load();
+  const original = api.originalRunCreate();
+
+  api.originalRunCapture(original, appendRun(api, 5), []);
+
+  assert.equal(original.tokens.length, 0);
+  assert.equal(api.originalRunTokenFrames(original), 5);
+});
+
+test("a snapshot baseline reads the frames it stored", () => {
+  const api = load();
+  const original = api.originalRunCreate();
+
+  api.originalRunCapture(original, baselineFrom(api, 4), []);
+
+  assert.equal(api.originalRunTokenFrames(original), 4);
+});
+
+test("a baseline restored without its detail reads none", () => {
+  // The light session payload drops the per-token arrays, and a
+  // comparison view must see no baseline rather than an empty one.
+  const api = load();
+
+  const original = api.originalRunFromJson(
+    { originalTotalFrames: 3 }, 0
+  );
+
+  assert.equal(api.originalRunCaptured(original), true);
+  assert.equal(api.originalRunTokenFrames(original), 0);
+});
+
+test("an uncaptured baseline reads none", () => {
+  const api = load();
+
+  assert.equal(
+    api.originalRunTokenFrames(api.originalRunCreate()), 0
+  );
+});

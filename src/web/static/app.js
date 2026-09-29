@@ -2809,12 +2809,8 @@ function invalidateRunMemos() {
 // metrics strip), the remask-origin positions, and a divergence
 // summary.
 function computeDiff() {
-  var cur = runFrames.tokens.length
-    ? runFramesTokensLast(runFrames)
-    : null;
-  var orig = originalRun.tokens.length
-    ? originalRunTokensLast(originalRun)
-    : null;
+  var cur = runFramesTokensLast(runFrames);
+  var orig = originalRunTokensLast(originalRun);
   return overlaysComputeDiff(cur, orig, remaskEdits);
 }
 
@@ -2830,7 +2826,7 @@ function renderDiffOverlay(frameIndex) {
   var diff = currentDiffData();
   var editedTokens = runFramesTokensAt(runFrames, frameIndex) || [];
   var oIdx = Math.min(
-    frameIndex, originalRun.tokens.length - 1
+    frameIndex, originalRunTokenFrames(originalRun) - 1
   );
   var origTokens =
     (oIdx >= 0 ? originalRunTokensAt(originalRun, oIdx) : null) || [];
@@ -3107,7 +3103,7 @@ function diffAvailable() {
   return (
     originalRun.totalFrames > 0
     && remaskEdits.length > 0
-    && originalRun.tokens.length > 0
+    && originalRunTokenFrames(originalRun) > 0
   );
 }
 
@@ -4570,15 +4566,13 @@ function metricsLayered() {
 // layer buildCrossfadedLayers draws past its end.
 function metricsFrameTokens() {
   if (!scrubberActive) {
-    return runFrames.tokens.length
-      ? runFramesTokensLast(runFrames)
-      : null;
+    return runFramesTokensLast(runFrames);
   }
   if (!metricsHoverOriginal) {
     return runFramesTokensAt(runFrames, currentScrubFrame) || null;
   }
   var index = Math.min(
-    currentScrubFrame, originalRun.tokens.length - 1
+    currentScrubFrame, originalRunTokenFrames(originalRun) - 1
   );
   return index >= 0 ? originalRunTokensAt(originalRun, index) : null;
 }
@@ -5513,7 +5507,7 @@ function renderFrameWithTokensDraw(frameIndex) {
 // rather than emptying out.
 function buildCrossfadedLayers(frameIndex, editedTokens) {
   var oIdx = Math.min(
-    frameIndex, originalRun.tokens.length - 1
+    frameIndex, originalRunTokenFrames(originalRun) - 1
   );
   var origTokens =
     (oIdx >= 0 ? originalRunTokensAt(originalRun, oIdx) : null) || [];

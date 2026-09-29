@@ -245,6 +245,20 @@ function originalRunTokensLast(original) {
   return originalRunTokensAt(original, original.tokens.length - 1);
 }
 
+// How many of the baseline's frames can be read as tokens: all of
+// them for an append run, whose positions are its frames, and as many
+// as were stored for a snapshot run, which a restore from the light
+// session payload can leave at none. The gate on comparing against
+// the baseline, and every view that clamps to its last frame, ask
+// this rather than one shape's array. Reading `tokens` alone is how
+// an autoregressive branch lost its crossfade: it keeps positions.
+function originalRunTokenFrames(original) {
+  if (originalRunIsAppend(original)) {
+    return original.positions.length;
+  }
+  return original.tokens.length;
+}
+
 function originalRunTextAt(original, index) {
   if (originalRunIsAppend(original)) {
     if (index < 0 || index >= original.positions.length) {
