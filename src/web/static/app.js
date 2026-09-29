@@ -330,9 +330,14 @@ var positionAlts = [];
 // Arrives in one message as the run ends; see run_candidates.js.
 // Replaced rather than mutated, so a snapshot can hold a reference.
 var runCandidates = runCandidatesCreate();
+// The pre-edit run's, frozen when the run first finishes, beside the
+// baseline itself, so an edited run's popover can page back to what
+// the original was weighing. Until an edit replaces the live store
+// the two names hold one object. Null before the first finish.
+var originalCandidates = null;
 // Position whose candidate popover is open, or null when closed.
-// The page is "original", "edited", or null where only one run
-// captured candidates and there is nothing to page between.
+// The page names the run it reads, "original" or "edited", and is
+// null where there is only one set to show, as on an unedited run.
 var altsPopoverPos = null;
 var altsPopoverPage = null;
 
@@ -2508,6 +2513,9 @@ function handleDone(data) {
     }
   }
   originalRunCapture(originalRun, runFrames, positionAlts);
+  if (originalCandidates === null) {
+    originalCandidates = runCandidates;
+  }
 
   setSaveAvailable(true);
 
@@ -3308,10 +3316,14 @@ function defaultAltsPage() {
 }
 
 // Show the candidate popover for a token position, anchored to its
-// span. The pager reaches the pre-edit set where one was retained.
+// span. The pager reaches the pre-edit set where one was retained:
+// by position on an append run, by frame on a canvas run.
 function showAltsPopover(pos, span) {
-  altsPopoverPage = altsPageable(pos)
-    ? defaultAltsPage() : null;
+  if (runFramesIsAppend(runFrames)) {
+    altsPopoverPage = altsPageable(pos) ? defaultAltsPage() : null;
+  } else {
+    altsPopoverPage = candidatesPage();
+  }
   renderAltsPopover(pos, span);
 }
 
@@ -3383,24 +3395,31 @@ function renderAltsPopover(pos, span) {
 
 // A canvas run's popover: what the position was weighing at the frame
 // on screen, or at the latest captured frame before it when the
-// stride skipped this one. No pager, because the pre-edit run's
-// candidates are not kept, and nothing over the pre-edit layer, whose
-// tokens they would not describe.
+// stride skipped this one. From the frame an edit branched at on it
+// pages between the two runs, opening on the one the crossfade
+// favours; if that run has nothing there it stays closed rather than
+// show the other run's candidates under this one's tokens.
 function renderCandidatesPopover(pos, span) {
-  var found = runCandidatesSetAt(
-    runCandidates, currentScrubFrame, pos, runFrameCanvas
-  );
-  var preEditLayer = runBlendActive() && runBlendFavorsOriginal();
-  if (found === null || preEditLayer) {
+  var page = altsPopoverPage;
+  var reading = candidatesReading(page, pos);
+  if (reading === null) {
     hideAltsPopover();
     return;
   }
+  var other = page === null
+    ? null
+    : candidatesReading(otherAltsPage(page), pos);
   setCandidateMetricsHover(null);
   altsPopover.textContent = "";
   altsPopover.appendChild(
-    overlaysBuildStepHeading(pos, found.frame, currentScrubFrame)
+    overlaysBuildStepHeading(
+      pos, reading.frame, reading.shown, page,
+      other === null ? null : setAltsPage
+    )
   );
-  altsPopover.appendChild(buildAltsRows(found.set.c, found.set.h));
+  altsPopover.appendChild(
+    buildAltsRows(reading.set.c, reading.set.h)
+  );
   var tokenizer = overlaysBuildAltTokenizer(activeTokenizer);
   if (tokenizer) {
     altsPopover.appendChild(tokenizer);
@@ -3414,6 +3433,70 @@ function renderCandidatesPopover(pos, span) {
 function runFrameCanvas(frame) {
   var canvas = runFrames.canvasIndex[frame];
   return typeof canvas === "number" ? canvas : 0;
+}
+
+// The earliest frame any edit branched at, or null on an unedited
+// run. Before it both runs hold the same frames, so there is only
+// one set of candidates to show.
+function editDivergenceFrame() {
+  var earliest = null;
+  for (var e = 0; e < remaskEdits.length; e++) {
+    var frame = remaskEdits[e].frame_index;
+    if (earliest === null || frame < earliest) {
+      earliest = frame;
+    }
+  }
+  return earliest;
+}
+
+// The page a canvas run's popover opens on: the run the crossfade
+// favours, from the frame an edit branched at on, and null before it,
+// on an unedited run, or while an edit phase has the crossfade off.
+function candidatesPage() {
+  var divergence = editDivergenceFrame();
+  if (!runBlendActive() || divergence === null) {
+    return null;
+  }
+  return currentScrubFrame >= divergence ? defaultAltsPage() : null;
+}
+
+function otherAltsPage(page) {
+  return page === "original" ? "edited" : "original";
+}
+
+// One run's set for a position, at the frame that run is showing, as
+// {frame, set, shown}, or null when it has none there. The edited run
+// shows the scrubbed frame; the original shows the frame its layer
+// clamps to past its own end. An edited run is single-canvas, since
+// Edit Frames is off for a run that chains canvases, so the pre-edit
+// run's lookups are on canvas 0.
+function candidatesReading(page, pos) {
+  if (page === "original") {
+    var shown = Math.min(
+      currentScrubFrame, originalRunTokenFrames(originalRun) - 1
+    );
+    var kept = originalCandidates || runCandidatesCreate();
+    return candidatesReadingOf(
+      runCandidatesSetAt(kept, shown, pos, singleCanvas), shown
+    );
+  }
+  return candidatesReadingOf(
+    runCandidatesSetAt(
+      runCandidates, currentScrubFrame, pos, runFrameCanvas
+    ),
+    currentScrubFrame
+  );
+}
+
+function candidatesReadingOf(found, shown) {
+  if (found === null) {
+    return null;
+  }
+  return { frame: found.frame, set: found.set, shown: shown };
+}
+
+function singleCanvas() {
+  return 0;
 }
 
 // Measure before placing: the popover must be visible for its height
@@ -7243,6 +7326,7 @@ function resetRunState() {
   originalRunClear(originalRun);
   positionAlts = [];
   runCandidates = runCandidatesCreate();
+  originalCandidates = null;
   entropyHoverPos = null;
   clearTokenHighlight();
   clearTokenMetrics();
@@ -7461,6 +7545,12 @@ function addOriginalRunSignals(payload) {
   if (originalAlts !== null) {
     payload.original_alternatives = originalAlts;
   }
+  var originalCandidateRecord = candidatesRecordFrom(
+    originalCandidates
+  );
+  if (originalCandidateRecord !== null) {
+    payload.original_candidates = originalCandidateRecord;
+  }
 }
 
 // Project accumulated candidate sets into the persisted shape, one
@@ -7501,7 +7591,7 @@ function alternativeRecordsFrom(positions) {
 // each stream arrived within it but an edited run carries several; a
 // store that cannot fit is left out rather than failing the save.
 function candidatesRecordFrom(store) {
-  if (runCandidatesIsEmpty(store)) {
+  if (store === null || runCandidatesIsEmpty(store)) {
     return null;
   }
   var thinned = runCandidatesThin(store, RUN_CANDIDATES_BUDGET);
@@ -8796,13 +8886,34 @@ function saveSessionState() {
   // Candidates go first: a default LLaDA run's are about 4 MiB, which
   // can be what tips the full payload over, and losing them costs
   // less than losing the per-token detail it exists to carry.
-  var tiers = [full, base];
-  if (!runCandidatesIsEmpty(runCandidates)) {
-    tiers.unshift(Object.assign({}, full, {
-      candidates: runCandidatesToJson(runCandidates),
+  sessionStoreFirstFitting(candidateTiers(full).concat([full, base]));
+}
+
+// The snapshot's fuller payloads, most complete first: both runs'
+// candidates, then the live run's alone, so the pre-edit run's give
+// way first. The pre-edit run's are written only once an edit has
+// made them a store of their own; before that they are the live
+// run's, and writing them twice could cost the quota the tokens.
+function candidateTiers(full) {
+  var tiers = [];
+  var withLive = Object.assign({}, full, {
+    candidates: runCandidatesToJson(runCandidates),
+  });
+  if (originalCandidatesKeptApart()) {
+    tiers.push(Object.assign({}, withLive, {
+      originalCandidates: runCandidatesToJson(originalCandidates),
     }));
   }
-  sessionStoreFirstFitting(tiers);
+  if (!runCandidatesIsEmpty(runCandidates)) {
+    tiers.push(withLive);
+  }
+  return tiers;
+}
+
+function originalCandidatesKeptApart() {
+  return originalCandidates !== null
+    && originalCandidates !== runCandidates
+    && !runCandidatesIsEmpty(originalCandidates);
 }
 
 // Write the first payload the sessionStorage quota accepts, or none.
@@ -8835,6 +8946,21 @@ function restoredRunPrompt(snapshot) {
     return snapshot.prompt.trim();
   }
   return null;
+}
+
+// The pre-edit run's candidates as a snapshot left them. An unedited
+// run never writes them, being the live run's own. An edited run's
+// may have given way to the storage quota, and that one gets an
+// empty store, so its Original page shows nothing rather than the
+// edited run's candidates under the original's tokens.
+function restoredOriginalCandidates(snapshot) {
+  if (snapshot.originalCandidates) {
+    return runCandidatesFromJson(snapshot.originalCandidates);
+  }
+  if (remaskEdits.length > 0) {
+    return runCandidatesCreate();
+  }
+  return runCandidates;
 }
 
 function restoreSessionState() {
@@ -8898,6 +9024,7 @@ function restoreSessionState() {
   originalRunRestore(originalRun, s, runFramesLength(runFrames));
   positionAlts = s.positionAlts || [];
   runCandidates = runCandidatesFromJson(s.candidates);
+  originalCandidates = restoredOriginalCandidates(s);
   editedRunSaved = !!s.editedRunSaved;
   // Restored with the rest, or a stopped run would come back from
   // Analytics looking complete and save itself that way.

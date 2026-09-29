@@ -3666,9 +3666,17 @@ input[type="checkbox"].app-checkbox:checked::after {
   cursor: default;
 }
 
-/* The step a diffusion run's candidates were read at, in the place
-   an autoregressive popover has its pager. Dim, because it qualifies
-   the list rather than being something to act on. */
+/* The step a diffusion run's candidates were read at, with the pager
+   after it on an edited run. Grouped so the heading's space-between
+   keeps both on the right. The step is dim, because it qualifies the
+   list rather than being something to act on. */
+.alt-heading-end {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
 .alt-step {
   flex: 0 0 auto;
   color: var(--text-dim);

@@ -89,8 +89,8 @@ var overlayDiffData = null;
 // (diffusion-only for now), keeping None + Heatmap + Entropy.
 var overlayIsAutoregressive = false;
 // Candidate popover for the token overlay (mirrors the generator).
-// The page is "original", "edited", or null where only one run
-// captured candidates and there is nothing to page between.
+// The page names the run it reads, "original" or "edited", and is
+// null where there is only one set to show, as on an unedited run.
 var altsPopover =
   document.getElementById("token-alts-popover");
 var altsPopoverPos = null;
@@ -3630,9 +3630,13 @@ function defaultAltsPage() {
   return compareBlend < 0.5 ? "original" : "edited";
 }
 
+// An autoregressive run pages by position, a diffusion run by frame.
 function showAltsPopover(pos, span) {
-  altsPopoverPage = altsPageable(pos)
-    ? defaultAltsPage() : null;
+  if (overlayIsAutoregressive) {
+    altsPopoverPage = altsPageable(pos) ? defaultAltsPage() : null;
+  } else {
+    altsPopoverPage = candidatesPage();
+  }
   renderAltsPopover(pos, span);
 }
 
@@ -3699,28 +3703,32 @@ function renderAltsPopover(pos, span) {
 
 // A diffusion run's candidates at the scrubbed frame, as the
 // generator shows them: the latest captured frame at or before it,
-// on the same canvas and not from before an edit began. No pager and
-// nothing over the pre-edit layer, whose candidates are not kept.
+// on the same canvas and not from before an edit began. From the
+// frame an edit branched at on it pages between the two runs,
+// opening on the one the crossfade favours, and stays closed when
+// that run has nothing there.
 function renderCandidatesPopover(pos, span) {
-  var store = overlayData ? overlayData.candidateStore : null;
-  var found = store
-    ? runCandidatesSetAt(
-      store, overlayFrameIndex, pos, overlayCanvasOf
-    )
-    : null;
-  if (found === null || overlayShowsPreEdit()) {
+  var page = altsPopoverPage;
+  var reading = candidatesReading(page, pos);
+  if (reading === null) {
     hideAltsPopover();
     return;
   }
+  var other = page === null
+    ? null
+    : candidatesReading(otherAltsPage(page), pos);
   setCandidateMetricsHover(null);
   altsPopover.textContent = "";
   altsPopover.appendChild(
-    overlaysBuildStepHeading(pos, found.frame, overlayFrameIndex)
+    overlaysBuildStepHeading(
+      pos, reading.frame, reading.shown, page,
+      other === null ? null : setAltsPage
+    )
   );
-  for (var i = 0; i < found.set.c.length; i++) {
+  for (var i = 0; i < reading.set.c.length; i++) {
     altsPopover.appendChild(
       overlaysBuildAltRow(
-        found.set.c[i], found.set.h, setCandidateMetricsHover, i
+        reading.set.c[i], reading.set.h, setCandidateMetricsHover, i
       )
     );
   }
@@ -3742,10 +3750,74 @@ function overlayCanvasOf(frame) {
   return canvases[frame];
 }
 
-// Whether the crossfade favors the pre-edit run on an edited run.
-function overlayShowsPreEdit() {
-  return compareBlend < 0.5
-    && overlaySeriesLength(overlayBaseline()) > 0;
+// The earliest frame any edit branched at, or null on an unedited
+// run. Before it both runs hold the same frames.
+function overlayDivergenceFrame() {
+  var edits = overlayData ? overlayData.remask_edits || [] : [];
+  var earliest = null;
+  for (var e = 0; e < edits.length; e++) {
+    var frame = edits[e].frame_index;
+    if (earliest === null || frame < earliest) {
+      earliest = frame;
+    }
+  }
+  return earliest;
+}
+
+// The page a diffusion run's popover opens on: the run the crossfade
+// favours, from the frame an edit branched at on, where a baseline
+// was saved to compare against; null otherwise.
+function candidatesPage() {
+  var divergence = overlayDivergenceFrame();
+  var baseline = overlaySeriesLength(overlayBaseline());
+  if (divergence === null || baseline === 0) {
+    return null;
+  }
+  return overlayFrameIndex >= divergence ? defaultAltsPage() : null;
+}
+
+function otherAltsPage(page) {
+  return page === "original" ? "edited" : "original";
+}
+
+// One run's set for a position, at the frame that run is showing, as
+// {frame, set, shown}, or null when it has none there. The original
+// clamps to its own last frame, as its layer does. An edited run is
+// single-canvas, so the pre-edit run's lookups are on canvas 0.
+function candidatesReading(page, pos) {
+  if (!overlayData) {
+    return null;
+  }
+  if (page === "original") {
+    var shown = overlayClampedIndex(overlayBaseline());
+    if (shown === null) {
+      return null;
+    }
+    return candidatesReadingOf(
+      runCandidatesSetAt(
+        overlayData.originalCandidateStore, shown, pos, singleCanvas
+      ),
+      shown
+    );
+  }
+  return candidatesReadingOf(
+    runCandidatesSetAt(
+      overlayData.candidateStore, overlayFrameIndex, pos,
+      overlayCanvasOf
+    ),
+    overlayFrameIndex
+  );
+}
+
+function candidatesReadingOf(found, shown) {
+  if (found === null) {
+    return null;
+  }
+  return { frame: found.frame, set: found.set, shown: shown };
+}
+
+function singleCanvas() {
+  return 0;
 }
 
 // Unhide before measuring: the height is unknown while hidden.
@@ -3771,13 +3843,21 @@ function placeAltsPopover(span) {
 // runs can differ in length, so a branch that outlives the one it
 // forked from must not read past the baseline's last frame.
 function overlayClampedFrame(series) {
+  var index = overlayClampedIndex(series);
+  if (index === null) {
+    return null;
+  }
+  return overlaySeriesAt(series, index);
+}
+
+// The scrub position clamped to a series' own end, or null for an
+// empty series.
+function overlayClampedIndex(series) {
   var count = overlaySeriesLength(series);
   if (count === 0) {
     return null;
   }
-  return overlaySeriesAt(
-    series, Math.min(overlayFrameIndex, count - 1)
-  );
+  return Math.min(overlayFrameIndex, count - 1);
 }
 
 // Candidate rows are built by overlaysBuildAltRow in overlays.js;
@@ -3821,6 +3901,9 @@ function renderRunOverlays(data) {
   overlayData.series = overlaySeriesOf(data, false);
   overlayData.baseline = overlaySeriesOf(data, true);
   overlayData.candidateStore = runCandidatesFromJson(data.candidates);
+  overlayData.originalCandidateStore = runCandidatesFromJson(
+    data.original_candidates
+  );
   overlayViewer.hidden = false;
   overlayEmpty.hidden = true;
   overlayOutput.hidden = false;

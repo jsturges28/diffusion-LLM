@@ -340,6 +340,12 @@ function overlaysBuildAltHeading(pos, page, onPage) {
   if (page === null) {
     return heading;
   }
+  heading.appendChild(overlaysBuildAltPagers(page, onPage));
+  return heading;
+}
+
+// The two arrows, the one toward the page on show disabled.
+function overlaysBuildAltPagers(page, onPage) {
   var pager = document.createElement("span");
   pager.className = "alt-pager";
   for (var i = 0; i < OVERLAYS_ALT_PAGES.length; i++) {
@@ -349,27 +355,35 @@ function overlaysBuildAltHeading(pos, page, onPage) {
       )
     );
   }
-  heading.appendChild(pager);
-  return heading;
+  return pager;
 }
 
 // The heading for a diffusion run's candidates: the position, and the
-// step they were read at, where an autoregressive popover has its
-// pager. "As of" when that is an earlier step than the frame on
-// screen, because the capture thinned to a stride on a long run and
-// skipped this one.
-function overlaysBuildStepHeading(pos, step, onScreen) {
+// step they were read at. "As of" when that is an earlier step than
+// the frame on screen, because the capture thinned to a stride on a
+// long run and skipped this one. On an edited run ``page`` names the
+// run being read, and ``onPage``, given only when the other run has
+// candidates there too, adds the arrows after the step; null leaves
+// the plain title.
+function overlaysBuildStepHeading(pos, step, onScreen, page, onPage) {
   var heading = document.createElement("div");
   heading.className = "alt-heading";
   var title = document.createElement("span");
-  title.textContent = "Position " + (pos + 1) + ": candidates";
+  title.textContent = "Position " + (pos + 1) + ": "
+    + (page ? overlaysAltPageLabel(page) : "candidates");
   heading.appendChild(title);
+  var end = document.createElement("span");
+  end.className = "alt-heading-end";
   var when = document.createElement("span");
   when.className = "alt-step";
   when.textContent = step === onScreen
     ? "Step " + step
     : "As of step " + step;
-  heading.appendChild(when);
+  end.appendChild(when);
+  if (page && onPage) {
+    end.appendChild(overlaysBuildAltPagers(page, onPage));
+  }
+  heading.appendChild(end);
   return heading;
 }
 

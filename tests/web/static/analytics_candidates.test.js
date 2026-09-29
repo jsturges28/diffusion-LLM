@@ -9,9 +9,12 @@
 // Passing proves the saved popover reads as the live one does: a
 // captured frame shows its own candidates, a skipped frame the
 // latest captured before it with "As of step N", and a frame on a
-// new canvas, the pre-edit layer, and a run saved before candidates
-// existed show nothing. An autoregressive run keeps its per-position
-// popover, untouched by any of it.
+// new canvas and a run saved before candidates existed show nothing.
+// An edited run pages between its two runs from the frame the edit
+// branched at, opening on the one the crossfade favours, and a run
+// saved before the pre-edit candidates were kept has only its edited
+// page. An autoregressive run keeps its per-position popover,
+// untouched by any of it.
 
 "use strict";
 
@@ -125,12 +128,13 @@ function withClass(node, name) {
   return descendants(node).filter((n) => n.classes.has(name));
 }
 
-// The stub keeps children when text is cleared, so it starts empty.
+// The popover as a hover opens it. The stub keeps children when text
+// is cleared, so it starts empty.
 function popoverAt(page, frame, position) {
   const popover = page.registry.get("token-alts-popover");
   page.context.setOverlayFrame(frame);
   popover.children = [];
-  page.context.renderAltsPopover(position, null);
+  page.context.showAltsPopover(position, null);
   return popover;
 }
 
@@ -185,16 +189,137 @@ test("a frame on a new canvas never borrows from the last", () => {
   assert.equal(stepLabel(popoverAt(page, 4, 2)), "Step 4");
 });
 
-test("the pre-edit layer has no popover", () => {
-  const page = opened(payload({
+// -- an edited run pages between the two runs --
+
+const EDIT_AT_2 = { frame_index: 2, token_positions: [1] };
+
+// A run edited at frame 2, as its save serves it. The original kept
+// frames 1, 3 and 4, so its sets lead with 302 at frame 3 for
+// position 2; the resume re-ran frames 2 to 4 and kept its own frames
+// 1 and 2, landing on 3 and 4, whose sets lead with 102 at frame 3.
+function editedPayload(overrides) {
+  return payload(Object.assign({
     original_frames: [0, 1, 2, 3, 4].map(frameTokens),
-    remask_edits: [{ frame_index: 2, token_positions: [1] }],
+    original_candidates: candidatesAt([1, 3, 4]),
+    candidates: {
+      k: 5,
+      stride: 2,
+      frames: [1, 3, 4],
+      segments: [0, 2],
+      sets: [setsAt(1), setsAt(1), setsAt(2)],
+    },
+    remask_edits: [EDIT_AT_2],
+  }, overrides || {}));
+}
+
+function titleOf(popover) {
+  return withClass(popover, "alt-heading")[0].children[0].textContent;
+}
+
+function pagerTo(popover, label) {
+  return withClass(popover, "alt-pager-btn").find(
+    (button) => button.getAttribute("aria-label") === label + " run"
+  );
+}
+
+test("an edited run opens on the run the crossfade favours", () => {
+  const page = opened(editedPayload());
+
+  page.context.compareBlend = 0.2;
+  const original = popoverAt(page, 3, 2);
+  assert.equal(titleOf(original), "Position 3: Original");
+  assert.deepEqual(rowIds(original), [302, 7]);
+
+  page.context.compareBlend = 0.8;
+  const edited = popoverAt(page, 3, 2);
+  assert.equal(titleOf(edited), "Position 3: Edited");
+  assert.deepEqual(rowIds(edited), [102, 7]);
+});
+
+test("the pager turns to the other run", () => {
+  const page = opened(editedPayload());
+  page.context.compareBlend = 0.2;
+  const popover = popoverAt(page, 3, 2);
+  const toEdited = pagerTo(popover, "Edited");
+
+  popover.children = [];
+  toEdited.dispatch("click", { stopPropagation() {} });
+
+  assert.equal(titleOf(popover), "Position 3: Edited");
+  assert.deepEqual(rowIds(popover), [102, 7]);
+});
+
+test("before the edit there is one run, so no pager", () => {
+  const page = opened(editedPayload());
+  page.context.compareBlend = 0.2;
+
+  const popover = popoverAt(page, 1, 2);
+
+  assert.equal(titleOf(popover), "Position 3: candidates");
+  assert.equal(withClass(popover, "alt-pager").length, 0);
+});
+
+test("the runs part at the earliest edit, whatever the order", () => {
+  const page = opened(editedPayload({
+    remask_edits: [
+      { frame_index: 3, token_positions: [2] }, EDIT_AT_2,
+    ],
   }));
+  page.context.compareBlend = 0.2;
+
+  const popover = popoverAt(page, 2, 2);
+
+  assert.equal(titleOf(popover), "Position 3: Original");
+  assert.equal(stepLabel(popover), "As of step 1");
+});
+
+test("past its end, the Original page reads the original's last frame", () => {
+  // The original ran four frames to the edit's five, so its layer
+  // holds its frame 3 at frame 4, and the page names that its step.
+  const page = opened(editedPayload({
+    original_frames: [0, 1, 2, 3].map(frameTokens),
+    original_candidates: candidatesAt([1, 3]),
+  }));
+  page.context.compareBlend = 0.2;
+
+  const popover = popoverAt(page, 4, 2);
+
+  assert.equal(stepLabel(popover), "Step 3");
+  assert.deepEqual(rowIds(popover), [302, 7]);
+});
+
+test("an edited run saved without its baseline has one page", () => {
+  // With no original to crossfade to, one run is on screen.
+  const page = opened(editedPayload({ original_frames: null }));
   page.context.compareBlend = 0.2;
 
   const popover = popoverAt(page, 3, 2);
 
+  assert.equal(titleOf(popover), "Position 3: candidates");
+  assert.deepEqual(rowIds(popover), [102, 7]);
+});
+
+test("where the favoured run has nothing, the popover stays closed", () => {
+  const page = opened(editedPayload({ candidates: null }));
+  page.context.compareBlend = 0.8;
+
+  const popover = popoverAt(page, 3, 2);
+
   assert.equal(popover.hidden, true);
+});
+
+test("a run saved without pre-edit candidates has only its edited page", () => {
+  // Saved before they were kept: nothing under the original's
+  // tokens, and nothing to turn to from the edited run's.
+  const page = opened(editedPayload({ original_candidates: null }));
+
+  page.context.compareBlend = 0.2;
+  assert.equal(popoverAt(page, 3, 2).hidden, true);
+
+  page.context.compareBlend = 0.8;
+  const edited = popoverAt(page, 3, 2);
+  assert.equal(titleOf(edited), "Position 3: Edited");
+  assert.equal(withClass(edited, "alt-pager").length, 0);
 });
 
 test("a run saved before candidates existed has no popover", () => {

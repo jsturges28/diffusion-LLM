@@ -11,10 +11,14 @@
 // Passing proves the popover follows the scrubber: a captured frame
 // shows its own candidates under "Step N", a frame the stride skipped
 // shows the latest captured before it under "As of step N", and the
-// opening frame, a resumed edit's first frame and the pre-edit layer
-// show nothing. It also proves the candidates reach the save, land
-// after the point a resume branched from, come back on Retry, and
-// survive the snapshot a trip to Analytics depends on.
+// opening frame and a resumed edit's first frame show nothing. On an
+// edited run it opens, from the frame the edit branched at, on the
+// run the crossfade favours, turns to the other, reads the original
+// at the frame its layer clamps to, and stays closed where the
+// favoured run has nothing. It also proves the candidates, the
+// pre-edit run's among them, reach the save, land after the point a
+// resume branched from, come back on Retry, and survive the snapshot
+// a trip to Analytics depends on.
 
 "use strict";
 
@@ -170,13 +174,14 @@ function withClass(node, name) {
   return descendants(node).filter((n) => n.classes.has(name));
 }
 
-// The popover as drawn for `position` with the scrubber at `frame`.
-// The stub keeps children when text is cleared, so it starts empty.
+// The popover as a hover opens it for `position` with the scrubber at
+// `frame`. The stub keeps children when text is cleared, so it starts
+// empty.
 function popoverAt(context, registry, frame, position) {
   const popover = registry.get("token-alts-popover");
   context.navigateToFrame(frame);
   popover.children = [];
-  context.renderAltsPopover(position, null);
+  context.showAltsPopover(position, null);
   return popover;
 }
 
@@ -243,16 +248,154 @@ test("a frame on a new canvas never borrows from the last", () => {
   assert.equal(stepLabel(next), "Step 4");
 });
 
-test("the pre-edit layer has no popover", () => {
-  // Its candidates are not kept, and the edited run's would describe
-  // tokens that are not the ones under the pointer.
-  const { context, registry } = finishedRun();
-  context.remaskEdits = [{ frame_index: 2, token_positions: [1] }];
+// -- an edited run pages between the two runs --
+
+const EDIT_AT_2 = { frame_index: 2, token_positions: [1] };
+
+// A finished run edited at frame 2 and resumed for `frames` frames,
+// whose capture kept `captured` of its own frames, or none when null
+// (a guided Run to Here), then finished again. The original captured
+// frames 1, 3 and 4, so its sets lead with 301 at frame 3; the
+// resume's frame 3 is its own frame 1, whose sets lead with 101.
+function editedRun(options) {
+  const settings = Object.assign(
+    { frames: 3, captured: [1, 2] }, options || {}
+  );
+  const run = finishedRun();
+  run.context.remaskEdits = [EDIT_AT_2];
+  resumeFrom(run.context, 2, settings.frames);
+  if (settings.captured !== null) {
+    run.context.handleMessage(candidatesMessage(settings.captured));
+  }
+  run.context.handleDone({ type: "done", final_text: WORDS.join("") });
+  return run;
+}
+
+function titleOf(popover) {
+  return withClass(popover, "alt-heading")[0].children[0].textContent;
+}
+
+function pagerTo(popover, label) {
+  return withClass(popover, "alt-pager-btn").find(
+    (button) => button.getAttribute("aria-label") === label + " run"
+  );
+}
+
+function chosenId(popover) {
+  const chosen = withClass(popover, "alt-row-chosen");
+  assert.equal(chosen.length, 1);
+  return Number(chosen[0].getAttribute("data-alt-id"));
+}
+
+test("an edited run opens on the run the crossfade favours", () => {
+  const { context, registry } = editedRun();
+
   context.runBlend = 0.2;
+  const original = popoverAt(context, registry, 3, 1);
+  assert.equal(titleOf(original), "Position 2: Original");
+  assert.deepEqual(rowIds(original), [301, 7]);
+
+  context.runBlend = 0.8;
+  const edited = popoverAt(context, registry, 3, 1);
+  assert.equal(titleOf(edited), "Position 2: Edited");
+  assert.deepEqual(rowIds(edited), [101, 7]);
+});
+
+test("the pager turns to the other run, marking its own token", () => {
+  const { context, registry } = editedRun();
+  context.runBlend = 0.2;
+  const popover = popoverAt(context, registry, 3, 1);
+  assert.equal(pagerTo(popover, "Original").disabled, true);
+  assert.equal(chosenId(popover), 301);
+  const toEdited = pagerTo(popover, "Edited");
+
+  popover.children = [];
+  toEdited.dispatch("click", { stopPropagation() {} });
+
+  assert.equal(titleOf(popover), "Position 2: Edited");
+  assert.equal(chosenId(popover), 101);
+});
+
+test("before the edit there is one run, so no pager", () => {
+  const { context, registry } = editedRun();
+  context.runBlend = 0.2;
+
+  const popover = popoverAt(context, registry, 1, 1);
+
+  assert.equal(titleOf(popover), "Position 2: candidates");
+  assert.equal(withClass(popover, "alt-pager").length, 0);
+});
+
+test("the frame the edit branched at already has two runs", () => {
+  // The edited run's frame 2 is its remasked canvas, with nothing
+  // captured yet, so there is no pager to it, but the original's
+  // frame 2 is its own and reads as of its step 1.
+  const { context, registry } = editedRun();
+  context.runBlend = 0.2;
+
+  const popover = popoverAt(context, registry, 2, 1);
+
+  assert.equal(titleOf(popover), "Position 2: Original");
+  assert.equal(stepLabel(popover), "As of step 1");
+  assert.equal(withClass(popover, "alt-pager").length, 0);
+});
+
+test("the runs part at the earliest edit, whatever the order", () => {
+  const { context, registry } = editedRun();
+  context.remaskEdits = [
+    { frame_index: 3, token_positions: [2] }, EDIT_AT_2,
+  ];
+  context.runBlend = 0.2;
+
+  const popover = popoverAt(context, registry, 2, 1);
+
+  assert.equal(titleOf(popover), "Position 2: Original");
+});
+
+test("past its end, the Original page reads the original's last frame", () => {
+  // The edit ran two frames longer than the run it replaced. The
+  // crossfade's pre-edit layer holds the original's final frame
+  // there, and the page names that frame as its own step.
+  const { context, registry } = editedRun({ frames: 5 });
+  context.runBlend = 0.2;
+
+  const popover = popoverAt(context, registry, 6, 1);
+
+  assert.equal(stepLabel(popover), "Step 4");
+  assert.deepEqual(rowIds(popover), [401, 7]);
+});
+
+test("where the favoured run has nothing, the popover stays closed", () => {
+  // The original's candidates would describe tokens that are not the
+  // ones under the pointer.
+  const { context, registry } = editedRun({ captured: null });
+  context.runBlend = 0.8;
 
   const popover = popoverAt(context, registry, 3, 1);
 
   assert.equal(popover.hidden, true);
+});
+
+test("an edited run without its baseline has one page", () => {
+  // With no original to crossfade to, one run is on screen.
+  const { context, registry } = editedRun();
+  context.originalRunClear(context.originalRun);
+  context.runBlend = 0.2;
+
+  const popover = popoverAt(context, registry, 3, 1);
+
+  assert.equal(titleOf(popover), "Position 2: candidates");
+  assert.deepEqual(rowIds(popover), [101, 7]);
+});
+
+test("a page with nothing to turn to has no pager", () => {
+  const { context, registry } = editedRun({ captured: null });
+  context.runBlend = 0.2;
+
+  const popover = popoverAt(context, registry, 3, 1);
+
+  assert.equal(titleOf(popover), "Position 2: Original");
+  assert.equal(withClass(popover, "alt-pager").length, 0);
 });
 
 // -- the run's candidates travel with it --
@@ -288,6 +431,26 @@ test("a run without candidates saves none", async () => {
   await context.saveRun();
 
   assert.equal("candidates" in saved[0], false);
+});
+
+test("an edited run's save carries the pre-edit candidates", async () => {
+  const { context, saved } = editedRun();
+
+  await context.saveRun();
+
+  const original = saved[0].original_candidates;
+  assert.deepEqual(original.frames, [1, 3, 4]);
+  assert.deepEqual(original.segments, [0]);
+  assert.equal(original.sets[1][1].h, 301);
+  assert.deepEqual(saved[0].candidates.segments, [0, 2]);
+});
+
+test("an unedited run saves its candidates once", async () => {
+  const { context, saved } = finishedRun();
+
+  await context.saveRun();
+
+  assert.equal("original_candidates" in saved[0], false);
 });
 
 // -- an edit, Retry, and the snapshot --
@@ -350,6 +513,23 @@ test("a new run forgets the last run's candidates", () => {
   assert.equal(popover.hidden, true);
 });
 
+test("a new run's Original page never shows the last run's", () => {
+  // The pre-edit candidates are frozen when a run first finishes, so
+  // a new run has to let go of the last one's to freeze its own.
+  const { context, registry } = finishedRun();
+  context.startGeneration();
+  for (let index = 0; index <= STEPS; index++) {
+    context.handleFrame(canvasFrame(index));
+  }
+  context.handleDone({ type: "done", final_text: WORDS.join("") });
+  context.remaskEdits = [EDIT_AT_2];
+  context.runBlend = 0.2;
+
+  const popover = popoverAt(context, registry, 3, 1);
+
+  assert.equal(popover.hidden, true);
+});
+
 test("Retry brings the run's candidates back", () => {
   const { context } = finishedRun();
   context.captureEditSnapshot();
@@ -396,4 +576,58 @@ test("candidates over the quota give way to per-token detail", () => {
 
   assert.ok(context.runCandidatesIsEmpty(context.runCandidates));
   assert.equal(context.runFrames.tokens.length, STEPS + 1);
+});
+
+test("the snapshot keeps both runs' candidates", () => {
+  const { context } = editedRun();
+  context.saveSessionState();
+  context.runCandidates = context.runCandidatesCreate();
+  context.originalCandidates = null;
+
+  assert.equal(context.restoreSessionState(), true);
+
+  const original = context.originalCandidates;
+  assert.deepEqual(Array.from(original.frames), [1, 3, 4]);
+  assert.deepEqual(Array.from(original.segments), [0]);
+  assert.deepEqual(
+    Array.from(context.runCandidates.segments), [0, 2]
+  );
+});
+
+test("an unedited run's snapshot writes its candidates once", () => {
+  // Until an edit the pre-edit run's candidates are the live run's,
+  // and writing them twice could cost the quota the tokens.
+  const { context } = finishedRun();
+  context.saveSessionState();
+  const written = JSON.parse(
+    context.sessionStorage.getItem(context.SESSION_KEY)
+  );
+  context.originalCandidates = null;
+
+  assert.equal("originalCandidates" in written, false);
+  assert.equal(context.restoreSessionState(), true);
+  assert.equal(context.originalCandidates, context.runCandidates);
+});
+
+test("over the quota, the pre-edit candidates give way first", () => {
+  // The Original page then shows nothing, rather than the edited
+  // run's candidates under the original's tokens.
+  const { context, registry } = editedRun();
+  const storage = context.sessionStorage;
+  const write = storage.setItem.bind(storage);
+  storage.setItem = (key, value) => {
+    if (value.indexOf("\"originalCandidates\"") !== -1) {
+      throw new Error("QuotaExceededError");
+    }
+    write(key, value);
+  };
+  context.saveSessionState();
+
+  assert.equal(context.restoreSessionState(), true);
+
+  assert.deepEqual(
+    Array.from(context.runCandidates.segments), [0, 2]
+  );
+  context.runBlend = 0.2;
+  assert.equal(popoverAt(context, registry, 3, 1).hidden, true);
 });
