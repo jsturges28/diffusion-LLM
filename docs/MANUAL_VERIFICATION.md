@@ -213,6 +213,10 @@ kept when these were written:
 - **334**: confirmed on 2026-09-28 apart from the colours, which were
   332's defect; re-check them with 332.
 - **335**: confirmed on 2026-09-28.
+- **336**: done by an agent on 2026-09-28, on CPU through the script:
+  forgetting predicts uncertainty on all three passages, in the middle
+  of sentences and above chance. The overall bar was the narrow one,
+  which the item records.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -3744,3 +3748,41 @@ through a script (item 331); none of this has been through the UI.
     at a time, like Autoregressive. Change the state-space brightness
     and fade, save, and run Mamba-3: the glow follows the new pair,
     and SmolLM3's pair is unchanged.
+
+## Does forgetting predict uncertainty?
+
+A second probe check on Mamba-3's one signal, written and pinned
+before it first ran. Reading a token produces two numbers in the same
+step: what the read erased from the state, and the entropy of the
+odds it leaves for the next token. If erasing more leaves the model
+less to go on, the two should rise together, and not only at the
+sentence boundaries that raise both.
+
+336. **Forgetting predicts uncertainty. Done by an agent on
+    2026-09-28, on CPU, passing all three tests.** Re-run it with:
+
+        .venv-ar/bin/python scripts/probe_mamba3.py --device cpu \
+            --dtype float32 --sections uncertainty
+
+    The bar, applied to each of the probe's three passages read whole
+    (194, 190 and 180 pairs, from the second token on, since the first
+    is read from an empty state): a Spearman correlation between
+    forgetting and entropy of at least 0.3; at least 0.15 over the
+    pairs where neither the token nor the one before it holds a
+    sentence mark or a newline, which leaves the middle of sentences;
+    and an association above the 99th percentile of 1,000 seeded
+    shuffles of the same values. The criteria were staged as tree
+    `fac06d85` at 22:43 on 2026-09-28, before the first run, and the
+    commit that adds them carries that tree.
+
+    What it found: 0.346, 0.350 and 0.409 overall; 0.264, 0.231 and
+    0.342 in the middle of sentences, over 177, 173 and 161 pairs;
+    against chance ceilings of 0.165, 0.149 and 0.176. The link
+    survives the boundaries with room to spare. The overall bar is
+    the narrow one, cleared by 0.046 and 0.050 on two passages, so it
+    is the test to watch if this is re-run on other text. On the
+    repeated token, reported and not judged, forgetting stays flat
+    (variation 0.046) while entropy moves more (0.212): entropy has
+    drivers forgetting does not see. A correlation, not a direction
+    of cause, though both numbers come from the same update of the
+    same state.

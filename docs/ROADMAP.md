@@ -151,6 +151,19 @@ since shipped is noted on the item rather than left for a reader to infer.
      each other, but both sit under twice chance (6.25), where "as many"
      is a coin toss. The flat test, which asks the same question
      directly, passes by a wide margin.
+   - **Forgetting predicts uncertainty** (manual item 336), a second
+     check written first. Reading a token yields both what the read
+     erased and the entropy of the odds it leaves for the next token,
+     and across the three passages the two correlate at 0.35 to 0.41.
+     The sentence boundaries that raise both are not the whole story:
+     with each mark and the word after it dropped, the middle of
+     sentences still gives 0.23 to 0.34, far above shuffled pairings
+     (at most 0.18). So where the model lets go of its state is also
+     where its next choice opens up, which ties the Forgetting overlay
+     to the entropy profile beside it. The overall bar of 0.3 was the
+     narrow test, cleared by about 0.05 on two passages; and on a
+     repeated token entropy moves while forgetting does not, so
+     forgetting is one driver of uncertainty rather than its measure.
 
    **The worker**, `src/backends/mamba3_worker.py`, and a registry entry
    that needed no special case, which is what `ROADMAP-01` was for:
