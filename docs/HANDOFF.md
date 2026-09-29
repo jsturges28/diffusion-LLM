@@ -171,11 +171,11 @@ predate the campaign and have never been validated.
 
 **Mamba-3** is in progress as a new model class, in our own PyTorch
 (`src/inference/mamba3.py`) held to upstream's references in
-`reference/mamba3/`. Next is the CUDA run of `scripts/probe_mamba3.py`
-(manual item 328). Its CPU run already found the model correct, CPU
-decoding viable and a retention overlay failing its degenerate test; the
-worker's plan starts from those, and the reasoning, including why the
-tokenizer comes from SmolLM3, is under the Mamba-3 direction in
-`docs/ROADMAP.md`. Then top-k for the diffusion models,
+`reference/mamba3/`. Its probe, `scripts/probe_mamba3.py`, has run on
+both devices (manual item 328): the model is correct, decoding is viable
+on the CPU and comfortable on the card, and a retention overlay fails
+its degenerate test. Next is the worker's plan, which starts from those;
+the reasoning, including why the tokenizer comes from SmolLM3, is under
+the Mamba-3 direction in `docs/ROADMAP.md`. Then top-k for the diffusion models,
 whose entropy half shipped with `ROADMAP-03`. `docs/ROADMAP.md` carries
 the settled decisions and the longer backlog.

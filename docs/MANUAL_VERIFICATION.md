@@ -196,9 +196,9 @@ kept when these were written:
   knows the repository cannot follow its README cold.
 - **327**: confirmed on 2026-09-28: on the 2.2B the red strip lights
   nothing, and the hover meets the drawn block edges.
-- **328**: **outstanding**, the Mamba-3 probe's CUDA run. Its CPU half
-  was run by an agent on 2026-09-28 through the script itself, and the
-  numbers are in the item.
+- **328**: confirmed on 2026-09-28: the CPU half run by an agent
+  through the script itself, the CUDA half by the maintainer. Both
+  halves' numbers are in the item.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -3583,7 +3583,17 @@ direction in `docs/ROADMAP.md`.
       in 17 of 24 layers on the state and 20 of 24 on the output side,
       against a chance overlap of about 3. That fails the lens.
 
-    What is left is the CUDA run: its throughput and peak VRAM, and the
-    rest of its report agreeing with the CPU's, allowing for bfloat16.
-    Summarise it under the Mamba-3 direction in `docs/ROADMAP.md`,
-    where the worker's plan will look for it.
+    **The CUDA half is done too**, run by the maintainer on 2026-09-28
+    at commit `430a787`, and every verdict matches the CPU's. In
+    bfloat16 the cores agree to a relative 3.3e-3, reported unjudged as
+    the bar says; perplexity is 8.1, 4.5 and 3.3; decoding runs at 60
+    tokens a second and prompts at 177; peak VRAM is 3,251 MiB and peak
+    host memory 4,747 MiB; and the retention table matches the CPU's to
+    rounding, failing the same test in the same layers. The summary is
+    under the Mamba-3 direction in `docs/ROADMAP.md`.
+
+    Read completions from the JSON report, not from a copied terminal.
+    Copying a wrapped line drops the space at each wrap, and on this
+    run that made two completions look as if the model had lost a
+    space ("lookingfor"), which it had not; the same paste shows
+    "tokendoes" in a verdict whose wording is fixed.

@@ -54,7 +54,8 @@ Agreed with the maintainer (deliberate each in Ask mode before Plan). What has
 since shipped is noted on the item rather than left for a reader to infer.
 
 1. **State-space models: Mamba-3 (new model class). In progress: the model
-   and a hardware probe exist, the worker does not.** The first SSM, and a
+   exists and its probe has run on both devices; the worker does not.**
+   The first SSM, and a
    distinct XAI lens: a fixed-size recurrent state that every token decays
    and writes into, so what the model keeps can be read off it exactly.
    **Chosen:** `state-spaces/mamba3-siso-1.5b` (arXiv 2603.15569). It is a
@@ -101,16 +102,25 @@ since shipped is noted on the item rather than left for a reader to infer.
    fingerprint. That removes the planned token plumbing: no worker
    needs a Hub login, and no menu has to explain a gate.
 
-   **The probe decides the rest.** `scripts/probe_mamba3.py`, manual item
-   328, with its criteria fixed before any run. An agent ran its CPU half
-   on 2026-09-28, through the script as written, against the real
-   checkpoint:
+   **The probe decided the rest.** `scripts/probe_mamba3.py`, manual item
+   328, with its criteria fixed before any run. It ran on 2026-09-28 on
+   both devices, through the script as written, against the real
+   checkpoint: the CPU half by an agent, the CUDA half by the maintainer.
    - **The model is right.** The checkpoint's 291 tensors match the
      module's names and shapes exactly, our loop and upstream's parallel
      form agree to a relative 1.9e-7, perplexity on three passages is 3.3
      to 8.1, and greedy completions read coherently.
    - **CPU is viable.** 4.3 to 4.5 tokens a second decoding in float32
      and 11.1 in bfloat16, on a Ryzen 9 7950X3D, against a bar of 3.
+   - **The card is comfortable.** In bfloat16 on the RTX 4090 it decodes
+     60 tokens a second and reads prompts at 177, in 3.2 GiB of VRAM at
+     peak, with the same perplexity, completions and retention verdicts
+     as the CPU. Both rates are the Python loop's rather than the card's:
+     streaming 3 GB of weights takes about 3 ms and a token takes 17, so
+     CUDA graphs or a chunked parallel prefill are where a worker would
+     find speed if it ever needs it. In float32 on the card, decoding a
+     token at a time reproduces the whole-sequence pass exactly; in
+     bfloat16 the two differ only at near-ties.
    - **A retention overlay fails.** The weights are exact (3.6e-7), decay
      does vary with content, and only one layer ranks by position alone.
      But a single token repeated shares as many of its top 20 positions
@@ -124,15 +134,14 @@ since shipped is noted on the item rather than left for a reader to infer.
      input, including one with nothing in it: the attention-sink failure
      from the Vision page, arriving by another route.
 
-   What the card still has to show is CUDA throughput and VRAM.
-
    **After the probe**, as its own plan: a Mamba-3 worker in
    `src/backends/` and a registry entry. The registry can express it
    without a special case, which is what `ROADMAP-01` was for:
    `family="state_space"` keeps its own identity and glow pair,
    `generation_shape="append_only"` gets it the autoregressive affordances
    and none of the denoising ones, `input_mode="completion"`,
-   `environment="ar"`, and devices chosen from the probe's speed numbers.
+   `environment="ar"`, and both devices, since CPU decoding cleared the
+   bar that was set to decide exactly that.
    The decode loop reuses the helpers in `src/inference/ar_sampler.py`.
    Per-token signals (delta, decay, state norm) are what the evidence
    supports, since decay passed the content test; an overlay of what the
