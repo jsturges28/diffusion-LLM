@@ -25,6 +25,7 @@ import pytest
 import torch
 
 from src.backends.text_adapter import DGEMMA_TEXT
+from src.inference import dgemma_sampler
 from src.inference.dgemma_sampler import (
     CANDIDATES_KEY,
     FrameQueueStreamer,
@@ -150,6 +151,29 @@ def test_a_run_without_alternatives_sends_none() -> None:
     assert _candidates(_run(alternatives=False)) is None
 
 
+def test_the_draft_pass_reads_five_only_for_a_capture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every draft is read in one pass, and how many candidates it
+    reads is the one thing the capture changes: a run with
+    Alternatives off asks for one, the likeliest token it shows."""
+    asked: List[int] = []
+    real_pass = dgemma_sampler.draft_signals
+
+    def spy(logits: torch.Tensor, k: int) -> Any:
+        asked.append(k)
+        return real_pass(logits, k)
+
+    monkeypatch.setattr(dgemma_sampler, "draft_signals", spy)
+    _run(alternatives=False)
+    off = list(asked)
+    asked.clear()
+    _run(alternatives=True)
+
+    assert off == [1] * DRAFTS
+    assert asked == [5] * DRAFTS
+
+
 def test_candidates_never_ride_a_frame_to_the_page() -> None:
     """The frame carries them across the queue; the consumer takes
     them off before the frame leaves the process."""
@@ -223,6 +247,9 @@ def test_the_held_token_is_the_drafts_argmax() -> None:
             assert entry["h"] == token["id"]
             assert entry["c"][0]["id"] == token["id"]
             assert len(entry["c"]) == 5
+            # The frame's confidence is that first row's probability,
+            # read in the same pass; both are rounded to four places.
+            assert abs(token["c"] - entry["c"][0]["p"]) <= 1e-4
 
 
 def test_candidate_text_is_the_raw_decode() -> None:

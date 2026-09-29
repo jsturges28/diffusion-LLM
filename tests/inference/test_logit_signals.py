@@ -22,6 +22,11 @@ quantity from confidence rather than a second name for it. That last
 one matters because the report found a channel labelled entropy that
 was emitting argmax confidence, and the way to make that unrepeatable
 is a case where the two numbers cannot be confused.
+
+The draft pass gets the same checks, plus its own: DiffusionGemma
+reads confidence, entropy and its candidates off one walk, and the
+token a draft shows has to be its first candidate even where two
+logits tie.
 """
 
 from __future__ import annotations
@@ -32,11 +37,13 @@ import pytest
 import torch
 
 from src.inference.logit_signals import (
+    DRAFT_CHUNK_POSITIONS,
     LOGIT_CHUNK_POSITIONS,
+    draft_candidates,
+    draft_signals,
     entropy_nats,
     picked_confidence,
     top_candidates,
-    top_confidence,
 )
 
 VOCAB = 512
@@ -65,23 +72,24 @@ def _softmax_oracle(logits: torch.Tensor) -> torch.Tensor:
 # -- the likeliest token and its probability --
 
 
-def test_top_confidence_matches_the_softmax_maximum() -> None:
+def test_the_draft_reads_the_softmax_maximum() -> None:
     logits = _logits(64)
     probs = _softmax_oracle(logits)
     want_conf, want_ids = probs.max(dim=-1)
 
-    ids, conf = top_confidence(logits)
+    signals = draft_signals(logits, 1)
 
-    assert torch.equal(ids, want_ids)
-    assert torch.allclose(conf, want_conf, atol=TOLERANCE)
+    assert torch.equal(signals.ids, want_ids)
+    assert torch.allclose(
+        signals.confidence, want_conf, atol=TOLERANCE
+    )
 
 
-def test_top_confidence_is_a_probability() -> None:
+def test_draft_confidence_is_a_probability() -> None:
     """Negative space on the unit. A reduction that forgot to
     normalize would still correlate with confidence while being
     unusable as one, and the heatmap scale assumes [0, 1]."""
-    ids, conf = top_confidence(_logits(64, seed=11))
-    del ids
+    conf = draft_signals(_logits(64, seed=11), 1).confidence
 
     assert bool((conf >= 0.0).all())
     assert bool((conf <= 1.0).all())
@@ -104,15 +112,15 @@ def test_picked_confidence_matches_a_softmax_gather() -> None:
     assert torch.allclose(got, want, atol=TOLERANCE)
 
 
-def test_picking_the_argmax_agrees_with_top_confidence() -> None:
+def test_picking_the_argmax_agrees_with_the_draft() -> None:
     """The two functions must not disagree where they overlap, which
-    is every run at temperature 0, the registry's default."""
+    is every LLaDA run at temperature 0, the registry's default."""
     logits = _logits(64, seed=4)
-    ids, top = top_confidence(logits)
+    signals = draft_signals(logits, 1)
 
-    picked = picked_confidence(logits, ids)
+    picked = picked_confidence(logits, signals.ids)
 
-    assert torch.allclose(picked, top, atol=TOLERANCE)
+    assert torch.allclose(picked, signals.confidence, atol=TOLERANCE)
 
 
 def test_picked_confidence_can_be_far_below_the_maximum() -> None:
@@ -137,7 +145,7 @@ def test_entropy_of_a_uniform_distribution_is_log_vocab() -> None:
     logits = torch.zeros((1, 4))
 
     entropy = float(entropy_nats(logits))
-    _, conf = top_confidence(logits)
+    conf = draft_signals(logits, 1).confidence
 
     assert entropy == pytest.approx(math.log(4), abs=1e-5)
     assert float(conf) == pytest.approx(0.25, abs=1e-5)
@@ -150,7 +158,7 @@ def test_entropy_of_a_peaked_distribution_is_near_zero() -> None:
     logits = torch.tensor([[40.0, 0.0, 0.0, 0.0]])
 
     entropy = float(entropy_nats(logits))
-    _, conf = top_confidence(logits)
+    conf = draft_signals(logits, 1).confidence
 
     assert entropy == pytest.approx(0.0, abs=1e-5)
     assert float(conf) == pytest.approx(1.0, abs=1e-5)
@@ -184,7 +192,7 @@ def test_entropy_and_confidence_are_not_the_same_series() -> None:
     logits = _logits(32, seed=9)
 
     entropy = entropy_nats(logits)
-    _, conf = top_confidence(logits)
+    conf = draft_signals(logits, 1).confidence
 
     assert not torch.allclose(entropy, conf, atol=0.1)
 
@@ -210,16 +218,15 @@ def test_every_canvas_width_survives_chunking(
     repeat the last partial slice."""
     logits = _logits(positions, seed=13)
     probs = _softmax_oracle(logits)
-    want_conf, want_ids = probs.max(dim=-1)
+    picks = torch.randint(0, VOCAB, (positions,))
+    want = probs.gather(-1, picks.unsqueeze(-1)).squeeze(-1)
 
-    ids, conf = top_confidence(logits)
+    picked = picked_confidence(logits, picks)
     entropy = entropy_nats(logits)
 
-    assert ids.shape[0] == positions
-    assert conf.shape[0] == positions
+    assert picked.shape[0] == positions
     assert entropy.shape[0] == positions
-    assert torch.equal(ids, want_ids)
-    assert torch.allclose(conf, want_conf, atol=TOLERANCE)
+    assert torch.allclose(picked, want, atol=TOLERANCE)
 
 
 def test_bfloat16_logits_are_widened_before_reducing() -> None:
@@ -230,7 +237,7 @@ def test_bfloat16_logits_are_widened_before_reducing() -> None:
     wide = _logits(48, seed=17)
     narrow = wide.to(torch.bfloat16)
 
-    _, conf = top_confidence(narrow)
+    conf = picked_confidence(narrow, wide.argmax(dim=-1))
     entropy = entropy_nats(narrow)
 
     assert conf.dtype == torch.float32
@@ -238,7 +245,7 @@ def test_bfloat16_logits_are_widened_before_reducing() -> None:
     # bf16 has about three decimal digits, so agreement with the
     # float32 answer is loose by construction; what is checked is that
     # the reduction happened in the wider type rather than in bf16.
-    _, wide_conf = top_confidence(wide)
+    wide_conf = picked_confidence(wide, wide.argmax(dim=-1))
     assert torch.allclose(conf, wide_conf, atol=2e-2)
 
 
@@ -335,3 +342,183 @@ def test_a_mismatched_held_count_is_a_programmer_error() -> None:
     """One held token per position, for the same reason as a pick."""
     with pytest.raises(AssertionError):
         top_candidates(_logits(8), CANDIDATES, _held(4, seed=47))
+
+
+# -- the draft pass: every DiffusionGemma signal off one walk --
+
+
+def _float64_oracle(
+    logits: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """The distribution and its entropy in double precision, which is
+    what both float32 forms are compared against."""
+    wide = logits.double()
+    probs = torch.softmax(wide, dim=-1)
+    entropy = -(probs * torch.log_softmax(wide, dim=-1)).sum(dim=-1)
+    return probs, entropy
+
+
+@pytest.mark.parametrize(
+    "positions",
+    [
+        1,
+        DRAFT_CHUNK_POSITIONS - 1,
+        DRAFT_CHUNK_POSITIONS,
+        DRAFT_CHUNK_POSITIONS + 1,
+        LOGIT_CHUNK_POSITIONS * 2 + 7,
+    ],
+)
+def test_the_draft_pass_matches_the_softmax_it_avoids(
+    positions: int,
+) -> None:
+    """Every field against a double-precision softmax, at widths that
+    cross the draft pass's own chunk boundaries."""
+    logits = _logits(positions, seed=53)
+    probs, want_entropy = _float64_oracle(logits)
+    want_probs, want_ids = torch.topk(probs, CANDIDATES, dim=-1)
+
+    signals = draft_signals(logits, CANDIDATES)
+
+    assert torch.equal(signals.candidate_ids, want_ids)
+    assert torch.equal(signals.ids, want_ids[:, 0])
+    assert torch.allclose(
+        signals.candidate_probs.double(), want_probs, atol=TOLERANCE
+    )
+    assert torch.allclose(
+        signals.confidence.double(), want_probs[:, 0], atol=TOLERANCE
+    )
+    assert torch.allclose(
+        signals.entropy.double(), want_entropy, atol=TOLERANCE
+    )
+
+
+def test_the_draft_entropy_is_the_quantity_the_others_read() -> None:
+    """One signal, two implementations: the draft pass and
+    `entropy_nats` must not disagree about what a run's entropy is."""
+    logits = _logits(64, seed=59)
+
+    signals = draft_signals(logits, 1)
+
+    assert torch.allclose(
+        signals.entropy, entropy_nats(logits), atol=1e-4
+    )
+
+
+def test_the_draft_pass_widens_bfloat16() -> None:
+    """What DiffusionGemma hands over: bf16, on the host. The signals
+    come back in float32, close to the float32 answer."""
+    wide = _logits(48, seed=61)
+    narrow = wide.to(torch.bfloat16)
+
+    signals = draft_signals(narrow, CANDIDATES)
+
+    assert signals.confidence.dtype == torch.float32
+    assert signals.entropy.dtype == torch.float32
+    assert signals.candidate_probs.dtype == torch.float32
+    exact = draft_signals(wide, CANDIDATES)
+    assert torch.allclose(
+        signals.confidence, exact.confidence, atol=2e-2
+    )
+
+
+def test_a_draft_shows_its_first_candidate_even_at_a_tie() -> None:
+    """Where logits tie exactly, ``argmax`` and ``topk`` choose
+    differently: on the CPU this three-way tie comes back from
+    ``topk`` as 301, 402, 17, and ``argmax`` says 17. bf16 makes ties
+    common at DiffusionGemma's vocabulary. The shown token comes from
+    the same call as the list, so the marked row is always the first,
+    and it is an argmax."""
+    tied = [17, 301, 402]
+    logits = torch.zeros(3, VOCAB)
+    logits[:, tied] = 6.0
+
+    signals = draft_signals(logits, CANDIDATES)
+
+    assert torch.equal(signals.ids, signals.candidate_ids[:, 0])
+    shown = logits.gather(-1, signals.ids.unsqueeze(-1)).squeeze(-1)
+    assert bool((shown == 6.0).all())
+    listed = signals.candidate_ids[:, :3].sort(dim=-1).values
+    assert bool((listed == torch.tensor(tied)).all())
+
+
+def test_one_candidate_is_enough_without_alternatives() -> None:
+    """A run with Alternatives off asks for one, which is still the
+    likeliest token and its probability."""
+    logits = _logits(20, seed=67)
+
+    signals = draft_signals(logits, 1)
+
+    assert signals.candidate_ids.shape == (20, 1)
+    assert torch.equal(signals.ids, signals.candidate_ids[:, 0])
+    assert torch.allclose(
+        signals.confidence, signals.candidate_probs[:, 0]
+    )
+
+
+def test_draft_candidates_agree_with_the_general_reduction() -> None:
+    """The shortcut that skips counting: a draft holds its own
+    argmax, so its rank is 1 and its probability the first
+    candidate's, exactly what `top_candidates` finds by counting."""
+    logits = _logits(40, seed=71)
+    signals = draft_signals(logits, CANDIDATES)
+
+    got = draft_candidates(signals)
+    want = top_candidates(logits, CANDIDATES, signals.ids)
+
+    assert torch.equal(got.ids, want.ids)
+    assert torch.allclose(got.probs, want.probs, atol=TOLERANCE)
+    assert torch.allclose(
+        got.held_probs, want.held_probs, atol=TOLERANCE
+    )
+    assert torch.equal(got.held_ranks, want.held_ranks)
+    assert bool((got.held_ranks == 1).all())
+
+
+def test_the_draft_extremes_read_as_themselves() -> None:
+    """Hand-computable ends: a flat row is confidence 1/V at ln V
+    nats, a decided one confidence 1 at zero, never below it."""
+    flat = draft_signals(torch.zeros(2, VOCAB), 1)
+    decided = torch.full((2, VOCAB), -100.0)
+    decided[:, 3] = 100.0
+    sure = draft_signals(decided, 1)
+
+    floor = torch.full((2,), 1 / VOCAB)
+    assert torch.allclose(flat.confidence, floor)
+    assert torch.allclose(
+        flat.entropy, torch.full((2,), math.log(VOCAB)), atol=1e-5
+    )
+    assert torch.allclose(sure.confidence, torch.ones(2))
+    assert bool((sure.entropy >= 0.0).all())
+    assert float(sure.entropy.max()) < 1e-5
+
+
+def test_a_draft_entropy_never_shows_below_zero() -> None:
+    """A peaked row far from zero, where float32 spacing is coarse:
+    the arithmetic lands at -0.00018 nats before the clamp, and a
+    negative entropy would draw outside the colour scale."""
+    torch.manual_seed(0)
+    logits = torch.randn(1, VOCAB) * 0.3 + 1000.0
+    logits[0, 7] = 1020.0
+
+    entropy = draft_signals(logits, 1).entropy
+
+    assert float(entropy[0]) >= 0.0
+
+
+def test_the_draft_pass_leaves_its_input_alone() -> None:
+    """float32 logits are reduced without being copied, so an
+    in-place step on them would write into the caller's tensor."""
+    logits = _logits(16, seed=73)
+    before = logits.clone()
+
+    draft_signals(logits, CANDIDATES)
+
+    assert torch.equal(logits, before)
+
+
+@pytest.mark.parametrize("k", [0, VOCAB + 1])
+def test_the_draft_pass_refuses_k_outside_the_vocabulary(
+    k: int,
+) -> None:
+    with pytest.raises(AssertionError):
+        draft_signals(_logits(4), k)

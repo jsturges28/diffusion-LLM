@@ -20,6 +20,12 @@ Passing proves the rewrite is arithmetically identical to the softmax
 it replaced, that chunking does not lose the tail when the canvas
 does not divide evenly, and that the result is a probability rather
 than something that merely correlates with one.
+
+It now reads entropy and candidates in the same pass (see
+`logit_signals.draft_signals`), because these logits arrive on the
+host. One thing is stated more carefully than before: where two
+logits tie exactly, the shown token is *an* argmax, whichever the
+pass lists first, rather than the lowest-numbered one.
 """
 
 from __future__ import annotations
@@ -48,6 +54,18 @@ def _reference(
     return ids.tolist(), conf.tolist()
 
 
+def _shown_are_argmaxes(
+    logits: torch.Tensor, ids: list[int]
+) -> bool:
+    """Whether every shown token holds its row's greatest logit. A
+    tie makes more than one token the argmax, and which one the pass
+    names first is not a promise."""
+    wide = logits.float()
+    index = torch.tensor(ids).unsqueeze(-1)
+    shown = wide.gather(-1, index).squeeze(-1)
+    return bool((shown == wide.max(dim=-1).values).all())
+
+
 def _logits(positions: int, *, seed: int = 0) -> torch.Tensor:
     torch.manual_seed(seed)
     # bf16 because that is what the checkpoint hands over, and the
@@ -58,18 +76,19 @@ def _logits(positions: int, *, seed: int = 0) -> torch.Tensor:
 # -- the same answer as before --
 
 
-def test_the_argmax_is_unchanged() -> None:
+def test_the_shown_token_is_an_argmax() -> None:
     logits = _logits(64)
 
-    ids, _conf, _spread = FrameQueueStreamer._from_logits(logits)
+    ids = FrameQueueStreamer._from_logits(logits).ids.tolist()
 
-    assert ids == _reference(logits)[0]
+    assert len(ids) == 64
+    assert _shown_are_argmaxes(logits, ids)
 
 
 def test_the_probability_is_unchanged() -> None:
     logits = _logits(64)
 
-    _ids, conf, _spread = FrameQueueStreamer._from_logits(logits)
+    conf = FrameQueueStreamer._from_logits(logits).confidence.tolist()
 
     expected = _reference(logits)[1]
     # strict, so a chunking bug that returned the wrong number of
@@ -85,20 +104,21 @@ def test_a_ragged_tail_is_not_dropped() -> None:
     positions = LOGIT_CHUNK_POSITIONS * 2 + 7
     logits = _logits(positions, seed=3)
 
-    ids, conf, _spread = FrameQueueStreamer._from_logits(logits)
+    signals = FrameQueueStreamer._from_logits(logits)
+    ids = signals.ids.tolist()
 
     assert len(ids) == positions
-    assert len(conf) == positions
-    assert ids == _reference(logits)[0]
+    assert len(signals.confidence) == positions
+    assert _shown_are_argmaxes(logits, ids)
 
 
 def test_a_canvas_smaller_than_one_chunk_works() -> None:
     logits = _logits(3, seed=5)
 
-    ids, conf, _spread = FrameQueueStreamer._from_logits(logits)
+    ids = FrameQueueStreamer._from_logits(logits).ids.tolist()
 
     assert len(ids) == 3
-    assert ids == _reference(logits)[0]
+    assert _shown_are_argmaxes(logits, ids)
 
 
 def test_a_batched_leading_dimension_is_squeezed() -> None:
@@ -106,19 +126,21 @@ def test_a_batched_leading_dimension_is_squeezed() -> None:
     built from one canvas."""
     logits = _logits(16, seed=7)
 
-    flat = FrameQueueStreamer._from_logits(logits)[0]
+    flat = FrameQueueStreamer._from_logits(logits).ids
     batched = FrameQueueStreamer._from_logits(
         logits.unsqueeze(0)
-    )[0]
+    ).ids
 
-    assert flat == batched
+    assert torch.equal(flat, batched)
 
 
 # -- and it is a probability --
 
 
 def test_every_value_is_a_probability() -> None:
-    conf = FrameQueueStreamer._from_logits(_logits(48, seed=11))[1]
+    conf = FrameQueueStreamer._from_logits(
+        _logits(48, seed=11)
+    ).confidence.tolist()
 
     for value in conf:
         assert 0.0 < value <= 1.0, value
@@ -131,7 +153,7 @@ def test_a_decided_position_reads_near_one() -> None:
     logits = torch.zeros(4, VOCAB)
     logits[:, 2] = 30.0
 
-    conf = FrameQueueStreamer._from_logits(logits)[1]
+    conf = FrameQueueStreamer._from_logits(logits).confidence
 
     for value in conf:
         assert value > 0.99, value
@@ -143,7 +165,7 @@ def test_a_uniform_position_reads_near_the_floor() -> None:
     can be."""
     logits = torch.zeros(4, VOCAB)
 
-    conf = FrameQueueStreamer._from_logits(logits)[1]
+    conf = FrameQueueStreamer._from_logits(logits).confidence
 
     for value in conf:
         assert abs(value - 1.0 / VOCAB) < 1e-6, value

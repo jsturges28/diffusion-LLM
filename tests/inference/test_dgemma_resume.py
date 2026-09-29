@@ -362,6 +362,25 @@ def test_an_unsettled_token_carries_confidence_from_logits(
     assert all("c" in tok for tok in tokens)
 
 
+def test_a_draft_carries_the_entropy_of_its_logits() -> None:
+    """The spread beside the confidence, off the same pass. They are
+    different numbers, so a frame carrying one in the other's place
+    would show a model sure of what it was torn over. Frames round
+    both to four places, which is the tolerance."""
+    streamer, out_queue = _bare_streamer(takes_logits=True)
+    streamer.put_draft(logits=_logits())
+
+    tokens = out_queue.get()["tokens"]
+    probs = torch.softmax(_logits()[0].double(), dim=-1)
+    entropy = (-(probs * probs.log()).sum(dim=-1)).tolist()
+    confidence = probs.max(dim=-1).values.tolist()
+    for token, want_e, want_c in zip(
+        tokens, entropy, confidence, strict=True
+    ):
+        assert abs(token["e"] - want_e) < 1e-4, token
+        assert abs(token["c"] - want_c) < 1e-4, token
+
+
 def test_a_frame_without_logits_records_no_confidence() -> None:
     """Nothing was measured, so nothing is claimed.
 

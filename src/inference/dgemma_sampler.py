@@ -44,9 +44,9 @@ from src.inference.logit_signals import (
     LOGIT_CHUNK_POSITIONS as _LOGIT_CHUNK_POSITIONS,
 )
 from src.inference.logit_signals import (
-    entropy_nats,
-    top_candidates,
-    top_confidence,
+    DraftSignals,
+    draft_candidates,
+    draft_signals,
 )
 from src.inference.frame_queue import (
     FrameQueueCancelled,
@@ -143,35 +143,27 @@ class FrameQueueStreamer(BaseStreamer):
 
     @staticmethod
     def _from_logits(
-        logits: torch.Tensor,
-    ) -> tuple[List[int], List[float], List[float]]:
-        """The argmax, its probability, and the spread, cheaply.
+        logits: torch.Tensor, k: int = 1
+    ) -> DraftSignals:
+        """The argmax, its probability, the spread and the k likeliest
+        tokens, in one pass.
 
         A softmax over this vocabulary is the expensive way to ask a
         cheap question. At 256 positions by roughly 262K entries the
         probability tensor alone is about 256 MiB in float32, and the
         cast that precedes it copies, so the old form peaked near
         half a gigabyte per denoising step to read one number per
-        position.
+        position. Processing a slice of positions at a time bounds
+        what exists at once to one chunk.
 
-        ``exp(max - logsumexp)`` is the same quantity from two
-        reductions, in the numerically stable form, and processing a
-        slice of positions at a time bounds what exists at once to
-        one chunk.
-
-        Entropy comes off the same bounded walk, which is the
-        generalisation that note anticipated. It lives in
-        `logit_signals` now, shared with LLaDA, so the two diffusion
-        models cannot disagree about what a signal means or about how
-        much transient memory reading one is allowed to hold.
+        One pass for all of it, because transformers hands these
+        logits over already copied to the host, so every pass is CPU
+        time inside the step. Reading confidence, entropy and
+        candidates separately cost about 440 ms a draft, more than the
+        capture of candidates was worth; see ``draft_signals``.
         """
-        tensor = FrameQueueStreamer._canvas_logits(logits)
-        ids, conf = top_confidence(tensor)
-        spread = entropy_nats(tensor)
-        return (
-            ids.detach().to("cpu").tolist(),
-            conf.detach().to("cpu").tolist(),
-            spread.detach().to("cpu").tolist(),
+        return draft_signals(
+            FrameQueueStreamer._canvas_logits(logits), k
         )
 
     @staticmethod
@@ -182,26 +174,29 @@ class FrameQueueStreamer(BaseStreamer):
             tensor = tensor[0]
         return tensor
 
+    def _candidate_count(self) -> int:
+        """Candidates to read per position: five for a capture, and
+        one otherwise, which is still the likeliest token."""
+        if self.capture is None:
+            return 1
+        return CANDIDATES_PER_POSITION
+
     def _draft_candidates(
-        self, logits: torch.Tensor, ids: List[int]
+        self, signals: DraftSignals
     ) -> Optional[StepCandidates]:
         """This draft's candidates, when the run captures them.
 
-        Off the same processed, temperature-scheduled logits as the
-        frame's confidence and entropy, so the popover and the
-        heatmap describe one distribution. The held token is the
-        draft's argmax, which is what the frame shows, so it ranks
-        first; passed as the frame's own ids so the marked row is the
-        token on screen even where two logits tie.
+        Off the same pass over the processed, temperature-scheduled
+        logits as the frame's confidence and entropy, so the popover
+        and the heatmap describe one distribution. The held token is
+        the draft's argmax, which is what the frame shows and the
+        first candidate, so it ranks first even where logits tie.
         """
         if self.capture is None:
             return None
-        tensor = self._canvas_logits(logits)
-        held = torch.tensor(
-            ids, dtype=torch.long, device=tensor.device
+        return step_candidates(
+            self._index, signals.ids, draft_candidates(signals)
         )
-        found = top_candidates(tensor, CANDIDATES_PER_POSITION, held)
-        return step_candidates(self._index, held, found)
 
     def offer_forwarded(self, frame: Dict[str, Any]) -> None:
         """Hand a frame's candidates to the capture as the frame
@@ -404,13 +399,15 @@ class FrameQueueStreamer(BaseStreamer):
         **kwargs: Any,
     ) -> None:
         if logits is not None:
-            ids, conf, spread = self._from_logits(logits)
+            signals = self._from_logits(
+                logits, self._candidate_count()
+            )
             self._emit(
-                ids,
+                signals.ids.tolist(),
                 committed=False,
-                conf_override=conf,
-                entropy=spread,
-                candidates=self._draft_candidates(logits, ids),
+                conf_override=signals.confidence.tolist(),
+                entropy=signals.entropy.tolist(),
+                candidates=self._draft_candidates(signals),
             )
         elif value is not None:
             self._emit(

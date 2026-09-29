@@ -19,6 +19,12 @@ DiffusionGemma proved the technique first on its own confidence read;
 LLaDA needs the same thing for a picked token rather than the argmax,
 and both now need entropy. A module of its own is what stops the
 constant below being written twice and drifting.
+
+The two read differently. LLaDA's logits are on the card, where a
+pass is cheap, so it calls one reduction per signal. DiffusionGemma's
+arrive on the host, copied there by transformers before the streamer
+sees them, so every pass is paid in CPU time; ``draft_signals`` reads
+all of its signals off one.
 """
 
 from __future__ import annotations
@@ -37,33 +43,17 @@ LOGIT_CHUNK_POSITIONS = 32
 
 assert LOGIT_CHUNK_POSITIONS > 0, "a chunk must hold a position"
 
+# Positions per chunk for the draft pass, which runs on the host,
+# where a chunk that stays in cache is what makes it fast: at a
+# draft's 256 by 262,144 shape in bf16, 8 rows (8 MiB of float32) took
+# about 55 ms on the maintainer's machine, against 66 at 16 rows and
+# 98 at the 32 above. Those suit the card, where a chunk is a round of
+# kernel launches.
+DRAFT_CHUNK_POSITIONS = 8
 
-def top_confidence(
-    logits: torch.Tensor,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """The likeliest token per position, and its probability.
-
-    ``logits`` is (positions, vocabulary). Returns (ids, probability),
-    both (positions,), on the input's device.
-
-    ``exp(max - logsumexp)`` is ``softmax(...).max()`` from two
-    reductions rather than a materialized distribution.
-    """
-    assert logits.dim() == 2, "expected (positions, vocabulary)"
-    id_chunks = []
-    conf_chunks = []
-    for chunk in torch.split(
-        logits, LOGIT_CHUNK_POSITIONS, dim=0
-    ):
-        wide = _widen(chunk)
-        top, top_ids = wide.max(dim=-1)
-        spread = torch.logsumexp(wide, dim=-1)
-        id_chunks.append(top_ids)
-        conf_chunks.append(torch.exp(top - spread))
-    return (
-        torch.cat(id_chunks, dim=0),
-        torch.cat(conf_chunks, dim=0),
-    )
+assert 0 < DRAFT_CHUNK_POSITIONS <= LOGIT_CHUNK_POSITIONS, (
+    "the draft pass may only shrink the transient"
+)
 
 
 def picked_confidence(
@@ -71,7 +61,7 @@ def picked_confidence(
 ) -> torch.Tensor:
     """The probability of an already-chosen token per position.
 
-    Separate from ``top_confidence`` because the choice is not always
+    Separate from ``draft_signals`` because the choice is not always
     the argmax. LLaDA picks from Gumbel-noised logits and then reports
     the clean probability of what it picked, so with a temperature the
     pick and the maximum part company, and reading the maximum would
@@ -173,6 +163,120 @@ def top_candidates(
         parts[2].append(torch.exp(taken - spread).squeeze(-1))
         parts[3].append((wide > taken).sum(dim=-1) + 1)
     return Candidates(*(torch.cat(part, dim=0) for part in parts))
+
+
+class DraftSignals(NamedTuple):
+    """Everything a DiffusionGemma draft reads off its logits."""
+
+    ids: torch.Tensor  # (positions,), the argmax the draft shows
+    confidence: torch.Tensor  # (positions,), its probability
+    entropy: torch.Tensor  # (positions,), in nats
+    candidate_ids: torch.Tensor  # (positions, k), likeliest first
+    candidate_probs: torch.Tensor  # (positions, k)
+
+
+def draft_signals(logits: torch.Tensor, k: int) -> DraftSignals:
+    """Confidence, entropy and the k likeliest tokens, in one pass.
+
+    For a model whose draft shows its argmax. Reading the three
+    separately widened and exponentiated every logit three times,
+    which on the host cost more than the capture of candidates it
+    was paying for; here each chunk is widened once and exponentiated
+    once, and the rest is one ``topk`` and one dot product per row.
+    ``k`` is 1 when no candidates are wanted, which still leaves the
+    likeliest token and its probability.
+
+    ``ids`` is the first of the top k, so the token a frame shows is
+    always its first candidate, even where two logits tie exactly.
+
+    The logits must be finite, as DiffusionGemma's temperature
+    schedule leaves them: an ``-inf`` would make the entropy NaN, as
+    it would in ``entropy_nats``. Not checked per element, because
+    that would be a pass over every logit, the cost this removes.
+    """
+    assert logits.dim() == 2, "expected (positions, vocabulary)"
+    assert logits.shape[0] > 0, "a draft has positions"
+    assert 0 < k <= logits.shape[1], "k within the vocabulary"
+    rows = min(DRAFT_CHUNK_POSITIONS, logits.shape[0])
+    wide = torch.empty(
+        (rows, logits.shape[1]),
+        dtype=torch.float32,
+        device=logits.device,
+    )
+    weights = torch.empty_like(wide)
+    chunks = []
+    for chunk in torch.split(logits, DRAFT_CHUNK_POSITIONS, dim=0):
+        count = chunk.shape[0]
+        chunks.append(
+            _draft_chunk(chunk, k, wide[:count], weights[:count])
+        )
+    fields = zip(*chunks, strict=True)
+    return DraftSignals(
+        *(torch.cat(field, dim=0) for field in fields)
+    )
+
+
+def draft_candidates(signals: DraftSignals) -> Candidates:
+    """A draft's candidates, with the token it shows as the held one.
+
+    That token is the first candidate, so it needs no count over the
+    vocabulary to be ranked: it ranks first, at the first candidate's
+    probability.
+    """
+    assert signals.candidate_ids.dim() == 2, "a set per position"
+    assert signals.candidate_ids.shape[0] == signals.ids.shape[0]
+    return Candidates(
+        ids=signals.candidate_ids,
+        probs=signals.candidate_probs,
+        held_probs=signals.candidate_probs[:, 0],
+        held_ranks=torch.ones_like(signals.ids),
+    )
+
+
+def _draft_chunk(
+    chunk: torch.Tensor,
+    k: int,
+    wide: torch.Tensor,
+    weights: torch.Tensor,
+) -> DraftSignals:
+    """One chunk's signals, worked in two float32 buffers the caller
+    reuses from chunk to chunk.
+
+    Reused because allocating them per chunk made the pass hostage to
+    the allocator: at a draft's shape the same arithmetic took 39 to
+    53 ms with the buffers reused and 111 to 149 ms without, as freed
+    memory went back to the system and came back faulted in. Copying
+    into ``wide`` is also the widening, and nothing is written to the
+    caller's logits. Nothing returned is a view of either buffer, or
+    the next chunk would overwrite it.
+
+    Entropy as ``peak + log(total) - E[z]``, where ``total`` sums
+    ``exp(z - peak)`` and the expectation is a dot product of those
+    weights with the logits: the quantity ``entropy_nats`` reads, with
+    one exponential where that takes three. Against float64 at a
+    draft's shape it is within 3e-6 nats, where ``entropy_nats``
+    drifts by 3e-4.
+    """
+    assert wide.shape == chunk.shape, "a buffer row per position"
+    assert weights.shape == chunk.shape, "a buffer row per position"
+    wide.copy_(chunk)
+    top, top_ids = torch.topk(
+        wide, k, dim=-1, largest=True, sorted=True
+    )
+    peak = top[:, :1]
+    torch.sub(wide, peak, out=weights)
+    weights.exp_()
+    total = weights.sum(dim=-1, keepdim=True)
+    log_total = torch.log(total)
+    dot = torch.linalg.vecdot(weights, wide, dim=-1).unsqueeze(-1)
+    entropy = peak + log_total - dot / total
+    return DraftSignals(
+        ids=top_ids[:, 0],
+        confidence=total.reciprocal().squeeze(-1),
+        entropy=entropy.squeeze(-1).clamp_min(0.0),
+        candidate_ids=top_ids,
+        candidate_probs=torch.exp(top - peak - log_total),
+    )
 
 
 def _widen(chunk: torch.Tensor) -> torch.Tensor:
