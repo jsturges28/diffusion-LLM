@@ -1150,9 +1150,6 @@ blank.
 
 - The stack and the flicker below are not built. Both are displays over
   this capture and need nothing new from the worker.
-- An edited run's pre-edit layer has no candidates. Only the live stream is
-  captured, and the popover stays off that layer rather than showing the
-  branch's candidates over the original's tokens.
 - A LLaDA run stopped partway has none. Its terminal frame is the worker's,
   written after the sampler has returned, so nothing is left to flush the
   capture. DiffusionGemma's streamer outlives the stop, so its stopped runs
@@ -1191,6 +1188,28 @@ identical text: the capture now costs nothing measurable, and a step with
 it is faster than one without it was before. LLaDA keeps its separate
 reductions, which run on the card at about 2.4 ms a step and whose held
 token is not always its argmax.
+
+**The pre-edit run's candidates, kept on 2026-09-29.** An edited run's
+popover pages between **Original** and **Edited** from the frame the edit
+branched at, the earliest `frame_index` among its edits, opening on the
+side the crossfade favours, as the autoregressive popover already did by
+position. Before that frame both runs hold the same frames, so there is one
+set and no pager. Each page reads its own run at the frame its own layer
+shows, so the Original page clamps to the original's last frame past its
+end, as the layer does. Where the favoured side has nothing at that frame
+(a **Run to Here** segment, or a run saved before these were kept) the
+popover stays closed rather than show the other side's, because a list
+whose marked row names a token that is not under the pointer reads as a
+claim about that token. The pre-edit store is frozen at the run's first
+`done`, beside `originalRunCapture`, and is the live store itself until an
+edit replaces it. That identity is what keeps the session snapshot from
+writing one store twice: the pre-edit one is written only once it is a
+store of its own, and gives way to the storage quota before the live one
+does. Saved as `original_candidates.json`, an object sidecar held to
+the same rules as `candidates.json`. One fact a future change has to keep:
+the Original page looks its sets up on canvas 0, which holds because Edit
+Frames is off for a run that chains canvases; lifting that would need the
+original's canvas index kept as well.
 
 **Two renderings, one capture.** Scoped 2026-08-30. The stack above encodes
 probability share as stacked opacity, which is spatial. The alternative is to

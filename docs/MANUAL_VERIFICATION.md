@@ -224,17 +224,15 @@ kept when these were written:
 - **341**: half done by an agent on 2026-09-28: the step-time cost,
   measured on the card and recorded in the item. Checking a run with
   Alternatives off in the app is **outstanding**.
-- **342 to 344**: confirmed on 2026-09-29. In 344 the popover stood
-  down on the crossfade's Original side as designed; paging it to the
-  original run's candidates is planned instead.
-- **345**: **outstanding**. It failed on 2026-09-29 with no popover at
-  all, on either side of the crossfade: the candidate popover sat
-  outside the run detail modal, which since 2026-09-15 has been a
-  native dialog painting above everything outside it, so every run's
-  popover opened unseen. Fixed that day; re-run it.
-- **346**: confirmed on 2026-09-29.
-- **347**: **outstanding**, an autoregressive branch's crossfade and
-  diff, restored on 2026-09-29.
+- **342 to 347**: confirmed on 2026-09-29. In 344 the popover stood
+  down on the crossfade's Original side, as designed then; it has
+  paged to the original run's candidates since, which 348 covers. 345
+  passed on its second run that day. The first found no popover at
+  all, because the popover sat outside the run detail modal, which
+  since 2026-09-15 has been a native dialog painting above everything
+  outside it.
+- **348 to 350**: **outstanding**, the diffusion popover's Original
+  and Edited pages, added on 2026-09-29.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -3908,9 +3906,10 @@ records (one default LLaDA run); longer runs keep every few steps.
     resume to the end. Frames before the edit keep the original run's
     candidates; the edit's first frame, the remasked canvas, shows
     none; the frames after it show the resumed run's. Drag the
-    crossfade toward **Original**: the popover stops opening. Press
-    **Retry**: the original candidates are back. Then take a guided
-    **Run to Here**: its frames show no popover.
+    crossfade toward **Original**: the popover turns to the original
+    run's candidates instead, which 348 covers. Press **Retry**: the
+    original candidates are back. Then take a guided **Run to Here**:
+    its frames show no popover.
 
 345. **Analytics reads the same popover off the saved run.** Open the
     run from 340 in Analytics and scrub the token overlay: the
@@ -3944,3 +3943,44 @@ token arrays it never has.
     runs with its own two sliders, and `Diverged N/total` counts from
     the substitution on. Hovering a token on the Original side reads
     the original run's token in the metrics strip.
+
+## An edited diffusion run pages between its two runs
+
+From 2026-09-29 an edited diffusion run's candidate popover turns
+between **Original** and **Edited**, as an autoregressive branch's
+already did. The pre-edit run's candidates are kept when it first
+finishes and saved beside the edited run's as
+`original_candidates.json`.
+
+348. **An edited LLaDA run pages between its two runs.** Generate
+    with LLaDA at its defaults. Use **Edit Frames** to remask a few
+    tokens at a frame partway through, **Resume to End**, and
+    **Confirm**. With the crossfade at **Edited**, scrub past the edit
+    frame and hover a token the edit changed: the heading reads
+    **Position N: Edited**, then **Step N** and a small ‹ › pager, and
+    the rows are the resumed run's. Click ‹: the heading reads
+    **Original**, the rows are what the original run weighed at that
+    frame, and the marked row is the token the original held there.
+    Drag the crossfade past the middle toward **Original** and hover
+    again: it opens on the Original page. On a frame before the edit
+    the heading reads **Position N: candidates**, with no pager. On
+    the edit frame itself, the remasked canvas, the edited run has no
+    candidates yet: at **Edited** the popover stays closed, and at
+    **Original** it opens with no pager.
+
+349. **Analytics pages the saved run the same way.** Save the run
+    from 348 and find `original_candidates.json` beside
+    `candidates.json` in its folder. Open it in Analytics and scrub
+    the token overlay past the edit frame: the popover opens on the
+    page the detail modal's crossfade favours and turns to the other,
+    and before the edit frame it shows one set with no pager. Open an
+    edited diffusion run saved before 2026-09-29 as well: at
+    **Original** no popover opens, and at **Edited** it opens with no
+    pager.
+
+350. **The pages survive a trip away and back.** Repeat 348 up to
+    **Confirm**, then go to Analytics without saving and come back:
+    past the edit frame both pages are still there. Save now, and the
+    folder has both files. Then generate a new run and edit it the
+    same way: its Original page shows the new run's own candidates,
+    never the previous run's.
