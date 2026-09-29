@@ -26,7 +26,9 @@ from typing import (
 
 import pytest
 
-from src.backends import smollm3_worker
+# The handlers live in the shared append-only shell, so that is where
+# the sampler entry points they call are replaced.
+from src.backends import append_only_backend
 from src.backends.protocol import (
     ERROR_SCOPE_REQUEST,
     ERROR_STALE_RUN,
@@ -173,7 +175,7 @@ def _install_branch_stub(
         yield {"type": "done", "final_text": "she flew"}
 
     monkeypatch.setattr(
-        smollm3_worker, "streaming_substitute", fake_substitute
+        append_only_backend, "streaming_substitute", fake_substitute
     )
 
 
@@ -527,7 +529,7 @@ def _install_probe_stub(
         }
 
     monkeypatch.setattr(
-        smollm3_worker, "probe_token", fake_probe
+        append_only_backend, "probe_token", fake_probe
     )
 
 
