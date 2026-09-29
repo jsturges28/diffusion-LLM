@@ -220,6 +220,9 @@ kept when these were written:
 - **337 to 339**: confirmed on 2026-09-28: the completion label and
   its "?", saving after browsing the history, and deleting a prompt
   from it.
+- **340 to 346**: **outstanding**, the diffusion candidate popover on
+  both models, live and in Analytics, including the step-time cost
+  that 341 asks to be written down.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -3827,3 +3830,65 @@ sentence boundaries that raise both.
     prompt: browsing ends, what you had typed before opening the
     history is back, and the history button disappears. Restart the
     app: the deleted prompts stay deleted.
+
+## Diffusion candidates, following the scrubber
+
+A diffusion position is re-decided at every step, so its candidate
+popover answers for the frame on screen. Each run captures the five
+likeliest tokens per position per step, within a budget of 102,400
+records (one default LLaDA run); longer runs keep every few steps.
+
+340. **A default LLaDA run's candidates narrow as it settles.** Load
+    LLaDA with its defaults (**Alternatives** is on) and turn on
+    **Reveal the mask candidate** in Settings. Generate, then scrub to
+    an early frame and hover a masked position: the popover's heading
+    reads **Step N** for that frame, it lists five candidates, and the
+    marked row is the guess the canvas shows. Scrub forward a frame at
+    a time: the list changes under the same token, and the leading
+    candidate's share grows as the position settles. Hover a settled
+    token: its own row is marked. Frame 0 shows no popover. Save, and
+    find `candidates.json` in the run's folder at between 4 and 5 MiB.
+
+341. **What the capture costs, written down.** Run the same prompt
+    with a fixed **Seed** twice, once with **Alternatives** off, and
+    note both elapsed times from the footer here. The run with it off
+    shows no popover on hover and saves no `candidates.json`.
+
+342. **A long run keeps every few steps and says so.** With
+    **Experimental** on, run LLaDA at **Gen Length** 512 and **Steps**
+    256 (**Block Length** 512). Scrubbing, some frames read **Step
+    N** and the ones between them **As of step N**, naming the latest
+    captured step before them, spaced evenly; the last frame reads
+    **Step 256**. The saved `candidates.json` stays between 4 and 5
+    MiB, the same budget as a default run, where keeping every step
+    would have written about 26.
+
+343. **DiffusionGemma, over more than one canvas.** Run DiffusionGemma
+    with **Max Tokens** 512, so it chains two canvases. On a draft
+    frame the popover reads **Step N**; on the frame that commits a
+    canvas it reads **As of step N**, showing that canvas's last
+    draft. On the second canvas's first frames it never shows the
+    first canvas's candidates. Then stop a run partway: the frames it
+    streamed keep their popover.
+
+344. **An edit gets its own candidates, never the replaced run's.**
+    On a LLaDA run, use **Edit Frames** to remask a few tokens and
+    resume to the end. Frames before the edit keep the original run's
+    candidates; the edit's first frame, the remasked canvas, shows
+    none; the frames after it show the resumed run's. Drag the
+    crossfade toward **Original**: the popover stops opening. Press
+    **Retry**: the original candidates are back. Then take a guided
+    **Run to Here**: its frames show no popover.
+
+345. **Analytics reads the same popover off the saved run.** Open the
+    run from 340 in Analytics and scrub the token overlay: the
+    popover follows that scrubber with the same **Step N** and **As
+    of step N** headings, and the same five candidates, as the
+    generator showed at each frame. A diffusion run saved before this
+    change shows no popover, as before.
+
+346. **The candidates survive a trip away and back.** After a default
+    LLaDA run, go to Analytics without saving and come back: hovering
+    still opens the popover at each frame. Save now, and the run's
+    folder has `candidates.json`. Reload the page instead of going to
+    Analytics, and the same holds.

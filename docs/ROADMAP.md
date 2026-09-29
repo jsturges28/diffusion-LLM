@@ -221,20 +221,22 @@ since shipped is noted on the item rather than left for a reader to infer.
    confidence-driven mask opacity in the XAI backlog, not applied the
    first time: check a signal against its own distribution before
    choosing a ramp for it.
-2. **Entropy and top-k for the diffusion models.** The entropy half **shipped
-   with `ROADMAP-03`**, in `a26b8c3`, `455b2ef` and `ffed5b6`. Top-k is still
-   open and was left downstream on purpose, with a budget field reserved for it.
-   Kept here because the shape argument below is why the entropy that shipped
-   reads the way it does, and top-k will meet the same argument.
+2. **Entropy and top-k for the diffusion models.** Both halves have
+   **shipped**: entropy with `ROADMAP-03`, in `a26b8c3`, `455b2ef` and
+   `ffed5b6`, and top-k on 2026-09-28 as the candidate popover on LLaDA and
+   DiffusionGemma runs, which follows the scrubber. Kept here because the
+   shape argument below is why both read the way they do.
 
    The AR signals generalize, but the shape does not: a diffusion position is
    re-decided every step, so entropy becomes a per-position trajectory over
    steps rather than the single value the AR case yields. That is why a signal
    now declares its axes and unit rather than being assumed per-position, and
    why the views that read it follow the scrubber for diffusion runs and stay
-   fixed for autoregressive ones. What top-k still needs a decision on is
-   payload, since a trajectory per position is O(n·steps), and whether it rides
-   DiffusionGemma's existing `entropy_signal` toggle.
+   fixed for autoregressive ones. Top-k's payload, a trajectory per position
+   at O(n·steps), was settled by a record budget and a stride, recorded under
+   layer three of the mask display below. It rides an `alternatives` parameter
+   of its own on both models: the `entropy_signal` toggle DiffusionGemma once
+   had went when reading entropy stopped costing a canvas-sized softmax.
 3. **An elapsed readout that ticks on a clock.** Accepted on 2026-08-28
    and **shipped the same day**, in `52b0968`. Kept here rather than
    deleted because the wrinkle below is the reason it works the way it
@@ -393,7 +395,8 @@ cleanly onto AR: frame N is the sequence after N generated tokens, every token
   described (that shape belongs to diffusion, where a position is re-decided
   each step).
 - **Top-k alternatives**, opt-in (`alternatives` BOOL `ParamSpec` on `SMOLLM3`,
-  mirroring DiffusionGemma's `entropy_signal`), k fixed at 5. A position's
+  mirroring DiffusionGemma's `entropy_signal`, a toggle since removed), k fixed
+  at 5. A position's
   candidate set is fixed the moment it is sampled, so it rides only the frame
   that introduces that position and the client accumulates by position: O(n·k)
   on the wire against the O(n²·k) of repeating it per snapshot. Shown in a hover
@@ -1117,6 +1120,46 @@ also new, per-frame *and* per-position, where `alternatives.json` today is
 per-position only, which suffices for an autoregressive run because a position
 is decided once and does not for a diffusion draft that is re-decided every
 step. Budget roughly frames x canvas width x k records.
+
+**The capture policy shipped on 2026-09-28: a stride, within a budget.**
+`CANDIDATE_BUDGET_RECORDS` is 102,400 records, one default LLaDA run (160
+positions, 128 steps, five each) captured at every step, so the run people
+make most is never thinned. Past it, `CandidateCapture` drops every other
+step it kept and doubles its stride, so the sample stays evenly spaced
+without knowing a run's length in advance, which DiffusionGemma cannot give;
+the final step is always kept, taking the last kept step's place when there
+is no room. A stride won over a smaller k, which would make the diffusion
+popover disagree with the autoregressive one, and over masked-only capture,
+which would leave nothing to say about a settled token that is losing
+support. Delivery is one message as the run ends, not a per-frame field, so
+the live stream is untouched and the bespoke wire field `ROADMAP-03` warned
+against never exists. It is saved as `candidates.json` and declared in the
+manifest as `alternatives` over frame and position, with the budget on the
+channel. The popover reads it at the scrubbed frame, or at the latest
+captured frame before it ("As of step N"), and never across the start of a
+resumed edit or of a new canvas. Two implementation facts a future change
+has to keep: DiffusionGemma's candidates ride their frame across the queue
+and are offered only as the consumer forwards it, because the generate
+thread runs ahead by the queue's depth and a stopped run would otherwise
+name frames the page never received; and the text is the raw decode, as
+the autoregressive capture's is, because a canvas ends in end-of-text
+tokens that `overlaysAltDisplay` draws legibly and a sanitized decode would
+blank.
+
+**Where it stops, deliberately:**
+
+- The stack and the flicker below are not built. Both are displays over
+  this capture and need nothing new from the worker.
+- An edited run's pre-edit layer has no candidates. Only the live stream is
+  captured, and the popover stays off that layer rather than showing the
+  branch's candidates over the original's tokens.
+- A LLaDA run stopped partway has none. Its terminal frame is the worker's,
+  written after the sampler has returned, so nothing is left to flush the
+  capture. DiffusionGemma's streamer outlives the stop, so its stopped runs
+  keep what the page received.
+- A guided **Run to Here** edit has none on either model. LLaDA's streamer
+  closes the sampler at the budget before the flush, and DiffusionGemma's
+  would name frames past the budget that the page never receives.
 
 **Two renderings, one capture.** Scoped 2026-08-30. The stack above encodes
 probability share as stacked opacity, which is spatial. The alternative is to
