@@ -202,9 +202,17 @@ kept when these were written:
 - **329**: done by an agent on 2026-09-28, on CPU through the script:
   forgetting passed all four tests, one of them narrowly, which the
   item records.
-- **330 to 335**: **outstanding**, the Mamba-3 worker through the UI.
-  The worker half of 331 was done by an agent on 2026-09-28, through a
-  script rather than the UI; the item records what it found.
+- **330**: half confirmed on 2026-09-28: activation on the card from a
+  checkpoint that was already cached. The download half, on a machine
+  that has never fetched Mamba-3, is **outstanding**.
+- **331**: confirmed on 2026-09-28.
+- **332**: **outstanding** again. It failed on 2026-09-28, every token
+  reading as the same violet: the values were right and the ramp was
+  not. The item records the fix; re-run it.
+- **333**: confirmed on 2026-09-28.
+- **334**: confirmed on 2026-09-28 apart from the colours, which were
+  332's defect; re-check them with 332.
+- **335**: confirmed on 2026-09-28.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -3658,8 +3666,14 @@ through a script (item 331); none of this has been through the UI.
       6 GiB of VRAM (float32), and the prompt box asking for text to
       continue rather than for a chat prompt.
 
-331. **Activation on the CPU.** Pick CPU on the Mamba-3 row's
-    CPU/GPU toggle and activate. Expect the device tag to read CPU,
+    **Half confirmed on 2026-09-28.** The maintainer's card already
+    had the checkpoint cached, so selecting Mamba-3 loaded it, and
+    properly. The download half still wants a machine that has never
+    fetched it.
+
+331. **Activation on the CPU. Confirmed on 2026-09-28.** Pick CPU on
+    the Mamba-3 row's CPU/GPU toggle and activate. Expect the device
+    tag to read CPU,
     the meter to report cores, the token budget to default to 128,
     and decoding at about 4 tokens a second.
 
@@ -3684,8 +3698,20 @@ through a script (item 331); none of this has been through the UI.
     puts `Forgetting: 0.xxx` on the metrics strip's overlay line. A
     SmolLM3 run afterwards does not list Forgetting.
 
-333. **What If replays.** After a Mamba-3 run with Alternatives on,
-    press **What If?** and pick a candidate at an early position.
+    **Failed on 2026-09-28, fixed since.** Every token read as the same
+    violet, live and in Analytics. The values were right, 0.08 to 0.42
+    on the two saved runs with sentence boundaries highest, and the
+    ramp was not: it ran from 0 to 0.4 over 22 points of lightness, so
+    the middle half of a run landed within four of them. It now spans
+    0.12 to 0.30 over 40 points, with a small turn of hue. On the
+    re-run, full stops and sentence openers should glow a bright lilac
+    while mid-phrase words ("a", "the", "server") recede to slate, and
+    a run that repeats itself should show each line's start bright and
+    the repetition dim.
+
+333. **What If replays. Confirmed on 2026-09-28.** After a Mamba-3
+    run with Alternatives on, press **What If?** and pick a candidate
+    at an early position.
     Expect a short pause before the branch starts, while the prompt and
     the kept prefix are read again (there is no cache to slice), then
     the usual **Confirm** / **Retry** review and **Diff vs Original**.
@@ -3702,8 +3728,12 @@ through a script (item 331); none of this has been through the UI.
     position. For an edited run, each side of the Original / Edited
     crossfade takes its colours from its own run.
 
-335. **The glyph and the glow.** In the Main Menu the Mamba-3 glyph,
-    at its real 13 pixels, reads as a box on a line with a loop
+    **Confirmed on 2026-09-28 apart from the colours**, which were
+    item 332's flat ramp; re-check them when 332 is re-run.
+
+335. **The glyph and the glow. Confirmed on 2026-09-28.** In the Main
+    Menu the Mamba-3 glyph, at its real 13 pixels, reads as a box on a
+    line with a loop
     beneath it and a dot inside, not as a padlock, and hovering it
     says "Model Family: State space". On the Settings page, **Token
     birth glow** > **Tune for** offers **State space** and opens on it

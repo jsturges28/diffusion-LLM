@@ -235,19 +235,82 @@ function hue(color) {
   return Number(/hsl\((\d+),/.exec(color)[1]);
 }
 
-test("more erased reads brighter, up to the reference", () => {
+// WCAG contrast of an hsl() colour against the output area's #111.
+function contrastOnCanvas(color) {
+  const [h, s, l] = /hsl\((\d+), (\d+)%, (\d+)%\)/
+    .exec(color).slice(1).map(Number);
+  const chroma = (1 - Math.abs(2 * (l / 100) - 1)) * (s / 100);
+  const second = chroma * (1 - Math.abs(((h / 60) % 2) - 1));
+  const base = l / 100 - chroma / 2;
+  // Every hue this ramp produces lies between 240 and 300.
+  assert.ok(h >= 240 && h < 300, `hue ${h} outside the violet band`);
+  const channels = [second + base, base, chroma + base];
+  const linear = channels.map((v) =>
+    v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4
+  );
+  const luminance =
+    0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+  const canvas = ((0x11 / 255 + 0.055) / 1.055) ** 2.4;
+  return (luminance + 0.05) / (canvas + 0.05);
+}
+
+test("the window sits inside a fraction's range, in order", () => {
   const ramp = overlays();
-  const steps = [0, 0.1, 0.2, 0.3, 0.4];
+
+  assert.ok(ramp.OVERLAYS_FORGETTING_FLOOR > 0);
+  assert.ok(
+    ramp.OVERLAYS_FORGETTING_FLOOR < ramp.OVERLAYS_FORGETTING_CEILING
+  );
+  assert.ok(ramp.OVERLAYS_FORGETTING_CEILING < 1);
+});
+
+test("more erased reads brighter across the window", () => {
+  const ramp = overlays();
+  const floor = ramp.OVERLAYS_FORGETTING_FLOOR;
+  const ceiling = ramp.OVERLAYS_FORGETTING_CEILING;
+  const steps = [0, 0.25, 0.5, 0.75, 1].map(
+    (at) => floor + (ceiling - floor) * at
+  );
 
   const lights = steps.map((f) => lightness(ramp.forgettingColor(f)));
 
   for (let i = 1; i < lights.length; i++) {
     assert.ok(lights[i] > lights[i - 1], `step ${i}: ${lights}`);
   }
-  assert.equal(
-    ramp.forgettingColor(0.9),
-    ramp.forgettingColor(ramp.OVERLAYS_FORGETTING_REF)
-  );
+});
+
+test("the tails clamp to the ends of the window", () => {
+  // Digits fall below the window and line breaks above it; each reads
+  // at the nearer end rather than off the ramp.
+  const ramp = overlays();
+  const floor = ramp.OVERLAYS_FORGETTING_FLOOR;
+  const ceiling = ramp.OVERLAYS_FORGETTING_CEILING;
+
+  assert.equal(ramp.forgettingColor(0.02), ramp.forgettingColor(floor));
+  assert.equal(ramp.forgettingColor(0.9), ramp.forgettingColor(ceiling));
+});
+
+test("the middle of real text is told apart", () => {
+  // The defect this pins. On two saved runs, one per device, the
+  // middle half of tokens sat between about 0.14 and 0.25. The first
+  // ramp ran from 0 to 0.4 and put those six points of lightness
+  // apart, which read as a single colour. Twenty points is the least
+  // that separates them at a glance.
+  const ramp = overlays();
+
+  const low = lightness(ramp.forgettingColor(0.14));
+  const high = lightness(ramp.forgettingColor(0.25));
+
+  assert.ok(high - low >= 20, `${low}% to ${high}%`);
+});
+
+test("the dimmest token stays legible on the canvas", () => {
+  // The other side of that trade. Contrast bought by darkening the
+  // dim end would cost the words themselves; 3:1 is where the
+  // heatmap's dimmest green already sits.
+  const ramp = overlays();
+
+  assert.ok(contrastOnCanvas(ramp.forgettingColor(0)) >= 3);
 });
 
 test("a missing value reads as nothing erased", () => {
@@ -259,13 +322,15 @@ test("a missing value reads as nothing erased", () => {
 
 test("the ramp keeps clear of the other overlays' hues", () => {
   // Entropy runs 45 to 205, the heatmap sits at 135 and the diff at
-  // 320. Violet between them cannot be read as any of the three.
+  // 320. The ramp turns within the violet band between them, so no
+  // point on it can be read as any of the three.
   const ramp = overlays();
-  const at = hue(ramp.forgettingColor(0.2));
 
-  assert.ok(at > 205 + 30, String(at));
-  assert.ok(at < 320 - 30, String(at));
-  assert.equal(hue(ramp.forgettingColor(0.4)), at);
+  for (const f of [0, 0.12, 0.18, 0.24, 0.3, 1]) {
+    const at = hue(ramp.forgettingColor(f));
+    assert.ok(at >= 205 + 40, `${f}: ${at}`);
+    assert.ok(at <= 320 - 30, `${f}: ${at}`);
+  }
 });
 
 test("the reading has three places, and is blank without one", () => {

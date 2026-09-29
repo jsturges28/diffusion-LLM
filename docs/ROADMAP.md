@@ -192,6 +192,22 @@ since shipped is noted on the item rather than left for a reader to infer.
    since 60 tokens a second in bfloat16 and the float32 rate are both
    usable. No context ceiling is claimed: the model has none, only a
    2,048-token training length, so nothing refuses a longer prompt.
+
+   **The overlay's ramp was measured the second time.** The first ran
+   from 0 to 0.4 over 22 points of lightness, picked from a rough range,
+   and on its first hardware run every token read as the same violet
+   (manual item 332). The values were fine: 0.08 to 0.42 across two saved
+   runs, with full stops and sentence openers highest. But the middle half
+   of each run landed within four points of lightness. The ramp now spans
+   0.12 to 0.30, where nine in ten real tokens fall, over 40 points of
+   lightness and a 40-degree turn of hue inside the violet band. On those
+   runs that took the colour difference between a run's 5th and 95th
+   percentile tokens from a CIELAB distance of 14 to 17 up to 39 to 44,
+   against the heatmap's 59. It stays fixed rather than fitted to each
+   run, so a flat run stays flat. This is the lesson recorded under
+   confidence-driven mask opacity in the XAI backlog, not applied the
+   first time: check a signal against its own distribution before
+   choosing a ramp for it.
 2. **Entropy and top-k for the diffusion models.** The entropy half **shipped
    with `ROADMAP-03`**, in `a26b8c3`, `455b2ef` and `ffed5b6`. Top-k is still
    open and was left downstream on purpose, with a budget field reserved for it.

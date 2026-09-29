@@ -220,32 +220,46 @@ function entropyDimColor(e) {
     + light + "%, " + ENTROPY_DIM_ALPHA + ")";
 }
 
-// Reference maximum for forgetting: the share of a state-space
-// model's recurrent state that reading one token erased. It is a
-// fraction already, so unlike entropy it needs no unit, but the
-// pinned Mamba-3 spends it narrowly: real text reads about 0.1 to
-// 0.3. A ramp over the whole of [0, 1] would paint every token the
-// same colour, so the top of this one sits a little above the
-// busiest token measured so far, and anything past it clamps.
-var OVERLAYS_FORGETTING_REF = 0.4;
+// The window forgetting is drawn over. Forgetting is the share of a
+// state-space model's recurrent state that reading one token erased,
+// and on the pinned Mamba-3 real text puts the middle ninety percent
+// of its tokens between about 0.12 and 0.30 (two saved runs, one per
+// device), with thin tails: digits below, line breaks and sentence
+// openers above. A ramp from 0 to the busiest token seen left the
+// middle half of a run within four points of lightness of itself,
+// which read as one colour, so this one spans where tokens fall and
+// the tails clamp to its ends.
+//
+// Fixed rather than fitted to each run, on purpose: stretching a run
+// over its own range would paint a flat one, a model repeating a
+// single token, in full contrast from noise, which is the reading the
+// forgetting check exists to rule out.
+var OVERLAYS_FORGETTING_FLOOR = 0.12;
+var OVERLAYS_FORGETTING_CEILING = 0.30;
 
-// Normalize forgetting into [0,1] against the reference maximum.
+// Where a value sits in that window, in [0,1].
 function overlaysForgettingFraction(f) {
-  if (typeof f !== "number" || !isFinite(f) || f < 0) {
+  if (typeof f !== "number" || !isFinite(f)) {
     return 0;
   }
-  return Math.min(1, f / OVERLAYS_FORGETTING_REF);
+  var span = OVERLAYS_FORGETTING_CEILING - OVERLAYS_FORGETTING_FLOOR;
+  var at = (f - OVERLAYS_FORGETTING_FLOOR) / span;
+  return Math.max(0, Math.min(1, at));
 }
 
-// One hue, violet, because this is an amount of one thing rather
-// than a scale between two: a token that erased little reads dim and
-// one that erased much reads bright. Kept off the green heatmap, the
-// blue-to-amber entropy ramp and the magenta diff.
+// Dim slate-violet for a token that erased little, bright lilac for
+// one that erased much. Lightness and saturation carry most of it and
+// a small turn of hue, blue-violet to pink-violet, carries the rest:
+// how dark a dim token may go is capped by legibility on the canvas,
+// and lightness alone measured under half the heatmap's contrast on
+// real runs. The hue stays inside the violet band, clear of the blue
+// end of the entropy ramp and of the diff's magenta.
 function forgettingColor(f) {
   var frac = overlaysForgettingFraction(f);
-  var sat = Math.round(25 + 60 * frac);
-  var light = Math.round(46 + 22 * frac);
-  return "hsl(270, " + sat + "%, " + light + "%)";
+  var hue = Math.round(250 + 40 * frac);
+  var sat = Math.round(20 + 80 * frac);
+  var light = Math.round(46 + 40 * frac);
+  return "hsl(" + hue + ", " + sat + "%, " + light + "%)";
 }
 
 // Place the candidate popover horizontally: aligned to the token's
