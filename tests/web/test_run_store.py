@@ -690,6 +690,57 @@ def test_validation_rejects_a_sidecar_that_is_not_a_list(
         run_store.validate_staged(staging)
 
 
+CANDIDATES = {"k": 5, "stride": 1, "frames": [1], "segments": [0]}
+
+
+def test_diffusion_candidates_are_saved_as_an_object(
+    tmp_path: Path,
+) -> None:
+    """The one sidecar that is not a list: its frames, segments and
+    stride travel beside the sets. Declared in the manifest like the
+    rest, so a reader trusts it rather than testing for the file."""
+    candidates = dict(CANDIDATES, sets=[[{"h": 1, "c": []}]])
+    run_id, _ = _save(
+        tmp_path, bundle=_bundle(candidates=candidates)
+    )
+    run_dir = tmp_path / run_id
+
+    written = json.loads(
+        (run_dir / "candidates.json").read_text(encoding="utf-8")
+    )
+    meta = json.loads(
+        (run_dir / "metadata.json").read_text(encoding="utf-8")
+    )
+    assert written == candidates
+    assert meta[run_store.CAPTURE_KEY]["candidates"] is True
+
+
+def test_a_run_without_candidates_writes_none(tmp_path: Path) -> None:
+    run_id, _ = _save(tmp_path)
+    run_dir = tmp_path / run_id
+
+    meta = json.loads(
+        (run_dir / "metadata.json").read_text(encoding="utf-8")
+    )
+    assert not (run_dir / "candidates.json").exists()
+    assert meta[run_store.CAPTURE_KEY]["candidates"] is False
+
+
+def test_validation_rejects_candidates_written_as_a_list(
+    tmp_path: Path,
+) -> None:
+    staging = run_store.stage(
+        tmp_path, "run-a", _bundle(candidates=dict(CANDIDATES))
+    )
+    _stamp_valid_metadata(staging, candidates=True)
+    (staging / "candidates.json").write_text("[]", encoding="utf-8")
+
+    with pytest.raises(
+        run_store.BundleInvalidError, match="must be an object"
+    ):
+        run_store.validate_staged(staging)
+
+
 def test_a_bundle_that_fails_validation_publishes_nothing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

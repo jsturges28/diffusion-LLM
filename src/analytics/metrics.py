@@ -734,14 +734,16 @@ def load_run_frames(
     optional ``original_tokens.json`` (pre-edit snapshot), and the
     optional ``alternatives.json`` / ``original_alternatives.json``
     (per-position candidate sets for each run, only written when the
-    capture was enabled). Tolerates legacy files that stored only
-    integer ids: those cannot drive the token overlays, so
-    ``records_available`` is False.
+    capture was enabled), and a diffusion run's optional
+    ``candidates.json`` (a set per position for each captured frame).
+    Tolerates legacy files that stored only integer ids: those cannot
+    drive the token overlays, so ``records_available`` is False.
 
     Returns a dict with ``frames``, ``original_frames`` (or None),
     ``records_available``, ``alternatives`` (or None),
-    ``alternatives_available``, and ``original_alternatives`` (or
-    None). Raises ``ValueError`` on malformed files.
+    ``alternatives_available``, ``original_alternatives`` (or None),
+    and ``candidates`` (or None). Raises ``ValueError`` on malformed
+    files.
 
     The shape is the same for both eras. What differs is where
     ``records_available`` comes from: a v1 run declares it in the
@@ -769,6 +771,7 @@ def load_run_frames(
         "alternatives": None,
         "alternatives_available": False,
         "original_alternatives": None,
+        "candidates": None,
     }
 
     tokens_path = run_dir / "tokens.json"
@@ -846,7 +849,27 @@ def load_run_frames(
         run_dir / "original_alternatives.json", run_dir
     )
 
+    # Per captured frame rather than per position: a diffusion
+    # position is re-decided at every step, so its candidates are a
+    # trajectory (see candidate_capture).
+    result["candidates"] = _load_candidates(
+        run_dir / "candidates.json", run_dir
+    )
+
     return result
+
+
+def _load_candidates(
+    path: Path,
+    run_dir: Path,
+) -> Optional[Dict[str, Any]]:
+    """Read a diffusion run's candidates, or None if absent."""
+    if not path.is_file():
+        return None
+    candidates = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(candidates, dict):
+        raise ValueError(f"{path.name} is malformed in {run_dir}")
+    return candidates
 
 
 def _load_alternatives(

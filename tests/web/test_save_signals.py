@@ -28,8 +28,11 @@ from typing import Any, Dict, List
 
 import pytest
 from pydantic import ValidationError
+from starlette.testclient import TestClient
 
 from src.analytics.metrics import load_run_frames
+from src.backends.protocol import CANDIDATE_BUDGET_RECORDS
+from src.web import server
 from src.web.server import (
     RemaskEdit,
     SaveRunRequest,
@@ -333,6 +336,170 @@ def test_malformed_original_candidate_file_is_rejected(
 
     with pytest.raises(ValueError):
         load_run_frames(run_dir)
+
+
+# -- A diffusion run's candidates, a set per position per frame --
+
+
+def _frame_candidates(**overrides: Any) -> Dict[str, Any]:
+    """Two captured frames over the two positions of ``_frame``. The
+    second position's held token falls outside the likeliest two, so
+    it is appended with its rank, as the sampler does."""
+    likeliest = [
+        {"id": 5, "t": "he", "p": 0.9},
+        {"id": 7, "t": "she", "p": 0.05},
+    ]
+    held = {"id": 9, "t": "it", "p": 1e-5, "rank": 40}
+    outside = likeliest + [held]
+    sets = [{"h": 5, "c": likeliest}, {"h": 9, "c": outside}]
+    body: Dict[str, Any] = {
+        "k": 2,
+        "stride": 1,
+        "frames": [1, 2],
+        "segments": [0],
+        "sets": [sets, sets],
+    }
+    body.update(overrides)
+    return body
+
+
+def _diffusion_request(**candidates: Any) -> SaveRunRequest:
+    return SaveRunRequest(
+        prompt="p",
+        frames=["a", "b", "c"],
+        final_text="hello",
+        frame_tokens=[_frame(), _frame(), _frame()],
+        candidates=_frame_candidates(**candidates),
+    )
+
+
+def test_frame_candidates_survive_the_save_request() -> None:
+    candidates = _diffusion_request().candidates
+
+    assert candidates is not None
+    assert candidates.frames == [1, 2]
+    assert candidates.sets[0][1].h == 9
+    assert candidates.sets[0][1].c[-1].rank == 40
+
+
+def test_dumped_candidates_carry_a_rank_only_where_set() -> None:
+    """``exclude_none`` as the other candidate files use it: a null
+    rank on every captured row would be most of the file."""
+    candidates = _diffusion_request().candidates
+    assert candidates is not None
+
+    dumped = candidates.model_dump(exclude_none=True)
+
+    rows = dumped["sets"][0][1]["c"]
+    assert "rank" not in rows[0]
+    assert rows[-1]["rank"] == 40
+
+
+@pytest.mark.parametrize(
+    ("overrides", "why"),
+    [
+        ({"frames": [2, 1]}, "frames descend"),
+        ({"frames": [1, 1]}, "a frame repeats"),
+        ({"frames": [-1, 2]}, "a frame before the first"),
+        ({"frames": []}, "no frames at all"),
+        ({"segments": [1]}, "segments start past 0"),
+        ({"segments": [0, 0]}, "a segment repeats"),
+        ({"frames": [1]}, "one frame, two lists of sets"),
+        ({"k": 1}, "more rows than k and the held token"),
+        ({"extra": True}, "a key the model does not declare"),
+    ],
+)
+def test_candidates_no_reader_could_place_are_refused(
+    overrides: Dict[str, Any], why: str
+) -> None:
+    with pytest.raises(ValidationError):
+        _diffusion_request(**overrides)
+
+
+def _one_frame_of(positions: int) -> Dict[str, Any]:
+    row = {"id": 1, "t": "a", "p": 1.0}
+    return {
+        "k": 5,
+        "frames": [1],
+        "sets": [[{"h": 1, "c": [row]}] * positions],
+    }
+
+
+def test_candidates_at_the_budget_are_accepted() -> None:
+    """The budget counts positions times k per frame, the unit the
+    capture thins by, so a capture that thinned correctly always
+    fits."""
+    positions = CANDIDATE_BUDGET_RECORDS // 5
+
+    request = _diffusion_request(**_one_frame_of(positions))
+
+    assert request.candidates is not None
+
+
+def test_candidates_past_the_budget_are_refused() -> None:
+    positions = CANDIDATE_BUDGET_RECORDS // 5 + 1
+
+    with pytest.raises(ValidationError, match="budget"):
+        _diffusion_request(**_one_frame_of(positions))
+
+
+def test_a_candidates_file_that_is_not_an_object_is_rejected(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "tokens.json").write_text(
+        json.dumps([_frame()]), encoding="utf-8"
+    )
+    (run_dir / "candidates.json").write_text("[]", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="candidates.json"):
+        load_run_frames(run_dir)
+
+
+@pytest.fixture()
+def client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> TestClient:
+    monkeypatch.setattr(server, "RESULTS_DIR", tmp_path)
+    return TestClient(server.app)
+
+
+def _save_diffusion(client: TestClient, **extra: Any) -> str:
+    payload: Dict[str, Any] = {
+        "model": "llada",
+        "prompt": "p",
+        "frames": ["a", "b", "c"],
+        "final_text": "hello",
+        "frame_tokens": [_frame(), _frame(), _frame()],
+    }
+    payload.update(extra)
+    response = client.post("/api/save", json=payload)
+    assert response.status_code == 200, response.text
+    return str(response.json()["run_id"])
+
+
+def test_saved_candidates_reach_the_analytics_frames(
+    client: TestClient,
+) -> None:
+    """The whole server path: the save writes the sidecar, and the
+    overlay viewer's endpoint hands it back unchanged."""
+    run_id = _save_diffusion(client, candidates=_frame_candidates())
+
+    response = client.get(f"/api/analytics/runs/{run_id}/frames")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["candidates"] == _frame_candidates()
+
+
+def test_a_run_saved_without_candidates_reports_none(
+    client: TestClient,
+) -> None:
+    run_id = _save_diffusion(client)
+
+    response = client.get(f"/api/analytics/runs/{run_id}/frames")
+
+    assert response.json()["candidates"] is None
 
 
 # -- The context block --

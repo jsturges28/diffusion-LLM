@@ -52,7 +52,7 @@ from fastapi.responses import (
     Response,
 )
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.analytics.metrics import (
     CONVERGENCE_BASIS_CHARACTERS,
@@ -75,6 +75,7 @@ from src.analytics.metrics import (
     total_elapsed_seconds,
 )
 from src.backends.protocol import (
+    CANDIDATE_BUDGET_RECORDS,
     ERROR_NO_MODEL_ACTIVE,
     ERROR_SCOPE_FATAL,
     ERROR_WORKER_UNREACHABLE,
@@ -2154,6 +2155,81 @@ class TokenAlternative(BaseModel):
     rank: Optional[int] = None
 
 
+class CandidateSet(BaseModel):
+    """What one diffusion position was weighing at one captured step.
+
+    ``h`` is the token the position held at that step, which is the
+    row the popover marks: the step's guess where the position was
+    masked, its token where it had settled. ``c`` is the likeliest
+    candidates, then the held token with its ``rank`` when they omit
+    it, exactly as an autoregressive position's list reads.
+    """
+
+    model_config = STRICT
+
+    h: int
+    c: List[TokenAlternative] = Field(min_length=1)
+
+
+class FrameCandidates(BaseModel):
+    """A diffusion run's candidates: a set per position for each
+    captured frame.
+
+    Not ``alternatives``, which is one set per position, because a
+    diffusion position is re-decided at every step, so what it was
+    weighing is a trajectory. The capture thins to a stride past
+    ``CANDIDATE_BUDGET_RECORDS``, and ``stride`` is where it got to.
+
+    ``frames`` are the run's own frame indices, ascending.
+    ``segments`` are the frames where a stream of candidates begins:
+    0, then the first frame of each resumed edit, so a reader never
+    lends a resumed frame the candidates of the run the edit
+    replaced.
+    """
+
+    model_config = STRICT
+
+    k: int = Field(ge=1)
+    stride: int = Field(ge=1)
+    frames: List[int] = Field(min_length=1)
+    segments: List[int] = Field(min_length=1)
+    sets: List[List[CandidateSet]]
+
+    @model_validator(mode="after")
+    def _placeable(self) -> "FrameCandidates":
+        _check_frame_candidates(self)
+        return self
+
+
+def _ascending(values: List[int]) -> bool:
+    return all(
+        earlier < later
+        for earlier, later in zip(values, values[1:], strict=False)
+    )
+
+
+def _check_frame_candidates(value: FrameCandidates) -> None:
+    """Refuse candidates no reader could place, or that outgrew their
+    budget. A ValueError, which the save reports as a 422 naming it.
+    """
+    if len(value.sets) != len(value.frames):
+        raise ValueError("candidates need one list of sets per frame")
+    if value.frames[0] < 0 or not _ascending(value.frames):
+        raise ValueError("candidate frames must ascend from 0")
+    if value.segments[0] != 0 or not _ascending(value.segments):
+        raise ValueError("candidate segments must ascend from 0")
+    rows = value.k + 1
+    for sets in value.sets:
+        if any(len(entry.c) > rows for entry in sets):
+            raise ValueError(f"a candidate set holds over {rows}")
+    records = sum(len(sets) for sets in value.sets) * value.k
+    if records > CANDIDATE_BUDGET_RECORDS:
+        raise ValueError(
+            f"candidates hold {records} records, over the budget of"
+            f" {CANDIDATE_BUDGET_RECORDS}"
+        )
+
+
 # Per-frame, per-token stream. A frame may be ``None`` when a model
 # emitted no token detail for it.
 FrameTokens = List[Optional[List[TokenRecord]]]
@@ -2289,6 +2365,10 @@ class SaveRunRequest(BaseModel):
     original_alternatives: Optional[
         List[Optional[List[TokenAlternative]]]
     ] = None
+    # A diffusion run's candidates, per captured frame. Absent when
+    # the capture was off, for an autoregressive run, and for runs
+    # saved before it existed.
+    candidates: Optional[FrameCandidates] = None
     # What the worker said about itself when this run finished,
     # echoed back from the terminal frame. Absent for a run whose
     # snapshot predates this field, which then falls back to the
@@ -2737,6 +2817,11 @@ def _build_bundle(body: SaveRunRequest) -> run_store.RunBundle:
             None
             if body.original_alternatives is None
             else _dump_alternatives(body.original_alternatives)
+        ),
+        candidates=(
+            None
+            if body.candidates is None
+            else body.candidates.model_dump(exclude_none=True)
         ),
     )
 
@@ -3280,6 +3365,7 @@ def _compute_run_frames(run_id: str) -> Dict[str, Any]:
         "original_alternatives": data[
             "original_alternatives"
         ],
+        "candidates": data["candidates"],
         "remask_edits": meta.get("remask_edits", []),
         "canvas_index": meta.get("canvas_index"),
     }

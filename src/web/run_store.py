@@ -63,7 +63,14 @@ SIDECAR_NAMES = (
     ("original_frame_tokens", "original_tokens.json"),
     ("alternatives", "alternatives.json"),
     ("original_alternatives", "original_alternatives.json"),
+    ("candidates", "candidates.json"),
 )
+
+# The sidecars written as a JSON object rather than a list. A
+# diffusion run's candidates carry their frames, segments and stride
+# beside the sets, which a bare list could hold only by a convention
+# every reader would have to know.
+OBJECT_SIDECARS = frozenset({"candidates"})
 
 # Working directories under the data root that are not runs.
 # Dot-prefixed so ``is_run_dir`` skips them by the same rule it uses
@@ -202,6 +209,7 @@ class RunBundle:
     original_frame_tokens: Optional[List[Any]] = None
     alternatives: Optional[List[Any]] = None
     original_alternatives: Optional[List[Any]] = None
+    candidates: Optional[Dict[str, Any]] = None
 
 
 def resolve_run_dir(root: Path, run_id: str) -> Path:
@@ -508,6 +516,7 @@ def _stage_and_publish(
         original_frame_tokens=bundle.original_frame_tokens,
         alternatives=bundle.alternatives,
         original_alternatives=bundle.original_alternatives,
+        candidates=bundle.candidates,
     )
     staging = stage(root, run_id, staged)
     try:
@@ -561,14 +570,25 @@ def validate_staged(staging: Path) -> None:
                 f" {filename} is {'present' if present else 'absent'}"
             )
         if present:
-            _require_json_list(staging / filename)
+            _require_json_shape(
+                staging / filename, _sidecar_shape(attribute)
+            )
 
 
-def _require_json_list(path: Path) -> None:
+def _sidecar_shape(attribute: str) -> type:
+    """The JSON type a sidecar's file holds."""
+    if attribute in OBJECT_SIDECARS:
+        return dict
+    return list
+
+
+def _require_json_shape(path: Path, shape: type) -> None:
+    assert shape in (list, dict), "sidecars are lists or objects"
     payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, list):
+    if not isinstance(payload, shape):
+        noun = "a list" if shape is list else "an object"
         raise BundleInvalidError(
-            f"{path.name} must be a list, got"
+            f"{path.name} must be {noun}, got"
             f" {type(payload).__name__}"
         )
 

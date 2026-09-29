@@ -386,6 +386,7 @@ def test_the_manifest_records_which_signals_were_captured(
     assert manifest["alternatives"] is True
     assert manifest["original_frame_tokens"] is False
     assert manifest["original_alternatives"] is False
+    assert manifest["candidates"] is False
 
 
 def test_the_manifest_covers_every_optional_sidecar(
