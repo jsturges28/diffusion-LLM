@@ -2369,6 +2369,11 @@ class SaveRunRequest(BaseModel):
     # the capture was off, for an autoregressive run, and for runs
     # saved before it existed.
     candidates: Optional[FrameCandidates] = None
+    # The pre-edit run's, sent only for an edited run, so the popover
+    # can page between the two runs from the edit on. Unlike its
+    # tokens these cannot be rebuilt later: an edit truncates the live
+    # capture at the frame it branched from.
+    original_candidates: Optional[FrameCandidates] = None
     # What the worker said about itself when this run finished,
     # echoed back from the terminal frame. Absent for a run whose
     # snapshot predates this field, which then falls back to the
@@ -2818,12 +2823,22 @@ def _build_bundle(body: SaveRunRequest) -> run_store.RunBundle:
             if body.original_alternatives is None
             else _dump_alternatives(body.original_alternatives)
         ),
-        candidates=(
-            None
-            if body.candidates is None
-            else body.candidates.model_dump(exclude_none=True)
+        candidates=_dump_candidates(body.candidates),
+        original_candidates=_dump_candidates(
+            body.original_candidates
         ),
     )
+
+
+def _dump_candidates(
+    candidates: Optional[FrameCandidates],
+) -> Optional[Dict[str, Any]]:
+    """A diffusion run's candidates for their sidecar, or None when
+    the run has none. ``exclude_none`` so the rank appears only on
+    the row that carries one."""
+    if candidates is None:
+        return None
+    return candidates.model_dump(exclude_none=True)
 
 
 def _save_run_blocking(body: SaveRunRequest) -> Dict[str, Any]:
@@ -3366,6 +3381,7 @@ def _compute_run_frames(run_id: str) -> Dict[str, Any]:
             "original_alternatives"
         ],
         "candidates": data["candidates"],
+        "original_candidates": data["original_candidates"],
         "remask_edits": meta.get("remask_edits", []),
         "canvas_index": meta.get("canvas_index"),
     }

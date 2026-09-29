@@ -64,13 +64,14 @@ SIDECAR_NAMES = (
     ("alternatives", "alternatives.json"),
     ("original_alternatives", "original_alternatives.json"),
     ("candidates", "candidates.json"),
+    ("original_candidates", "original_candidates.json"),
 )
 
 # The sidecars written as a JSON object rather than a list. A
 # diffusion run's candidates carry their frames, segments and stride
 # beside the sets, which a bare list could hold only by a convention
 # every reader would have to know.
-OBJECT_SIDECARS = frozenset({"candidates"})
+OBJECT_SIDECARS = frozenset({"candidates", "original_candidates"})
 
 # Working directories under the data root that are not runs.
 # Dot-prefixed so ``is_run_dir`` skips them by the same rule it uses
@@ -210,6 +211,7 @@ class RunBundle:
     alternatives: Optional[List[Any]] = None
     original_alternatives: Optional[List[Any]] = None
     candidates: Optional[Dict[str, Any]] = None
+    original_candidates: Optional[Dict[str, Any]] = None
 
 
 def resolve_run_dir(root: Path, run_id: str) -> Path:
@@ -517,6 +519,7 @@ def _stage_and_publish(
         alternatives=bundle.alternatives,
         original_alternatives=bundle.original_alternatives,
         candidates=bundle.candidates,
+        original_candidates=bundle.original_candidates,
     )
     staging = stage(root, run_id, staged)
     try:

@@ -735,15 +735,16 @@ def load_run_frames(
     optional ``alternatives.json`` / ``original_alternatives.json``
     (per-position candidate sets for each run, only written when the
     capture was enabled), and a diffusion run's optional
-    ``candidates.json`` (a set per position for each captured frame).
-    Tolerates legacy files that stored only integer ids: those cannot
-    drive the token overlays, so ``records_available`` is False.
+    ``candidates.json`` (a set per position for each captured frame)
+    and, for an edited run, ``original_candidates.json``. Tolerates
+    legacy files that stored only integer ids: those cannot drive the
+    token overlays, so ``records_available`` is False.
 
     Returns a dict with ``frames``, ``original_frames`` (or None),
     ``records_available``, ``alternatives`` (or None),
     ``alternatives_available``, ``original_alternatives`` (or None),
-    and ``candidates`` (or None). Raises ``ValueError`` on malformed
-    files.
+    ``candidates`` (or None) and ``original_candidates`` (or None).
+    Raises ``ValueError`` on malformed files.
 
     The shape is the same for both eras. What differs is where
     ``records_available`` comes from: a v1 run declares it in the
@@ -772,6 +773,7 @@ def load_run_frames(
         "alternatives_available": False,
         "original_alternatives": None,
         "candidates": None,
+        "original_candidates": None,
     }
 
     tokens_path = run_dir / "tokens.json"
@@ -854,6 +856,10 @@ def load_run_frames(
     # trajectory (see candidate_capture).
     result["candidates"] = _load_candidates(
         run_dir / "candidates.json", run_dir
+    )
+    # The pre-edit run's, written only for an edited run.
+    result["original_candidates"] = _load_candidates(
+        run_dir / "original_candidates.json", run_dir
     )
 
     return result

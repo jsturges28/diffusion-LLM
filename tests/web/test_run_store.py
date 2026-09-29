@@ -726,6 +726,49 @@ def test_a_run_without_candidates_writes_none(tmp_path: Path) -> None:
     assert meta[run_store.CAPTURE_KEY]["candidates"] is False
 
 
+def test_an_edited_runs_pre_edit_candidates_are_an_object_too(
+    tmp_path: Path,
+) -> None:
+    """Their own sidecar, beside the edited run's, declared the same
+    way."""
+    original = dict(CANDIDATES, sets=[[{"h": 2, "c": []}]])
+    run_id, _ = _save(
+        tmp_path, bundle=_bundle(original_candidates=original)
+    )
+    run_dir = tmp_path / run_id
+
+    written = json.loads(
+        (run_dir / "original_candidates.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    meta = json.loads(
+        (run_dir / "metadata.json").read_text(encoding="utf-8")
+    )
+    assert written == original
+    assert meta[run_store.CAPTURE_KEY]["original_candidates"] is True
+    assert meta[run_store.CAPTURE_KEY]["candidates"] is False
+
+
+def test_validation_rejects_pre_edit_candidates_as_a_list(
+    tmp_path: Path,
+) -> None:
+    staging = run_store.stage(
+        tmp_path,
+        "run-a",
+        _bundle(original_candidates=dict(CANDIDATES)),
+    )
+    _stamp_valid_metadata(staging, original_candidates=True)
+    (staging / "original_candidates.json").write_text(
+        "[]", encoding="utf-8"
+    )
+
+    with pytest.raises(
+        run_store.BundleInvalidError, match="must be an object"
+    ):
+        run_store.validate_staged(staging)
+
+
 def test_validation_rejects_candidates_written_as_a_list(
     tmp_path: Path,
 ) -> None:

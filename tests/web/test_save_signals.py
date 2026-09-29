@@ -457,6 +457,54 @@ def test_a_candidates_file_that_is_not_an_object_is_rejected(
         load_run_frames(run_dir)
 
 
+# -- An edited run's pre-edit candidates, kept for the pager --
+
+
+def _edited_diffusion_request(**original: Any) -> SaveRunRequest:
+    return SaveRunRequest(
+        prompt="p",
+        frames=["a", "b", "c"],
+        final_text="hello",
+        frame_tokens=[_frame(), _frame(), _frame()],
+        remask_edits=[RemaskEdit(frame_index=1, token_positions=[1])],
+        candidates=_frame_candidates(),
+        original_candidates=_frame_candidates(**original),
+    )
+
+
+def test_the_pre_edit_candidates_survive_the_save_request() -> None:
+    original = _edited_diffusion_request().original_candidates
+
+    assert original is not None
+    assert original.frames == [1, 2]
+    assert original.sets[0][1].c[-1].rank == 40
+
+
+def test_pre_edit_candidates_are_held_to_the_same_rules() -> None:
+    """Placed by the same reader and saved against the same budget,
+    so refused on the same terms as the edited run's."""
+    with pytest.raises(ValidationError):
+        _edited_diffusion_request(frames=[2, 1])
+    with pytest.raises(ValidationError):
+        _edited_diffusion_request(segments=[1])
+
+
+def test_a_pre_edit_candidates_file_that_is_a_list_is_rejected(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "tokens.json").write_text(
+        json.dumps([_frame()]), encoding="utf-8"
+    )
+    (run_dir / "original_candidates.json").write_text(
+        "[]", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="original_candidates.json"):
+        load_run_frames(run_dir)
+
+
 @pytest.fixture()
 def client(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -492,6 +540,26 @@ def test_saved_candidates_reach_the_analytics_frames(
     assert response.json()["candidates"] == _frame_candidates()
 
 
+def test_an_edited_runs_pre_edit_candidates_come_back_too(
+    client: TestClient,
+) -> None:
+    """Both stores through the whole server path, each unchanged and
+    neither mistaken for the other."""
+    original = _frame_candidates(frames=[1, 3])
+    run_id = _save_diffusion(
+        client,
+        remask_edits=[{"frame_index": 2, "token_positions": [1]}],
+        candidates=_frame_candidates(),
+        original_candidates=original,
+    )
+
+    response = client.get(f"/api/analytics/runs/{run_id}/frames")
+
+    body = response.json()
+    assert body["candidates"] == _frame_candidates()
+    assert body["original_candidates"] == original
+
+
 def test_a_run_saved_without_candidates_reports_none(
     client: TestClient,
 ) -> None:
@@ -500,6 +568,7 @@ def test_a_run_saved_without_candidates_reports_none(
     response = client.get(f"/api/analytics/runs/{run_id}/frames")
 
     assert response.json()["candidates"] is None
+    assert response.json()["original_candidates"] is None
 
 
 # -- The context block --
