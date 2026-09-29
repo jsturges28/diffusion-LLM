@@ -223,7 +223,7 @@ def _run_kernel(
             )
         )
         for step in range(schedule.steps_per_block):
-            x, _conf, _transfer, _guess, _entropy = diffusion_step(
+            x, _conf, _transfer, _guess, _entropy, _ = diffusion_step(
                 x,
                 model,
                 attention_mask,
@@ -392,7 +392,7 @@ def test_the_step_reports_entropy_distinct_from_confidence() -> None:
     x[:, :PROMPT_LEN] = prompt
     prompt_index = x != MASK_ID
 
-    _x, conf, _transfer, _guess, entropy = diffusion_step(
+    _x, conf, _transfer, _guess, entropy, _ = diffusion_step(
         x,
         model,
         _extended_mask(),
@@ -424,7 +424,7 @@ def test_entropy_is_in_nats_and_confidence_in_probability() -> None:
     x[:, :PROMPT_LEN] = prompt
     prompt_index = x != MASK_ID
 
-    _x, conf, _transfer, _guess, entropy = diffusion_step(
+    _x, conf, _transfer, _guess, entropy, _ = diffusion_step(
         x,
         model,
         _extended_mask(),
@@ -443,6 +443,86 @@ def test_entropy_is_in_nats_and_confidence_in_probability() -> None:
     # The stub's logits are standard normal, so no position is close
     # to deterministic and every entropy should be well above zero.
     assert float(entropy.min()) > 1.0
+
+
+# -- candidates, which only the kernel can read --
+
+CANDIDATES = 5
+SETTLED_POSITION = PROMPT_LEN + 1
+SETTLED_TOKEN = 7
+
+
+def _step_with_candidates(top_k: int) -> Tuple[Any, ...]:
+    """One step over a canvas with one settled generated position,
+    so both kinds of held token are present."""
+    x = torch.full(
+        (1, PROMPT_LEN + GEN_LENGTH), MASK_ID, dtype=torch.long
+    )
+    x[:, :PROMPT_LEN] = _prompt()
+    prompt_index = x != MASK_ID
+    x[0, SETTLED_POSITION] = SETTLED_TOKEN
+    return diffusion_step(
+        x,
+        _StubModel(),
+        _extended_mask(),
+        prompt_index,
+        0.0,
+        0.0,
+        "low_confidence",
+        PROMPT_LEN + GEN_LENGTH,
+        torch.ones((1, 1), dtype=torch.int64),
+        0,
+        top_k=top_k,
+        candidates_from=PROMPT_LEN,
+    )
+
+
+def _first_call_probs() -> torch.Tensor:
+    """The softmax of the stub's first logits, which the step saw."""
+    generator = torch.Generator().manual_seed(_StubModel().seed)
+    logits = torch.randn(
+        1,
+        PROMPT_LEN + GEN_LENGTH,
+        VOCAB,
+        generator=generator,
+        dtype=torch.float32,
+    )
+    return torch.softmax(logits[0], dim=-1)
+
+
+def test_the_step_reads_no_candidates_unless_asked() -> None:
+    """A run without the parameter pays nothing for it."""
+    assert _step_with_candidates(top_k=0)[-1] is None
+
+
+def test_candidates_cover_only_the_generation_region() -> None:
+    candidates = _step_with_candidates(top_k=CANDIDATES)[-1]
+    probs = _first_call_probs()[PROMPT_LEN:]
+    want_probs, want_ids = torch.topk(probs, CANDIDATES, dim=-1)
+
+    assert candidates.ids.shape == (GEN_LENGTH, CANDIDATES)
+    assert torch.equal(candidates.ids, want_ids)
+    assert torch.allclose(candidates.probs, want_probs, atol=1e-6)
+
+
+def test_the_held_token_is_the_one_each_position_shows() -> None:
+    """A settled position holds its token, whatever the model now
+    prefers; a masked one holds the step's pick, which is the guess
+    the frame displays. Either way the popover marks the token on
+    screen."""
+    result = _step_with_candidates(top_k=CANDIDATES)
+    guess, candidates = result[3], result[-1]
+    probs = _first_call_probs()[PROMPT_LEN:]
+    held = guess[0, PROMPT_LEN:]
+    settled = SETTLED_POSITION - PROMPT_LEN
+    want = probs.gather(-1, held.unsqueeze(-1)).squeeze(-1)
+
+    assert int(held[settled]) == SETTLED_TOKEN
+    assert torch.allclose(candidates.held_probs, want, atol=1e-6)
+    masked = [p for p in range(GEN_LENGTH) if p != settled]
+    assert bool((candidates.held_ranks[masked] == 1).all())
+    settled_rank = int((probs[settled] > want[settled]).sum()) + 1
+    assert int(candidates.held_ranks[settled]) == settled_rank
 
 
 def test_nothing_past_the_block_end_is_revealed() -> None:

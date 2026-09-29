@@ -261,6 +261,7 @@ def _backend() -> LladaBackend:
         "temperature": 0.0,
         "cfg_scale": 0.0,
         "remasking": "low_confidence",
+        "alternatives": False,
         "seed": 0,
     }
     # Since LIFE-01 a retained run is state plus an identity, and a
@@ -679,6 +680,94 @@ def test_one_edit_branches_from_one_checkpoint(
     assert entries[0]["base_tokens"] is entries[1]["base_tokens"]
     assert entries[0]["base_conf"] is entries[1]["base_conf"]
     assert entries[0]["base_rng"] is entries[1]["base_rng"]
+
+
+class _ChatTokenizer(_StubTokenizer):
+    """Enough of a tokenizer for ``_store_state`` to encode a
+    prompt the way a generation does."""
+
+    def apply_chat_template(
+        self, messages: List[Dict[str, str]], **_: Any
+    ) -> str:
+        return messages[0]["content"]
+
+    def __call__(
+        self, texts: List[str], **_: Any
+    ) -> Dict[str, torch.Tensor]:
+        ids = torch.zeros((1, 2), dtype=torch.long)
+        mask = torch.ones_like(ids)
+        return {"input_ids": ids, "attention_mask": mask}
+
+
+@pytest.mark.parametrize("captured", [True, False])
+def test_a_run_captures_as_asked_and_keeps_the_flag(
+    monkeypatch: pytest.MonkeyPatch, captured: bool
+) -> None:
+    """The first half of an edit's inheritance: the generation hands
+    the flag to the sampler and records it with the run."""
+    entries: List[Dict[str, Any]] = []
+
+    async def fake_generate(
+        *_args: Any, **kwargs: Any
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        entries.append(kwargs)
+        yield {"type": "done", "final_text": "generated"}
+
+    monkeypatch.setattr(
+        llada_worker, "streaming_generate", fake_generate
+    )
+    params: Dict[str, Any] = {
+        "prompt": "hi",
+        "steps": ORIGINAL_TOTAL_STEPS,
+        "gen_length": GEN_LENGTH,
+        "block_length": GEN_LENGTH,
+        "temperature": 0.0,
+        "cfg_scale": 0.0,
+        "remasking": "low_confidence",
+        "seed": -1,
+        "alternatives": captured,
+    }
+    backend = LladaBackend()
+    backend.tokenizer = _ChatTokenizer()
+    backend._validate_generate = (  # type: ignore[method-assign]
+        lambda data: dict(params)
+    )
+    ws = _StubWebSocket()
+
+    asyncio.run(
+        backend.handle_generate(
+            ws,  # type: ignore[arg-type]
+            {},
+            threading.Event(),
+            _StubStreamer(ws),  # type: ignore[arg-type]
+        )
+    )
+
+    assert len(entries) == 1
+    assert entries[0]["alternatives"] is captured
+    state = backend.last_run_state
+    assert state is not None
+    assert state["alternatives"] is captured
+
+
+@pytest.mark.parametrize("captured", [True, False])
+def test_an_edit_captures_candidates_as_its_run_did(
+    monkeypatch: pytest.MonkeyPatch, captured: bool
+) -> None:
+    """A resume takes the flag from the retained run rather than the
+    request, so a saved run's candidates cover both sides of an edit
+    or neither, never the edit alone."""
+    entries: List[Dict[str, Any]] = []
+    _install_resume_stub(monkeypatch, frames=3, entries=entries)
+    backend = _backend()
+    state = backend.last_run_state
+    assert state is not None
+    state["alternatives"] = captured
+
+    _resume(backend, _StubWebSocket(), frame_index=2)
+
+    assert len(entries) == 1
+    assert entries[0]["alternatives"] is captured
 
 
 def test_without_a_rewind_the_second_edit_moves(

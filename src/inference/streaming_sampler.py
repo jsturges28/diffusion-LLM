@@ -19,11 +19,17 @@ from typing import (
     AsyncGenerator,
     Dict,
     List,
+    Optional,
 )
 
 import torch
 
+from src.backends.protocol import CANDIDATES_PER_POSITION
 from src.backends.text_adapter import ChatTextAdapter
+from src.inference.candidate_capture import (
+    CandidateCapture,
+    step_candidates,
+)
 from src.inference.checkpoint import (
     CheckpointBudget,
     FrameCheckpoint,
@@ -37,6 +43,7 @@ from src.inference.llada_kernel import (
     diffusion_step,
     get_num_transfer_tokens,
 )
+from src.inference.logit_signals import Candidates
 from src.inference.reveal import newly_revealed
 
 # Re-exported rather than defined here. The algorithm owns the mask id
@@ -310,6 +317,60 @@ def _mean_conf(
     return round(float(reveal_conf[resolved].mean().item()), 4)
 
 
+def _candidate_capture(alternatives: bool) -> CandidateCapture | None:
+    """A capture when the run asked for candidates, else None."""
+    if alternatives:
+        return CandidateCapture()
+    return None
+
+
+def _candidates_top_k(capture: CandidateCapture | None) -> int:
+    """What to ask the step for: nothing when no capture is running,
+    so a run without candidates pays nothing for them."""
+    if capture is None:
+        return 0
+    return CANDIDATES_PER_POSITION
+
+
+def _offer_candidates(
+    capture: CandidateCapture | None,
+    frame: int,
+    held: torch.Tensor,
+    candidates: Candidates | None,
+) -> None:
+    """Hand one step's candidates to the capture, if one is running.
+
+    ``held`` is the generation region's guesses, which are the tokens
+    the frame shows: settled tokens where settled, picks elsewhere.
+    """
+    if capture is None:
+        assert candidates is None, "candidates only when asked for"
+        return
+    assert candidates is not None, "a capture reads every step"
+    capture.offer(step_candidates(frame, held, candidates))
+
+
+def _flush_candidates(
+    capture: CandidateCapture | None, tokenizer: Any
+) -> Optional[Dict[str, Any]]:
+    """The run's candidates message, or None without a capture.
+
+    The raw decode, control tokens intact, as the autoregressive
+    sampler's candidates are: a canvas ends in end-of-text tokens,
+    and the popover draws each one legibly where a sanitized decode
+    would leave a row of blanks. See ``overlaysAltDisplay``.
+    """
+    if capture is None:
+        return None
+
+    def decode(token: int) -> str:
+        return str(
+            tokenizer.decode([token], skip_special_tokens=False)
+        )
+
+    return capture.flush(decode)
+
+
 async def streaming_generate(
     model: Any,
     tokenizer: Any,
@@ -321,6 +382,7 @@ async def streaming_generate(
     temperature: float = 0.0,
     cfg_scale: float = 0.0,
     remasking: str = "low_confidence",
+    alternatives: bool = False,
     cancel_event: threading.Event | None = None,
     frame_checkpoints: List[FrameCheckpoint] | None = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
@@ -333,11 +395,17 @@ async def streaming_generate(
         After each diffusion step (including initial masked state).
         ``revealed`` holds the positions unmasked by this step and
         never seen before; see src/inference/reveal.py.
+    {"type": "candidates", ...}
+        Once, before done, when ``alternatives`` asked for them; see
+        src/inference/candidate_capture.py. A stopped run has none.
     {"type": "done", "final_text": str}
         After the last step with skip_special_tokens decoding.
 
     Parameters
     ----------
+    alternatives :
+        Capture each step's five likeliest tokens per position, from
+        frame 1 on: frame 0 has no forward pass behind it.
     frame_checkpoints :
         If provided, each frame's checkpoint (canvas ids, reveal
         confidence, random state) is appended here so the server can
@@ -390,6 +458,7 @@ async def streaming_generate(
     # Positions already counted as born, so a token is only ever
     # revealed once. Empty here because the canvas starts all masked.
     seen_revealed: set[int] = set()
+    capture = _candidate_capture(alternatives)
 
     budget = CheckpointBudget()
     checkpoint_append(
@@ -441,6 +510,7 @@ async def streaming_generate(
                 step_transfer,
                 step_guess,
                 step_entropy,
+                candidates,
             ) = await asyncio.to_thread(
                 diffusion_step,
                 x,
@@ -453,6 +523,8 @@ async def streaming_generate(
                 block_end,
                 num_transfer_tokens,
                 i,
+                top_k=_candidates_top_k(capture),
+                candidates_from=prompt_len,
             )
             gen_transfer = step_transfer[0, prompt_len:]
             gen_step_conf = step_conf[0, prompt_len:]
@@ -460,6 +532,9 @@ async def streaming_generate(
             gen_step_entropy = step_entropy[0, prompt_len:]
             reveal_conf[gen_transfer] = (
                 gen_step_conf[gen_transfer]
+            )
+            _offer_candidates(
+                capture, frame_index, gen_step_guess, candidates
             )
 
             checkpoint_append(
@@ -496,6 +571,9 @@ async def streaming_generate(
             }
             frame_index += 1
 
+    message = _flush_candidates(capture, tokenizer)
+    if message is not None:
+        yield message
     final_text = tokenizer.batch_decode(
         x[:, prompt_len:], skip_special_tokens=True
     )[0]
@@ -523,6 +601,7 @@ async def streaming_resume(
     temperature: float = 0.0,
     cfg_scale: float = 0.0,
     remasking: str = "low_confidence",
+    alternatives: bool = False,
     cancel_event: threading.Event | None = None,
     frame_checkpoints: List[FrameCheckpoint] | None = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
@@ -554,6 +633,9 @@ async def streaming_resume(
         set back to MASK_ID before resuming.
     remaining_steps :
         How many diffusion steps to run from this point.
+    alternatives :
+        Capture candidates as generate does, at this resume's own
+        frame indices; the client places them after the resume point.
     """
     assert remaining_steps > 0
     assert len(remask_positions) > 0
@@ -609,6 +691,7 @@ async def streaming_resume(
     seen_revealed: set[int] = set(
         newly_revealed(_resolved_flags(x, prompt_len), set())
     )
+    capture = _candidate_capture(alternatives)
 
     initial_text = tokenizer.batch_decode(
         x[:, prompt_len:], skip_special_tokens=False
@@ -639,6 +722,7 @@ async def streaming_resume(
             step_transfer,
             step_guess,
             step_entropy,
+            candidates,
         ) = await asyncio.to_thread(
             diffusion_step,
             x,
@@ -651,6 +735,8 @@ async def streaming_resume(
             block_end,
             num_transfer_tokens,
             i,
+            top_k=_candidates_top_k(capture),
+            candidates_from=prompt_len,
         )
         gen_transfer = step_transfer[0, prompt_len:]
         gen_step_conf = step_conf[0, prompt_len:]
@@ -659,6 +745,7 @@ async def streaming_resume(
         reveal_conf[gen_transfer] = (
             gen_step_conf[gen_transfer]
         )
+        _offer_candidates(capture, i + 1, gen_step_guess, candidates)
 
         checkpoint_append(
             frame_checkpoints, budget, x, prompt_len, reveal_conf
@@ -689,6 +776,9 @@ async def streaming_resume(
             "revealed": born,
         }
 
+    message = _flush_candidates(capture, tokenizer)
+    if message is not None:
+        yield message
     final_text = tokenizer.batch_decode(
         x[:, prompt_len:], skip_special_tokens=True
     )[0]

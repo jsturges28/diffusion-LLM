@@ -69,6 +69,12 @@ def _apply_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def _wants_alternatives(params: Dict[str, Any]) -> bool:
+    """Whether a run captures candidates. Absent means no, since
+    the registry has not declared the parameter yet."""
+    return bool(params.get("alternatives", False))
+
+
 def _commit_resume(
     state: Dict[str, Any],
     base_history: List[FrameCheckpoint],
@@ -294,6 +300,7 @@ class LladaBackend(Backend):
                 temperature=params["temperature"],
                 cfg_scale=params["cfg_scale"],
                 remasking=params["remasking"],
+                alternatives=_wants_alternatives(params),
                 cancel_event=cancel_event,
                 frame_checkpoints=frame_checkpoints,
             )
@@ -362,6 +369,10 @@ class LladaBackend(Backend):
             "temperature": params["temperature"],
             "cfg_scale": params["cfg_scale"],
             "remasking": params["remasking"],
+            # So an edit captures candidates exactly when the run it
+            # branches from did, and a saved run's candidates cover
+            # both sides of the edit or neither.
+            "alternatives": _wants_alternatives(params),
             # Kept for provenance rather than for the resume, which
             # re-enters from the chosen frame's own random state. A
             # frame that outran the checkpoint budget has none, and
@@ -487,6 +498,7 @@ class LladaBackend(Backend):
                 temperature=state["temperature"],
                 cfg_scale=state["cfg_scale"],
                 remasking=state["remasking"],
+                alternatives=state["alternatives"],
                 cancel_event=cancel_event,
                 frame_checkpoints=resume_history,
             )

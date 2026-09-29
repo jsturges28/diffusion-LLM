@@ -25,14 +25,16 @@ callers and only the step and the schedule are shared.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Tuple
+from typing import Any, Optional, Tuple
 
 import numpy as np
 import torch
 
 from src.inference.logit_signals import (
+    Candidates,
     entropy_nats,
     picked_confidence,
+    top_candidates,
 )
 
 # LLaDA's [MASK] token. Every masked position on the canvas holds this
@@ -208,20 +210,33 @@ def diffusion_step(
     block_end: int,
     num_transfer_tokens: torch.Tensor,
     step_in_block: int,
+    *,
+    top_k: int = 0,
+    candidates_from: int = 0,
 ) -> Tuple[
     torch.Tensor,
     torch.Tensor,
     torch.Tensor,
     torch.Tensor,
     torch.Tensor,
+    Optional[Candidates],
 ]:
     """Execute one synchronous diffusion step, mutating x.
 
-    Returns (x, true_conf, transfer_index, x0, entropy): the mutated
-    sequence, the per-position probability of the picked token, the
-    boolean mask of positions revealed this step, the prediction
-    itself for every position, and the entropy in nats of each
-    position's distribution at this step.
+    Returns (x, true_conf, transfer_index, x0, entropy, candidates):
+    the mutated sequence, the per-position probability of the picked
+    token, the boolean mask of positions revealed this step, the
+    prediction itself for every position, the entropy in nats of each
+    position's distribution at this step, and the ``top_k`` likeliest
+    tokens at each position from ``candidates_from`` on, or None when
+    ``top_k`` is 0.
+
+    Candidates are read here because this is the only place the
+    logits exist. They start at ``candidates_from``, the generation
+    region, rather than covering the prompt as entropy does: the
+    popover only ever asks about generated positions, and a long
+    prompt would otherwise multiply the walk for nothing. A slice, so
+    no rows are copied.
 
     Entropy is this step's value at every position, settled or not,
     rather than a value frozen when a position was revealed. That is
@@ -274,6 +289,9 @@ def diffusion_step(
 
     x0 = torch.where(mask_index, x0, x)
     confidence = torch.where(mask_index, x0_p, -np.inf)
+    candidates = _step_candidates(
+        logits, x0, top_k=top_k, start=candidates_from
+    )
 
     transfer_index = torch.zeros_like(
         x0, dtype=torch.bool, device=x0.device
@@ -292,4 +310,26 @@ def diffusion_step(
     # the few that were revealed this step. The rest are what a
     # masked position is currently holding out for, and the display
     # had no way to name them because they stopped here.
-    return x, true_conf, transfer_index, x0, entropy
+    return x, true_conf, transfer_index, x0, entropy, candidates
+
+
+def _step_candidates(
+    logits: torch.Tensor,
+    held: torch.Tensor,
+    *,
+    top_k: int,
+    start: int,
+) -> Optional[Candidates]:
+    """The step's candidates from ``start`` on, or None when none
+    were asked for.
+
+    ``held`` is what each position shows after the step: its token
+    where it had settled, the step's pick where it was masked, which
+    is the guess a masked position displays. So the popover's marked
+    row is always the token on screen.
+    """
+    assert top_k >= 0, "top_k is a count"
+    assert 0 <= start < logits.shape[1], "start within the sequence"
+    if top_k == 0:
+        return None
+    return top_candidates(logits[0, start:], top_k, held[0, start:])
