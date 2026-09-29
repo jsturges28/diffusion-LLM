@@ -220,13 +220,21 @@ kept when these were written:
 - **337 to 339**: confirmed on 2026-09-28: the completion label and
   its "?", saving after browsing the history, and deleting a prompt
   from it.
-- **340**: **outstanding**, a default LLaDA run's popover and the file
-  it saves.
+- **340**: confirmed on 2026-09-29.
 - **341**: half done by an agent on 2026-09-28: the step-time cost,
   measured on the card and recorded in the item. Checking a run with
   Alternatives off in the app is **outstanding**.
-- **342 to 346**: **outstanding**, the rest of the diffusion candidate
-  popover on both models, live and in Analytics.
+- **342 to 344**: confirmed on 2026-09-29. In 344 the popover stood
+  down on the crossfade's Original side as designed; paging it to the
+  original run's candidates is planned instead.
+- **345**: **outstanding**. It failed on 2026-09-29 with no popover at
+  all, on either side of the crossfade: the candidate popover sat
+  outside the run detail modal, which since 2026-09-15 has been a
+  native dialog painting above everything outside it, so every run's
+  popover opened unseen. Fixed that day; re-run it.
+- **346**: confirmed on 2026-09-29.
+- **347**: **outstanding**, an autoregressive branch's crossfade and
+  diff, restored on 2026-09-29.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -3909,10 +3917,30 @@ records (one default LLaDA run); longer runs keep every few steps.
     popover follows that scrubber with the same **Step N** and **As
     of step N** headings, and the same five candidates, as the
     generator showed at each frame. A diffusion run saved before this
-    change shows no popover, as before.
+    change shows no popover, as before. Open a SmolLM3 run saved with
+    **Alternatives** on as well: its popover shows there too, since
+    the fault that hid this one hid every run's.
 
 346. **The candidates survive a trip away and back.** After a default
     LLaDA run, go to Analytics without saving and come back: hovering
     still opens the popover at each frame. Save now, and the run's
     folder has `candidates.json`. Reload the page instead of going to
     Analytics, and the same holds.
+
+## An autoregressive branch keeps its comparison views
+
+From 2026-09-01 to 2026-09-29 a SmolLM3 or Mamba-3 run lost its
+comparison views after a **What If?** substitution: its pre-edit
+baseline keeps positions, and the views measured it by per-frame
+token arrays it never has.
+
+347. **The crossfade and the diff are back after What If.** Generate
+    with SmolLM3 (**Alternatives** on), press **What If?**, substitute
+    a candidate and **Confirm**. The **Original** / **Edited**
+    crossfade appears below the scrubber: drag it and the two runs
+    fade into each other, the substituted position included, and the
+    candidate popover opens on the page of the run the slider favours.
+    Pick **Diff vs Original** in the overlay drawer: it draws both
+    runs with its own two sliders, and `Diverged N/total` counts from
+    the substitution on. Hovering a token on the Original side reads
+    the original run's token in the metrics strip.
