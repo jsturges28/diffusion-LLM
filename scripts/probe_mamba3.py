@@ -22,6 +22,9 @@ without it. The rest are chosen with --sections:
 - forgetting: what reading each token erased, the one per-token
   signal a Mamba-3 run would draw, held to its own bar (manual item
   329) before any overlay shows it.
+- uncertainty: whether forgetting predicts how open the model's next
+  choice is, beyond the sentence boundaries that raise both, held to
+  a bar fixed before its first run (manual item 336).
 
 The checkpoint was trained with Llama 3.1's tokenizer, whose own
 repository is gated. SmolLM3's, which this project already pins, is
@@ -44,6 +47,7 @@ import argparse
 import json
 import math
 import platform
+import random
 import resource
 import sys
 import time
@@ -116,6 +120,15 @@ FORGETTING_WARM_UP = 8  # tokens the repeated input's state settles in
 FORGETTING_FLAT_RATIO = 0.5  # the repeated input's share of variation
 CHANCE_FLOOR = 2.0  # multiples of chance before an overlap counts
 FORGETTING_TOP_TOKENS = 10  # most-forgetting tokens the report shows
+# The uncertainty bar, fixed before its first run (manual item 336).
+# Does what reading a token erased predict how open the next choice
+# is, beyond the sentence boundaries that raise both?
+UNCERTAINTY_SPEARMAN = 0.3  # forgetting against entropy, per passage
+UNCERTAINTY_WITHIN = 0.15  # the same, away from every boundary
+PERMUTATIONS = 1000  # shuffled pairings behind the chance test
+PERMUTATION_QUANTILE = 0.99  # the share of shuffles to beat
+PERMUTATION_SEED = 20260928
+BOUNDARY_MARKS = (".", "!", "?", ":", ";", "\n")
 
 AGREEMENT_TOKENS = 128
 RETENTION_TOKENS = 128
@@ -124,7 +137,13 @@ SPEED_DECODE_TOKENS = 128
 COMPLETION_TOKENS = 40
 WARM_UP_TOKENS = 8
 
-SECTIONS = ("correctness", "speed", "retention", "forgetting")
+SECTIONS = (
+    "correctness",
+    "speed",
+    "retention",
+    "forgetting",
+    "uncertainty",
+)
 DTYPES: Dict[str, torch.dtype] = {
     "bfloat16": torch.bfloat16,
     "float32": torch.float32,
@@ -133,6 +152,9 @@ DTYPES: Dict[str, torch.dtype] = {
 assert PERPLEXITY_EXPECTED[1] < PERPLEXITY_GLUE_ERROR, "bands"
 assert 0 < TOP_POSITIONS < RETENTION_TOKENS, "top of what"
 assert WARM_UP_TOKENS < SPEED_PROMPT_TOKENS, "warm-up is short"
+assert 0 < UNCERTAINTY_WITHIN < UNCERTAINTY_SPEARMAN < 1, "bars"
+assert 0.5 < PERMUTATION_QUANTILE < 1, "a quantile of the shuffles"
+assert PERMUTATIONS >= 100, "enough shuffles to place a quantile"
 
 # Written for this probe rather than copied, so no passage can be one
 # the checkpoint memorised. Plain explanatory prose, which is what its
@@ -205,8 +227,20 @@ class TextCodec(NamedTuple):
     fingerprint: str  # `bpe_fingerprint` of the file it came from
 
 
+class Pairs(NamedTuple):
+    """One passage as the uncertainty check reads it: both numbers
+    reading each token produces, and what each token's text is."""
+
+    forgetting: Tensor  # (length,) what reading each token erased
+    entropy: Tensor  # (length,) nats, of the next token's odds
+    boundary: List[bool]  # whether each token holds a boundary mark
+
+
 Verdict = Dict[str, str]
 Section = Dict[str, Any]
+# The passages the uncertainty check reads whole, by name.
+UNCERTAINTY_INPUTS = ("passage_a", "passage_b", "passage_c")
+assert len(UNCERTAINTY_INPUTS) == len(PASSAGES), "a name each"
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -986,6 +1020,175 @@ def _most_forgetting(
     ]
 
 
+# -- uncertainty --
+
+
+def uncertainty(model: Mamba3LM, codec: TextCodec) -> Section:
+    """Does forgetting predict how open the next choice is? Every
+    passage read whole, judged by a bar fixed before its first run;
+    the repeated token reported beside it, and not judged."""
+    passages: Dict[str, Pairs] = {}
+    for name, text in zip(UNCERTAINTY_INPUTS, PASSAGES, strict=True):
+        ids = codec.encode(text)
+        erased, entropy = read_forgetting_and_entropy(
+            model, _on(model, ids)
+        )
+        boundary = _boundary_flags(codec, ids)
+        passages[name] = Pairs(erased, entropy, boundary)
+    section = judge_uncertainty(passages)
+    repeated = _repeated(codec, RETENTION_TOKENS)
+    erased, entropy = read_forgetting_and_entropy(
+        model, _on(model, repeated)
+    )
+    section["repeated"] = _settled_variation(erased, entropy)
+    return section
+
+
+def read_forgetting_and_entropy(
+    model: Mamba3LM, ids: Tensor
+) -> Tuple[Tensor, Tensor]:
+    """Both numbers reading each token produces, (length,) each, from
+    one forward: what the read erased, and the entropy of the odds it
+    leaves for the next token."""
+    sink: List[Tensor] = []
+    core = memory.recording_core(sink)
+    logits, _ = model(ids, model.empty_states(1), core=core)
+    erased = memory.forgetting(sink)[0].cpu()
+    entropy = _entropy_nats(logits[0]).cpu()
+    assert erased.shape == entropy.shape, "one pair per token"
+    return erased, entropy
+
+
+def judge_uncertainty(passages: Dict[str, Pairs]) -> Section:
+    """The three tests, each required on every passage.
+
+    Pairs run from the second token on: the first is read from an
+    empty state, so what it erased means nothing. Away from
+    boundaries drops a pair when its token or the one before holds a
+    mark, so a full stop and the word opening the next sentence are
+    both out, and what is left is the middle of sentences.
+    """
+    rows = {
+        name: _pair_row(pairs) for name, pairs in passages.items()
+    }
+    return _uncertainty_verdicts(rows)
+
+
+def _uncertainty_verdicts(
+    rows: Dict[str, Dict[str, float]],
+) -> Section:
+    association = [row["association"] for row in rows.values()]
+    within = [row["within"] for row in rows.values()]
+    beats = [
+        row["association"] > row["chance_ceiling"]
+        for row in rows.values()
+    ]
+    ceilings = [row["chance_ceiling"] for row in rows.values()]
+    verdicts = [
+        _verdict(
+            "forgetting predicts uncertainty: Spearman of at least"
+            f" {UNCERTAINTY_SPEARMAN:g} on each passage",
+            all(
+                value >= UNCERTAINTY_SPEARMAN for value in association
+            ),
+            _joined(association),
+        ),
+        _verdict(
+            "beyond boundaries: at least"
+            f" {UNCERTAINTY_WITHIN:g} away from every sentence mark",
+            all(value >= UNCERTAINTY_WITHIN for value in within),
+            _joined(within),
+        ),
+        _verdict(
+            "not chance: above the"
+            f" {PERMUTATION_QUANTILE:g} quantile of {PERMUTATIONS}"
+            " shuffles on each passage",
+            all(beats),
+            f"{_joined(association)} against {_joined(ceilings)}",
+        ),
+    ]
+    return {
+        "passages": rows,
+        "informative": all(v["result"] == "pass" for v in verdicts),
+        "verdicts": verdicts,
+    }
+
+
+def _pair_row(pairs: Pairs) -> Dict[str, float]:
+    """One passage's numbers, over pairs from the second token on."""
+    erased = pairs.forgetting[1:].double()
+    entropy = pairs.entropy[1:].double()
+    keep = torch.tensor(
+        _away_from_boundaries(pairs.boundary), dtype=torch.bool
+    )
+    assert keep.shape == erased.shape, "a flag for every pair"
+    within = math.nan
+    if int(keep.sum()) >= 2:
+        within = memory.spearman(erased[keep], entropy[keep])
+    return {
+        "pairs": int(erased.shape[0]),
+        "pairs_within": int(keep.sum()),
+        "association": memory.spearman(erased, entropy),
+        "within": within,
+        "chance_ceiling": _permutation_ceiling(erased, entropy),
+    }
+
+
+def _away_from_boundaries(boundary: Sequence[bool]) -> List[bool]:
+    """For each pair from the second token on, whether neither its
+    token nor the one before holds a boundary mark."""
+    return [
+        not (boundary[index] or boundary[index - 1])
+        for index in range(1, len(boundary))
+    ]
+
+
+def _permutation_ceiling(erased: Tensor, entropy: Tensor) -> float:
+    """The association shuffled pairings of these same values reach
+    at the registered quantile: what chance alone gives here."""
+    draw = random.Random(PERMUTATION_SEED)
+    order = list(range(int(entropy.shape[0])))
+    reached: List[float] = []
+    for _ in range(PERMUTATIONS):
+        draw.shuffle(order)
+        reached.append(memory.spearman(erased, entropy[order]))
+    reached.sort()
+    return reached[int(PERMUTATION_QUANTILE * (PERMUTATIONS - 1))]
+
+
+def _boundary_flags(codec: TextCodec, ids: List[int]) -> List[bool]:
+    """Whether each token's text holds a sentence mark or newline."""
+    return [_is_boundary(codec.decode([token])) for token in ids]
+
+
+def _is_boundary(text: str) -> bool:
+    return any(mark in text for mark in BOUNDARY_MARKS)
+
+
+def _entropy_nats(logits: Tensor) -> Tensor:
+    """Each position's next-token entropy, in nats and untempered: the
+    `e` a run records, computed as `ar_sampler._entropy_nats` does."""
+    probs = torch.softmax(logits.float(), dim=-1)
+    return torch.special.entr(probs).sum(dim=-1)
+
+
+def _settled_variation(
+    erased: Tensor, entropy: Tensor
+) -> Dict[str, float]:
+    """The repeated token once its state settles, where both numbers
+    barely move: the reason it is reported rather than judged."""
+    return {
+        "forgetting_variation": _variation(
+            erased[FORGETTING_WARM_UP:]
+        ),
+        "entropy_variation": _variation(entropy[FORGETTING_WARM_UP:]),
+    }
+
+
+def _joined(values: Sequence[float]) -> str:
+    return ", ".join(f"{value:.3f}" for value in values)
+
+
 # -- shared --
 
 
@@ -1033,6 +1236,7 @@ RUNNERS: Dict[str, Callable[[Mamba3LM, TextCodec], Section]] = {
     "speed": speed,
     "retention": retention,
     "forgetting": forgetting,
+    "uncertainty": uncertainty,
 }
 assert tuple(RUNNERS) == SECTIONS, "a runner for every section"
 
@@ -1143,12 +1347,32 @@ def _forgetting_lines(section: Section) -> List[str]:
     return lines
 
 
+def _uncertainty_lines(section: Section) -> List[str]:
+    lines = []
+    for name, row in section["passages"].items():
+        lines.append(
+            f"  {name}: Spearman {row['association']:.3f} over"
+            f" {row['pairs']} pairs; {row['within']:.3f} over the"
+            f" {row['pairs_within']} away from boundaries; chance"
+            f" reaches {row['chance_ceiling']:.3f}"
+        )
+    repeated = section.get("repeated")
+    if repeated is not None:
+        lines.append(
+            "  repeated token, settled: variation"
+            f" {repeated['forgetting_variation']:.4f} in forgetting,"
+            f" {repeated['entropy_variation']:.4f} in entropy"
+        )
+    return lines
+
+
 LINES: Dict[str, Callable[[Section], List[str]]] = {
     "load": _load_lines,
     "correctness": _correctness_lines,
     "speed": _speed_lines,
     "retention": _retention_lines,
     "forgetting": _forgetting_lines,
+    "uncertainty": _uncertainty_lines,
 }
 
 

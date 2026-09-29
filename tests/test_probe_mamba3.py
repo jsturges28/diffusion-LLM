@@ -26,6 +26,7 @@ import torch
 
 from scripts import probe_mamba3 as probe
 from src.backends.registry import SMOLLM3
+from src.inference.ar_sampler import _entropy_nats as sampler_entropy
 from src.inference.mamba3 import Mamba3LM, config_from_json
 from src.inference.mamba3_tokenizer import (
     BEGIN_OF_TEXT,
@@ -136,6 +137,14 @@ def test_every_section_runs_on_a_tiny_checkpoint(
     shown = len(forgetting["top_tokens"])
     assert len(forgetting["verdicts"]) == 4
     assert shown == probe.FORGETTING_TOP_TOKENS
+    uncertainty = report["uncertainty"]
+    passages = set(uncertainty["passages"])
+    assert passages == set(probe.UNCERTAINTY_INPUTS)
+    assert len(uncertainty["verdicts"]) == 3
+    assert set(uncertainty["repeated"]) == {
+        "forgetting_variation",
+        "entropy_variation",
+    }
 
 
 def test_sections_choose_what_runs(
@@ -295,6 +304,18 @@ def test_the_criteria_are_the_ones_registered_in_advance() -> None:
     assert probe.FORGETTING_WARM_UP == 8
     assert probe.FORGETTING_FLAT_RATIO == 0.5
     assert probe.CHANCE_FLOOR == 2.0
+
+
+def test_the_uncertainty_bar_is_the_one_registered() -> None:
+    """Item 336 states these numbers, committed before the check first
+    ran. Loosening one after seeing a result would decide nothing."""
+    assert probe.UNCERTAINTY_SPEARMAN == 0.3
+    assert probe.UNCERTAINTY_WITHIN == 0.15
+    assert probe.PERMUTATIONS == 1000
+    assert probe.PERMUTATION_QUANTILE == 0.99
+    assert probe.PERMUTATION_SEED == 20260928
+    assert probe.BOUNDARY_MARKS == (".", "!", "?", ":", ";", "\n")
+    assert len(probe.UNCERTAINTY_INPUTS) == len(probe.PASSAGES)
 
 
 def test_criteria_that_do_not_apply_to_a_run_are_not_judged() -> None:
@@ -507,3 +528,173 @@ def test_a_coin_toss_below_the_chance_floor_is_no_failure() -> None:
     assert section["passages_overlap"] == 0
     assert section["repeated_overlap"] == 3
     assert _results_by_name(section)["degenerate"] == "pass"
+
+
+# -- the uncertainty tests, on pairs with known answers --
+
+PAIRS = 190
+UNCERTAINTY_CRITERIA = ("association", "within", "chance")
+# Every sixth token holds a mark, about the share of full stops and
+# line breaks in the probe's passages.
+BOUNDARY_EVERY = 6
+# Denser than real text, so that marks alone carry the association
+# clear of its bar. At the real density they land around 0.3, which
+# is why the bar needs a second test at all.
+CONFOUND_EVERY = 4
+
+
+def _uniform(seed: int) -> torch.Tensor:
+    gen = torch.Generator().manual_seed(seed)
+    return torch.rand(PAIRS, generator=gen, dtype=torch.float64)
+
+
+def _marks(every: int = BOUNDARY_EVERY) -> List[bool]:
+    return [index % every == 0 for index in range(PAIRS)]
+
+
+def _coupled(seed: int) -> probe.Pairs:
+    """Entropy that follows forgetting at every token, marked or
+    not."""
+    erased = _uniform(seed)
+    entropy = erased + 0.2 * _uniform(seed + 100)
+    return probe.Pairs(erased, entropy, _marks())
+
+
+def _coupled_at_marks(seed: int) -> probe.Pairs:
+    """The confound on its own: a full stop both erases much and opens
+    the next choice wide, and elsewhere the two are unrelated."""
+    erased = _uniform(seed)
+    entropy = _uniform(seed + 100)
+    marks = _marks(CONFOUND_EVERY)
+    for index, marked in enumerate(marks):
+        if marked:
+            erased[index] = 2.0 + erased[index]
+            entropy[index] = 2.0 + entropy[index]
+    return probe.Pairs(erased, entropy, marks)
+
+
+def _unrelated(seed: int) -> probe.Pairs:
+    return probe.Pairs(_uniform(seed), _uniform(seed + 100), _marks())
+
+
+def _judged(make: Any) -> Dict[str, Any]:
+    return probe.judge_uncertainty({
+        name: make(seed)
+        for seed, name in enumerate(probe.UNCERTAINTY_INPUTS, start=1)
+    })
+
+
+def _uncertainty_results(section: Dict[str, Any]) -> Dict[str, str]:
+    results = _results(section)
+    return dict(zip(UNCERTAINTY_CRITERIA, results, strict=True))
+
+
+def test_forgetting_that_tracks_uncertainty_passes() -> None:
+    section = _judged(_coupled)
+
+    assert _results(section) == ["pass"] * 3
+    assert section["informative"] is True
+
+
+def test_a_link_only_at_sentence_marks_fails_beyond_them() -> None:
+    """What the second test exists for. Marks alone can carry the
+    association over its bar, and a punctuation detector would have
+    known everything such a link says."""
+    section = _judged(_coupled_at_marks)
+    results = _uncertainty_results(section)
+
+    assert results["association"] == "pass"
+    assert results["within"] == "fail"
+    assert section["informative"] is False
+
+
+def test_unrelated_numbers_fail_the_bar_and_chance() -> None:
+    section = _judged(_unrelated)
+    results = _uncertainty_results(section)
+
+    assert results["association"] == "fail"
+    assert results["chance"] == "fail"
+
+
+def test_every_passage_has_to_hold() -> None:
+    """Two passages of three are not the bar: the link has to be a
+    property of the model, not of one text."""
+    section = probe.judge_uncertainty({
+        "passage_a": _coupled(1),
+        "passage_b": _coupled(2),
+        "passage_c": _unrelated(3),
+    })
+
+    assert _uncertainty_results(section)["association"] == "fail"
+    assert section["informative"] is False
+
+
+def test_pairs_start_at_the_second_token() -> None:
+    """The first token is read from an empty state, so what it erased
+    is no reading of the text. Both counts leave it out."""
+    section = _judged(_coupled)
+    row = section["passages"]["passage_a"]
+
+    assert row["pairs"] == PAIRS - 1
+    assert row["pairs_within"] < row["pairs"]
+
+
+def test_a_mark_drops_its_pair_and_the_next() -> None:
+    """A full stop's pair and the pair of the word after it: the
+    sentence opener erases a lot too, so it is not the middle of a
+    sentence either."""
+    marks = [False, True, False, False, True, False]
+
+    kept = probe._away_from_boundaries(marks)
+
+    assert kept == [False, False, True, False, False]
+
+
+def test_boundaries_are_sentence_marks_and_line_breaks() -> None:
+    for text in (".", "?\n", ";", ":", "!", "\n", " end."):
+        assert probe._is_boundary(text), repr(text)
+    for text in ("Dr", ",", " the", "-", "'s"):
+        assert not probe._is_boundary(text), repr(text)
+
+
+def test_the_entropy_is_the_one_a_run_records() -> None:
+    """The check has to measure the `e` the entropy profile draws,
+    or passing it would say nothing about what the user sees."""
+    gen = torch.Generator().manual_seed(4)
+    logits = 3.0 * torch.randn(5, 64, generator=gen)
+
+    ours = probe._entropy_nats(logits)
+
+    for row in range(5):
+        expected = sampler_entropy(torch.softmax(logits[row], dim=-1))
+        assert float(ours[row]) == pytest.approx(expected, rel=1e-5)
+
+
+def test_the_reader_pairs_each_read_with_the_next_odds() -> None:
+    """One forward yields both numbers for the same read: forgetting
+    exactly as the forgetting section measures it, and the entropy
+    of the logits that read produced."""
+    torch.manual_seed(0)
+    model = Mamba3LM(config_from_json(TINY)).eval()
+    ids = torch.tensor([[BEGIN, 7, 12, 30, 9, 41, 3]])
+
+    read = probe.read_forgetting_and_entropy
+    with torch.no_grad():
+        erased, entropy = read(model, ids)
+        logits, _ = model(ids, model.empty_states(1))
+
+    assert torch.equal(erased, probe.read_forgetting(model, ids))
+    assert torch.allclose(entropy, probe._entropy_nats(logits[0]))
+    assert erased.shape == (ids.shape[1],)
+
+
+def test_the_chance_ceiling_is_reproducible() -> None:
+    """Seeded, so a re-run lands on the same threshold and a verdict
+    cannot flip on the luck of the shuffle."""
+    erased, entropy = _uniform(1), _uniform(2)
+
+    first = probe._permutation_ceiling(erased, entropy)
+    second = probe._permutation_ceiling(erased, entropy)
+
+    assert first == second
+    assert 0.0 < first < probe.UNCERTAINTY_SPEARMAN
