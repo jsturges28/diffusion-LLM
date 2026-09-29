@@ -206,9 +206,9 @@ kept when these were written:
   checkpoint that was already cached. The download half, on a machine
   that has never fetched Mamba-3, is **outstanding**.
 - **331**: confirmed on 2026-09-28.
-- **332**: **outstanding** again. It failed on 2026-09-28, every token
-  reading as the same violet: the values were right and the ramp was
-  not. The item records the fix; re-run it.
+- **332**: confirmed on 2026-09-28 on the retuned ramp, after failing
+  once that day with every token reading as the same violet; the item
+  records the fix.
 - **333**: confirmed on 2026-09-28.
 - **334**: confirmed on 2026-09-28 apart from the colours, which were
   332's defect; re-check them with 332.
@@ -3708,6 +3708,9 @@ through a script (item 331); none of this has been through the UI.
     while mid-phrase words ("a", "the", "server") recede to slate, and
     a run that repeats itself should show each line's start bright and
     the repetition dim.
+
+    **Confirmed on 2026-09-28 on the retuned ramp**, on the card: the
+    gradient reads, and the metrics strip shows the value on hover.
 
 333. **What If replays. Confirmed on 2026-09-28.** After a Mamba-3
     run with Alternatives on, press **What If?** and pick a candidate
