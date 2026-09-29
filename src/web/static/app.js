@@ -66,6 +66,8 @@ var btnHistPrev =
   document.getElementById("btn-hist-prev");
 var btnHistNext =
   document.getElementById("btn-hist-next");
+var btnHistDelete =
+  document.getElementById("btn-hist-delete");
 var promptHistoryCounter =
   document.getElementById("prompt-history-counter");
 var btnHistConfirm =
@@ -428,6 +430,13 @@ var promptHistory = [];
 var promptHistoryIndex = -1;
 var promptHistoryDraft = null;
 var promptHistoryActive = false;
+// Whether the trash button has had its first press. The label names
+// what the second press will do, so the state is visible to a
+// screen reader as well as in the button's colour.
+var promptHistoryDeleteArmed = false;
+var PROMPT_HISTORY_DELETE_LABEL = "Delete this prompt from history";
+var PROMPT_HISTORY_DELETE_ARMED_LABEL =
+  "Press again to delete this prompt";
 // Snapshot of the complete run taken when Edit Frames is entered.
 // Partial resumes ("Run to Here") truncate the live run mid-way, so
 // exiting restores this to avoid stranding the user on an
@@ -4845,6 +4854,8 @@ function cyclePromptHistory(delta) {
   if (!promptHistoryActive || promptHistory.length === 0) {
     return;
   }
+  // The first press armed the trash for the prompt it was on.
+  setPromptHistoryDeleteArmed(false);
   var n = promptHistory.length;
   promptHistoryIndex =
     (((promptHistoryIndex + delta) % n) + n) % n;
@@ -4858,6 +4869,7 @@ function cyclePromptHistory(delta) {
 // Reset the browse UI without changing the box text. Shared by commit
 // and by starting a generation from a browsed prompt.
 function _exitPromptHistoryUI() {
+  setPromptHistoryDeleteArmed(false);
   promptHistoryActive = false;
   promptHistoryDraft = null;
   promptHistoryIndex = -1;
@@ -4884,6 +4896,59 @@ function cancelPromptHistory() {
     promptInput.value = promptHistoryDraft;
   }
   _exitPromptHistoryUI();
+  promptTextChanged();
+}
+
+// Two presses delete, so a stray click cannot lose a prompt the user
+// may have nowhere else. The first arms the button; moving off it,
+// focus leaving it, stepping to another prompt or ending browsing
+// disarms it, so the second press only counts on the prompt the
+// first one was made on.
+function pressPromptHistoryDelete() {
+  if (!promptHistoryActive) {
+    return;
+  }
+  if (!promptHistoryDeleteArmed) {
+    setPromptHistoryDeleteArmed(true);
+    return;
+  }
+  setPromptHistoryDeleteArmed(false);
+  deleteShownPromptHistory();
+}
+
+function setPromptHistoryDeleteArmed(armed) {
+  promptHistoryDeleteArmed = armed;
+  if (!btnHistDelete) {
+    return;
+  }
+  var label = armed
+    ? PROMPT_HISTORY_DELETE_ARMED_LABEL
+    : PROMPT_HISTORY_DELETE_LABEL;
+  btnHistDelete.classList.toggle("is-armed", armed);
+  btnHistDelete.title = label;
+  btnHistDelete.setAttribute("aria-label", label);
+}
+
+// Drop the prompt on show and move to the next older one, or to the
+// newer one when the oldest went. When the last one goes there is
+// nothing left to browse, so browsing ends the way the cross ends it,
+// with whatever the user had typed put back.
+function deleteShownPromptHistory() {
+  var index = promptHistoryIndex;
+  if (index < 0 || index >= promptHistory.length) {
+    return;
+  }
+  promptHistory.splice(index, 1);
+  savePromptHistoryStore();
+  if (promptHistory.length === 0) {
+    cancelPromptHistory();
+    updatePromptHistoryUI();
+    promptInput.focus();
+    return;
+  }
+  promptHistoryIndex = Math.min(index, promptHistory.length - 1);
+  promptInput.value = promptHistory[promptHistoryIndex];
+  _setPromptHistoryCounter();
   promptTextChanged();
 }
 
@@ -7729,6 +7794,16 @@ if (btnHistPrev) {
 if (btnHistNext) {
   btnHistNext.addEventListener("click", function () {
     cyclePromptHistory(-1);
+  });
+}
+if (btnHistDelete) {
+  btnHistDelete.addEventListener("click", pressPromptHistoryDelete);
+  // Either way of leaving the button takes the first press back.
+  btnHistDelete.addEventListener("mouseleave", function () {
+    setPromptHistoryDeleteArmed(false);
+  });
+  btnHistDelete.addEventListener("blur", function () {
+    setPromptHistoryDeleteArmed(false);
   });
 }
 if (btnHistConfirm) {

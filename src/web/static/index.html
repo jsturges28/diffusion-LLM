@@ -113,6 +113,21 @@
               <span id="prompt-history-counter"></span>
               <button id="btn-hist-next" type="button" class="prompt-hist-nav-btn"
                 title="Newer prompt" aria-label="Newer prompt">&rsaquo;</button>
+              <button id="btn-hist-delete" type="button"
+                class="prompt-hist-icon prompt-hist-delete"
+                title="Delete this prompt from history"
+                aria-label="Delete this prompt from history">
+                <svg viewBox="0 0 24 24" width="12" height="12"
+                  fill="none" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round"
+                  aria-hidden="true">
+                  <path d="M3 6h18" />
+                  <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                  <line x1="10" y1="11" x2="10" y2="17" />
+                  <line x1="14" y1="11" x2="14" y2="17" />
+                </svg>
+              </button>
               <button id="btn-hist-confirm" type="button"
                 class="prompt-hist-icon prompt-hist-confirm"
                 title="Use this prompt" aria-label="Use this prompt">&#x2713;</button>
@@ -452,6 +467,7 @@
         <p>The label above the box tells you what kind of prompt the resident model wants. <strong>Prompt</strong> means an instruction-tuned model that answers what you write. <strong>Text to continue</strong> means a base model, Mamba-3 today, that writes on from where your text stops instead, so a question typed at one gets a longer list of questions rather than a reply. The <strong>?</strong> beside that label says how to get an answer anyway: begin it yourself, as in <em>A REST API is</em>, and the model finishes it. The distinction is declared per model rather than guessed, so the box cannot describe one wrongly.</p>
         <p>It turns <strong style="color:#ffb400;">amber</strong> when the prompt plus your output budget would not fit in the window (<strong>Gen Length</strong> for LLaDA, <strong>Max Tokens</strong> for the others), which is the case worth catching before you run rather than after. For DiffusionGemma the comparison is against the window, not the 256-token canvas: a longer budget legitimately chains several canvases.</p>
         <p>The <strong>import</strong> button, at the top right of the prompt box, loads a <code>.txt</code> or <code>.md</code> file into it. You can also drag a file onto the text area. The file is read in your browser and never uploaded anywhere. Markdown goes in as written, since the model reads it perfectly well and stripping it would misrepresent the file. If the prompt box is not empty, you are asked before it is replaced. Very large files are refused rather than truncated silently, and an import that lands tells you how many characters arrived; the readout above then says immediately what fraction of the window the file has taken, which is usually the thing you wanted to know.</p>
+        <p>The <strong>history</strong> button beside it brings back prompts you have run. <strong>&lsaquo;</strong> and <strong>&rsaquo;</strong> step through them, the check keeps the one shown, and the cross puts back what you had typed. The <strong>trash</strong> deletes the prompt shown, on a second press: the first turns it red, and moving away takes that back. Browsing after a run is safe, because a save records the prompt the run was generated from, not what the box shows by then.</p>
         <h4>Moving between pages</h4>
         <p>Header links move between pages: <strong>Menu</strong> returns to model selection, <strong>Analytics</strong> opens the analytics suite, and <strong>Vision</strong> opens the image tokeniser, which inspects a model without loading it. From Analytics, Vision and Settings, a <strong>Generation</strong> link appears whenever a model is loaded. A <strong>gear icon</strong> in the header opens the shared <strong>Settings</strong> page.</p>
         <h4>Experimental mode</h4>

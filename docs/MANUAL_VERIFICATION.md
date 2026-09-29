@@ -220,6 +220,7 @@ kept when these were written:
 - **337**: **outstanding**, the completion label and its "?" on
   screen.
 - **338**: **outstanding**, saving after browsing the history.
+- **339**: **outstanding**, deleting a prompt from the history.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -3813,3 +3814,17 @@ sentence boundaries that raise both.
     Analytics and back, then save. The same holds. Until 2026-09-28 a
     save recorded whatever the box showed, so this saved the browsed
     prompt as the run's.
+
+## Deleting a prompt from the history
+
+339. **The trash takes two presses, and only on the prompt it
+    armed.** With at least three prompts in the history, open it:
+    a trash icon sits between the arrows and the check, in the same
+    grey as the arrows. Press it once: it turns red, and its tooltip
+    reads "Press again to delete this prompt". Move the pointer off
+    it and back: it is grey again, and one press only re-arms it.
+    Press twice: the prompt on show is gone, the next older one takes
+    its place, and the counter drops by one. Delete down to the last
+    prompt: browsing ends, what you had typed before opening the
+    history is back, and the history button disappears. Restart the
+    app: the deleted prompts stay deleted.

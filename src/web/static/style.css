@@ -508,6 +508,16 @@ body {
   background: rgba(255, 68, 68, 0.14);
 }
 
+/* Neutral until armed, so it never reads as the red cross beside it.
+   Armed, it takes the danger colour and fill: the second press
+   deletes, and the button has to look like it. */
+.prompt-hist-delete.is-armed,
+.prompt-hist-delete.is-armed:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: rgba(255, 68, 68, 0.2);
+}
+
 /* The gap here also sets the clearance under #prompt-actions, which
    is absolutely positioned against this row's top and so sits on the
    label's line. Widening it moves the textarea down and gives both
