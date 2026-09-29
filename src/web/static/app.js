@@ -280,6 +280,13 @@ var reconnectTimer = null;
 // Never reassigned: the family is mutated in place so that a
 // reference taken anywhere stays valid.
 var runFrames = runFramesCreate();
+// The prompt and parameters the run was generated from, captured as
+// Generate sends them. Never read back from the form afterwards: the
+// box is free for browsing history and drafting the next prompt, the
+// parameters can change before an edit is resumed, and neither the
+// resume nor a What If branch sends either one, so the form stops
+// describing the run the moment it finishes.
+var lastRunPrompt = null;
 var lastRunParams = null;
 var lastFinalText = null;
 // Tokens the last run's templated prompt occupied, as the sampler
@@ -2473,7 +2480,6 @@ function handleDone(data) {
       thinkingContent.textContent = "";
     }
   }
-  lastRunParams = getParamValues();
   originalRunCapture(originalRun, runFrames, positionAlts);
 
   setSaveAvailable(true);
@@ -7099,6 +7105,7 @@ function resetRunState() {
   if (overlaySelectGroup) {
     overlaySelectGroup.hidden = true;
   }
+  lastRunPrompt = null;
   lastRunParams = null;
   lastFinalText = null;
   lastRunPromptLen = null;
@@ -7199,6 +7206,9 @@ function startGeneration() {
   _exitPromptHistoryUI();
   pushPromptHistory(prompt);
   resetRunState();
+  var params = getParamValues();
+  lastRunPrompt = prompt;
+  lastRunParams = params;
 
   outputArea.textContent = "";
   if (thinkingPanel) {
@@ -7209,7 +7219,7 @@ function startGeneration() {
   setGenerating(true);
   startRunStatus("Running");
 
-  var payload = getParamValues();
+  var payload = Object.assign({}, params);
   payload.type = "generate";
   payload.prompt = prompt;
   payload.experimental = toggleExperimental.checked;
@@ -7411,6 +7421,17 @@ function showAnalyticsCue(runId) {
   }
 }
 
+// The prompt a save records: the run's own. The box is only the
+// fallback for a run restored from a snapshot written before the run
+// carried its prompt, where the box text at that time is the best
+// record left of what ran.
+function runRecordPrompt() {
+  if (lastRunPrompt !== null) {
+    return lastRunPrompt;
+  }
+  return promptInput.value.trim();
+}
+
 // Returns a promise that settles when the save has finished, one way
 // or the other. Every existing caller ignores it, which is why
 // handing it back is safe; the one caller that needs it is the model
@@ -7478,7 +7499,7 @@ function saveRun() {
 
   var payload = {
     model: activeModelId,
-    prompt: promptInput.value.trim(),
+    prompt: runRecordPrompt(),
     params: lastRunParams || getParamValues(),
     final_text: lastFinalText,
     elapsed_seconds: totalElapsed,
@@ -8570,7 +8591,9 @@ function saveSessionState() {
     // in a reload, so this is the only thing that tells a CPU/GPU
     // switch apart from a page navigation.
     device: activeDevice,
+    // The box's text, put back in the box; runPrompt is what ran.
     prompt: promptInput.value,
+    runPrompt: lastRunPrompt,
     finalText: lastFinalText,
     params: lastRunParams,
     promptLen: lastRunPromptLen,
@@ -8635,6 +8658,19 @@ function clearSessionState() {
   overlaysClearLastRun();
 }
 
+// A snapshot written before the run carried its own prompt has only
+// the box text from when it was taken, which is the best record left
+// of what ran.
+function restoredRunPrompt(snapshot) {
+  if (typeof snapshot.runPrompt === "string") {
+    return snapshot.runPrompt;
+  }
+  if (typeof snapshot.prompt === "string" && snapshot.prompt !== "") {
+    return snapshot.prompt.trim();
+  }
+  return null;
+}
+
 function restoreSessionState() {
   if (!activeModelId) {
     return false;
@@ -8679,6 +8715,7 @@ function restoreSessionState() {
   runFramesRestore(runFrames, restored);
   invalidateRunMemos();
   lastFinalText = s.finalText || "";
+  lastRunPrompt = restoredRunPrompt(s);
   lastRunParams = s.params || null;
   lastRunPromptLen =
     typeof s.promptLen === "number" ? s.promptLen : null;

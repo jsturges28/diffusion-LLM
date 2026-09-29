@@ -219,6 +219,7 @@ kept when these were written:
   which the item records.
 - **337**: **outstanding**, the completion label and its "?" on
   screen.
+- **338**: **outstanding**, saving after browsing the history.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -3800,3 +3801,15 @@ sentence boundaries that raise both.
     placeholder carry the same example. Switch to SmolLM3: the label
     reads **Prompt**, the **?** is gone, and the prompt box has not
     moved by a pixel either way.
+
+## A save records the run, not the form
+
+338. **Browsing the history after a run leaves its record alone.**
+    Generate from one prompt, then open the prompt history and step
+    to a different prompt, and change a parameter such as
+    **Temperature**. Save, and open the run in Analytics: its prompt
+    and parameters are the ones it was generated from. Repeat with a
+    trip in between: after the run, browse to another prompt, go to
+    Analytics and back, then save. The same holds. Until 2026-09-28 a
+    save recorded whatever the box showed, so this saved the browsed
+    prompt as the run's.
