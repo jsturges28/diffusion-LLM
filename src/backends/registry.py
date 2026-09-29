@@ -12,6 +12,7 @@ from typing import Dict, Tuple
 
 from src.backends.environments import environment_names
 from src.backends.protocol import (
+    HubFiles,
     ModelCapabilities,
     ModelInfo,
     ParamOverride,
@@ -448,10 +449,80 @@ SMOLLM3 = ModelInfo(
 )
 
 
+# The autoregressive set plus the one state-space signal: what reading
+# each token erased from the recurrent state, as a share of it. It was
+# allowed in only after passing a check written before it first ran
+# (manual item 329); see `mamba3_memory.forgetting`.
+_STATE_SPACE_SIGNALS: Tuple[SignalChannel, ...] = (
+    *_AUTOREGRESSIVE_SIGNALS,
+    SignalChannel(
+        name="forgetting",
+        unit="fraction",
+        axes=("position",),
+        location="token_record",
+        key="f",
+        capture="always",
+    ),
+)
+
+
+MAMBA3 = ModelInfo(
+    id="mamba3",
+    display_name="Mamba-3-1.5B",
+    description=(
+        "State-space model (left-to-right). A fixed-size recurrent"
+        " state that every token decays and writes into. A base"
+        " model: it continues text. Runs on GPU or CPU."
+    ),
+    # 1.49B parameters in float32 is 5.6 GiB of weights, and the
+    # probe measured a 6.0 GiB peak on the card with a 256-token
+    # prompt. The state is fixed-size, so a longer run does not grow
+    # it the way a key-value cache grows.
+    min_vram_gib=7.0,
+    worker_module="src.backends.mamba3_worker",
+    environment="ar",
+    checkpoint="state-spaces/mamba3-siso-1.5b",
+    revision="5cfc721542ec9ccee768088b2fd6b7e8101219d8",
+    # Llama 3.1's tokenizer, which the checkpoint was trained with,
+    # from SmolLM3's repository at the commit SmolLM3 runs. Meta's
+    # own copy is gated, and this one is the same where ids are
+    # decided; the worker refuses it if its fingerprint ever moves.
+    companion=HubFiles(
+        repo=SMOLLM3.checkpoint,
+        revision=SMOLLM3.revision,
+        files=("tokenizer.json",),
+    ),
+    capabilities=ModelCapabilities(
+        family="state_space",
+        generation_shape="append_only",
+        input_mode="completion",
+        supports_resume=False,
+        # What If replays the prompt and the kept prefix, because a
+        # recurrent state cannot be sliced back to a position the way
+        # a cache can; in float32 the replay is exact.
+        supports_substitution=True,
+        supports_cfg=False,
+        # CPU decoding cleared the bar set to decide exactly this:
+        # 4.3 tokens a second in float32 against 3 (manual item 328).
+        supported_devices=("cuda", "cpu"),
+        signals=_STATE_SPACE_SIGNALS,
+    ),
+    # The same sampler, so the same knobs and the same lower CPU
+    # budget, less the reasoning switch a base model has no channel
+    # for.
+    param_specs=[
+        spec
+        for spec in SMOLLM3.param_specs
+        if spec.name != "thinking"
+    ],
+)
+
+
 REGISTRY: Dict[str, ModelInfo] = {
     LLADA.id: LLADA,
     DGEMMA.id: DGEMMA,
     SMOLLM3.id: SMOLLM3,
+    MAMBA3.id: MAMBA3,
 }
 
 # Anything fetched from the Hub names the commit it was fetched at,

@@ -35,6 +35,7 @@ mutually incompatible `transformers` versions.
 | [LLaDA-8B-Instruct](https://huggingface.co/GSAI-ML/LLaDA-8B-Instruct) | Masked discrete diffusion, single canvas | bf16 | ~17 GB | The first competitive large-scale diffusion LLM ([paper](https://arxiv.org/abs/2502.09992)). Interactive remasking and resume. |
 | DiffusionGemma-26B-A4B | Block-autoregressive diffusion, MoE (~4B active) | self-quantized 4-bit NF4 | ~18 GB | 256-token canvases, adaptive stopping, optional reasoning channel. Single-canvas runs support remask and resume. |
 | [SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B) | Autoregressive baseline | bf16 | ~6 GB | Runs on **GPU or CPU**, so a machine without a card can still use the suite. Per-token entropy, optional top-5 alternatives, What If? substitution. |
+| [Mamba-3-1.5B](https://huggingface.co/state-spaces/mamba3-siso-1.5b) | State-space model, base (continues text) | fp32 | ~6 GB | Runs on **GPU or CPU**. A fixed-size recurrent state in place of a cache, with per-token forgetting, optional top-5 alternatives and What If? substitution. |
 
 ## How it works
 

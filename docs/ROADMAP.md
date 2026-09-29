@@ -2421,7 +2421,9 @@ page appears that this map does not mention.
   one worker per model. `protocol.py` holds the shared types, `registry.py`
   declares every model, `worker_base.py` is the scaffolding each worker fills
   in, and `run_worker.py` is the process entry point. The workers are
-  `llada_worker.py`, `dgemma_worker.py` and `smollm3_worker.py`. Around them:
+  `llada_worker.py`, `dgemma_worker.py`, `smollm3_worker.py` and
+  `mamba3_worker.py`; the last two share `append_only_backend.py` and differ
+  only in how they load. Around them:
   `params.py` resolves a request against a model's schema, `text_adapter.py`
   owns per-model prompt conventions, `environments.py` maps an environment name
   to its interpreter, and `resource_sampler.py` feeds the generator's meter.
@@ -2429,6 +2431,8 @@ page appears that this map does not mention.
   (`streaming_sampler.py` over `llada_kernel.py` for LLaDA, `dgemma_sampler.py`
   with `dgemma_nf4.py`, `ar_sampler.py`), and the machinery they share, such as
   `reveal.py`, `logit_signals.py`, `checkpoint.py` and `frame_queue.py`.
+  Mamba-3 is this project's own PyTorch implementation, `mamba3.py`, which
+  `mamba3_causal.py` puts in the calling shape `ar_sampler.py` drives.
   Getting weights onto disk and into memory lives here too (`hf_download.py`,
   `download_main.py`, `load_progress.py`, `artifact_manifest.py`). So does the
   Vision page's arithmetic, `vision_geometry.py` and `vision_encoders.py`, which

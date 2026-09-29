@@ -92,8 +92,10 @@ class SignalChannel(BaseModel):
     name: str
     # Nats for entropy, matching the autoregressive sampler, which has
     # reported nats since entropy first appeared there. Two units for
-    # one quantity would make the Analytics scale a guess.
-    unit: Literal["probability", "nats"]
+    # one quantity would make the Analytics scale a guess. A fraction
+    # is a share of something between 0 and 1 that is not a
+    # probability: what reading a token erased from a state.
+    unit: Literal["probability", "nats", "fraction"]
     axes: Tuple[Axis, ...]
     location: Literal["token_record", "frame_scalar", "sidecar"]
     # Where to find it: a key on each token record, a metadata key

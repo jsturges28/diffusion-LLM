@@ -91,6 +91,25 @@ def test_dumped_masked_records_stay_compact() -> None:
     assert "c" not in dumped[0][1]
 
 
+def test_forgetting_survives_the_token_record() -> None:
+    """Mamba-3's per-token value, which the strict record would
+    otherwise refuse as an unknown key."""
+    record = TokenRecord(t="he", m=False, id=5, c=0.9, e=0.31, f=0.12)
+    dumped = _dump_frame_tokens([[record]])
+
+    assert dumped[0] is not None
+    assert dumped[0][0]["f"] == pytest.approx(0.12)
+
+
+def test_forgetting_is_not_written_for_models_without_it() -> None:
+    """Absent rather than null, so a reader's key check tells a run
+    with the signal from one without it."""
+    dumped = _dump_frame_tokens(_request().frame_tokens)
+
+    assert dumped[0] is not None
+    assert "f" not in dumped[0][0]
+
+
 def test_alternatives_keep_position_alignment() -> None:
     dumped = _dump_alternatives(_request().alternatives)
     assert len(dumped) == 2

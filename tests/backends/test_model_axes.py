@@ -31,7 +31,13 @@ from src.backends.protocol import (
     ModelCapabilities,
     saved_model_type,
 )
-from src.backends.registry import REGISTRY
+from src.backends.registry import (
+    DGEMMA,
+    LLADA,
+    MAMBA3,
+    REGISTRY,
+    SMOLLM3,
+)
 
 
 def _capabilities(
@@ -182,10 +188,21 @@ def test_the_input_mode_is_free_of_the_other_axes(
 
 
 def test_every_model_declares_how_a_prompt_reaches_it() -> None:
-    """All three are instruction-tuned today, asserted so the first
-    base checkpoint has to say otherwise rather than inherit this."""
+    """The three instruction-tuned models take chat; Mamba-3, the
+    first base checkpoint, takes completion. Named per model, so a
+    fifth has to be added here and say which it is rather than
+    inherit either."""
+    expected = {
+        LLADA.id: "chat",
+        DGEMMA.id: "chat",
+        SMOLLM3.id: "chat",
+        MAMBA3.id: "completion",
+    }
+
+    assert set(REGISTRY) == set(expected)
     for model_id, info in REGISTRY.items():
-        assert info.capabilities.input_mode == "chat", model_id
+        mode = info.capabilities.input_mode
+        assert mode == expected[model_id], model_id
 
 
 @pytest.mark.parametrize("family", FAMILIES)

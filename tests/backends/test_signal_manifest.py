@@ -28,7 +28,13 @@ import pytest
 
 from src.backends.protocol import AXES, SignalChannel
 from src.backends.protocol import ModelInfo
-from src.backends.registry import DGEMMA, LLADA, REGISTRY, SMOLLM3
+from src.backends.registry import (
+    DGEMMA,
+    LLADA,
+    MAMBA3,
+    REGISTRY,
+    SMOLLM3,
+)
 
 # The four shapes the finding asks for fixtures over, and the real
 # channel that has each. Named so a failure says which shape broke.
@@ -37,6 +43,11 @@ SHAPES: Dict[str, Tuple[str, ...]] = {
     "position by frame": ("frame", "position"),
     "one value per frame": ("frame",),
 }
+
+
+# Every model, named rather than read from the registry, so the
+# shared-signal tests below say which models they were written for.
+SHIPPED: Tuple[ModelInfo, ...] = (LLADA, DGEMMA, SMOLLM3, MAMBA3)
 
 
 def _channels(model: ModelInfo) -> Dict[str, SignalChannel]:
@@ -128,11 +139,42 @@ def test_an_autoregressive_position_is_decided_once() -> None:
     )
 
 
+def test_the_state_space_model_adds_forgetting() -> None:
+    """The one signal a Mamba-3 run adds. One value per position, like
+    autoregressive entropy, because a token is read once and what
+    reading it erased never changes afterwards; a fraction, because it
+    is a share of the state and not a probability of anything."""
+    channel = _channels(MAMBA3)["forgetting"]
+
+    assert channel.axes == SHAPES["one value per position"]
+    assert channel.location == "token_record"
+    assert channel.key == "f"
+    assert channel.unit == "fraction"
+    assert channel.capture == "always"
+
+
+def test_only_the_state_space_model_declares_forgetting() -> None:
+    """The negative space. A model with no recurrent state has nothing
+    to forget, and a declaration there would send the overlay looking
+    for a key its runs never carry."""
+    for model in (LLADA, DGEMMA, SMOLLM3):
+        assert "forgetting" not in _channels(model)
+
+
+def test_the_state_space_model_keeps_the_autoregressive_set() -> None:
+    """It decodes through the same sampler, so everything a SmolLM3
+    run carries, a Mamba-3 run carries too, described the same way."""
+    ours = _channels(MAMBA3)
+
+    for name, channel in _channels(SMOLLM3).items():
+        assert ours[name] == channel
+
+
 def test_a_per_frame_scalar_is_described() -> None:
     """`mean_conf` has been computed by all three samplers and
     persisted per frame since long before this manifest, entirely
     undescribed. It is the "one value per frame" shape."""
-    for model in (LLADA, DGEMMA, SMOLLM3):
+    for model in SHIPPED:
         channel = _channels(model)["mean_confidence"]
         assert channel.axes == SHAPES["one value per frame"]
         assert channel.location == "frame_scalar"
@@ -157,7 +199,7 @@ def test_everything_else_is_always_captured() -> None:
     """The negative of the test above. A channel wrongly marked
     opt_in would have its absence excused on runs that should always
     carry it."""
-    for model in (LLADA, DGEMMA, SMOLLM3):
+    for model in SHIPPED:
         for channel in _channels(model).values():
             if channel.name == "alternatives":
                 continue
@@ -171,12 +213,12 @@ def test_entropy_is_in_nats_everywhere() -> None:
     """Two units for one quantity would make the Analytics colour
     scale a guess, and the autoregressive sampler has reported nats
     since entropy first appeared there."""
-    for model in (LLADA, DGEMMA, SMOLLM3):
+    for model in SHIPPED:
         assert _channels(model)["entropy"].unit == "nats"
 
 
 def test_confidence_is_a_probability_everywhere() -> None:
-    for model in (LLADA, DGEMMA, SMOLLM3):
+    for model in SHIPPED:
         assert _channels(model)["confidence"].unit == "probability"
 
 
@@ -187,7 +229,7 @@ def test_the_declared_keys_are_the_ones_written() -> None:
     """A description pointing at the wrong key is worse than none:
     a reader would look up a field that is always absent and conclude
     the channel was never captured."""
-    for model in (LLADA, DGEMMA, SMOLLM3):
+    for model in SHIPPED:
         channels = _channels(model)
         assert channels["confidence"].key == "c"
         assert channels["entropy"].key == "e"
@@ -252,10 +294,11 @@ def test_a_canvas_wide_channel_is_expressible() -> None:
 
 def test_a_budget_is_recorded_only_where_it_matters() -> None:
     """Present so a channel with a real budget has somewhere to
-    declare it. None of the four shipped channels needs one: entropy
-    is a float per token record, where per-frame candidate sets run to
-    millions of records at the bounds the registry allows."""
-    for model in (LLADA, DGEMMA, SMOLLM3):
+    declare it. None of the shipped channels needs one: entropy and
+    forgetting are floats per token record, where per-frame candidate
+    sets run to millions of records at the bounds the registry
+    allows."""
+    for model in SHIPPED:
         for channel in _channels(model).values():
             assert channel.budget_records is None
 

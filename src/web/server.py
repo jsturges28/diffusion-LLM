@@ -2119,7 +2119,8 @@ class TokenRecord(BaseModel):
 
     A new signal must be declared here to reach ``tokens.json``. It
     used to be dropped silently; now the request fails and says which
-    key it did not recognize.
+    key it did not recognize. ``f`` is the one Mamba-3 adds: what
+    reading the token erased from its recurrent state, a fraction.
     """
 
     model_config = STRICT
@@ -2129,6 +2130,7 @@ class TokenRecord(BaseModel):
     id: int
     c: Optional[float] = None
     e: Optional[float] = None
+    f: Optional[float] = None
 
 
 class TokenAlternative(BaseModel):

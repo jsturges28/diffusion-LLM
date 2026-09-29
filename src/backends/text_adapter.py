@@ -365,6 +365,10 @@ class DgemmaTextAdapter(ChatTextAdapter):
 
 SMOLLM3_TEXT = Smollm3TextAdapter()
 DGEMMA_TEXT = DgemmaTextAdapter()
+# Mamba-3 is a base model: it continues the text as written, and its
+# tokenizer is built without special tokens, so there is nothing to
+# strip from what it writes.
+MAMBA3_TEXT = CompletionTextAdapter()
 
 # The template's own label for the reasoning channel. It follows
 # the opener as a literal word rather than as a token.
