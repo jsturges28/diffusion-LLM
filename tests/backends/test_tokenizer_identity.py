@@ -114,6 +114,18 @@ def test_describe_degrades_to_the_class_alone() -> None:
     assert described == {"class": "_BareTokenizer"}
 
 
+class _FingerprintedTokenizer(_StubTokenizer):
+    fingerprint = "ab" * 32
+
+
+def test_describe_reports_a_fingerprint_when_one_is_known() -> None:
+    """Names a tokenizer by its ids rather than its source, which is
+    the only honest name for Mamba-3's: Llama 3.1's, from SmolLM3."""
+    described = describe_tokenizer(_FingerprintedTokenizer())
+    assert described["fingerprint"] == "ab" * 32
+    assert "fingerprint" not in describe_tokenizer(_StubTokenizer())
+
+
 def test_describe_returns_nothing_before_a_load() -> None:
     assert describe_tokenizer(None) == {}
 

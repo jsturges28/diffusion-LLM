@@ -4,13 +4,14 @@ Strategy: the probe itself is hardware work, but everything around
 the model is ordinary code. A tiny random checkpoint saved under
 upstream's names, and a word-level stand-in for the tokenizer, drive
 `main` through every section on CPU in seconds. The downloads are
-checked for their pins with the Hub client replaced, the tokenizer
-fingerprint on hand-made files and on SmolLM3's real one where it is
-cached, and the verdict logic is fed hand-made lenses whose right
-answers are known. Passing proves the probe cannot pass a broken load
-or a tokenizer the checkpoint was not trained with, that its criteria
-are the ones written down before the first run, and that each
-retention test fails the lens it exists to catch.
+checked for their pins with the Hub client replaced, and the verdict
+logic is fed hand-made lenses whose right answers are known. The
+tokenizer the probe shares with the worker is tested on its own, in
+tests/inference/test_mamba3_tokenizer.py. Passing proves the probe
+cannot pass a broken load or a tokenizer the checkpoint was not
+trained with, that its criteria are the ones written down before the
+first run, and that each retention test fails the lens it exists to
+catch.
 """
 
 from __future__ import annotations
@@ -26,6 +27,11 @@ import torch
 from scripts import probe_mamba3 as probe
 from src.backends.registry import SMOLLM3
 from src.inference.mamba3 import Mamba3LM, config_from_json
+from src.inference.mamba3_tokenizer import (
+    BEGIN_OF_TEXT,
+    END_OF_TEXT,
+    Llama31Tokenizer,
+)
 
 TINY: Dict[str, Any] = {
     "d_model": 32,
@@ -203,63 +209,7 @@ def test_downloads_are_pinned_and_fetch_only_the_named_files(
     )
 
 
-# -- the tokenizer fingerprint --
-
-
-def _tokenizer_file(strings: bool = False) -> Dict[str, Any]:
-    """The parts of a tokenizer.json the fingerprint reads, small.
-    `strings` writes the merges the way Meta's file does."""
-    merges: List[Any] = [["a", "b"], ["ab", "c"]]
-    if strings:
-        merges = ["a b", "ab c"]
-    begin, end = probe.BEGIN_OF_TEXT, probe.END_OF_TEXT
-    return {
-        "normalizer": None,
-        "pre_tokenizer": {"type": "ByteLevel"},
-        "decoder": {"type": "ByteLevel"},
-        "model": {
-            "type": "BPE",
-            "vocab": {"a": 0, "b": 1, "c": 2, "ab": 3, "abc": 4},
-            "merges": merges,
-        },
-        "added_tokens": [
-            {"id": begin, "content": "<|begin_of_text|>"},
-            {"id": end, "content": "<|end_of_text|>"},
-            {"id": end + 1, "content": "<|reserved_0|>"},
-        ],
-    }
-
-
-def test_the_fingerprint_reads_both_merge_formats_alike() -> None:
-    """Meta's file writes merges as "a b" strings and SmolLM3's as
-    lists; the same rules must give the same fingerprint."""
-    strings = probe.bpe_fingerprint(_tokenizer_file(True))
-    lists = probe.bpe_fingerprint(_tokenizer_file(False))
-
-    assert strings == lists
-
-
-def test_the_fingerprint_changes_with_anything_moving_an_id() -> None:
-    base = probe.bpe_fingerprint(_tokenizer_file())
-    reordered = _tokenizer_file()
-    reordered["model"]["merges"].reverse()
-    renumbered = _tokenizer_file()
-    renumbered["model"]["vocab"]["abc"] = 5
-    renamed_end = _tokenizer_file()
-    renamed_end["added_tokens"][1]["content"] = "<|im_end|>"
-
-    for changed in (reordered, renumbered, renamed_end):
-        assert probe.bpe_fingerprint(changed) != base
-
-
-def test_the_fingerprint_ignores_tokens_never_emitted() -> None:
-    """SmolLM3 renamed ten reserved tokens for its chat format. The
-    codec drops every added token, so they must not count."""
-    base = probe.bpe_fingerprint(_tokenizer_file())
-    renamed = _tokenizer_file()
-    renamed["added_tokens"][2]["content"] = "<think>"
-
-    assert probe.bpe_fingerprint(renamed) == base
+# -- the probe's view of the shared tokenizer --
 
 
 class _Pieces(NamedTuple):
@@ -267,58 +217,62 @@ class _Pieces(NamedTuple):
 
 
 class _BytePairs:
-    """Word lengths as ids, recording whether specials were asked for.
-    Stands in for `tokenizers.Tokenizer`, whose installed version here
-    cannot read SmolLM3's file."""
-
-    def __init__(self) -> None:
-        self.asked_for_specials: List[bool] = []
+    """Word lengths as ids, standing in for a `tokenizers` model."""
 
     def encode(
         self, sequence: str, add_special_tokens: bool = True
     ) -> _Pieces:
-        self.asked_for_specials.append(add_special_tokens)
         return _Pieces([len(word) for word in sequence.split()])
 
     def decode(self, ids: List[int]) -> str:
         return ",".join(str(token) for token in ids)
 
 
-def test_the_codec_adds_begin_of_text_and_no_other_special() -> None:
-    """Begin-of-text comes from the codec, once, and the byte pairs
-    are never asked for specials of their own; decoding drops every
-    id past the vocabulary, since only the specials live there."""
-    pairs = _BytePairs()
-    data = _tokenizer_file()
+def test_the_codec_wraps_the_shared_tokenizer() -> None:
+    """Encoding keeps begin-of-text, decoding drops the specials, and
+    the fingerprint the load report judges is the tokenizer's own.
+    The tokenizer itself is tested in test_mamba3_tokenizer.py."""
+    begin, end = BEGIN_OF_TEXT, END_OF_TEXT
+    data = {
+        "normalizer": None,
+        "pre_tokenizer": None,
+        "decoder": None,
+        "model": {"type": "BPE", "vocab": {"a": 0}, "merges": []},
+        "added_tokens": [
+            {"id": begin, "content": "<|begin_of_text|>"},
+            {"id": end, "content": "<|end_of_text|>"},
+        ],
+    }
+    tokenizer = Llama31Tokenizer(_BytePairs(), data, source="test")
 
-    codec = probe.codec_from(pairs, data)
+    codec = probe.codec_of(tokenizer)
 
-    begin, end = probe.BEGIN_OF_TEXT, probe.END_OF_TEXT
     assert codec.encode("ab c") == [begin, 2, 1]
-    assert pairs.asked_for_specials == [False]
-    assert codec.decode([begin, 3, end]) == "3"
+    assert codec.decode([begin, 0, end]) == "0"
+    assert codec.vocabulary == end + 1
     assert codec.end == end
-    assert codec.vocabulary == end + 2
-    assert codec.fingerprint == probe.bpe_fingerprint(data)
+    assert codec.fingerprint == tokenizer.fingerprint
 
 
-def test_the_pinned_smollm3_tokenizer_is_llamas() -> None:
-    """Holds the recorded fingerprint to the real file, on any
-    machine that has run SmolLM3 and so has it cached."""
-    from huggingface_hub import try_to_load_from_cache
+def test_a_stranger_tokenizer_is_reported_not_refused(
+    tmp_path: Path,
+) -> None:
+    """The worker refuses a file that is not Llama 3.1's; the probe
+    must load it anyway, so the load report can say so as a verdict
+    instead of the run ending in a traceback."""
+    from tokenizers import Tokenizer, models, pre_tokenizers
 
-    path = try_to_load_from_cache(
-        probe.TOKENIZER_REPO,
-        probe.TOKENIZER_FILE,
-        revision=probe.TOKENIZER_REVISION,
+    alphabet = sorted(pre_tokenizers.ByteLevel.alphabet())
+    vocab = {symbol: index for index, symbol in enumerate(alphabet)}
+    built = Tokenizer(models.BPE(vocab=vocab, merges=[]))
+    built.pre_tokenizer = pre_tokenizers.ByteLevel(
+        add_prefix_space=False
     )
-    if not isinstance(path, str):
-        pytest.skip("SmolLM3's tokenizer is not cached here")
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
-    recorded = probe.LLAMA31_BPE_FINGERPRINT
+    built.save(str(tmp_path / "tokenizer.json"))
 
-    assert probe.bpe_fingerprint(data) == recorded
-    assert probe._id_count(data) == 128256
+    codec = probe.load_codec(tmp_path)
+
+    assert codec.fingerprint != probe.LLAMA31_BPE_FINGERPRINT
 
 
 # -- the bar --

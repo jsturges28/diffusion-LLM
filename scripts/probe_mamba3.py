@@ -38,7 +38,6 @@ device:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import platform
@@ -53,7 +52,6 @@ from typing import (
     List,
     NamedTuple,
     Optional,
-    Protocol,
     Sequence,
     Tuple,
 )
@@ -82,6 +80,12 @@ from src.inference.mamba3 import (  # noqa: E402
     Mamba3LM,
     StepTerms,
 )
+from src.inference.mamba3_tokenizer import (  # noqa: E402
+    LLAMA31_BPE_FINGERPRINT,
+    TOKENIZER_FILE,
+    Llama31Tokenizer,
+    load_tokenizer,
+)
 
 MODEL_REPO = "state-spaces/mamba3-siso-1.5b"
 MODEL_REVISION = "5cfc721542ec9ccee768088b2fd6b7e8101219d8"
@@ -89,19 +93,10 @@ MODEL_FILES = (mamba3.CONFIG_NAME, mamba3.WEIGHTS_NAME)
 # SmolLM3's copy of Llama 3.1's tokenizer, at the revision the
 # registry already runs. Meta's own is gated; this one is not, and
 # differs only in ten reserved special tokens SmolLM3 renamed for its
-# chat format, which `load_codec` drops.
+# chat format, which `load_tokenizer` drops.
 TOKENIZER_REPO = SMOLLM3.checkpoint
 TOKENIZER_REVISION = SMOLLM3.revision
-TOKENIZER_FILE = "tokenizer.json"
 TOKENIZER_FILES = (TOKENIZER_FILE,)
-BEGIN_OF_TEXT = 128000
-END_OF_TEXT = 128001
-# `bpe_fingerprint` of Meta's tokenizer.json for Llama-3.1-8B at
-# d04e592b, the file whose git blob Meta publishes as f916e710.
-# SmolLM3's pinned file gives the same value.
-LLAMA31_BPE_FINGERPRINT = (
-    "1277bcb60e03df534dfbf92525c92b5979b7613e19c84f821991947e218eb0df"
-)
 
 # The pass criteria, fixed before the first run. Changing one after
 # seeing a result would leave the probe deciding nothing.
@@ -317,101 +312,30 @@ def fetch(repo: str, revision: str, files: Sequence[str]) -> Path:
 
 
 def load_codec(directory: Path) -> TextCodec:
-    """Llama 3.1's tokenizer, built from its byte-pair model alone.
-
-    The file's added tokens are dropped, so no typed text can become a
-    special token, and begin-of-text is prepended here, as Llama's own
-    template does. Dropping them also sidesteps the reserved tokens
-    SmolLM3 renamed, the one place its file and Meta's differ.
-    """
-    from tokenizers import Tokenizer
-
-    path = directory / TOKENIZER_FILE
-    data = json.loads(path.read_text(encoding="utf-8"))
-    bare = {**data, "added_tokens": [], "post_processor": None}
-    return codec_from(Tokenizer.from_str(json.dumps(bare)), data)
+    """Llama 3.1's tokenizer from the file in `directory`, unchecked
+    here: the load report judges its fingerprint rather than refusing
+    it, so a mismatch is a finding instead of a traceback."""
+    tokenizer = load_tokenizer(
+        directory / TOKENIZER_FILE,
+        source=str(directory),
+        required=None,
+    )
+    return codec_of(tokenizer)
 
 
-class _Pieces(Protocol):
-    @property
-    def ids(self) -> List[int]: ...
-
-
-class BytePairs(Protocol):
-    """What the codec needs of a `tokenizers.Tokenizer`."""
-
-    def encode(
-        self, sequence: str, add_special_tokens: bool = True
-    ) -> _Pieces: ...
-
-    def decode(self, ids: List[int]) -> str: ...
-
-
-def codec_from(
-    tokenizer: BytePairs, data: Dict[str, Any]
-) -> TextCodec:
-    """The codec around a byte-pair tokenizer built from the file
-    `data` with its added tokens dropped."""
-    ordinary = len(data["model"]["vocab"])
-
-    def encode(text: str) -> List[int]:
-        pieces = tokenizer.encode(text, add_special_tokens=False)
-        return [BEGIN_OF_TEXT, *pieces.ids]
+def codec_of(tokenizer: Llama31Tokenizer) -> TextCodec:
+    """The probe's view of the shared tokenizer."""
 
     def decode(ids: Sequence[int]) -> str:
-        return tokenizer.decode([i for i in ids if i < ordinary])
+        return tokenizer.decode(ids, skip_special_tokens=True)
 
     return TextCodec(
-        encode,
+        tokenizer.encode,
         decode,
-        _id_count(data),
-        END_OF_TEXT,
-        bpe_fingerprint(data),
+        len(tokenizer),
+        tokenizer.eos_token_id,
+        tokenizer.fingerprint,
     )
-
-
-def bpe_fingerprint(data: Dict[str, Any]) -> str:
-    """SHA-256 of everything that decides which ids a text becomes:
-    the normalizer, the pre-tokenizer, the decoder, the byte-pair
-    model with its vocabulary and merges, and the begin and end
-    tokens. Other special tokens are left out on purpose; the codec
-    never produces them. Merges compare as pairs, because tokenizer
-    files store them either as "a b" strings or as lists."""
-    model = dict(data["model"])
-    model["merges"] = [_merge_pair(pair) for pair in model["merges"]]
-    special = {
-        token["id"]: token["content"]
-        for token in data["added_tokens"]
-    }
-    essence = {
-        "normalizer": data["normalizer"],
-        "pre_tokenizer": data["pre_tokenizer"],
-        "decoder": data["decoder"],
-        "model": model,
-        "begin": special.get(BEGIN_OF_TEXT),
-        "end": special.get(END_OF_TEXT),
-    }
-    text = json.dumps(
-        essence,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    )
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def _merge_pair(merge: Any) -> List[str]:
-    if isinstance(merge, str):
-        left, right = merge.split(" ", 1)
-        return [left, right]
-    return list(merge)
-
-
-def _id_count(data: Dict[str, Any]) -> int:
-    """How many ids the file defines: the vocabulary and every added
-    token after it."""
-    added = [token["id"] for token in data["added_tokens"]]
-    return 1 + max([*data["model"]["vocab"].values(), *added])
 
 
 # -- running --

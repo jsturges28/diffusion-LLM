@@ -1089,6 +1089,11 @@ def describe_tokenizer(
     Sharing one dict also means the pair reaches the UI and a saved
     run through the plumbing the tokenizer already has.
 
+    ``fingerprint``, reported by a tokenizer that knows one, names the
+    tokenizer by what decides its ids rather than by where the file
+    came from. Mamba-3's comes from SmolLM3's repository and is Llama
+    3.1's tokenizer, which only the fingerprint can say.
+
     Every field is optional, because this runs against whatever
     objects a backend happens to hold. An unrecognizable tokenizer
     reports only its class rather than failing a health check.
@@ -1110,6 +1115,9 @@ def describe_tokenizer(
     is_fast = getattr(tokenizer, "is_fast", None)
     if isinstance(is_fast, bool):
         described["is_fast"] = is_fast
+    fingerprint = getattr(tokenizer, "fingerprint", None)
+    if isinstance(fingerprint, str) and fingerprint:
+        described["fingerprint"] = fingerprint
     width = describe_output_width(model)
     if width is not None:
         described["model_vocab_size"] = width
