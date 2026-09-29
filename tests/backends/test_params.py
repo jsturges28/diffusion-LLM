@@ -425,6 +425,26 @@ def test_a_boolean_parameter_resolves_to_a_bool() -> None:
     assert resolved["alternatives"] is False
 
 
+@pytest.mark.parametrize("model_id", ["llada", "diffusiongemma"])
+def test_a_diffusion_run_captures_candidates_unless_told_not_to(
+    model_id: str,
+) -> None:
+    """On by default, as the autoregressive parameter is, because a
+    run that would outgrow the budget thins rather than grows; and
+    the workers read it unguarded, so it must always resolve."""
+    specs = REGISTRY[model_id].param_specs
+
+    omitted = resolve_params(
+        specs, {}, device="cuda", experimental=False
+    )
+    refused = resolve_params(
+        specs, {"alternatives": 0}, device="cuda", experimental=False
+    )
+
+    assert omitted["alternatives"] is True
+    assert refused["alternatives"] is False
+
+
 # -- the options --
 
 

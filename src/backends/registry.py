@@ -12,6 +12,7 @@ from typing import Dict, Tuple
 
 from src.backends.environments import environment_names
 from src.backends.protocol import (
+    CANDIDATE_BUDGET_RECORDS,
     HubFiles,
     ModelCapabilities,
     ModelInfo,
@@ -33,8 +34,9 @@ COMMIT_LENGTH = 40
 # per-position constant from a per-frame trajectory.
 
 # Every diffusion position is re-decided at every denoising step, so
-# both of these vary over frame and position. That is the axis pair
-# Analytics could not previously see, having read the final frame.
+# what is read off a position varies over frame and position. That is
+# the axis pair Analytics could not previously see, having read the
+# final frame.
 _DIFFUSION_SIGNALS: Tuple[SignalChannel, ...] = (
     SignalChannel(
         name="confidence",
@@ -59,6 +61,19 @@ _DIFFUSION_SIGNALS: Tuple[SignalChannel, ...] = (
         location="frame_scalar",
         key="mean_conf",
         capture="always",
+    ),
+    # The autoregressive channel's name over the other axis pair, as
+    # entropy is: five candidates per position at every step, rather
+    # than once. The only channel with a budget, because it is the
+    # only one that could outgrow the run it describes.
+    SignalChannel(
+        name="alternatives",
+        unit="probability",
+        axes=("frame", "position"),
+        location="sidecar",
+        key="candidates",
+        capture="opt_in",
+        budget_records=CANDIDATE_BUDGET_RECORDS,
     ),
 )
 
@@ -104,6 +119,20 @@ _AUTOREGRESSIVE_SIGNALS: Tuple[SignalChannel, ...] = (
 DEFAULT_MODEL = "llada"
 
 _SEED_MAX = 2**31 - 1
+
+# One parameter for both diffusion models, since the capture and its
+# budget are shared. On by default, as the autoregressive one is: a
+# default LLaDA run's candidates are about 4 MiB, and a run that
+# would pass the budget thins to a stride instead of growing.
+_DIFFUSION_ALTERNATIVES = ParamSpec(
+    name="alternatives",
+    label="Alternatives",
+    type=ParamType.BOOL,
+    default=True,
+    help="Capture the five likeliest tokens at each position for"
+    " every step, shown on hover. Long runs keep every few"
+    " steps instead.",
+)
 
 
 LLADA = ModelInfo(
@@ -209,6 +238,7 @@ LLADA = ModelInfo(
             options=["low_confidence", "random"],
             help="Remasking strategy.",
         ),
+        _DIFFUSION_ALTERNATIVES,
     ],
 )
 
@@ -303,6 +333,7 @@ DGEMMA = ModelInfo(
             help="Enable the step-by-step reasoning"
             " channel.",
         ),
+        _DIFFUSION_ALTERNATIVES,
     ],
 )
 

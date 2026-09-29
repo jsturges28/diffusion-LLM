@@ -26,7 +26,11 @@ from typing import Dict, Tuple
 
 import pytest
 
-from src.backends.protocol import AXES, SignalChannel
+from src.backends.protocol import (
+    AXES,
+    CANDIDATE_BUDGET_RECORDS,
+    SignalChannel,
+)
 from src.backends.protocol import ModelInfo
 from src.backends.registry import (
     DGEMMA,
@@ -186,13 +190,28 @@ def test_an_opt_in_channel_says_it_is_optional() -> None:
     captured and did not. That is a different fact from a model that
     cannot produce it, and only the declaration can tell them
     apart."""
-    alternatives = _channels(SMOLLM3)["alternatives"]
+    for model in SHIPPED:
+        alternatives = _channels(model)["alternatives"]
 
-    assert alternatives.capture == "opt_in"
-    assert alternatives.location == "sidecar"
-    # And the diffusion models do not claim it at all.
-    assert "alternatives" not in _channels(LLADA)
-    assert "alternatives" not in _channels(DGEMMA)
+        assert alternatives.capture == "opt_in", model.id
+        assert alternatives.location == "sidecar", model.id
+
+
+def test_diffusion_candidates_are_a_budgeted_trajectory() -> None:
+    """The alternatives pair, like the entropy pair: one name, two
+    shapes. A diffusion position is re-decided at every step, so its
+    candidates are a set per frame, in their own sidecar, and the
+    channel carries the budget that keeps them from outgrowing the
+    run."""
+    autoregressive = _channels(SMOLLM3)["alternatives"]
+    for model in (LLADA, DGEMMA):
+        channel = _channels(model)["alternatives"]
+
+        assert channel.axes == SHAPES["position by frame"]
+        assert channel.axes != autoregressive.axes
+        assert channel.key == "candidates"
+        assert channel.key != autoregressive.key
+        assert channel.budget_records == CANDIDATE_BUDGET_RECORDS
 
 
 def test_everything_else_is_always_captured() -> None:
@@ -293,14 +312,21 @@ def test_a_canvas_wide_channel_is_expressible() -> None:
 
 
 def test_a_budget_is_recorded_only_where_it_matters() -> None:
-    """Present so a channel with a real budget has somewhere to
-    declare it. None of the shipped channels needs one: entropy and
-    forgetting are floats per token record, where per-frame candidate
+    """Only the diffusion candidates declare one. Entropy and
+    forgetting are floats per token record, and the autoregressive
+    candidates are one set per position, where per-frame candidate
     sets run to millions of records at the bounds the registry
     allows."""
     for model in SHIPPED:
         for channel in _channels(model).values():
-            assert channel.budget_records is None
+            budgeted_here = (
+                channel.name == "alternatives"
+                and "frame" in channel.axes
+            )
+            if budgeted_here:
+                assert channel.budget_records is not None
+            else:
+                assert channel.budget_records is None, channel.name
 
     budgeted = SignalChannel(
         name="candidates",

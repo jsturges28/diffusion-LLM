@@ -50,12 +50,6 @@ from src.inference.dgemma_sampler import (
 logger = logging.getLogger("dgemma_worker")
 
 
-def _wants_alternatives(params: Dict[str, Any]) -> bool:
-    """Whether a run captures candidates. Absent means no, since
-    the registry has not declared the parameter yet."""
-    return bool(params.get("alternatives", False))
-
-
 class DgemmaBackend(Backend):
     # A resume splices the retained history, so an abandoned edit
     # session has to be able to put it back. No step count beside
@@ -180,7 +174,7 @@ class DgemmaBackend(Backend):
                 t_min=params["t_min"],
                 thinking=params["thinking"],
                 seed=params["seed"],
-                alternatives=_wants_alternatives(params),
+                alternatives=params["alternatives"],
                 cancel_event=cancel_event,
                 frame_history=frame_history,
             )
@@ -217,7 +211,7 @@ class DgemmaBackend(Backend):
             "seed": params["seed"],
             # So an edit captures candidates exactly when the run it
             # branches from did.
-            "alternatives": _wants_alternatives(params),
+            "alternatives": params["alternatives"],
             "max_denoising_steps": params[
                 "max_denoising_steps"
             ],

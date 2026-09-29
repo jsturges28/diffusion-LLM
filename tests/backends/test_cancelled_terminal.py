@@ -281,6 +281,7 @@ def _generate_request() -> Dict[str, Any]:
         "cfg_scale": 0.0,
         "remasking": "low_confidence",
         "seed": 0,
+        "alternatives": False,
     }
 
 
