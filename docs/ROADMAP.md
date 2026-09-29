@@ -19,18 +19,20 @@ the parts worth keeping out of the chats.
 
 ## Current status (orientation)
 
-Three models run locally with live visualization and the analytics
+Four models run locally with live visualization and the analytics
 suite. LLaDA-8B-Instruct and DiffusionGemma-26B-A4B are the discrete
 diffusion models, masked and block-autoregressive respectively;
-SmolLM3-3B is an autoregressive baseline that also runs on CPU, so a
-machine with no card can still use the suite. One model is resident at
-a time, each in its own virtual environment, because they need
-incompatible `transformers` versions.
+SmolLM3-3B is an autoregressive baseline, and Mamba-3-1.5B a
+state-space model whose fixed-size memory can be read token by token.
+Those two also run on CPU, so a machine with no card can still use the
+suite. One model is resident at a time, each in the virtual environment
+that matches its `transformers` version, because they need
+incompatible ones.
 
 The audit remediation campaign that ran from 2026-08-10 is complete except
 for a short remainder, tracked finding by finding in
-`docs/audit/IMPLEMENTATION_LEDGER.md`. The next feature is Mamba-3, the first
-of the accepted directions below.
+`docs/audit/IMPLEMENTATION_LEDGER.md`. Mamba-3, the first of the accepted
+directions below, shipped on 2026-09-28 and waits on its hardware checks.
 
 **What answers what**, because this is one document of five and this
 section previously tried to be three of them:
@@ -53,8 +55,10 @@ decided and the traps it found.
 Agreed with the maintainer (deliberate each in Ask mode before Plan). What has
 since shipped is noted on the item rather than left for a reader to infer.
 
-1. **State-space models: Mamba-3 (new model class). In progress: the model
-   exists and its probe has run on both devices; the worker does not.**
+1. **State-space models: Mamba-3 (new model class). Shipped on
+   2026-09-28: the worker, on both devices, with What If by replay and
+   one state-space signal; manual items 330 to 335 are its hardware
+   checks.**
    The first SSM, and a
    distinct XAI lens: a fixed-size recurrent state that every token decays
    and writes into, so what the model keeps can be read off it exactly.
@@ -148,21 +152,46 @@ since shipped is noted on the item rather than left for a reader to infer.
      is a coin toss. The flat test, which asks the same question
      directly, passes by a wide margin.
 
-   **After the probe**, as its own plan: a Mamba-3 worker in
-   `src/backends/` and a registry entry. The registry can express it
-   without a special case, which is what `ROADMAP-01` was for:
-   `family="state_space"` keeps its own identity and glow pair,
+   **The worker**, `src/backends/mamba3_worker.py`, and a registry entry
+   that needed no special case, which is what `ROADMAP-01` was for:
+   `family="state_space"` keeps its own glyph and glow pair,
    `generation_shape="append_only"` gets it the autoregressive affordances
    and none of the denoising ones, `input_mode="completion"`,
    `environment="ar"`, and both devices, since CPU decoding cleared the
-   bar that was set to decide exactly that.
-   The decode loop reuses the helpers in `src/inference/ar_sampler.py`.
-   Per-token signals (delta, decay, state norm) are what the evidence
-   supports, since decay passed the content test; an overlay of what the
-   state retains waits for a way past the recency window. What If waits
-   for state checkpoints: an SSM has no cache to slice, so resuming at a
-   position needs the state as it stood there, 48 MiB a copy, or a replay
-   of the prefix.
+   bar that was set to decide exactly that. What it settled:
+   - **No second decode loop.** `src/inference/mamba3_causal.py` gives
+     the model the calling shape of a Hugging Face causal model, with
+     the recurrent states where the cache would be, so `ar_sampler.py`
+     drives it unchanged, and SmolLM3's generate, What If and probe
+     handlers moved into `append_only_backend.py` for both to share.
+   - **Float32 on both devices.** On the card it costs no speed, since
+     the Python loop sets the pace, and it is what makes a token-at-a-time
+     read reproduce the whole-sequence pass exactly. That exactness is
+     the next decision's premise.
+   - **What If replays** the prompt and the kept prefix instead of
+     checkpointing the state (48 MiB a copy). The sampler's cache helpers
+     decline a list of states on their own, so the replay is the existing
+     prefill path, and in float32 it returns the run's own figures
+     exactly: the run's token probes to its recorded probability.
+   - **One signal, forgetting**, the one that passed its check. The
+     sampler emits a token only once the model has read it, so the
+     value on a token describes that token; it costs one extra forward
+     at the end of a run. Delta and state norm were not added: neither
+     had a check behind it, and the plan was to ship what was tested.
+   - **The tokenizer is a companion file**, fetched into its own cache
+     under `HF_HOME`. Fetching `tokenizer.json` into SmolLM3's
+     main-cache folder would have made a fresh machine report SmolLM3
+     as downloaded, because the cached check trusts any snapshot folder
+     that exists; a test holds that on a real filesystem.
+
+   **Stopping points, chosen.** No forgetting profile strip: the overlay
+   and the metrics strip carry the value, and a strip earns its space
+   once someone wants to read a whole run's forgetting at a glance. No
+   retention overlay, which failed its check (above), until something
+   gets past the recency window. No CUDA graphs or chunked prefill,
+   since 60 tokens a second in bfloat16 and the float32 rate are both
+   usable. No context ceiling is claimed: the model has none, only a
+   2,048-token training length, so nothing refuses a longer prompt.
 2. **Entropy and top-k for the diffusion models.** The entropy half **shipped
    with `ROADMAP-03`**, in `a26b8c3`, `455b2ef` and `ffed5b6`. Top-k is still
    open and was left downstream on purpose, with a budget field reserved for it.

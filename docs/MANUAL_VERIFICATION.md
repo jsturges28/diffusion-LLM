@@ -202,6 +202,9 @@ kept when these were written:
 - **329**: done by an agent on 2026-09-28, on CPU through the script:
   forgetting passed all four tests, one of them narrowly, which the
   item records.
+- **330 to 335**: **outstanding**, the Mamba-3 worker through the UI.
+  The worker half of 331 was done by an agent on 2026-09-28, through a
+  script rather than the UI; the item records what it found.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -3629,3 +3632,82 @@ direction in `docs/ROADMAP.md`.
     overlay offers: the model clears its memory at sentence
     boundaries. On the card in bfloat16 the numbers should agree to
     rounding.
+
+## The Mamba-3 worker
+
+Mamba-3 as the fourth model: its worker, the companion tokenizer, What
+If by replay, and the Forgetting overlay. The reasoning is under the
+Mamba-3 direction in `docs/ROADMAP.md`, and what each control does is
+in `docs/GUIDE.md`. An agent drove the real worker end to end on CPU
+through a script (item 331); none of this has been through the UI.
+
+330. **Download and activation on the card.** On a machine that has
+    never fetched Mamba-3, open the Main Menu and expect:
+
+    - the Mamba-3-1.5B row with the state-space glyph right of its
+      name (item 335), and a **Click to Download** veneer;
+    - the download fetching about 2.8 GB of weights plus SmolLM3's
+      `tokenizer.json`, then revealing the description;
+    - **SmolLM3's row unchanged** if SmolLM3 was not downloaded before:
+      still behind its own veneer. The tokenizer goes to
+      `~/.cache/huggingface/companions`, or is reused from SmolLM3's
+      cache when SmolLM3 is complete; if SmolLM3 now claims to be
+      downloaded, the companion landed in its main-cache folder, which
+      is the defect this design exists to prevent;
+    - activation on GPU in a few seconds, the meter reading about
+      6 GiB of VRAM (float32), and the prompt box asking for text to
+      continue rather than for a chat prompt.
+
+331. **Activation on the CPU.** Pick CPU on the Mamba-3 row's
+    CPU/GPU toggle and activate. Expect the device tag to read CPU,
+    the meter to report cores, the token budget to default to 128,
+    and decoding at about 4 tokens a second.
+
+    **The worker half is done**, by an agent on 2026-09-28, through a
+    script driving the real worker and its handlers rather than the
+    UI: a 2.1 s load at the pinned commit; 24 greedy tokens in 5.9 s
+    ("a vast and powerful empire that spanned across Europe, Africa,
+    and Asia..."); every token's forgetting matching a single-pass
+    reading to 1.2e-7, against 0.185 one position off; a What If
+    branch at position 3; a probe reproducing the recorded probability
+    exactly (0.712821, rank 1 of 128,256); and provenance recording
+    Llama 3.1's fingerprint and no context length.
+
+332. **A run streams, and every token carries its forgetting.**
+    Generate from "The Roman Empire was" with Alternatives on. Expect
+    tokens one at a time, each a beat after it is sampled, since a
+    token is sent once the model has read it; text that continues the
+    prompt rather than answering it; and an end at the budget or at
+    end-of-text. Then open the **Overlay** drawer: **Forgetting** is
+    listed after Entropy. Select it and the tokens take a violet ramp,
+    full stops and sentence-opening words brightest; hovering a token
+    puts `Forgetting: 0.xxx` on the metrics strip's overlay line. A
+    SmolLM3 run afterwards does not list Forgetting.
+
+333. **What If replays.** After a Mamba-3 run with Alternatives on,
+    press **What If?** and pick a candidate at an early position.
+    Expect a short pause before the branch starts, while the prompt and
+    the kept prefix are read again (there is no cache to slice), then
+    the usual **Confirm** / **Retry** review and **Diff vs Original**.
+    Under Forgetting the forced token has a value of its own. In the
+    popover's typed row, typing the run's own token at a position must
+    report exactly its recorded probability, since the float32 replay
+    is the run again.
+
+334. **The overlay survives a save.** Save that run and open it in
+    Analytics. The detail modal's **Overlay** drawer lists
+    **Forgetting**; it paints the colours the generator painted, the
+    metrics strip reads the same values, and scrubbing frames leaves
+    each token's colour unchanged, since the value belongs to the
+    position. For an edited run, each side of the Original / Edited
+    crossfade takes its colours from its own run.
+
+335. **The glyph and the glow.** In the Main Menu the Mamba-3 glyph,
+    at its real 13 pixels, reads as a box on a line with a loop
+    beneath it and a dot inside, not as a padlock, and hovering it
+    says "Model Family: State space". On the Settings page, **Token
+    birth glow** > **Tune for** offers **State space** and opens on it
+    while Mamba-3 is loaded; its preview trails left to right one word
+    at a time, like Autoregressive. Change the state-space brightness
+    and fade, save, and run Mamba-3: the glow follows the new pair,
+    and SmolLM3's pair is unchanged.

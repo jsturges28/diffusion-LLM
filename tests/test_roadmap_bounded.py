@@ -105,7 +105,7 @@ def test_it_still_says_what_runs_here() -> None:
     and fail the reader."""
     section = _orientation()
 
-    for model in ("LLaDA", "DiffusionGemma", "SmolLM3"):
+    for model in ("LLaDA", "DiffusionGemma", "SmolLM3", "Mamba-3"):
         assert model in section, f"orientation omits {model}"
 
 

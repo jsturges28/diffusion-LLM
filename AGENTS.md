@@ -10,7 +10,8 @@ is, how it is put together, and where it stands), then
 A local FastAPI + WebSocket visual playground and analytics suite for **LLMs**,
 oriented toward explainability (XAI). The depth is in **discrete diffusion**
 (LLaDA-8B-Instruct and DiffusionGemma-26B-A4B), with SmolLM3-3B alongside as an
-autoregressive baseline and room for further model classes. It runs in the
+autoregressive baseline, Mamba-3-1.5B as a state-space model, and room for
+further model classes. It runs in the
 browser (localhost) and as an optional native desktop app (`desktop.py`,
 pywebview). The front page and public roadmap live in `README.md`, every
 feature in detail in `docs/GUIDE.md`;
@@ -26,8 +27,9 @@ you are running, and always invoke it by path.
   here (`transformers==4.38.2`). Use `.venv/bin/python` and `.venv/bin/pip`.
 - `.venv-dgemma`: DiffusionGemma worker only (`transformers` v5). Use
   `.venv-dgemma/bin/python`.
-- `.venv-ar`: SmolLM3 autoregressive worker only (`transformers` >= 4.53,
-  CUDA torch wheel that also runs on CPU). Use `.venv-ar/bin/python`.
+- `.venv-ar`: the SmolLM3 and Mamba-3 workers (`transformers` >= 4.53 for
+  SmolLM3, while Mamba-3 is plain PyTorch; a CUDA torch wheel that also runs
+  on CPU). Use `.venv-ar/bin/python`.
 
 **Dependencies are declared in one place and the lock files are generated.**
 `[tool.diffusion-llm]` in `pyproject.toml` holds one table per environment,
@@ -50,7 +52,7 @@ written by `scripts/lock_environments.py` with every transitive pin hashed.
 
 ## Models and hardware
 
-Three model families, **one resident at a time**, each a separate worker
+Four model families, **one resident at a time**, each a separate worker
 process in the environment above that matches it.
 
 - **LLaDA-8B-Instruct**: masked discrete diffusion, bf16, ~17 GB VRAM.
@@ -58,6 +60,10 @@ process in the environment above that matches it.
   NF4, ~18 GB VRAM. Its checkpoint is a local directory, not a Hub id.
 - **SmolLM3-3B**: autoregressive baseline, bf16, ~6 GB VRAM. Also runs on CPU,
   so it is the model a GPU-less host can use.
+- **Mamba-3-1.5B**: state-space model, a base checkpoint that continues text,
+  float32, ~6 GB VRAM. Also runs on CPU. It runs on this project's own PyTorch
+  implementation (`src/inference/mamba3.py`), held to upstream's reference
+  code, and reads Llama 3.1's tokenizer from SmolLM3's pinned repository.
 
 Models load slowly and hold VRAM until evicted. **The agent sandbox has no GPU
 and no display**, so model inference and the desktop window can only be

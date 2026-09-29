@@ -38,6 +38,12 @@ in an analytics suite.
   Runs on GPU or CPU (per-activation toggle on the menu), so it is the model a
   GPU-less host can run. No diffusion remask/resume; its counterfactual is
   **What If?** substitution instead (`supports_substitution`).
+- **Mamba-3-1.5B**: state-space model, a base checkpoint that continues text,
+  float32 (~6GB) on GPU or CPU, in `.venv-ar` on our own PyTorch. Same
+  sampler, handlers and affordances as SmolLM3 (What If replays the prefix,
+  since a state cannot be sliced), plus one signal, per-token **forgetting**
+  (`f`), drawn by the Forgetting overlay. Reads Llama 3.1's tokenizer from
+  SmolLM3's pinned repository, fetched into a companion cache.
 
 ## Architecture (process isolation; incompatible transformers versions)
 
@@ -57,16 +63,18 @@ in an analytics suite.
   directory at import, defaulting to `<repo>/results` and overridable by
   `--results-dir` or `DIFFUSION_LLM_RESULTS_DIR`. It does not depend on the
   working directory, which it used to.
-- **Workers**: `src/backends/{llada_worker,dgemma_worker,smollm3_worker}.py`
+- **Workers**: `src/backends/{llada,dgemma,smollm3,mamba3}_worker.py`
   via `run_worker.py`; contract in `protocol.py` / `registry.py` /
-  `worker_base.py`. LLaDA to `.venv` (transformers 4.38.2); DiffusionGemma to
-  `.venv-dgemma` (transformers 5.13); SmolLM3 to `.venv-ar` (transformers
-  4.53). `run_worker.py` takes `--device`, forwarded via
+  `worker_base.py`, and the two left-to-right workers share
+  `append_only_backend.py`. LLaDA to `.venv` (transformers 4.38.2);
+  DiffusionGemma to `.venv-dgemma` (transformers 5.13); SmolLM3 and Mamba-3
+  to `.venv-ar` (transformers 4.53; Mamba-3 is plain PyTorch). `run_worker.py` takes `--device`, forwarded via
   `create_worker_app(device=...)` into `Backend.load(device=...)` (kw-only,
   default "cuda"). Cached weights load with `local_files_only`, so an
   already-downloaded model activates with no network.
 - **Samplers**: `src/inference/{streaming_sampler,dgemma_sampler,ar_sampler}`;
-  NF4 in `dgemma_nf4.py`. Analytics metrics: `src/analytics/metrics.py`.
+  NF4 in `dgemma_nf4.py`. `mamba3_causal.py` gives Mamba-3 the calling shape
+  `ar_sampler` drives. Analytics metrics: `src/analytics/metrics.py`.
   LLaDA's algorithm is `llada_kernel.py`, its old twin quarantined under
   `reference/llada/` behind a differential test (`ORG-03`).
 - **Frontend** (shared, schema-driven, no framework or bundler):
@@ -169,13 +177,13 @@ predate the campaign and have never been validated.
 
 ## Where to pick up
 
-**Mamba-3** is in progress as a new model class, in our own PyTorch
+**Mamba-3** shipped as the fourth model on 2026-09-28, on our own PyTorch
 (`src/inference/mamba3.py`) held to upstream's references in
-`reference/mamba3/`. Its probe, `scripts/probe_mamba3.py`, has run on
-both devices (manual item 328): the model is correct, decoding is viable
-on the CPU and comfortable on the card, and a retention overlay fails
-its degenerate test. Next is the worker's plan, which starts from those;
-the reasoning, including why the tokenizer comes from SmolLM3, is under
-the Mamba-3 direction in `docs/ROADMAP.md`. Then top-k for the diffusion models,
-whose entropy half shipped with `ROADMAP-03`. `docs/ROADMAP.md` carries
-the settled decisions and the longer backlog.
+`reference/mamba3/`. It has been run end to end on CPU through the worker,
+but not through the UI: manual items 330 to 335 (activation on both
+devices, streaming, What If, the Forgetting overlay live and in Analytics,
+the glyph and glow) are the hardware debt it leaves. The reasoning,
+including why the tokenizer comes from SmolLM3 and why What If replays, is
+under the Mamba-3 direction in `docs/ROADMAP.md`. Next is top-k for the
+diffusion models, whose entropy half shipped with `ROADMAP-03`.
+`docs/ROADMAP.md` carries the settled decisions and the longer backlog.

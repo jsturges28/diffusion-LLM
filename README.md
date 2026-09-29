@@ -7,7 +7,8 @@ many steps. A FastAPI server streams every intermediate frame to the
 browser, so you can watch a sequence resolve, scrub back through its
 history, remask tokens and resume from there, colour tokens by the
 model's confidence or by the order they settled in, and compare runs
-afterwards. An autoregressive model runs alongside as a baseline.
+afterwards. An autoregressive model runs alongside as a baseline, and a
+state-space model shows what a fixed-size memory keeps and forgets.
 
 It is built for building intuition, and it leans hard toward
 explainability: most of what it draws is a signal the model produced,
@@ -27,8 +28,9 @@ cores](assets/screenshot-cpu-run.png)
 ## The models
 
 One is resident at a time; a single large model already saturates a
-24 GB card. Each runs in its own virtual environment, because they need
-mutually incompatible `transformers` versions.
+24 GB card. Each runs in the virtual environment that matches its
+`transformers` version, because they need mutually incompatible ones;
+Mamba-3 is plain PyTorch and shares SmolLM3's.
 
 | Model | Kind | Precision | VRAM | Notes |
 |---|---|---|---|---|
@@ -74,6 +76,7 @@ Model Worker  (exactly one alive)
   - LLaDA           .venv          transformers 4.38.2
   - DiffusionGemma  .venv-dgemma   transformers 5.13
   - SmolLM3         .venv-ar       transformers >= 4.53
+  - Mamba-3         .venv-ar       plain PyTorch, our implementation
 ```
 
 The app opens on a **Main Menu** at `/`, a GPU-aware model picker.
@@ -113,12 +116,16 @@ Weights (~16 GB) download on first use, at the commit the registry
 pins, so the same app version always loads the same weights and remote
 code. The supervisor runs here and never imports torch.
 
-**SmolLM3** (`.venv-ar`, optional, the GPU-less path):
+**SmolLM3 and Mamba-3** (`.venv-ar`, optional, the GPU-less path):
 
 ```bash
 python3 -m venv .venv-ar
 .venv-ar/bin/pip install -r requirements-ar.txt
 ```
+
+Mamba-3 reads Llama 3.1's tokenizer, fetched from SmolLM3's
+repository at SmolLM3's pinned commit, so it needs no license
+acceptance of its own.
 
 **DiffusionGemma** (`.venv-dgemma`, optional) needs a license
 acceptance on Hugging Face and a local 4-bit build step. See
@@ -151,14 +158,15 @@ whatever directory you start from. Point elsewhere with
 ## What works
 
 Diffusion generation for both diffusion models, streamed frame by
-frame, with a scrubber over the full history. Autoregressive generation
-alongside it, replayed through the same tooling. Interactive
-**remasking and resume**: pick tokens at any frame, remask them, and
-regenerate from there, keeping the pre-edit run for comparison.
-**What If?** substitution for the autoregressive model. Four token
-overlays: a confidence heatmap, commit order, entropy, and a diff
-against the pre-edit run, with an Original/Edited crossfade between
-them.
+frame, with a scrubber over the full history. Autoregressive and
+state-space generation alongside it, replayed through the same tooling.
+Interactive **remasking and resume**: pick tokens at any frame, remask
+them, and regenerate from there, keeping the pre-edit run for
+comparison. **What If?** substitution for the two left-to-right models.
+Five token overlays: a confidence heatmap, commit order, entropy, a
+diff against the pre-edit run with an Original/Edited crossfade, and
+Mamba-3's **forgetting**, what reading each token erased from its
+state.
 
 Per-token **confidence** and **entropy** on every model, declared by
 the unit and the axes they vary over, so a reader knows whether a
