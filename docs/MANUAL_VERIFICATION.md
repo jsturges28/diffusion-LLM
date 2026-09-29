@@ -230,9 +230,18 @@ kept when these were written:
   passed on its second run that day. The first found no popover at
   all, because the popover sat outside the run detail modal, which
   since 2026-09-15 has been a native dialog painting above everything
-  outside it.
-- **348 to 350**: **outstanding**, the diffusion popover's Original
-  and Edited pages, added on 2026-09-29.
+  outside it. 346 passed in the desktop app, where by measurement a
+  default run's candidates could not then survive the trip, so 350
+  checks it again.
+- **348 and 349**: confirmed on 2026-09-29.
+- **350 and 351**: **outstanding**. 350 failed on 2026-09-29 in the
+  desktop app, whose session storage holds about 5.2 million
+  characters: a default LLaDA run's snapshot was 6.2 million with its
+  candidates, and 10 million with both runs', so a trip to Analytics
+  brought the run back without them. The snapshot packs them since,
+  and 350 was rewritten that day, as its old wording asked for a trip
+  after Confirm without saving, and Confirm saves. 351 was added with
+  it.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -3950,7 +3959,10 @@ From 2026-09-29 an edited diffusion run's candidate popover turns
 between **Original** and **Edited**, as an autoregressive branch's
 already did. The pre-edit run's candidates are kept when it first
 finishes and saved beside the edited run's as
-`original_candidates.json`.
+`original_candidates.json`. Items 350 and 351 take a trip to
+Analytics, which restores the run from the page's session storage:
+about 5.2 million characters in the desktop app, which the
+candidates fit only packed.
 
 348. **An edited LLaDA run pages between its two runs.** Generate
     with LLaDA at its defaults. Use **Edit Frames** to remask a few
@@ -3968,8 +3980,8 @@ finishes and saved beside the edited run's as
     candidates yet: at **Edited** the popover stays closed, and at
     **Original** it opens with no pager.
 
-349. **Analytics pages the saved run the same way.** Save the run
-    from 348 and find `original_candidates.json` beside
+349. **Analytics pages the saved run the same way.** Confirm saved
+    the run from 348: find `original_candidates.json` beside
     `candidates.json` in its folder. Open it in Analytics and scrub
     the token overlay past the edit frame: the popover opens on the
     page the detail modal's crossfade favours and turns to the other,
@@ -3978,9 +3990,21 @@ finishes and saved beside the edited run's as
     **Original** no popover opens, and at **Edited** it opens with no
     pager.
 
-350. **The pages survive a trip away and back.** Repeat 348 up to
-    **Confirm**, then go to Analytics without saving and come back:
-    past the edit frame both pages are still there. Save now, and the
-    folder has both files. Then generate a new run and edit it the
-    same way: its Original page shows the new run's own candidates,
-    never the previous run's.
+350. **The pages survive a trip away and back, in the desktop app.**
+    In the desktop app, generate with LLaDA at its defaults, go to
+    Analytics without saving and come back: hovering still opens the
+    popover at each frame, as 346 has it. Then use **Edit Frames**,
+    **Resume to End** and **Confirm**, which saves the run, and take
+    the same trip: past the edit frame both pages are still there.
+    Then generate a new run and edit it the same way: its Original
+    page shows the new run's own candidates, never the previous
+    run's.
+
+351. **Leaving before Confirm discards the edit.** In the desktop
+    app, use **Edit Frames** to remask a few tokens and **Resume to
+    End**, but do not **Confirm**. Go to Analytics and come back: the
+    run is as it was before the edit, with **Edit Frames** available.
+    Open a new session, remask a token at a frame after the one the
+    discarded edit started at, and resume: in the resume's first
+    frame, the tokens you did not remask are the ones that frame
+    showed, not the discarded edit's.

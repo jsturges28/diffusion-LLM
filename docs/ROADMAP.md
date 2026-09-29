@@ -1157,6 +1157,11 @@ blank.
 - A guided **Run to Here** edit has none on either model. LLaDA's streamer
   closes the sampler at the budget before the flush, and DiffusionGemma's
   would name frames past the budget that the page never receives.
+- A run far past the default size comes back from a trip to Analytics in
+  the desktop app without its candidates or its per-token detail: a 512
+  by 256 run's frames alone are 6.8 million characters in the snapshot.
+  The next levers are not writing an unedited run's pre-edit frames,
+  which copy its own, and moving the heavy parts to IndexedDB.
 
 **What it costs, measured on 2026-09-28** on an RTX 4090 with one seed,
 Alternatives off against on (manual item 341 has the method). LLaDA took
@@ -1210,6 +1215,29 @@ the same rules as `candidates.json`. One fact a future change has to keep:
 the Original page looks its sets up on canvas 0, which holds because Edit
 Frames is off for a run that chains canvases; lifting that would need the
 original's canvas index kept as well.
+
+**The snapshot's candidates, packed on 2026-09-29.** A trip to Analytics
+restores the run from the page's session snapshot, and in the desktop app
+that brought a diffusion run back without its candidates every time. The
+app's QtWebEngine 6.11 (Chromium 140) holds about 5.24 million characters
+of session storage, 10 MiB at two bytes a character whatever the text;
+Cursor's Chromium 148, for comparison, held over 30 million. A default
+LLaDA run's snapshot measured 2.41 million characters of frames and 3.82
+million of candidates, and an edited one 10 million with both runs'
+stores, so no tier with candidates fit. The snapshot now packs each store:
+a token's text once, a candidate as its id and its probability in whole
+ten-thousandths, and the held token appended from outside the five with
+its unrounded probability and its rank. That is exact, because the worker
+rounds to four places and a value off that grid is written as it is. A
+store the rows cannot say, one id with two texts or a ranked candidate
+that is not last, is written plainly, and the reader takes either form,
+including a snapshot from before the change. A store went from 3.78 to
+1.04 million characters, so a default run's snapshot is about 3.5 million
+unedited and 4.5 million edited, 4.8 with Reveal the mask candidate on,
+and `snapshot_budget.test.js` holds a default-sized run to the desktop
+limit. The snapshot is still never written mid-edit: leaving before
+Confirm discards the edit, and the rewind that opens the next session
+brings the worker back to the run on screen.
 
 **Two renderings, one capture.** Scoped 2026-08-30. The stack above encodes
 probability share as stacked opacity, which is spatial. The alternative is to
