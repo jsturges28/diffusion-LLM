@@ -146,3 +146,72 @@ test("loading settings tolerates storage being unavailable", () => {
 
   assert.equal(settings.revealMaskCandidate, false);
 });
+
+// ---- The state-space glow pair ----
+//
+// The third class's pair, held to the same three places as every
+// other key: the defaults, parseSettings and settingsEqual.
+
+test("state space has its own glow pair, at the defaults", () => {
+  const sandbox = load();
+
+  const settings = sandbox.parseSettings(null);
+
+  assert.equal(
+    settings.glowBrightnessStateSpace,
+    sandbox.GLOW_BRIGHTNESS_DEFAULT
+  );
+  assert.equal(
+    settings.glowFadeMsStateSpace, sandbox.GLOW_FADE_MS_DEFAULT
+  );
+});
+
+test("a stored state-space pair comes back, clamped", () => {
+  const sandbox = load();
+
+  const stored = parse(sandbox, {
+    glowBrightnessStateSpace: 150,
+    glowFadeMsStateSpace: 5000,
+  });
+
+  assert.equal(stored.glowBrightnessStateSpace, 150);
+  assert.equal(
+    stored.glowFadeMsStateSpace, sandbox.GLOW_FADE_MS_MAX
+  );
+});
+
+test("a state-space change is one the Save button sees", () => {
+  const sandbox = load();
+  const before = sandbox.parseSettings(null);
+  const after = parse(sandbox, { glowFadeMsStateSpace: 900 });
+
+  assert.equal(sandbox.settingsEqual(before, after), false);
+});
+
+test("a state-space model reads its own pair", () => {
+  // Not the diffusion pair it would fall back to, and not the
+  // autoregressive one it appends like: the class is its own.
+  const sandbox = load();
+  const settings = parse(sandbox, {
+    glowBrightnessStateSpace: 150,
+    glowBrightnessAutoregressive: 80,
+    glowBrightnessDiffusion: 60,
+  });
+
+  const glow = sandbox.overlaysGlowFor(settings, "state_space");
+
+  assert.equal(glow.brightness, 150);
+});
+
+test("the Settings picker offers the state-space class", () => {
+  const sandbox = load();
+
+  const values = sandbox.GLOW_CLASS_OPTIONS.map(
+    (option) => option.value
+  );
+
+  assert.deepEqual(
+    Object.keys(sandbox.GLOW_KEYS).sort(), [...values].sort()
+  );
+  assert.ok(values.includes("state_space"));
+});

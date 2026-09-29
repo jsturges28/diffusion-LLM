@@ -220,6 +220,34 @@ function entropyDimColor(e) {
     + light + "%, " + ENTROPY_DIM_ALPHA + ")";
 }
 
+// Reference maximum for forgetting: the share of a state-space
+// model's recurrent state that reading one token erased. It is a
+// fraction already, so unlike entropy it needs no unit, but the
+// pinned Mamba-3 spends it narrowly: real text reads about 0.1 to
+// 0.3. A ramp over the whole of [0, 1] would paint every token the
+// same colour, so the top of this one sits a little above the
+// busiest token measured so far, and anything past it clamps.
+var OVERLAYS_FORGETTING_REF = 0.4;
+
+// Normalize forgetting into [0,1] against the reference maximum.
+function overlaysForgettingFraction(f) {
+  if (typeof f !== "number" || !isFinite(f) || f < 0) {
+    return 0;
+  }
+  return Math.min(1, f / OVERLAYS_FORGETTING_REF);
+}
+
+// One hue, violet, because this is an amount of one thing rather
+// than a scale between two: a token that erased little reads dim and
+// one that erased much reads bright. Kept off the green heatmap, the
+// blue-to-amber entropy ramp and the magenta diff.
+function forgettingColor(f) {
+  var frac = overlaysForgettingFraction(f);
+  var sat = Math.round(25 + 60 * frac);
+  var light = Math.round(46 + 22 * frac);
+  return "hsl(270, " + sat + "%, " + light + "%)";
+}
+
 // Place the candidate popover horizontally: aligned to the token's
 // left edge, pulled back inside the viewport when the token sits near
 // the right margin. Both arguments are viewport-space rects (the
@@ -725,6 +753,17 @@ function overlaysMetricEntropyBar(value) {
     width: overlaysEntropyFraction(value) * 100,
     color: entropyColor(value),
   };
+}
+
+// The strip's overlay line while Forgetting is on, or "" for a token
+// that carries none. The line rather than a field of its own, because
+// three of the four models never report the value, and a permanent
+// field would read as a dash on every run of theirs.
+function overlaysForgettingReading(tok) {
+  if (!tok || typeof tok.f !== "number" || !isFinite(tok.f)) {
+    return "";
+  }
+  return "Forgetting: " + tok.f.toFixed(3);
 }
 
 // Per-position commit step for a run: the step after which a position
@@ -1391,10 +1430,10 @@ var GLOW_OUTER_ALPHA = 0.5;
 // pair even though it appends like an autoregressive one.
 //
 // Written out rather than derived from the class name so every key is
-// greppable as a literal; a new class (state space is on the roadmap)
-// is one entry here plus an option in the Settings picker. The key
-// strings themselves are persisted user settings, so they are named
-// after the family and must not be renamed to follow a refactor.
+// greppable as a literal; a new class is one entry here plus an
+// option in the Settings picker. The key strings themselves are
+// persisted user settings, so they are named after the family and
+// must not be renamed to follow a refactor.
 var GLOW_KEYS = {
   diffusion: {
     brightness: "glowBrightnessDiffusion",
@@ -1404,11 +1443,16 @@ var GLOW_KEYS = {
     brightness: "glowBrightnessAutoregressive",
     fadeMs: "glowFadeMsAutoregressive",
   },
+  state_space: {
+    brightness: "glowBrightnessStateSpace",
+    fadeMs: "glowFadeMsStateSpace",
+  },
 };
 
 var GLOW_CLASS_OPTIONS = [
   { value: "diffusion", label: "Diffusion" },
   { value: "autoregressive", label: "Autoregressive" },
+  { value: "state_space", label: "State space" },
 ];
 
 var SETTINGS_DEFAULTS = {
@@ -1425,6 +1469,8 @@ var SETTINGS_DEFAULTS = {
   glowFadeMsDiffusion: GLOW_FADE_MS_DEFAULT,
   glowBrightnessAutoregressive: GLOW_BRIGHTNESS_DEFAULT,
   glowFadeMsAutoregressive: GLOW_FADE_MS_DEFAULT,
+  glowBrightnessStateSpace: GLOW_BRIGHTNESS_DEFAULT,
+  glowFadeMsStateSpace: GLOW_FADE_MS_DEFAULT,
   // "total" is the run average, "last" the most recent step. Lives
   // here rather than on the Settings page because its control is the
   // footer readout itself, like highlightTokens and the drawers.
@@ -1449,6 +1495,9 @@ function parseSettings(raw) {
       SETTINGS_DEFAULTS.glowBrightnessAutoregressive,
     glowFadeMsAutoregressive:
       SETTINGS_DEFAULTS.glowFadeMsAutoregressive,
+    glowBrightnessStateSpace:
+      SETTINGS_DEFAULTS.glowBrightnessStateSpace,
+    glowFadeMsStateSpace: SETTINGS_DEFAULTS.glowFadeMsStateSpace,
     tpsMode: SETTINGS_DEFAULTS.tpsMode,
   };
   if (!raw) {
@@ -1483,7 +1532,7 @@ function parseSettings(raw) {
   return settings;
 }
 
-// Fold the four per-class glow values out of stored state, clamped to
+// Fold every class's glow pair out of stored state, clamped to
 // their ranges. Clamped rather than rejected because the bounds can
 // tighten later and a value saved under the old ones is still a
 // coherent intent; only a non-number falls back to the default.
@@ -1657,6 +1706,8 @@ function settingsEqual(a, b) {
     && a.glowBrightnessAutoregressive
       === b.glowBrightnessAutoregressive
     && a.glowFadeMsAutoregressive === b.glowFadeMsAutoregressive
+    && a.glowBrightnessStateSpace === b.glowBrightnessStateSpace
+    && a.glowFadeMsStateSpace === b.glowFadeMsStateSpace
     && a.tpsMode === b.tpsMode
   );
 }

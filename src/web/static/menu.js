@@ -249,14 +249,31 @@
     + ' stroke-width="1.3" />'
     + '<path d="M11 5 a7 7 0 0 1 0 14 M7 12 h6"'
     + ' stroke-width="1.9" /></svg>';
+  // State space: the block diagram the name comes from, drawn small.
+  // A line runs through a box holding the state (the filled node),
+  // and a feedback path leaves the output side and climbs back into
+  // the box from below: what the state keeps is carried to the next
+  // token. The loop sits under the box on purpose, since a loop over
+  // the top of a box reads as a padlock.
+  var _STATE_SPACE_ICON =
+    '<svg viewBox="0 0 24 24" width="13" height="13" fill="none"'
+    + ' stroke="currentColor" stroke-width="1.5" stroke-linecap="round"'
+    + ' stroke-linejoin="round" aria-hidden="true">'
+    + '<rect x="7.5" y="4.5" width="9" height="8" rx="1.8" />'
+    + '<path d="M2.5 8.5 H7.5 M16.5 8.5 H21.5" />'
+    + '<path d="M19.5 8.5 V16.5 Q19.5 19 17 19 H12 V14.4" />'
+    + '<path d="M10.4 15.9 L12 14.2 L13.6 15.9" />'
+    + '<circle cx="12" cy="8.5" r="1.3" fill="currentColor"'
+    + ' stroke="none" /></svg>';
 
   // Keyed by family, so a new class is one entry rather than another
-  // branch. State space carries a name but no glyph yet: the label
-  // matters more, because the alternative is telling the user a
-  // state-space model is a diffusion one.
+  // branch. The label matters more than the glyph: falling back to
+  // the diffusion name would tell the user a model of another class
+  // is a diffusion one.
   var _FAMILY_ICONS = {
     diffusion: _DIFFUSION_ICON,
     autoregressive: _AR_ICON,
+    state_space: _STATE_SPACE_ICON,
   };
   var _FAMILY_LABELS = {
     diffusion: "Diffusion",

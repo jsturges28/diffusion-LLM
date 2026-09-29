@@ -268,3 +268,27 @@ def test_the_family_glyph_is_keyed_by_family() -> None:
 
     assert "_FAMILY_LABELS" in code
     assert "state_space:" in code
+
+
+def _table_keys(code: str, name: str) -> set[str]:
+    """The keys of one `var NAME = { key: value, ... };` literal."""
+    start = code.index(f"var {name} = {{")
+    body = code[start:code.index("};", start)]
+    return set(re.findall(r"^\s+(\w+):", body, flags=re.MULTILINE))
+
+
+def test_every_registered_family_has_a_glyph_and_a_name() -> None:
+    """Derived from the registry, so a model of a new class fails here
+    until the menu can draw it, rather than borrowing the diffusion
+    glyph silently the way the fallback would."""
+    code = _code("menu.js")
+    families = {
+        info.capabilities.family for info in REGISTRY.values()
+    }
+
+    icons = _table_keys(code, "_FAMILY_ICONS")
+    labels = _table_keys(code, "_FAMILY_LABELS")
+
+    assert families <= icons, families - icons
+    assert families <= labels, families - labels
+    assert icons <= labels, icons - labels

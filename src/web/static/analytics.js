@@ -3532,12 +3532,18 @@ function entropyAvailability(data) {
 }
 
 function framesHaveEntropy(series) {
+  return framesHaveTokenValue(series, "e");
+}
+
+// Whether any token in the series' final frame carries a number under
+// `key`. The final frame is the series' ground truth.
+function framesHaveTokenValue(series, key) {
   var final = overlaySeriesFinal(series);
   if (!final) {
     return false;
   }
   for (var i = 0; i < final.length; i++) {
-    if (final[i] && typeof final[i].e === "number") {
+    if (final[i] && typeof final[i][key] === "number") {
       return true;
     }
   }
@@ -3547,6 +3553,19 @@ function framesHaveEntropy(series) {
 // Whether the saved run carries per-token entropy.
 function overlayEntropyAvailable(data) {
   return framesHaveEntropy(overlaySeriesOf(data, false));
+}
+
+// Whether the saved run carries per-token forgetting to colour by.
+// The run's own manifest decides the shape when it has one, as it
+// does for entropy: forgetting is one value per position, and a run
+// declaring it any other way has a channel this page cannot draw. A
+// run saved without a manifest falls back to the data.
+function overlayForgettingAvailable(data) {
+  var channel = signalChannel(data, "forgetting");
+  if (channel && channelShape(channel) !== "position") {
+    return false;
+  }
+  return framesHaveTokenValue(overlaySeriesOf(data, false), "f");
 }
 
 // Per-position candidate sets for the open run, or an empty list.
@@ -3901,6 +3920,11 @@ function buildOverlaySelect(data) {
   if (overlayEntropyAvailable(data)) {
     options.push({ value: "entropy", label: "Entropy" });
   }
+  // What reading each token erased from a state-space model's state,
+  // for the runs that recorded it.
+  if (overlayForgettingAvailable(data)) {
+    options.push({ value: "forgetting", label: "Forgetting" });
+  }
   // Commit Order tints by resolution step, which a left-to-right run
   // does not have (its commit order is just position order).
   if (!overlayIsAutoregressive) {
@@ -3958,6 +3982,8 @@ function renderCurrentOverlay() {
     renderHeatmapOverlay();
   } else if (overlayMode === "entropy") {
     renderEntropyOverlay();
+  } else if (overlayMode === "forgetting") {
+    renderForgettingOverlay();
   } else {
     renderNoneOverlay();
   }
@@ -4004,6 +4030,24 @@ function renderEntropyOverlay() {
     colorFor: function (index, tok) {
       if (typeof tok.e === "number") {
         return entropyColor(tok.e);
+      }
+      return null;
+    },
+  });
+}
+
+// Forgetting: recolor tokens by what reading each one erased from a
+// state-space model's recurrent state, dim for little and bright for
+// much. Read once per token as it went in, so like entropy a
+// position's value never changes across frames.
+function renderForgettingOverlay() {
+  overlayReadout.hidden = true;
+  overlayReadout.textContent = "";
+  renderOverlayTokens({
+    frame: overlayFrameAt(overlayFrameIndex),
+    colorFor: function (index, tok) {
+      if (typeof tok.f === "number") {
+        return forgettingColor(tok.f);
       }
       return null;
     },
@@ -4405,7 +4449,7 @@ function buildTokenMetricsReading() {
     confidence: metricsConfidence(tok, masked),
     entropy:
       tok && typeof tok.e === "number" ? tok.e : null,
-    extra: metricsExtra(index),
+    extra: metricsExtra(index, tok),
     candidate: metricsCandidate,
     runLabel: metricsRunLabel(),
   };
@@ -4427,7 +4471,10 @@ function metricsConfidence(tok, masked) {
 // The overlay-specific line. Computed at hover time from the same
 // memoized state the coloring uses, so no per-token callback has to
 // be threaded through the render paths to carry it.
-function metricsExtra(index) {
+function metricsExtra(index, tok) {
+  if (overlayMode === "forgetting") {
+    return overlaysForgettingReading(tok);
+  }
   if (overlayMode === "commit") {
     var steps = metricsHoverOriginal
       ? overlayOriginalCommitSteps

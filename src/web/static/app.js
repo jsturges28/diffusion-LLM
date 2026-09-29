@@ -2888,6 +2888,12 @@ function tokenColorAt(index, tok, isOriginal) {
     }
     return entropyColor(tok.e);
   }
+  if (mode === "forgetting") {
+    if (typeof tok.f !== "number") {
+      return null;
+    }
+    return forgettingColor(tok.f);
+  }
   if (mode === "commit") {
     var step = tokenCommitStep(index, isOriginal);
     if (step === null) {
@@ -3072,17 +3078,17 @@ function diffAvailable() {
 // different thing from a run that captured none.
 var ENTROPY_SHAPES = ["position", "frame|position"];
 
-// The active model's declared entropy channel, or null. Read off
-// capabilities rather than off the run, because the strip has to be
+// The active model's declared channel of this name, or null. Read
+// off capabilities rather than off the run, because a view has to be
 // offered or withheld before the first frame arrives, and provenance
 // does not turn up until the terminal one.
-function declaredEntropyChannel() {
+function declaredChannel(name) {
   if (!activeModel || !activeModel.capabilities) {
     return null;
   }
   var signals = activeModel.capabilities.signals || [];
   for (var i = 0; i < signals.length; i++) {
-    if (signals[i] && signals[i].name === "entropy") {
+    if (signals[i] && signals[i].name === name) {
       return signals[i];
     }
   }
@@ -3099,19 +3105,42 @@ function declaredEntropyChannel() {
 // per-position bars to draw, and drawing them anyway would invent a
 // reading rather than admit there is none.
 function entropyAvailable() {
-  var channel = declaredEntropyChannel();
+  var channel = declaredChannel("entropy");
   if (channel) {
     var shape = (channel.axes || []).join("|");
     if (ENTROPY_SHAPES.indexOf(shape) === -1) {
       return false;
     }
   }
+  return runCarriesTokenValue("e");
+}
+
+// Whether the run carries per-token forgetting to colour by. Unlike
+// entropy there are no runs from before the declaration to keep
+// working, so this one requires it: the model has to say it reports
+// one value per position, and the run has to carry it. A model with
+// no recurrent state declares nothing, and the option never appears.
+function forgettingAvailable() {
+  var channel = declaredChannel("forgetting");
+  if (!channel) {
+    return false;
+  }
+  if ((channel.axes || []).join("|") !== "position") {
+    return false;
+  }
+  return runCarriesTokenValue("f");
+}
+
+// Whether any token in the run's latest frame carries a number under
+// `key`. The latest frame is enough: a position's value arrives with
+// it and never changes afterwards.
+function runCarriesTokenValue(key) {
   var tokens = runFramesTokensLast(runFrames);
   if (!tokens) {
     return false;
   }
   for (var i = 0; i < tokens.length; i++) {
-    if (typeof tokens[i].e === "number") {
+    if (tokens[i] && typeof tokens[i][key] === "number") {
       return true;
     }
   }
@@ -4499,7 +4528,7 @@ function buildTokenMetricsReading() {
     confidence: metricsConfidence(tok, masked, remasked),
     entropy:
       tok && typeof tok.e === "number" ? tok.e : null,
-    extra: metricsExtra(index),
+    extra: metricsExtra(index, tok),
     candidate: metricsCandidate,
     runLabel: metricsRunLabel(),
   };
@@ -4521,8 +4550,11 @@ function metricsConfidence(tok, masked, remasked) {
 
 // The overlay-specific line, the one part of the reading that depends
 // on which coloring is active.
-function metricsExtra(index) {
+function metricsExtra(index, tok) {
   var mode = effectiveColorMode();
+  if (mode === "forgetting") {
+    return overlaysForgettingReading(tok);
+  }
   if (mode === "commit") {
     var step = tokenCommitStep(index, metricsHoverOriginal);
     return step === null ? "" : "Resolved at step: " + step;
@@ -4640,10 +4672,14 @@ function buildOverlaySelect() {
   }
   var hasDiff = diffAvailable();
   var hasEntropy = entropyAvailable();
+  var hasForgetting = forgettingAvailable();
   if (overlayMode === "diff" && !hasDiff) {
     overlayMode = "none";
   }
   if (overlayMode === "entropy" && !hasEntropy) {
+    overlayMode = "none";
+  }
+  if (overlayMode === "forgetting" && !hasForgetting) {
     overlayMode = "none";
   }
   // Commit Order is diffusion-only; drop a stale selection for AR runs.
@@ -4667,6 +4703,12 @@ function buildOverlaySelect() {
   // not how likely the token it chose was.
   if (hasEntropy) {
     options.push({ value: "entropy", label: "Entropy" });
+  }
+  // What reading each token erased from a state-space model's state:
+  // a question about the model's memory rather than its choice, so it
+  // sits beside Entropy rather than replacing either.
+  if (hasForgetting) {
+    options.push({ value: "forgetting", label: "Forgetting" });
   }
   // Commit Order tints by resolution step, which a left-to-right model
   // does not have (its commit order is just position order), so it
@@ -7222,6 +7264,7 @@ function positionRecordsFrom(positions) {
     var record = { t: token.t, m: !!token.m, id: token.id };
     if (typeof token.c === "number") { record.c = token.c; }
     if (typeof token.e === "number") { record.e = token.e; }
+    if (typeof token.f === "number") { record.f = token.f; }
     out.push(record);
   }
   return out;
@@ -7244,6 +7287,9 @@ function tokenRecordsFrom(frames) {
       }
       if (typeof tok.e === "number") {
         record.e = tok.e;
+      }
+      if (typeof tok.f === "number") {
+        record.f = tok.f;
       }
       records.push(record);
     }

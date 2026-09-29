@@ -77,6 +77,8 @@ function cloneSettings(source) {
     glowBrightnessAutoregressive:
       source.glowBrightnessAutoregressive,
     glowFadeMsAutoregressive: source.glowFadeMsAutoregressive,
+    glowBrightnessStateSpace: source.glowBrightnessStateSpace,
+    glowFadeMsStateSpace: source.glowFadeMsStateSpace,
     tpsMode: source.tpsMode,
   };
 }
@@ -162,14 +164,20 @@ var GLOW_PREVIEW_COPY = {
     + "right, so the glow reads as a trail chasing the word at "
     + "the front. Drag either slider above, or click here, to "
     + "replay this at the current settings.",
+  state_space:
+    "A state-space model emits one token at a time, left to "
+    + "right, reading each into a fixed-size state, so the glow "
+    + "forms a trail. Drag either slider above, or click here, "
+    + "to replay this at the current settings.",
 };
 
-// Both classes run for exactly 3420ms over the 38 words of copy, so
+// Every class runs for exactly 3420ms over its 38 words of copy, so
 // switching between them compares the glow and not the pacing. They
-// spend it differently: one word per tick for autoregressive, a
-// scattered burst per slower tick for diffusion, which is the shape
-// of a denoising step. Fixed rather than matched to real hardware,
-// since a real run's speed is the thing being compensated for.
+// spend it differently: one word per tick for the two classes that
+// append, a scattered burst per slower tick for diffusion, which is
+// the shape of a denoising step. Fixed rather than matched to real
+// hardware, since a real run's speed is the thing being compensated
+// for.
 //
 // The pace is set by the worst case rather than by realism. Lit words
 // at any moment is roughly fade over tick, so the sequence has to
@@ -185,6 +193,16 @@ var GLOW_PREVIEW_COPY = {
 var GLOW_PREVIEW_TICK_MS = {
   diffusion: 380,
   autoregressive: 90,
+  state_space: 90,
+};
+
+// The classes whose tokens arrive one at a time, left to right, and
+// whose preview therefore lights one word per tick in order. A
+// state-space model appends exactly as an autoregressive one does;
+// only its pair of settings is its own.
+var GLOW_PREVIEW_APPENDS = {
+  autoregressive: true,
+  state_space: true,
 };
 
 // Real denoising steps do not resolve the same number of positions
@@ -255,7 +273,7 @@ function buildGlowPreviewCopy() {
 function glowPreviewSchedule(count) {
   var groups = [];
   var i = 0;
-  if (glowClass === "autoregressive") {
+  if (GLOW_PREVIEW_APPENDS[glowClass] === true) {
     for (i = 0; i < count; i++) {
       groups.push([i]);
     }
