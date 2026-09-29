@@ -133,6 +133,20 @@ since shipped is noted on the item rather than left for a reader to infer.
      picture would bury them under the same recency window on every
      input, including one with nothing in it: the attention-sink failure
      from the Vision page, arriving by another route.
+   - **Per-token forgetting passes** (manual item 329), a check written
+     and committed before it first ran. Forgetting is what reading a
+     token erased: 1 minus alpha, averaged over heads and layers. It
+     varies with content (a coefficient of variation of 0.31 against a
+     bar of 0.05), has no trend with position (Spearman 0.07 and
+     -0.09), and a repeated token stays flat once its state settles
+     (0.046, about a seventh of real text's variation). Its top tokens
+     are full stops and the words opening the next sentence: the model
+     clears its memory at sentence boundaries. The degenerate top-20
+     test passed on its chance floor, narrowly: the repeated token
+     shares 6.0 top positions with the passages where they share 5 with
+     each other, but both sit under twice chance (6.25), where "as many"
+     is a coin toss. The flat test, which asks the same question
+     directly, passes by a wide margin.
 
    **After the probe**, as its own plan: a Mamba-3 worker in
    `src/backends/` and a registry entry. The registry can express it

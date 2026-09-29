@@ -199,6 +199,9 @@ kept when these were written:
 - **328**: confirmed on 2026-09-28: the CPU half run by an agent
   through the script itself, the CUDA half by the maintainer. Both
   halves' numbers are in the item.
+- **329**: done by an agent on 2026-09-28, on CPU through the script:
+  forgetting passed all four tests, one of them narrowly, which the
+  item records.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -3597,3 +3600,32 @@ direction in `docs/ROADMAP.md`.
     run that made two completions look as if the model had lost a
     space ("lookingfor"), which it had not; the same paste shows
     "tokendoes" in a verdict whose wording is fixed.
+
+329. **Forgetting earns its overlay. Done by an agent on 2026-09-28,
+    on CPU, passing all four tests.** Per-token forgetting is what
+    reading a token erased from the state, 1 minus alpha averaged over
+    heads and layers, and it was allowed to become an overlay only if
+    it passed a bar written and committed before it first ran. Re-run
+    it with:
+
+        .venv-ar/bin/python scripts/probe_mamba3.py --device cpu \
+            --dtype float32 --sections forgetting
+
+    The bar, on two real passages and one repeated token, 128 tokens
+    each: a coefficient of variation of at least 0.05 across real
+    text; |Spearman with position| at most 0.9 on each passage; the
+    repeated token's variation, after 8 warm-up tokens, at most half
+    of real text's; and the repeated token not sharing as many top-20
+    positions with the passages as they share with each other, counted
+    only above twice chance.
+
+    What it found: variation 0.312 on real text against 0.046 on the
+    repeated token; Spearman 0.072 and -0.086; top-20 overlaps of 5
+    between the passages and 6.0 with the repeated token, against a
+    chance of 3.125. That last test passed on its floor, since both
+    overlaps sit under 6.25, and it is the one to watch if the check
+    is re-run on other text. The most-forgetting tokens are full stops
+    and the words opening the next sentence, which is the reading the
+    overlay offers: the model clears its memory at sentence
+    boundaries. On the card in bfloat16 the numbers should agree to
+    rounding.
