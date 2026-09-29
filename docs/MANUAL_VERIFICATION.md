@@ -210,17 +210,16 @@ kept when these were written:
   once that day with every token reading as the same violet; the item
   records the fix.
 - **333**: confirmed on 2026-09-28.
-- **334**: confirmed on 2026-09-28 apart from the colours, which were
-  332's defect; re-check them with 332.
+- **334**: confirmed on 2026-09-28, the colours on the second pass
+  once 332's ramp was retuned.
 - **335**: confirmed on 2026-09-28.
 - **336**: done by an agent on 2026-09-28, on CPU through the script:
   forgetting predicts uncertainty on all three passages, in the middle
   of sentences and above chance. The overall bar was the narrow one,
   which the item records.
-- **337**: **outstanding**, the completion label and its "?" on
-  screen.
-- **338**: **outstanding**, saving after browsing the history.
-- **339**: **outstanding**, deleting a prompt from the history.
+- **337 to 339**: confirmed on 2026-09-28: the completion label and
+  its "?", saving after browsing the history, and deleting a prompt
+  from it.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -3739,8 +3738,8 @@ through a script (item 331); none of this has been through the UI.
     position. For an edited run, each side of the Original / Edited
     crossfade takes its colours from its own run.
 
-    **Confirmed on 2026-09-28 apart from the colours**, which were
-    item 332's flat ramp; re-check them when 332 is re-run.
+    **Confirmed on 2026-09-28.** The colours were item 332's flat
+    ramp on the first pass and confirmed on the retuned one.
 
 335. **The glyph and the glow. Confirmed on 2026-09-28.** In the Main
     Menu the Mamba-3 glyph, at its real 13 pixels, reads as a box on a
