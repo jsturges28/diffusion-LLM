@@ -128,6 +128,41 @@ def test_the_download_command_names_its_module() -> None:
     )
 
 
+def test_a_companion_rides_along_in_the_download_command() -> None:
+    """One child fetches everything the model needs, so one cancel
+    ends all of it."""
+    command = download_command(
+        python=Path("/venv/bin/python"),
+        repo_id="org/model",
+        revision="a" * 40,
+        companion_repo="org/donor",
+        companion_revision="b" * 40,
+        companion_files=("tokenizer.json", "vocab.txt"),
+    )
+
+    assert (
+        command[command.index("--companion-repo") + 1] == "org/donor"
+    )
+    assert (
+        command[command.index("--companion-revision") + 1]
+        == "b" * 40
+    )
+    files = [
+        command[index + 1]
+        for index, part in enumerate(command)
+        if part == "--companion-file"
+    ]
+    assert files == ["tokenizer.json", "vocab.txt"]
+
+
+def test_no_companion_adds_nothing() -> None:
+    command = download_command(
+        python=Path("/venv/bin/python"), repo_id="org/model"
+    )
+
+    assert not any(part.startswith("--companion") for part in command)
+
+
 def test_a_download_inherits_the_orphan_guards() -> None:
     """Not a separate spawn path, which is the point: a download
     gets its own session and PDEATHSIG for free, so even a

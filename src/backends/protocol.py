@@ -272,6 +272,21 @@ def is_hub_checkpoint(checkpoint: str) -> bool:
     return value.count("/") == 1
 
 
+class HubFiles(BaseModel):
+    """Named files from another Hub repository, at a pinned commit.
+
+    A model's checkpoint is a whole repository, and occasionally it
+    also needs a file that lives in somebody else's. Mamba-3 reads
+    Llama 3.1's tokenizer out of SmolLM3's repository, because Meta's
+    own copy is gated. ``files`` are exact names rather than
+    patterns, since each is fetched and checked by name.
+    """
+
+    repo: str
+    revision: str
+    files: Tuple[str, ...]
+
+
 class ModelInfo(BaseModel):
     """Everything needed to launch and describe one model."""
 
@@ -307,6 +322,11 @@ class ModelInfo(BaseModel):
     # here would be a value nobody could check. The registry asserts
     # that every Hub checkpoint does declare one.
     revision: Optional[str] = None
+    # Files the model needs from another repository, fetched with the
+    # checkpoint and required before the model counts as downloaded.
+    # Kept in their own cache, never the donor's, for the reason
+    # ``hf_download.companion_cache_dir`` gives.
+    companion: Optional[HubFiles] = None
 
 
 # -- WebSocket message type constants (client <-> worker) --

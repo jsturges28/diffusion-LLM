@@ -37,6 +37,7 @@ from src.inference.download_main import (
     DOWNLOAD_EXIT_OK,
     DOWNLOAD_EXIT_UNREACHABLE,
 )
+from src.backends.protocol import HubFiles
 from src.web import server as server_module
 from src.web.server import ActivationRefused, ModelManager
 
@@ -174,6 +175,53 @@ def test_the_child_is_told_which_repo_to_fetch() -> None:
     command = harness.commands[0]
     assert "src.inference.download_main" in command
     assert checkpoint in command
+
+
+_DONOR = HubFiles(
+    repo="org/donor", revision="b" * 40, files=("tokenizer.json",)
+)
+
+
+def test_a_borrowing_model_hands_its_companion_to_the_child() -> None:
+    """The same child fetches the borrowed file, so a cancel ends the
+    whole download and not just its larger part."""
+    info = server_module.REGISTRY[DOWNLOADABLE].model_copy(
+        update={"companion": _DONOR}
+    )
+
+    command = server_module._download_argv(info)
+
+    repo_at = command.index("--companion-repo") + 1
+    assert command[repo_at] == _DONOR.repo
+    assert "--companion-file" in command
+
+
+def test_a_model_is_downloaded_only_with_its_companion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Otherwise the menu would offer a model whose first activation
+    has to fetch after all, which offline it cannot."""
+    from src.inference import hf_download
+
+    borrowed = {"present": False}
+    monkeypatch.setattr(
+        hf_download, "is_repo_cached", lambda repo, **kw: True
+    )
+    monkeypatch.setattr(
+        hf_download,
+        "are_companion_files_cached",
+        lambda repo, files, **kw: borrowed["present"],
+    )
+    checkpoint, revision = "org/model", "a" * 40
+    is_downloaded = server_module._is_downloaded
+
+    missing = is_downloaded(checkpoint, revision, _DONOR)
+    borrowed["present"] = True
+    present = is_downloaded(checkpoint, revision, _DONOR)
+
+    assert missing is False
+    assert present is True
+    assert is_downloaded(checkpoint, revision) is True
 
 
 def test_a_second_download_is_refused_while_one_runs() -> None:

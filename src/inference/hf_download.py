@@ -24,9 +24,13 @@ from __future__ import annotations
 import shutil
 import threading
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Sequence
 
 ProgressSink = Callable[[Dict[str, Any]], None]
+
+# The directory under HF_HOME that files borrowed from another
+# model's repository are kept in. See `companion_cache_dir`.
+COMPANION_CACHE_NAME = "companions"
 
 # Poll cadence for the disk-size sampler and a generous ceiling on how
 # long we keep sampling. The download completing is the real bound; the
@@ -523,3 +527,95 @@ def download_with_progress(
     path = result.get("path")
     assert path is not None, "download finished without a path"
     return path
+
+
+# -- files borrowed from another model's repository --
+
+
+def companion_cache_dir() -> Path:
+    """Where borrowed files are kept: beside the Hub cache, not in it.
+
+    Not the main cache, and that is the point. Fetching one file of a
+    repository there creates that repository's snapshot folder, and
+    ``is_repo_cached`` trusts ``snapshot_download(local_files_only)``,
+    which reports any existing snapshot folder as a complete download.
+    One borrowed tokenizer would make SmolLM3 look installed on a
+    machine that never fetched its weights, and its load would then
+    fail. Kept under HF_HOME so it sits with the other model files.
+    """
+    from huggingface_hub import constants
+
+    return Path(constants.HF_HOME) / COMPANION_CACHE_NAME
+
+
+def companion_file(
+    repo_id: str, filename: str, *, revision: str
+) -> Optional[Path]:
+    """Where one borrowed file already is, or None.
+
+    The main cache is asked first, for that exact file at that exact
+    commit, which is the case on any machine that has run the donor
+    model, so nothing is fetched twice. ``try_to_load_from_cache``
+    answers about the one file, not about the repository, so a donor
+    that is itself only partly cached cannot pass for this file.
+    """
+    assert isinstance(repo_id, str) and repo_id, "repo_id required"
+    assert filename, "a companion names its file"
+    from huggingface_hub import try_to_load_from_cache
+
+    for cache_dir in (None, companion_cache_dir()):
+        found = try_to_load_from_cache(
+            repo_id, filename, cache_dir=cache_dir, revision=revision
+        )
+        if isinstance(found, str):
+            return Path(found)
+    return None
+
+
+def are_companion_files_cached(
+    repo_id: str, filenames: Sequence[str], *, revision: str
+) -> bool:
+    """Whether every borrowed file is already on disk somewhere."""
+    assert filenames, "a companion names at least one file"
+    return all(
+        companion_file(repo_id, name, revision=revision) is not None
+        for name in filenames
+    )
+
+
+def fetch_companion_files(
+    repo_id: str, filenames: Sequence[str], *, revision: str
+) -> Dict[str, Path]:
+    """Every borrowed file, fetched into the companion cache if it is
+    not already on disk. Offline with a file missing, this raises the
+    same `WeightsUnavailableError` a missing checkpoint does."""
+    assert filenames, "a companion names at least one file"
+    paths: Dict[str, Path] = {}
+    for name in filenames:
+        found = companion_file(repo_id, name, revision=revision)
+        if found is None:
+            found = _fetch_companion(repo_id, name, revision=revision)
+        paths[name] = found
+    assert len(paths) == len(filenames), "a borrowed file is missing"
+    return paths
+
+
+def _fetch_companion(
+    repo_id: str, filename: str, *, revision: str
+) -> Path:
+    from huggingface_hub import hf_hub_download
+
+    try:
+        fetched = hf_hub_download(
+            repo_id,
+            filename,
+            revision=revision,
+            cache_dir=companion_cache_dir(),
+        )
+    except Exception as exc:  # noqa: BLE001 - translated or reraised
+        if _is_unreachable(exc):
+            raise WeightsUnavailableError(
+                describe_unreachable(repo_id, exc)
+            ) from exc
+        raise
+    return Path(fetched)

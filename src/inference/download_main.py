@@ -70,12 +70,25 @@ def main() -> int:
     # that a download and the load that follows it agree on which
     # commit they are about.
     parser.add_argument("--revision", default=None)
+    # Files the model borrows from another repository, fetched after
+    # the checkpoint into their own cache. All three or none.
+    parser.add_argument("--companion-repo", default=None)
+    parser.add_argument("--companion-revision", default=None)
+    parser.add_argument(
+        "--companion-file", action="append", default=[]
+    )
     args = parser.parse_args()
+    borrowing = args.companion_repo is not None
+    if borrowing != (args.companion_revision is not None):
+        parser.error("a companion needs both a repo and a revision")
+    if borrowing != bool(args.companion_file):
+        parser.error("a companion names its files, and only then")
 
     from src.inference.hf_download import (
         InsufficientSpaceError,
         _is_unreachable,
         check_space_for_download,
+        fetch_companion_files,
         repo_total_bytes,
     )
 
@@ -85,7 +98,8 @@ def main() -> int:
         # The same pre-flight the in-process path makes. Duplicated
         # here rather than shared because this process calls
         # ``snapshot_download`` directly: it has no progress sink to
-        # feed, which is the only reason the helper exists.
+        # feed, which is the only reason the helper exists. A
+        # companion is a few megabytes and rides inside the reserve.
         check_space_for_download(
             args.repo,
             total_bytes=repo_total_bytes(
@@ -93,6 +107,12 @@ def main() -> int:
             ),
         )
         snapshot_download(args.repo, revision=args.revision)
+        if borrowing:
+            fetch_companion_files(
+                args.companion_repo,
+                args.companion_file,
+                revision=args.companion_revision,
+            )
     except InsufficientSpaceError as exc:
         print(f"download refused: {exc}", file=sys.stderr)
         return DOWNLOAD_EXIT_NO_SPACE

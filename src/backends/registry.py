@@ -21,6 +21,10 @@ from src.backends.protocol import (
     is_hub_checkpoint,
 )
 
+# A full git commit. Short ones resolve until a repository grows
+# enough to make them ambiguous, so they are not an address.
+COMMIT_LENGTH = 40
+
 # The signal channels the models share, declared once. Each says what
 # it measures, what it varies over, and where to find it, which is the
 # distinction `ROADMAP-03` exists to draw: confidence and entropy are
@@ -465,6 +469,29 @@ for _model in REGISTRY.values():
         assert _model.revision is None, (
             f"{_model.id} is a local artifact and has no Hub revision"
         )
+
+
+def assert_companion_pinned(model: ModelInfo) -> None:
+    """A borrowed file is fetched from the Hub by name, so it is
+    pinned as a checkpoint is, and to a full commit: a moving donor
+    would change what the model reads underneath a saved run."""
+    companion = model.companion
+    if companion is None:
+        return
+    assert is_hub_checkpoint(companion.repo), (
+        f"{model.id} borrows from {companion.repo!r}, not a Hub repo"
+    )
+    assert len(companion.revision) == COMMIT_LENGTH, (
+        f"{model.id}'s companion is not pinned to a full commit"
+    )
+    assert all(
+        char in "0123456789abcdef" for char in companion.revision
+    ), f"{model.id}'s companion revision is not a commit"
+    assert companion.files, f"{model.id}'s companion names no files"
+
+
+for _model in REGISTRY.values():
+    assert_companion_pinned(_model)
 
 # Every model names an environment the manifest declares. Asserted at
 # import rather than only at launch, because the alternative is to

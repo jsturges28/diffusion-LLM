@@ -80,6 +80,7 @@ from src.backends.protocol import (
     ERROR_WORKER_UNREACHABLE,
     SAVED_MODEL_TYPE_AUTOREGRESSIVE,
     SAVED_MODEL_TYPE_DIFFUSION,
+    HubFiles,
     ModelInfo,
     is_hub_checkpoint,
     saved_model_type,
@@ -499,9 +500,15 @@ def _is_partial(checkpoint: str) -> bool:
 
 
 def _is_downloaded(
-    checkpoint: str, revision: Optional[str] = None
+    checkpoint: str,
+    revision: Optional[str] = None,
+    companion: Optional[HubFiles] = None,
 ) -> bool:
     """Whether the checkpoint's files are fully present locally.
+
+    A model that borrows files from another repository is downloaded
+    only when those are present too; otherwise the first activation
+    would have to fetch after all, and offline it could not.
 
     A partial cache (an interrupted download leaving ``*.incomplete``
     parts) counts as not-downloaded so the menu keeps its download
@@ -522,9 +529,20 @@ def _is_downloaded(
     """
     if is_hub_checkpoint(checkpoint):
         try:
-            from src.inference.hf_download import is_repo_cached
+            from src.inference.hf_download import (
+                are_companion_files_cached,
+                is_repo_cached,
+            )
 
-            return is_repo_cached(checkpoint, revision=revision)
+            if not is_repo_cached(checkpoint, revision=revision):
+                return False
+            if companion is None:
+                return True
+            return are_companion_files_cached(
+                companion.repo,
+                companion.files,
+                revision=companion.revision,
+            )
         except Exception:  # noqa: BLE001 - probe failure: treat as not cached
             return False
     try:
@@ -537,6 +555,28 @@ def _is_downloaded(
         )
     except Exception:  # noqa: BLE001 - probe failure: treat as absent
         return False
+
+
+def _download_argv(info: ModelInfo) -> List[str]:
+    """The download child's argv, with the companion when the model
+    borrows files, so one child fetches everything the model needs
+    and one cancel ends all of it."""
+    python = Path(sys.executable)
+    companion = info.companion
+    if companion is None:
+        return download_command(
+            python=python,
+            repo_id=info.checkpoint,
+            revision=info.revision,
+        )
+    return download_command(
+        python=python,
+        repo_id=info.checkpoint,
+        revision=info.revision,
+        companion_repo=companion.repo,
+        companion_revision=companion.revision,
+        companion_files=companion.files,
+    )
 
 
 def _validate_local_artifact(info: ModelInfo, path: Path) -> None:
@@ -1207,11 +1247,7 @@ class ModelManager:
         if self.download_state == "downloading":
             raise RuntimeError("a download is already running")
         handle = self._spawn(
-            download_command(
-                python=Path(sys.executable),
-                repo_id=checkpoint,
-                revision=info.revision,
-            ),
+            _download_argv(info),
             cwd=REPO_ROOT,
             env=dict(os.environ),
         )
@@ -1719,7 +1755,7 @@ def _models_snapshot() -> Dict[str, Any]:
             info.checkpoint
         )
         data["downloaded"] = _is_downloaded(
-            info.checkpoint, info.revision
+            info.checkpoint, info.revision, info.companion
         )
         data["partial"] = _is_partial(info.checkpoint)
         models.append(data)

@@ -119,7 +119,13 @@ def worker_command(
 
 
 def download_command(
-    *, python: Path, repo_id: str, revision: Optional[str] = None
+    *,
+    python: Path,
+    repo_id: str,
+    revision: Optional[str] = None,
+    companion_repo: Optional[str] = None,
+    companion_revision: Optional[str] = None,
+    companion_files: Sequence[str] = (),
 ) -> List[str]:
     """The argv that fetches one repository's weights.
 
@@ -130,7 +136,9 @@ def download_command(
     without launching anything.
 
     ``--revision`` is omitted rather than passed empty when there is
-    none, so the argv says what it means: nothing was pinned.
+    none, so the argv says what it means: nothing was pinned. The
+    companion, files the model borrows from another repository,
+    travels as plain strings so this module needs no model types.
     """
     argv = [
         str(python),
@@ -141,6 +149,15 @@ def download_command(
     ]
     if revision is not None:
         argv.extend(["--revision", revision])
+    if companion_repo is None:
+        assert not companion_files, "files need a repo to come from"
+        return argv
+    assert companion_revision, "a companion is always pinned"
+    assert companion_files, "a companion names its files"
+    argv.extend(["--companion-repo", companion_repo])
+    argv.extend(["--companion-revision", companion_revision])
+    for name in companion_files:
+        argv.extend(["--companion-file", name])
     return argv
 
 

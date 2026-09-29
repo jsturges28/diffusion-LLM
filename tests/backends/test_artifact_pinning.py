@@ -21,8 +21,18 @@ from __future__ import annotations
 
 import pytest
 
-from src.backends.protocol import ModelInfo, is_hub_checkpoint
-from src.backends.registry import DGEMMA, LLADA, REGISTRY, SMOLLM3
+from src.backends.protocol import (
+    HubFiles,
+    ModelInfo,
+    is_hub_checkpoint,
+)
+from src.backends.registry import (
+    DGEMMA,
+    LLADA,
+    REGISTRY,
+    SMOLLM3,
+    assert_companion_pinned,
+)
 
 # A Hub commit is a full 40-character git sha. Short shas resolve
 # today and stop resolving when the repository grows enough to make
@@ -66,6 +76,38 @@ def test_pinned_revisions_are_full_shas(model: ModelInfo) -> None:
     assert revision is not None
     assert len(revision) == SHA_LENGTH
     assert all(c in "0123456789abcdef" for c in revision)
+
+
+def _borrowing(companion: HubFiles) -> ModelInfo:
+    return SMOLLM3.model_copy(update={"companion": companion})
+
+
+def test_a_pinned_companion_passes() -> None:
+    assert_companion_pinned(
+        _borrowing(HubFiles(
+            repo="org/donor", revision="a" * 40, files=("x.json",)
+        ))
+    )
+
+
+@pytest.mark.parametrize(
+    "companion",
+    [
+        HubFiles(repo="~/local", revision="a" * 40, files=("x",)),
+        HubFiles(repo="org/donor", revision="main", files=("x",)),
+        HubFiles(repo="org/donor", revision="A" * 40, files=("x",)),
+        HubFiles(repo="org/donor", revision="a" * 40, files=()),
+    ],
+    ids=["local", "branch", "not-hex", "no-files"],
+)
+def test_an_unpinned_companion_is_refused(
+    companion: HubFiles,
+) -> None:
+    """A borrowed file from a moving source would change what the
+    model reads underneath a saved run, as a moving checkpoint
+    would."""
+    with pytest.raises(AssertionError):
+        assert_companion_pinned(_borrowing(companion))
 
 
 def test_dgemma_is_the_local_one() -> None:
