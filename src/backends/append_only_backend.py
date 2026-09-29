@@ -303,6 +303,7 @@ class AppendOnlyBackend(Backend):
                     :position
                 ],
                 prefix_alts=state["alternatives"][:position],
+                prefix_signals=_prefix_signals(state, position),
                 max_new_tokens=state["max_new_tokens"],
                 # Greedy: the divergence after the forced token
                 # should be the intervention's effect, not fresh
@@ -444,6 +445,17 @@ class AppendOnlyBackend(Backend):
         if state is None:
             raise ValueError("No previous generation to probe.")
         return state
+
+
+def _prefix_signals(
+    state: Dict[str, Any], position: int
+) -> Optional[List[Dict[str, float]]]:
+    """The recorded run's per-token values before `position`, so a
+    branch keeps them; None for a run that recorded none."""
+    signals = state.get("signals")
+    if signals is None:
+        return None
+    return list(signals[:position])
 
 
 def _probe_token_id(data: Dict[str, Any]) -> int:

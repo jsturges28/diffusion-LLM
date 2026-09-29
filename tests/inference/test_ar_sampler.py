@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
@@ -24,6 +25,7 @@ import torch
 
 from src.backends.text_adapter import ChatTextAdapter
 from src.inference import ar_sampler
+from src.inference.frame_queue import frame_queue_create
 from src.inference.ar_sampler import (
     AR_CACHE_BYTES_MAX,
     TOP_K_ALTERNATIVES,
@@ -1277,3 +1279,265 @@ def test_substitute_rejects_a_misaligned_prefix() -> None:
 
     with pytest.raises(AssertionError):
         asyncio.run(drive())
+
+
+# -- values a model reports as it reads each token --
+
+
+class ReadingOutput(StubOutput):
+    def __init__(
+        self,
+        logits: torch.Tensor,
+        past: Any,
+        signals: Dict[str, torch.Tensor],
+    ) -> None:
+        super().__init__(logits, past)
+        self.token_signals = signals
+
+
+class ReadingStubModel(StubModel):
+    """Reports, for every token it reads, `f` = its id / 100, so a
+    frame can be checked against its own token rather than a
+    neighbour's. `stop_after` decode steps later it favours EOS, and
+    `on_call` runs inside a chosen call, which is how a test cancels
+    at a known moment rather than racing the decode thread."""
+
+    emits_token_signals = True
+
+    def __init__(
+        self,
+        stop_after: Optional[int] = None,
+        on_call: Optional[Dict[int, Any]] = None,
+    ) -> None:
+        super().__init__()
+        self.stop_after = stop_after
+        self.on_call = on_call or {}
+
+    def __call__(
+        self,
+        input_ids: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        past_key_values: Any = None,
+        use_cache: bool = True,
+    ) -> ReadingOutput:
+        plain = super().__call__(
+            input_ids, attention_mask, past_key_values, use_cache
+        )
+        assert input_ids is not None
+        count = len(self.calls)
+        if self.stop_after is not None and count > self.stop_after:
+            plain.logits[0, -1, EOS_ID] = 100.0
+        if count in self.on_call:
+            self.on_call[count]()
+        signals = {"f": input_ids.float() / 100.0}
+        past = plain.past_key_values
+        return ReadingOutput(plain.logits, past, signals)
+
+
+def _read_run(
+    model: ReadingStubModel, budget: int
+) -> Dict[str, Any]:
+    state: Dict[str, Any] = {}
+    frames: List[Dict[str, Any]] = []
+
+    async def drive() -> None:
+        async for item in streaming_generate(
+            model,
+            StubTokenizer(),
+            ChatTextAdapter(),
+            "prompt",
+            max_new_tokens=budget,
+            temperature=0.0,
+            top_p=1.0,
+            alternatives=True,
+            state_sink=state,
+        ):
+            frames.append(item)
+
+    asyncio.run(drive())
+    tokens = [f["token"] for f in frames if f["type"] == "frame"]
+    return {"state": state, "tokens": tokens, "frames": frames}
+
+
+def test_each_token_carries_what_reading_it_reported() -> None:
+    """The whole point of reading before sending: `f` belongs to the
+    token on its own frame, not to the one before or after."""
+    out = _read_run(ReadingStubModel(), budget=5)
+
+    assert len(out["tokens"]) == 5
+    for token in out["tokens"]:
+        assert token["f"] == round(token["id"] / 100.0, 4)
+    kept = [values["f"] for values in out["state"]["signals"]]
+    assert kept == pytest.approx(
+        [token_id / 100.0 for token_id in out["state"]["ids"]]
+    )
+
+
+def test_the_last_token_is_read_before_it_is_sent() -> None:
+    """One extra forward, one token wide, and no more."""
+    model = ReadingStubModel()
+
+    _read_run(model, budget=4)
+
+    widths = [call["width"] for call in model.calls]
+    assert widths == [3, 1, 1, 1, 1]
+
+
+def test_a_stop_token_is_read_and_ends_the_run() -> None:
+    """Three ordinary tokens, then the fourth pass favours the stop,
+    which is read like any other before its frame goes out."""
+    model = ReadingStubModel(stop_after=3)
+
+    out = _read_run(model, budget=10)
+
+    ids = [token["id"] for token in out["tokens"]]
+    assert ids[-1] == EOS_ID
+    assert len(ids) == 4
+    assert len(model.calls) == 5
+    assert out["tokens"][-1]["f"] == round(EOS_ID / 100.0, 4)
+
+
+def test_a_cancel_leaves_the_trace_as_what_was_sent() -> None:
+    """Cancelled while the second token is being read. The queue
+    refuses frames once a run is cancelled, so the second never
+    reaches the client, and it leaves the trace too, rather than
+    turning up in the final text of a run that never showed it."""
+    cancel = threading.Event()
+    model = ReadingStubModel(on_call={3: cancel.set})
+    trace = _Trace()
+    out_queue = frame_queue_create()
+
+    ar_sampler._stream_read_tokens(
+        model=model,
+        tokenizer=StubTokenizer(),
+        adapter=ChatTextAdapter(),
+        step_ids=torch.tensor([[1, 2, 3]]),
+        attention_mask=None,
+        trace=trace,
+        budget=6,
+        total_steps=6,
+        temperature=0.0,
+        top_p=1.0,
+        top_k=0,
+        alternatives=False,
+        out_queue=out_queue,
+        cancel_event=cancel,
+    )
+
+    sent = out_queue.get_nowait()["token"]
+    assert out_queue.empty()
+    assert sent["f"] == round(sent["id"] / 100.0, 4)
+    assert trace.ids == [sent["id"]]
+    assert len(trace.signals) == 1
+
+
+def test_a_substitution_seeds_with_its_forced_tokens_value() -> None:
+    """The seed frame waits for the forced token to be read, and the
+    kept prefix keeps the values its own run recorded."""
+    out = _read_run(ReadingStubModel(), budget=6)
+    state = out["state"]
+    position = 2
+    forced = next(
+        c for c in state["alternatives"][position]
+        if c["id"] != state["ids"][position]
+    )
+    branch: Dict[str, Any] = {}
+    frames: List[Dict[str, Any]] = []
+
+    async def drive() -> None:
+        async for item in streaming_substitute(
+            ReadingStubModel(),
+            StubTokenizer(),
+            ChatTextAdapter(),
+            "prompt",
+            position=position,
+            forced_id=forced["id"],
+            forced_conf=forced["p"],
+            forced_entropy=state["entropies"][position],
+            forced_alts=state["alternatives"][position],
+            prefix_ids=state["ids"][:position],
+            prefix_confs=state["confidences"][:position],
+            prefix_entropies=state["entropies"][:position],
+            prefix_alts=state["alternatives"][:position],
+            prefix_signals=state["signals"][:position],
+            max_new_tokens=6,
+            alternatives=True,
+            state_sink=branch,
+        ):
+            frames.append(item)
+
+    asyncio.run(drive())
+
+    seed = frames[0]
+    assert seed["index"] == position + 1
+    assert seed["token"]["f"] == round(forced["id"] / 100.0, 4)
+    assert branch["signals"][:position] == state["signals"][:position]
+    assert len(branch["ids"]) == 6
+
+
+def test_a_forced_stop_token_does_not_end_the_branch() -> None:
+    """Only a sampled stop ends a run, as in the plain loop: forcing
+    end-of-text somewhere is a question about what follows it."""
+    out = _read_run(ReadingStubModel(), budget=6)
+    state = out["state"]
+    position = 2
+    captured = state["alternatives"][position]
+    assert not any(c["id"] == EOS_ID for c in captured)
+    branch: Dict[str, Any] = {}
+
+    async def drive() -> None:
+        async for _ in streaming_substitute(
+            ReadingStubModel(),
+            StubTokenizer(),
+            ChatTextAdapter(),
+            "prompt",
+            position=position,
+            forced_id=EOS_ID,
+            forced_conf=None,
+            forced_entropy=state["entropies"][position],
+            forced_alts=captured,
+            prefix_ids=state["ids"][:position],
+            prefix_confs=state["confidences"][:position],
+            prefix_entropies=state["entropies"][:position],
+            prefix_alts=state["alternatives"][:position],
+            max_new_tokens=6,
+            state_sink=branch,
+        ):
+            pass
+
+    asyncio.run(drive())
+
+    assert branch["ids"][position] == EOS_ID
+    assert len(branch["ids"]) == 6
+
+
+def test_a_model_that_reports_nothing_streams_as_before() -> None:
+    """No extra forward and no key on the record: every model before
+    Mamba-3 is untouched by any of this."""
+    model = StubModel()
+    state: Dict[str, Any] = {}
+
+    async def drive() -> None:
+        async for _ in streaming_generate(
+            model,
+            StubTokenizer(),
+            ChatTextAdapter(),
+            "prompt",
+            max_new_tokens=4,
+            temperature=0.0,
+            state_sink=state,
+        ):
+            pass
+
+    asyncio.run(drive())
+
+    assert [call["width"] for call in model.calls] == [3, 1, 1, 1]
+    assert state["signals"] == [{}, {}, {}, {}]
+
+
+def test_a_signal_cannot_shadow_a_record_field() -> None:
+    trace = _traced([(4, 0.9, 0.25)])
+    trace.set_signals(0, {"c": 0.5})
+
+    with pytest.raises(AssertionError):
+        _append_frame(trace, 0)

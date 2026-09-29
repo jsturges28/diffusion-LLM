@@ -22,6 +22,13 @@ undecided the model was over the whole vocabulary, not how likely
 the token it chose was. Per-position **top-k alternatives** are
 opt-in, mirroring DiffusionGemma's entropy-signal toggle.
 
+A model may also report values as it **reads** each token, such as
+what reading it erased from a recurrent state. Those exist one
+forward after the token is sampled, so for a model that sets
+``emits_token_signals`` each frame goes out once its token has been
+read and carries that token's own values; see ``_stream_read_tokens``.
+Every other model streams exactly as before.
+
 Note on payload size: frames carry the one position they added, not
 the whole sequence, so the streamed payload is linear in the token
 count rather than O(n^2). Decoding runs strictly left to right and
@@ -40,6 +47,7 @@ unbounded worker memory; see ``src/inference/frame_queue.py``.
 from __future__ import annotations
 
 import asyncio
+import functools
 import queue
 import threading
 from typing import (
@@ -384,6 +392,10 @@ def _build_append_frame(
         },
         "revealed": [frame_index],
     }
+    token = frame["token"]
+    for key, value in trace.signals[frame_index].items():
+        assert key not in token, f"signal {key!r} shadows a field"
+        token[key] = round(value, 4)
     alternatives = trace.alts[frame_index]
     if alternatives is not None:
         frame["alts"] = alternatives
@@ -428,6 +440,10 @@ class _Trace:
         self.confs: List[float] = []
         self.entropies: List[float] = []
         self.alts: List[Optional[List[Dict[str, Any]]]] = []
+        # Values the model reports as it reads a token, keyed by the
+        # token record's short key. Empty until the token is read,
+        # and always empty for a model that reports none.
+        self.signals: List[Dict[str, float]] = []
         # Running, so a frame can report the mean without walking
         # every position it already reported. Summing per token is
         # the same quadratic the append shape exists to remove, paid
@@ -439,6 +455,7 @@ class _Trace:
         self.confs.append(pick.confidence)
         self.entropies.append(pick.entropy)
         self.alts.append(pick.alternatives)
+        self.signals.append({})
         self.conf_sum += pick.confidence
 
     def seed(
@@ -447,6 +464,7 @@ class _Trace:
         confs: List[float],
         entropies: List[float],
         alts: List[Optional[List[Dict[str, Any]]]],
+        signals: Optional[List[Dict[str, float]]] = None,
     ) -> None:
         """Start from a kept prefix rather than from nothing.
 
@@ -458,10 +476,31 @@ class _Trace:
         assert len(ids) == len(confs), "seed conf misalign"
         assert len(ids) == len(entropies), "seed entropy misalign"
         assert len(ids) == len(alts), "seed alts misalign"
+        if signals is None:
+            signals = [{} for _ in ids]
+        assert len(ids) == len(signals), "seed signals misalign"
         self.ids = list(ids)
         self.confs = list(confs)
         self.entropies = list(entropies)
         self.alts = list(alts)
+        self.signals = [dict(values) for values in signals]
+        self.conf_sum = sum(self.confs)
+
+    def set_signals(
+        self, index: int, values: Dict[str, float]
+    ) -> None:
+        """What the model reported on reading the token at `index`."""
+        assert 0 <= index < len(self.ids), "signals off the trace"
+        self.signals[index] = dict(values)
+
+    def truncate(self, length: int) -> None:
+        """Keep the first `length` positions, the ones sent."""
+        assert 0 <= length <= len(self.ids), "cannot grow by cutting"
+        del self.ids[length:]
+        del self.confs[length:]
+        del self.entropies[length:]
+        del self.alts[length:]
+        del self.signals[length:]
         self.conf_sum = sum(self.confs)
 
     def check(self) -> None:
@@ -470,6 +509,7 @@ class _Trace:
             "entropy misalign"
         )
         assert len(self.ids) == len(self.alts), "alts misalign"
+        assert len(self.ids) == len(self.signals), "signals misalign"
         # Tolerant, because the running total adds in decode order
         # while this adds in list order and float addition is not
         # associative. The check is for a missed update, which is off
@@ -578,6 +618,145 @@ def _stream_tokens(
     return past
 
 
+def _reads_signals(model: Any) -> bool:
+    """Whether a model reports values as it reads each token."""
+    return bool(getattr(model, "emits_token_signals", False))
+
+
+def _stream_read_tokens(
+    *,
+    model: Any,
+    tokenizer: Any,
+    adapter: TextAdapter,
+    step_ids: torch.Tensor,
+    attention_mask: Optional[torch.Tensor],
+    trace: _Trace,
+    budget: int,
+    total_steps: int,
+    temperature: float,
+    top_p: float,
+    top_k: int,
+    alternatives: bool,
+    out_queue: "queue.Queue[Any]",
+    cancel_event: Optional[threading.Event],
+    past: Any = None,
+    pending: Optional[int] = None,
+) -> Any:
+    """Decode as `_stream_tokens` does, but send each token only after
+    the model has read it.
+
+    For a model whose outputs carry `token_signals`: values that
+    describe a token as the model reads it, such as what reading it
+    erased from a recurrent state. They exist one forward after the
+    token is sampled, so each frame goes out one forward later, the
+    last token costs one extra forward, and every frame carries its
+    own token's values rather than the previous one's. `pending` is a
+    position already in the trace and not yet read, which is how a
+    substitution hands over its forced token.
+
+    The trace ends as exactly what was sent. A cancel stops frames at
+    the queue, so a token sampled or read but never delivered leaves
+    the trace rather than turning up in the run's final text. As in
+    `_stream_tokens`, only a sampled stop token ends the run.
+    """
+    assert budget >= 0, "budget must be non-negative"
+    trace.check()
+    stop_ids = adapter.stop_ids(tokenizer, model)
+    device = model.device
+    dtype = step_ids.dtype
+    emit = functools.partial(
+        _emit_position,
+        out_queue=out_queue,
+        tokenizer=tokenizer,
+        adapter=adapter,
+        trace=trace,
+        total_steps=total_steps,
+        cancel_event=cancel_event,
+    )
+    sent = len(trace.ids) if pending is None else pending
+    assert len(trace.ids) - sent in (0, 1), "only the newest waits"
+    sampled = 0
+    with torch.no_grad():
+        for _ in range(budget + 1):
+            if cancel_event is not None and cancel_event.is_set():
+                break
+            outputs = model(
+                input_ids=step_ids,
+                attention_mask=attention_mask,
+                past_key_values=past,
+                use_cache=True,
+            )
+            past = outputs.past_key_values
+            sent = _settle(outputs, trace, sent, emit)
+            stopped = sampled > 0 and trace.ids[-1] in stop_ids
+            if sent < len(trace.ids) or stopped or sampled >= budget:
+                break
+            pick = _sample_next(
+                outputs.logits[:, -1, :],
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                tokenizer=tokenizer,
+                alternatives=alternatives,
+            )
+            trace.append(pick)
+            sampled += 1
+            step_ids = torch.tensor(
+                [[pick.token_id]], dtype=dtype, device=device
+            )
+            attention_mask = _grow_attention(
+                attention_mask, device
+            )
+    trace.truncate(sent)
+    trace.check()
+    return past
+
+
+def _settle(outputs: Any, trace: _Trace, sent: int, emit: Any) -> int:
+    """Give the newest token, if it is still unsent, what reading it
+    reported, and send it. Returns how many positions are sent."""
+    if sent == len(trace.ids):
+        return sent
+    assert sent == len(trace.ids) - 1, "only the newest waits"
+    trace.set_signals(sent, _read_signals(outputs))
+    if emit(sent):
+        return sent + 1
+    return sent
+
+
+def _read_signals(outputs: Any) -> Dict[str, float]:
+    """The values a forward reported for the last token it read."""
+    signals = getattr(outputs, "token_signals", None) or {}
+    return {
+        key: float(values[0, -1]) for key, values in signals.items()
+    }
+
+
+def _emit_position(
+    index: int,
+    *,
+    out_queue: "queue.Queue[Any]",
+    tokenizer: Any,
+    adapter: TextAdapter,
+    trace: _Trace,
+    total_steps: int,
+    cancel_event: Optional[threading.Event],
+) -> bool:
+    """Send the frame for one position; False if nobody took it."""
+    return frame_queue_put(
+        out_queue,
+        _build_append_frame(
+            tokenizer,
+            adapter,
+            trace,
+            frame_index=index,
+            total_steps=total_steps,
+            conf_sum=trace.conf_sum,
+        ),
+        stop_event=cancel_event,
+    )
+
+
 def _finalize(
     tokenizer: Any,
     adapter: TextAdapter,
@@ -608,6 +787,7 @@ def _finalize(
     result["confidences"] = list(trace.confs)
     result["entropies"] = list(trace.entropies)
     result["alternatives"] = list(trace.alts)
+    result["signals"] = list(trace.signals)
 
 
 def _decode_loop(
@@ -629,7 +809,10 @@ def _decode_loop(
     """Blocking token-by-token generation; runs in a worker thread."""
     _seed(seed)
     trace = _Trace()
-    past = _stream_tokens(
+    stream: Any = _stream_tokens
+    if _reads_signals(model):
+        stream = _stream_read_tokens
+    past = stream(
         model=model,
         tokenizer=tokenizer,
         adapter=adapter,
@@ -677,6 +860,7 @@ def _substitute_loop(
     cancel_event: Optional[threading.Event],
     result: Dict[str, Any],
     cache: Optional[Dict[str, Any]] = None,
+    prefix_signals: Optional[List[Dict[str, float]]] = None,
 ) -> None:
     """Force one position, then continue generating from it.
 
@@ -690,6 +874,11 @@ def _substitute_loop(
     for a token the user typed, which by definition has none. In that
     case it is read from the model instead (see
     ``_probe_forced_position``).
+
+    For a model that reports values on reading a token, the seed
+    frame waits for the forced token to be read, so it carries that
+    token's own values; ``prefix_signals`` keeps the recorded run's
+    values for the positions before it.
     """
     assert position >= 0, "position must be non-negative"
     assert len(prefix_ids) == position, (
@@ -720,23 +909,30 @@ def _substitute_loop(
         forced_entropy=forced_entropy,
         forced_alts=forced_alts,
         tokenizer=tokenizer,
+        prefix_signals=prefix_signals,
     )
 
-    _emit_seed_frame(
-        tokenizer=tokenizer,
-        adapter=adapter,
-        trace=trace,
-        position=position,
-        total_steps=max_new_tokens,
-        out_queue=out_queue,
-        cancel_event=cancel_event,
-    )
+    stream: Any = _stream_tokens
+    if _reads_signals(model):
+        stream = functools.partial(
+            _stream_read_tokens, pending=position
+        )
+    else:
+        _emit_seed_frame(
+            tokenizer=tokenizer,
+            adapter=adapter,
+            trace=trace,
+            position=position,
+            total_steps=max_new_tokens,
+            out_queue=out_queue,
+            cancel_event=cancel_event,
+        )
 
     # Only the forced token is left to forward: the probe's cache
     # already covers the prompt and the kept prefix.
     device = model.device
     remaining = max_new_tokens - (position + 1)
-    _stream_tokens(
+    stream(
         model=model,
         tokenizer=tokenizer,
         adapter=adapter,
@@ -818,6 +1014,7 @@ def _forced_trace(
     forced_entropy: float,
     forced_alts: Optional[List[Dict[str, Any]]],
     tokenizer: Any,
+    prefix_signals: Optional[List[Dict[str, float]]] = None,
 ) -> _Trace:
     """The branch's trace: the kept prefix plus the forced position.
 
@@ -839,6 +1036,7 @@ def _forced_trace(
         list(prefix_confs),
         list(prefix_entropies),
         list(prefix_alts),
+        prefix_signals,
     )
     trace.append(
         _StepPick(
@@ -1324,6 +1522,7 @@ async def streaming_substitute(
     cancel_event: Optional[threading.Event] = None,
     state_sink: Optional[Dict[str, Any]] = None,
     cache: Optional[Dict[str, Any]] = None,
+    prefix_signals: Optional[List[Dict[str, float]]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Substitute one position's token, then regenerate forward.
 
@@ -1382,6 +1581,7 @@ async def streaming_substitute(
                 cancel_event=cancel_event,
                 result=result,
                 cache=cache,
+                prefix_signals=prefix_signals,
             )
         except Exception as exc:  # noqa: BLE001
             result["err"] = exc
@@ -1440,6 +1640,10 @@ async def _drain_frames(
         state_sink["alternatives"] = result.get(
             "alternatives", []
         )
+        # What the model reported on reading each token, so a later
+        # substitution keeps the prefix's values instead of blanking
+        # them.
+        state_sink["signals"] = result.get("signals", [])
         # Rides with the trace rather than on its own channel,
         # because it is only meaningful alongside it: the cache and
         # the ids describe the same sequence, and a sink holding one

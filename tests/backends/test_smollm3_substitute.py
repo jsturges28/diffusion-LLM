@@ -238,6 +238,27 @@ def test_branch_does_not_replace_the_run_state(
     assert state["alternatives"] == ORIGINAL_ALTS
 
 
+def test_a_branch_keeps_the_prefix_values_the_run_recorded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A model that reports values on reading a token recorded them
+    for every position; the branch is handed the ones before the
+    forced position, and a run that recorded none hands over none."""
+    calls: List[Dict[str, Any]] = []
+    _install_branch_stub(monkeypatch, calls)
+    backend = Smollm3Backend()
+    state = _run_state()
+    state["signals"] = [{"f": 0.25}, {"f": 0.5}]
+    _seed_run(backend, state)
+
+    _substitute(backend, position=1, token_id=13)
+    _seed_run(backend, _run_state())
+    _substitute(backend, position=1, token_id=13)
+
+    assert calls[0]["prefix_signals"] == [{"f": 0.25}]
+    assert calls[1]["prefix_signals"] is None
+
+
 def test_retry_can_pick_a_position_after_the_edit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
