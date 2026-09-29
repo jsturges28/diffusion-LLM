@@ -500,6 +500,14 @@
 
           </div>
         </div>
+        <!-- Competing-candidate popover for the token overlay, shown
+             on hover for runs saved with a candidate capture. Inside
+             the dialog, not at body level: a modal dialog paints in
+             the top layer, above anything outside it whatever its
+             z-index, so a body-level popover opened unseen beneath
+             the modal. A sibling of the box rather than inside it,
+             so the box's scrolling never clips it. -->
+        <div id="token-alts-popover" hidden></div>
       </dialog>
 
       <!-- Comparison panel (replaces detail) -->
@@ -537,11 +545,6 @@
 
   <!-- Bottom-right toast for transient confirmations. -->
   <div id="toast" class="toast"></div>
-
-  <!-- Competing-candidate popover for the token overlay, shown on
-       hover for runs saved with the Alternatives capture. Body level
-       so the detail modal never clips it. -->
-  <div id="token-alts-popover" hidden></div>
 
   <!-- Save-to-collections chooser, opened from a row's caret -->
   <dialog id="modal-collections" class="modal-overlay">

@@ -205,6 +205,21 @@ def test_modals_really_do_hold_controls(page: str) -> None:
     )
 
 
+def test_the_analytics_popover_lives_inside_its_modal() -> None:
+    """What the conversion cost without anyone seeing it. A modal
+    dialog paints in the top layer, above everything outside it
+    whatever the z-index, so the candidate popover, left at body level
+    where it had been put to escape the old modal's clipping, opened
+    unseen beneath the run detail modal from 2026-09-15 on, for every
+    run. It has to sit inside the dialog it annotates."""
+    html = (STATIC / "analytics.html").read_text(encoding="utf-8")
+    start = html.find('<dialog id="detail-modal"')
+
+    assert start != -1, "the run detail modal is gone or renamed"
+    assert html.count('id="token-alts-popover"') == 1
+    assert 'id="token-alts-popover"' in _block(html, start, "dialog")
+
+
 # -- controls whose focus ring had nowhere to land --
 
 
