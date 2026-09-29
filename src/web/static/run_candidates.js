@@ -23,6 +23,11 @@
 //
 // Every operation returns a new store and leaves the one it was given
 // alone, so a snapshot can hold a reference rather than a copy.
+//
+// A save sends the plain form the server checks. The session snapshot
+// a trip to Analytics depends on writes a packed one instead, because
+// the plain form did not fit the desktop app's session storage; see
+// runCandidatesToSnapshot.
 
 "use strict";
 
@@ -33,6 +38,15 @@ var RUN_CANDIDATES_BUDGET = 102400;
 // Halving passes a thinning may take. A pass halves every segment of
 // three or more frames, so this covers any store a page could build.
 var RUN_CANDIDATES_THIN_PASSES = 32;
+// Marks the packed form a session snapshot writes, so a reader can
+// tell it from the plain form an older snapshot holds.
+var RUN_CANDIDATES_SNAPSHOT_FORM = 1;
+// The worker rounds a candidate's probability to four places
+// (PROBABILITY_PLACES in src/inference/candidate_capture.py), so the
+// packed form writes it as a whole number of ten-thousandths. One off
+// that grid is written as it is, which keeps the form exact whatever
+// the worker sends; only the size depends on the two agreeing.
+var RUN_CANDIDATES_PROBABILITY_SCALE = 10000;
 
 function runCandidatesCreate() {
   return { k: 0, stride: 1, frames: [], segments: [0], sets: [] };
@@ -203,9 +217,9 @@ function runCandidatesToJson(store) {
   };
 }
 
-// A saved or snapshotted store, or an empty one for anything that is
-// not a well-formed store: a snapshot or a run from before candidates
-// existed, or one that captured none.
+// A saved store, or a snapshot written plainly, or an empty one for
+// anything that is not a well-formed store: a snapshot or a run from
+// before candidates existed, or one that captured none.
 function runCandidatesFromJson(source) {
   if (!runCandidatesWellFormed(source)) {
     return runCandidatesCreate();
@@ -236,6 +250,219 @@ function runCandidatesWellFormed(source) {
     return false;
   }
   return source.frames.length === source.sets.length;
+}
+
+// A store as the session snapshot writes it. The plain form repeats
+// every candidate's text and spells out every field name, and at 3.8
+// million characters for a default LLaDA run it never fit the desktop
+// app's session storage, about 5.2 million for the whole snapshot.
+// This writes each token's text once and each set as one row of
+// numbers, about a quarter of the size. It is exact for every field
+// a save carries: a store holding something the rows cannot say, one
+// id with two texts or a ranked candidate that is not last, is
+// written plainly instead, and runCandidatesFromSnapshot reads both.
+function runCandidatesToSnapshot(store) {
+  var texts = Object.create(null);
+  var sets = [];
+  for (var f = 0; f < store.sets.length; f++) {
+    var rows = runCandidatesPackFrame(store.sets[f], texts);
+    if (rows === null) {
+      return runCandidatesToJson(store);
+    }
+    sets.push(rows);
+  }
+  return {
+    form: RUN_CANDIDATES_SNAPSHOT_FORM,
+    k: store.k,
+    stride: store.stride,
+    frames: store.frames.slice(),
+    segments: store.segments.slice(),
+    texts: texts,
+    sets: sets,
+  };
+}
+
+// A store as the session snapshot left it, in either form, or an
+// empty one for anything that is not a well-formed store, a form this
+// build does not know among them.
+function runCandidatesFromSnapshot(source) {
+  if (!source || source.form === undefined) {
+    return runCandidatesFromJson(source);
+  }
+  if (source.form !== RUN_CANDIDATES_SNAPSHOT_FORM) {
+    return runCandidatesCreate();
+  }
+  var unpacked = runCandidatesUnpack(source);
+  return unpacked === null ? runCandidatesCreate() : unpacked;
+}
+
+function runCandidatesPackFrame(frameSets, texts) {
+  if (!Array.isArray(frameSets)) {
+    return null;
+  }
+  var rows = [];
+  for (var p = 0; p < frameSets.length; p++) {
+    var row = runCandidatesPackSet(frameSets[p], texts);
+    if (row === null) {
+      return null;
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+// One set as [h, n, id, q, ...]: the held token, how many plain
+// candidates follow, and each as its id and packed probability, then
+// the id, probability and rank of a held token appended from outside
+// them, which comes last. Records each text in `texts`. Null for a
+// set the row cannot say exactly.
+function runCandidatesPackSet(set, texts) {
+  if (!set || !Array.isArray(set.c)) {
+    return null;
+  }
+  var count = set.c.length;
+  var last = set.c[count - 1];
+  var ranked = !!last && last.rank !== undefined;
+  var plain = ranked ? count - 1 : count;
+  var row = [set.h, plain];
+  for (var i = 0; i < count; i++) {
+    var alt = set.c[i];
+    if (!runCandidatesPackable(alt, i < plain, texts)) {
+      return null;
+    }
+    row.push(alt.id, runCandidatesPackProbability(alt.p));
+  }
+  if (ranked) {
+    row.push(last.rank);
+  }
+  return row;
+}
+
+// Whether a candidate fits its row: a plain one carries no rank, and
+// its text agrees with any text its id already recorded.
+function runCandidatesPackable(alt, plain, texts) {
+  if (!alt || typeof alt.t !== "string") {
+    return false;
+  }
+  if (plain && alt.rank !== undefined) {
+    return false;
+  }
+  var known = texts[alt.id];
+  if (known === undefined) {
+    texts[alt.id] = alt.t;
+    return true;
+  }
+  return known === alt.t;
+}
+
+// Whole ten-thousandths where that reads back as the same number,
+// and the number itself otherwise. The two cannot be confused: any
+// integer is on the grid, so what is written as itself is never one.
+function runCandidatesPackProbability(p) {
+  var scaled = Math.round(p * RUN_CANDIDATES_PROBABILITY_SCALE);
+  if (scaled / RUN_CANDIDATES_PROBABILITY_SCALE === p) {
+    return scaled;
+  }
+  return p;
+}
+
+function runCandidatesUnpackProbability(q) {
+  if (Number.isInteger(q)) {
+    return q / RUN_CANDIDATES_PROBABILITY_SCALE;
+  }
+  return q;
+}
+
+// The packed form's inverse, or null when anything in it is not what
+// runCandidatesToSnapshot writes.
+function runCandidatesUnpack(source) {
+  if (!runCandidatesWellFormed(source)) {
+    return null;
+  }
+  var texts = source.texts;
+  if (!texts || typeof texts !== "object") {
+    return null;
+  }
+  var sets = [];
+  for (var f = 0; f < source.sets.length; f++) {
+    var frameSets = runCandidatesUnpackFrame(source.sets[f], texts);
+    if (frameSets === null) {
+      return null;
+    }
+    sets.push(frameSets);
+  }
+  return {
+    k: source.k,
+    stride: source.stride,
+    frames: source.frames.slice(),
+    segments: source.segments.slice(),
+    sets: sets,
+  };
+}
+
+function runCandidatesUnpackFrame(rows, texts) {
+  if (!Array.isArray(rows)) {
+    return null;
+  }
+  var sets = [];
+  for (var p = 0; p < rows.length; p++) {
+    var set = runCandidatesUnpackSet(rows[p], texts);
+    if (set === null) {
+      return null;
+    }
+    sets.push(set);
+  }
+  return sets;
+}
+
+// One row back as a set, or null for a row runCandidatesPackSet could
+// not have written.
+function runCandidatesUnpackSet(row, texts) {
+  var plain = runCandidatesPackedCount(row);
+  if (plain < 0) {
+    return null;
+  }
+  var ranked = row.length > 2 + 2 * plain;
+  var total = ranked ? plain + 1 : plain;
+  var candidates = [];
+  for (var i = 0; i < total; i++) {
+    var alt = runCandidatesUnpackCandidate(row, 2 + 2 * i, texts);
+    if (alt === null) {
+      return null;
+    }
+    candidates.push(alt);
+  }
+  if (ranked) {
+    candidates[plain].rank = row[row.length - 1];
+  }
+  return { h: row[0], c: candidates };
+}
+
+// How many plain candidates a packed row holds, or -1 when it is not
+// one: after the held token and the count come exactly that many
+// pairs, then nothing, or a ranked candidate's three values.
+function runCandidatesPackedCount(row) {
+  if (!Array.isArray(row)) {
+    return -1;
+  }
+  var plain = row[1];
+  if (!Number.isInteger(plain) || plain < 0) {
+    return -1;
+  }
+  var over = row.length - 2 - 2 * plain;
+  return over === 0 || over === 3 ? plain : -1;
+}
+
+function runCandidatesUnpackCandidate(row, at, texts) {
+  var text = texts[row[at]];
+  if (typeof text !== "string") {
+    return null;
+  }
+  return {
+    id: row[at],
+    t: text,
+    p: runCandidatesUnpackProbability(row[at + 1]),
+  };
 }
 
 function runCandidatesAssertMessage(message) {

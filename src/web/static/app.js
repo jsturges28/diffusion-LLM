@@ -8883,9 +8883,10 @@ function saveSessionState() {
   }, originalRunToJson(originalRun));
   // Most complete first, each tier dropping what the next can live
   // without when the sessionStorage quota refuses it (long runs).
-  // Candidates go first: a default LLaDA run's are about 4 MiB, which
-  // can be what tips the full payload over, and losing them costs
-  // less than losing the per-token detail it exists to carry.
+  // Candidates go first: packed, a default LLaDA run's are about a
+  // million characters against the desktop app's 5.2 million for the
+  // whole snapshot, and losing them costs less than losing the
+  // per-token detail they explain.
   sessionStoreFirstFitting(candidateTiers(full).concat([full, base]));
 }
 
@@ -8897,11 +8898,11 @@ function saveSessionState() {
 function candidateTiers(full) {
   var tiers = [];
   var withLive = Object.assign({}, full, {
-    candidates: runCandidatesToJson(runCandidates),
+    candidates: runCandidatesToSnapshot(runCandidates),
   });
   if (originalCandidatesKeptApart()) {
     tiers.push(Object.assign({}, withLive, {
-      originalCandidates: runCandidatesToJson(originalCandidates),
+      originalCandidates: runCandidatesToSnapshot(originalCandidates),
     }));
   }
   if (!runCandidatesIsEmpty(runCandidates)) {
@@ -8955,7 +8956,7 @@ function restoredRunPrompt(snapshot) {
 // edited run's candidates under the original's tokens.
 function restoredOriginalCandidates(snapshot) {
   if (snapshot.originalCandidates) {
-    return runCandidatesFromJson(snapshot.originalCandidates);
+    return runCandidatesFromSnapshot(snapshot.originalCandidates);
   }
   if (remaskEdits.length > 0) {
     return runCandidatesCreate();
@@ -9023,7 +9024,7 @@ function restoreSessionState() {
   remaskEdits = s.remaskEdits || [];
   originalRunRestore(originalRun, s, runFramesLength(runFrames));
   positionAlts = s.positionAlts || [];
-  runCandidates = runCandidatesFromJson(s.candidates);
+  runCandidates = runCandidatesFromSnapshot(s.candidates);
   originalCandidates = restoredOriginalCandidates(s);
   editedRunSaved = !!s.editedRunSaved;
   // Restored with the rest, or a stopped run would come back from

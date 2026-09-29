@@ -12,8 +12,10 @@
 // the edit branched from, and the start of a new DiffusionGemma
 // canvas, whose positions are unrelated to the last one's. It also
 // proves a save fits the budget the server enforces, that thinning
-// keeps each segment's last frame, and that the store survives the
-// JSON round trip a session snapshot and a saved run both take.
+// keeps each segment's last frame, that the store survives the round
+// trip a saved run takes, and that it survives the packed one a
+// session snapshot takes exactly, reading back empty wherever that
+// form is broken rather than as something half right.
 //
 // Run with: node --test tests/web/static/
 
@@ -305,4 +307,182 @@ test("anything that is not a store reads back empty", () => {
     const back = api.runCandidatesFromJson(source);
     assert.ok(api.runCandidatesIsEmpty(back));
   }
+});
+
+// -- the session snapshot's packed form --
+
+const WORKER_TEXTS = [" Yeast", "\n", " ", "\u2591", "\ud83d\ude00"];
+const WORKER_PROBABILITIES = [0.9475, 0.0163, 0.0101, 0.0042, 0.0001];
+
+// Sets shaped like a worker's: five candidates with texts JSON has to
+// escape or that sit outside ASCII, probabilities on the grid the
+// worker rounds to (0.0163 among them, which scales inexactly), and
+// in the last position the held token appended from outside the five
+// with its rank and an unrounded probability.
+function workerSets(frame) {
+  const sets = [];
+  for (let position = 0; position < 3; position += 1) {
+    sets.push({
+      h: 100 + (frame % 5),
+      c: WORKER_TEXTS.map((text, index) => ({
+        id: 100 + index, t: text, p: WORKER_PROBABILITIES[index],
+      })),
+    });
+  }
+  sets[2].h = 5000 + frame;
+  sets[2].c.push({
+    id: 5000 + frame, t: " outside", p: 0.0033787887077778578,
+    rank: 41,
+  });
+  return sets;
+}
+
+function streamOf(frames, stride, setsOf) {
+  return {
+    type: "candidates",
+    k: 5,
+    stride: stride,
+    frames: frames,
+    sets: frames.map(setsOf),
+  };
+}
+
+// Two segments, the second at a stride of 2: frames 1, 3 and 4.
+function workerStore(api) {
+  const generated = api.runCandidatesAddStream(
+    api.runCandidatesCreate(), 0, streamOf([1, 2, 3], 1, workerSets)
+  );
+  return api.runCandidatesAddStream(
+    api.runCandidatesTruncate(generated, 2), 2,
+    streamOf([1, 2], 2, workerSets)
+  );
+}
+
+function throughSnapshot(api, store) {
+  return api.runCandidatesFromSnapshot(
+    JSON.parse(JSON.stringify(api.runCandidatesToSnapshot(store)))
+  );
+}
+
+// The whole store as the save writes it, which is what "exactly"
+// is measured against.
+function plainText(api, store) {
+  return JSON.stringify(api.runCandidatesToJson(store));
+}
+
+test("the packed form reads back exactly", () => {
+  const api = load();
+  const store = workerStore(api);
+
+  const back = throughSnapshot(api, store);
+
+  assert.equal(plainText(api, back), plainText(api, store));
+  assert.deepEqual(Array.from(back.segments), [0, 2]);
+  assert.equal(back.stride, 2);
+});
+
+test("each text is written once and each set as numbers", () => {
+  const api = load();
+
+  const packed = api.runCandidatesToSnapshot(workerStore(api));
+
+  assert.equal(packed.form, 1);
+  assert.deepEqual(
+    Object.keys(packed.texts).sort(),
+    ["100", "101", "102", "103", "104", "5001", "5002"]
+  );
+  assert.deepEqual(
+    Array.from(packed.sets[0][0]),
+    [101, 5, 100, 9475, 101, 163, 102, 101, 103, 42, 104, 1]
+  );
+  assert.deepEqual(
+    Array.from(packed.sets[0][2]).slice(12),
+    [5001, 0.0033787887077778578, 41]
+  );
+});
+
+test("what the packed form cannot say is written plainly", () => {
+  // One id with two texts, a ranked candidate that is not last, a
+  // text that is not a string, a set with no list of candidates and
+  // a frame that is not a list of sets. No worker sends the last
+  // three; each still reads back exactly, through the plain form.
+  const api = load();
+  const cases = [
+    [
+      [{ h: 1, c: [{ id: 1, t: " a", p: 0.5 }] }],
+      [{ h: 1, c: [{ id: 1, t: " A", p: 0.5 }] }],
+    ],
+    [
+      [{ h: 2, c: [
+        { id: 2, t: " b", p: 0.001, rank: 9 },
+        { id: 1, t: " a", p: 0.5 },
+      ] }],
+    ],
+    [[{ h: 3, c: [{ id: 3, t: 3, p: 0.5 }] }]],
+    [[{ h: 4 }]],
+    [5],
+  ];
+
+  for (const frames of cases) {
+    const store = api.runCandidatesAddStream(
+      api.runCandidatesCreate(), 0,
+      streamOf(frames.map((_, index) => index + 1), 1,
+        (frame) => frames[frame - 1])
+    );
+    assert.equal(api.runCandidatesToSnapshot(store).form, undefined);
+    assert.equal(
+      plainText(api, throughSnapshot(api, store)),
+      plainText(api, store)
+    );
+  }
+});
+
+test("a snapshot written plainly still reads back", () => {
+  // What a tab holds from before the packed form.
+  const api = load();
+  const store = workerStore(api);
+
+  const back = api.runCandidatesFromSnapshot(
+    JSON.parse(JSON.stringify(api.runCandidatesToJson(store)))
+  );
+
+  assert.equal(plainText(api, back), plainText(api, store));
+});
+
+test("a broken packed snapshot reads back empty", () => {
+  const api = load();
+  const packed = () => JSON.parse(
+    JSON.stringify(api.runCandidatesToSnapshot(workerStore(api)))
+  );
+  const breaks = [
+    (s) => { s.sets[0][0].push(7); },
+    (s) => { s.sets[0][0].push(100, 5); },
+    (s) => { s.sets[0][0][1] = 6; },
+    (s) => { s.sets[0][0][1] = -1; },
+    (s) => { s.sets[0][0] = [101]; },
+    (s) => { delete s.texts["100"]; },
+    (s) => { s.sets[0][0] = { h: 1 }; },
+    (s) => { s.sets[0] = "rows"; },
+    (s) => { s.sets.pop(); },
+    (s) => { s.texts = null; },
+    (s) => { s.form = 2; },
+  ];
+  assert.equal(api.runCandidatesIsEmpty(
+    api.runCandidatesFromSnapshot(packed())
+  ), false);
+
+  for (const breakIt of breaks) {
+    const snapshot = packed();
+    breakIt(snapshot);
+    const back = api.runCandidatesFromSnapshot(snapshot);
+    assert.ok(api.runCandidatesIsEmpty(back), String(breakIt));
+  }
+});
+
+test("an empty store comes back empty", () => {
+  const api = load();
+
+  const back = throughSnapshot(api, api.runCandidatesCreate());
+
+  assert.ok(api.runCandidatesIsEmpty(back));
 });
