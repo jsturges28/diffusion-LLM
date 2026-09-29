@@ -23,7 +23,7 @@ constant below being written twice and drifting.
 
 from __future__ import annotations
 
-from typing import Tuple
+from typing import List, NamedTuple, Tuple
 
 import torch
 
@@ -126,6 +126,53 @@ def entropy_nats(logits: torch.Tensor) -> torch.Tensor:
     # near-deterministic distribution, and a negative entropy would
     # render as a colour outside the scale rather than as an error.
     return value.clamp_min(0.0)
+
+
+class Candidates(NamedTuple):
+    """What a step was weighing at each position, and where the token
+    each position holds stood in it."""
+
+    ids: torch.Tensor  # (positions, k), likeliest first
+    probs: torch.Tensor  # (positions, k)
+    held_probs: torch.Tensor  # (positions,)
+    held_ranks: torch.Tensor  # (positions,), 1 for the likeliest
+
+
+def top_candidates(
+    logits: torch.Tensor, k: int, held: torch.Tensor
+) -> Candidates:
+    """The k likeliest tokens per position, and the held token's
+    standing among all of them.
+
+    ``logits`` is (positions, vocabulary) and ``held`` is
+    (positions,), the token each position holds at this step. The
+    held token's rank
+    is one plus how many tokens the model preferred, counted strictly,
+    so ties share the better rank: the convention the autoregressive
+    sampler's ``_token_rank`` uses, which keeps the two popovers
+    agreeing about what a rank means.
+    """
+    assert logits.dim() == 2, "expected (positions, vocabulary)"
+    assert held.dim() == 1, "expected one held token per position"
+    assert held.shape[0] == logits.shape[0], "held per position"
+    assert 0 < k <= logits.shape[1], "k within the vocabulary"
+    parts: Tuple[List[torch.Tensor], ...] = ([], [], [], [])
+    held_chunks = torch.split(held, LOGIT_CHUNK_POSITIONS, dim=0)
+    logit_chunks = torch.split(logits, LOGIT_CHUNK_POSITIONS, dim=0)
+    for chunk, chosen in zip(logit_chunks, held_chunks, strict=True):
+        wide = _widen(chunk)
+        spread = torch.logsumexp(wide, dim=-1, keepdim=True)
+        top, top_ids = torch.topk(
+            wide, k, dim=-1, largest=True, sorted=True
+        )
+        taken = torch.gather(
+            wide, dim=-1, index=chosen.unsqueeze(-1)
+        )
+        parts[0].append(top_ids)
+        parts[1].append(torch.exp(top - spread))
+        parts[2].append(torch.exp(taken - spread).squeeze(-1))
+        parts[3].append((wide > taken).sum(dim=-1) + 1)
+    return Candidates(*(torch.cat(part, dim=0) for part in parts))
 
 
 def _widen(chunk: torch.Tensor) -> torch.Tensor:

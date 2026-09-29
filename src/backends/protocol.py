@@ -66,6 +66,20 @@ Axis = Literal["frame", "position", "canvas"]
 
 AXES: Tuple[str, ...] = ("frame", "position", "canvas")
 
+# The candidates a run records per position per step. Five for every
+# model, so the popover reads the same whichever produced the run;
+# the autoregressive sampler's `TOP_K_ALTERNATIVES` is held to it by a
+# test.
+CANDIDATES_PER_POSITION = 5
+# The records a diffusion run's candidates may take: one default LLaDA
+# run, 160 positions for 128 steps at five each, captured at every
+# step. Past it the capture thins to a stride rather than growing. At
+# the 42 bytes a record the ROADMAP measured, this is about 4 MiB,
+# where every step at the registry's largest settings would be 212.
+CANDIDATE_BUDGET_RECORDS = 160 * 128 * CANDIDATES_PER_POSITION
+
+assert CANDIDATE_BUDGET_RECORDS == 102_400, "the ROADMAP's budget"
+
 
 class SignalChannel(BaseModel):
     """One XAI signal, described rather than inferred.

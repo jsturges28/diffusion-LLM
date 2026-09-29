@@ -35,6 +35,7 @@ from src.inference.logit_signals import (
     LOGIT_CHUNK_POSITIONS,
     entropy_nats,
     picked_confidence,
+    top_candidates,
     top_confidence,
 )
 
@@ -248,3 +249,89 @@ def test_a_mismatched_pick_count_is_a_programmer_error() -> None:
 
     with pytest.raises(AssertionError):
         picked_confidence(_logits(8), picks)
+
+
+# -- what a step was weighing, and where its held token stood --
+
+CANDIDATES = 5
+
+
+def _held(positions: int, *, seed: int) -> torch.Tensor:
+    torch.manual_seed(seed)
+    return torch.randint(0, VOCAB, (positions,))
+
+
+def test_top_candidates_match_the_softmax_top_k() -> None:
+    """The candidates, likeliest first, and the held token's
+    probability and rank, against a materialized softmax. The canvas
+    crosses a chunk boundary, so the tail is covered too."""
+    positions = LOGIT_CHUNK_POSITIONS * 2 + 5
+    logits = _logits(positions, seed=23)
+    held = _held(positions, seed=29)
+    probs = _softmax_oracle(logits)
+    want_probs, want_ids = torch.topk(probs, CANDIDATES, dim=-1)
+    want_held = probs.gather(-1, held.unsqueeze(-1))
+    want_ranks = (probs > want_held).sum(dim=-1) + 1
+
+    got = top_candidates(logits, CANDIDATES, held)
+
+    assert got.ids.shape == (positions, CANDIDATES)
+    assert torch.equal(got.ids, want_ids)
+    assert torch.allclose(got.probs, want_probs, atol=TOLERANCE)
+    assert torch.allclose(
+        got.held_probs, want_held.squeeze(-1), atol=TOLERANCE
+    )
+    assert torch.equal(got.held_ranks, want_ranks)
+
+
+def test_a_held_argmax_ranks_first() -> None:
+    """A position holding the model's favourite ranks 1 and carries
+    the top candidate's probability, which is the case the popover
+    marks without appending a row."""
+    logits = _logits(40, seed=31)
+    held = logits.argmax(dim=-1)
+
+    got = top_candidates(logits, CANDIDATES, held)
+
+    assert torch.equal(got.held_ranks, torch.ones_like(held))
+    assert torch.allclose(got.held_probs, got.probs[:, 0])
+
+
+def test_tied_logits_share_the_better_rank() -> None:
+    """Counting strictly greater tokens, as the autoregressive
+    sampler does, so two popovers never disagree about a tie."""
+    logits = torch.zeros(1, VOCAB)
+    logits[0, 3] = 5.0
+    logits[0, 7] = 5.0
+    logits[0, 9] = 2.0
+
+    tied = top_candidates(logits, CANDIDATES, torch.tensor([7]))
+    third = top_candidates(logits, CANDIDATES, torch.tensor([9]))
+
+    assert int(tied.held_ranks[0]) == 1
+    assert int(third.held_ranks[0]) == 3
+
+
+def test_top_candidates_widen_bfloat16() -> None:
+    """The checkpoints hand over bf16; the probabilities come back in
+    float32, reduced per chunk like the other signals."""
+    narrow = _logits(48, seed=37).to(torch.bfloat16)
+
+    got = top_candidates(narrow, CANDIDATES, _held(48, seed=41))
+
+    assert got.probs.dtype == torch.float32
+    assert got.held_probs.dtype == torch.float32
+
+
+@pytest.mark.parametrize("k", [0, VOCAB + 1])
+def test_k_outside_the_vocabulary_is_a_programmer_error(
+    k: int,
+) -> None:
+    with pytest.raises(AssertionError):
+        top_candidates(_logits(4), k, _held(4, seed=43))
+
+
+def test_a_mismatched_held_count_is_a_programmer_error() -> None:
+    """One held token per position, for the same reason as a pick."""
+    with pytest.raises(AssertionError):
+        top_candidates(_logits(8), CANDIDATES, _held(4, seed=47))
