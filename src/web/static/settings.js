@@ -11,8 +11,9 @@ var settingGpuTickerCb =
   document.getElementById("setting-gpu-ticker");
 var settingBirthGlowCb =
   document.getElementById("setting-token-birth-glow");
-var settingRevealMaskCb =
-  document.getElementById("setting-reveal-mask-candidate");
+var unsettledShowsMount =
+  document.getElementById("unsettled-shows-mount");
+var selectUnsettledShows = null;
 var diffusionModeRow =
   document.getElementById("diffusion-mode-row");
 var diffusionModeMount =
@@ -71,7 +72,7 @@ function cloneSettings(source) {
     diffusionTextMode: source.diffusionTextMode,
     gpuTicker: source.gpuTicker,
     tokenBirthGlow: source.tokenBirthGlow,
-    revealMaskCandidate: source.revealMaskCandidate,
+    unsettledShows: source.unsettledShows,
     glowBrightnessDiffusion: source.glowBrightnessDiffusion,
     glowFadeMsDiffusion: source.glowFadeMsDiffusion,
     glowBrightnessAutoregressive:
@@ -95,9 +96,8 @@ function syncControls() {
     settingBirthGlowCb.checked =
       stagedSettings.tokenBirthGlow;
   }
-  if (settingRevealMaskCb) {
-    settingRevealMaskCb.checked =
-      stagedSettings.revealMaskCandidate;
+  if (selectUnsettledShows) {
+    selectUnsettledShows.value = stagedSettings.unsettledShows;
   }
   if (selectDiffusionMode) {
     selectDiffusionMode.value = stagedSettings.diffusionTextMode;
@@ -545,13 +545,6 @@ function wireControls() {
       updateButtons();
     });
   }
-  if (settingRevealMaskCb) {
-    settingRevealMaskCb.addEventListener("change", function () {
-      stagedSettings.revealMaskCandidate =
-        settingRevealMaskCb.checked;
-      updateButtons();
-    });
-  }
   wireGlowControls();
   if (btnSettingsSave) {
     btnSettingsSave.addEventListener("click", saveStaged);
@@ -627,6 +620,21 @@ function adoptGlowClassForActiveModel(family) {
   }
 }
 
+function buildUnsettledShowsSelect() {
+  if (!unsettledShowsMount) {
+    return;
+  }
+  selectUnsettledShows = createCustomSelect(
+    UNSETTLED_SHOWS_OPTIONS, stagedSettings.unsettledShows
+  );
+  unsettledShowsMount.appendChild(selectUnsettledShows);
+  sizeCustomSelect(selectUnsettledShows);
+  selectUnsettledShows.addEventListener("change", function () {
+    stagedSettings.unsettledShows = selectUnsettledShows.value;
+    updateButtons();
+  });
+}
+
 function buildModeSelect() {
   if (!diffusionModeMount) {
     return;
@@ -692,6 +700,7 @@ function bootSettings() {
   // copy and the preview itself all open on it.
   adoptGlowClassForActiveModel(bootActiveModelFamily());
   buildModeSelect();
+  buildUnsettledShowsSelect();
   buildGlowClassSelect();
   buildGlowPreviewCopy();
   syncControls();

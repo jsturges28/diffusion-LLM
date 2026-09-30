@@ -2851,7 +2851,7 @@ function renderDiffOverlay(frameIndex) {
         originalOpacity: diffOriginalOpacity,
         editedOpacity: diffEditedOpacity,
         blend: diffBlend,
-        revealMask: appSettings.revealMaskCandidate,
+        revealMask: overlaysDrawsGuess(appSettings),
         opacityFor: tokenOpacityFn,
       },
       MASK_CHAR
@@ -5433,7 +5433,7 @@ function loadSettings() {
   // than per frame, so the setting is copied in here, where the rest
   // of the preferences land, instead of being read inside the render
   // loop for every position on every step.
-  LIVE_TOKEN_OPTIONS.revealMask = appSettings.revealMaskCandidate;
+  LIVE_TOKEN_OPTIONS.revealMask = overlaysDrawsGuess(appSettings);
 }
 
 // Apply the (saved) settings to the live app: hover highlight and any
@@ -5522,7 +5522,7 @@ function tokenColorFn(isOriginal) {
 function tokenLayerOptions(isOriginal) {
   return {
     maskChar: MASK_CHAR,
-    revealMask: appSettings.revealMaskCandidate,
+    revealMask: overlaysDrawsGuess(appSettings),
     maskedFor: tokenMaskedFn,
     classFor: tokenClassFn,
     opacityFor: tokenOpacityFn,
@@ -5690,7 +5690,7 @@ function renderTargetPlaceholder(frameIndex) {
       // gap. .preview-content is pointer-events: none, so the
       // data-pos the builder adds stays inert here.
       var previewOptions = {
-        revealMask: appSettings.revealMaskCandidate,
+        revealMask: overlaysDrawsGuess(appSettings),
       };
       for (var i = 0; i < origTokens.length; i++) {
         wrapper.appendChild(

@@ -1503,16 +1503,27 @@ var GLOW_CLASS_OPTIONS = [
   { value: "state_space", label: "State space" },
 ];
 
+// What an unsettled diffusion position shows: the block glyph, the
+// token the model is holding there, or its captured candidates,
+// cycling. One choice rather than two toggles, because they are three
+// readings of one position and never stack: cycling reserves room for
+// its widest candidate, which would pad a canvas of guesses.
+var UNSETTLED_SHOWS_OPTIONS = [
+  { value: "glyph", label: "The mask glyph" },
+  { value: "guess", label: "The model's guess" },
+  { value: "candidates", label: "Its candidates, cycling" },
+];
+
 var SETTINGS_DEFAULTS = {
   highlightTokens: true,
   diffusionText: false,
   diffusionTextMode: "default",
   gpuTicker: true,
   tokenBirthGlow: true,
-  // Off by default. A canvas of blocks is what a diffusion run looks
-  // like, and reading a page of plausible words that are not the
-  // answer yet is a thing to opt into, not to be handed.
-  revealMaskCandidate: false,
+  // The glyph by default. A canvas of blocks is what a diffusion run
+  // looks like, and reading a page of plausible words that are not
+  // the answer yet is a thing to opt into, not to be handed.
+  unsettledShows: "glyph",
   glowBrightnessDiffusion: GLOW_BRIGHTNESS_DEFAULT,
   glowFadeMsDiffusion: GLOW_FADE_MS_DEFAULT,
   glowBrightnessAutoregressive: GLOW_BRIGHTNESS_DEFAULT,
@@ -1535,7 +1546,7 @@ function parseSettings(raw) {
     diffusionTextMode: SETTINGS_DEFAULTS.diffusionTextMode,
     gpuTicker: SETTINGS_DEFAULTS.gpuTicker,
     tokenBirthGlow: SETTINGS_DEFAULTS.tokenBirthGlow,
-    revealMaskCandidate: SETTINGS_DEFAULTS.revealMaskCandidate,
+    unsettledShows: SETTINGS_DEFAULTS.unsettledShows,
     glowBrightnessDiffusion:
       SETTINGS_DEFAULTS.glowBrightnessDiffusion,
     glowFadeMsDiffusion: SETTINGS_DEFAULTS.glowFadeMsDiffusion,
@@ -1566,10 +1577,7 @@ function parseSettings(raw) {
       // saved before this setting existed should still meet the
       // effect rather than having it silently off forever.
       settings.tokenBirthGlow = parsed.tokenBirthGlow !== false;
-      // Default off when absent, unlike the two above: this one
-      // changes what the canvas says rather than how it looks, so an
-      // older profile keeps the glyphs until it asks otherwise.
-      settings.revealMaskCandidate = !!parsed.revealMaskCandidate;
+      settings.unsettledShows = parseUnsettledShows(parsed);
       parseGlowInto(settings, parsed);
       settings.tpsMode =
         parsed.tpsMode === "last" ? "last" : "total";
@@ -1578,6 +1586,30 @@ function parseSettings(raw) {
     // Corrupt storage: keep the defaults.
   }
   return settings;
+}
+
+// A stored choice counts when it is one of the three. A profile saved
+// while this was a single toggle migrates: the reveal switched on was
+// asking for the guess. Anything else keeps the glyph, unlike the
+// highlight and the glow above, which default on when absent: this
+// one changes what the canvas says rather than how it looks.
+function parseUnsettledShows(parsed) {
+  var stored = parsed.unsettledShows;
+  for (var i = 0; i < UNSETTLED_SHOWS_OPTIONS.length; i++) {
+    if (UNSETTLED_SHOWS_OPTIONS[i].value === stored) {
+      return stored;
+    }
+  }
+  return parsed.revealMaskCandidate ? "guess" : "glyph";
+}
+
+// Whether an unsettled position draws the token it is holding, which
+// is the span builder's revealMask flag. True for cycling as well as
+// for the guess, because a position shows its guess wherever there
+// are no candidates to cycle through: while a run streams, on its
+// opening frame, mid-edit, and with motion reduced.
+function overlaysDrawsGuess(settings) {
+  return settings.unsettledShows !== "glyph";
 }
 
 // Fold every class's glow pair out of stored state, clamped to
@@ -1748,7 +1780,7 @@ function settingsEqual(a, b) {
     && a.diffusionTextMode === b.diffusionTextMode
     && a.gpuTicker === b.gpuTicker
     && a.tokenBirthGlow === b.tokenBirthGlow
-    && a.revealMaskCandidate === b.revealMaskCandidate
+    && a.unsettledShows === b.unsettledShows
     && a.glowBrightnessDiffusion === b.glowBrightnessDiffusion
     && a.glowFadeMsDiffusion === b.glowFadeMsDiffusion
     && a.glowBrightnessAutoregressive

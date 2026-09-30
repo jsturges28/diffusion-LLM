@@ -134,14 +134,10 @@
             </div>
             <div class="settings-row">
               <div class="settings-label-group">
-                <label>Reveal the mask candidate</label>
-                <span class="settings-desc">Draw the token a diffusion model is currently holding at each unsettled position, instead of the block glyph. The position still reads as unsettled: it stays tinted, and faded by the model's confidence in that guess. Applies to live runs and to saved runs in Analytics.</span>
+                <label>Unsettled positions show</label>
+                <span class="settings-desc">What a diffusion model's unsettled positions draw: the block glyph, the token the model is currently holding there, or the candidates it was weighing, each shown for its share of every second and the glyph for the rest. Cycling needs a finished run, so a run still streaming shows its guesses. Either way the position stays tinted and faded by the model's confidence. Applies to live runs and to saved runs in Analytics.</span>
               </div>
-              <label class="toggle-switch">
-                <input type="checkbox"
-                  id="setting-reveal-mask-candidate" />
-                <span class="toggle-slider"></span>
-              </label>
+              <span id="unsettled-shows-mount"></span>
             </div>
           </section>
 

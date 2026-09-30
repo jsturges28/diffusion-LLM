@@ -4260,7 +4260,7 @@ function renderOverlayTokens(opts) {
   var edited = {
     colorFor: overlayColorFn(opts.colorFor),
     classFor: editedClassFn,
-    revealMask: analyticsSettings.revealMaskCandidate,
+    revealMask: overlaysDrawsGuess(analyticsSettings),
     opacityFor: overlayOpacityFn,
   };
   var original = overlayComparisonFrame();
@@ -4269,7 +4269,7 @@ function renderOverlayTokens(opts) {
       colorFor: overlayColorFn(
         opts.originalColorFor || opts.colorFor
       ),
-      revealMask: analyticsSettings.revealMaskCandidate,
+      revealMask: overlaysDrawsGuess(analyticsSettings),
       opacityFor: overlayOpacityFn,
     });
     return;
@@ -4688,7 +4688,7 @@ function renderDiffOverlay() {
         originalOpacity: overlayDiffOrigOpacity,
         editedOpacity: overlayDiffEditOpacity,
         blend: overlayDiffBlendOn,
-        revealMask: analyticsSettings.revealMaskCandidate,
+        revealMask: overlaysDrawsGuess(analyticsSettings),
         opacityFor: overlayOpacityFn,
       }
     )

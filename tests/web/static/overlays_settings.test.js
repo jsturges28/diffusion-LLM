@@ -17,6 +17,8 @@
 // Written with the mask-candidate reveal, the first setting to be
 // read by Analytics as well as the generator, so it is also the first
 // one where getting the round trip wrong would show up on two pages.
+// That toggle is now a three-way choice of what an unsettled position
+// shows, and a profile saved while it was a toggle migrates.
 //
 // Run with: node --test tests/web/static/
 
@@ -55,32 +57,70 @@ function parse(sandbox, value) {
   return sandbox.parseSettings(JSON.stringify(value));
 }
 
-// ---- The mask-candidate reveal ----
+// ---- What an unsettled position shows ----
 
-test("the reveal is off until it is asked for", () => {
+test("unsettled positions show the glyph until asked otherwise", () => {
   // A canvas of blocks is what a diffusion run looks like. Reading a
   // page of plausible words that are not the answer yet is a thing
   // to opt into.
   const sandbox = load();
 
-  assert.equal(sandbox.SETTINGS_DEFAULTS.revealMaskCandidate, false);
-  assert.equal(
-    sandbox.parseSettings(null).revealMaskCandidate,
-    false
-  );
+  assert.equal(sandbox.SETTINGS_DEFAULTS.unsettledShows, "glyph");
+  assert.equal(sandbox.parseSettings(null).unsettledShows, "glyph");
 });
 
-test("the reveal round-trips through storage", () => {
+test("each choice round-trips through storage", () => {
+  const sandbox = load();
+
+  for (const choice of ["glyph", "guess", "candidates"]) {
+    const parsed = parse(sandbox, { unsettledShows: choice });
+    assert.equal(parsed.unsettledShows, choice);
+  }
+});
+
+test("a profile that had the reveal on lands on the guess", () => {
+  // The toggle this replaced drew the guess when on. Its old
+  // coercion read any truthy value as on, so the migration does too.
   const sandbox = load();
 
   const on = parse(sandbox, { revealMaskCandidate: true });
+  const stringly = parse(sandbox, { revealMaskCandidate: "on" });
   const off = parse(sandbox, { revealMaskCandidate: false });
 
-  assert.equal(on.revealMaskCandidate, true);
-  assert.equal(off.revealMaskCandidate, false);
+  assert.equal(on.unsettledShows, "guess");
+  assert.equal(stringly.unsettledShows, "guess");
+  assert.equal(off.unsettledShows, "glyph");
 });
 
-test("a profile saved before the reveal existed keeps blocks", () => {
+test("a stored choice wins over the old toggle", () => {
+  // Once the Settings page saves, the choice is what the profile
+  // says; a stale toggle beside it must not override it.
+  const sandbox = load();
+
+  const cycling = parse(sandbox, {
+    unsettledShows: "candidates", revealMaskCandidate: false,
+  });
+  const glyph = parse(sandbox, {
+    unsettledShows: "glyph", revealMaskCandidate: true,
+  });
+
+  assert.equal(cycling.unsettledShows, "candidates");
+  assert.equal(glyph.unsettledShows, "glyph");
+});
+
+test("a choice this build does not know falls back", () => {
+  const sandbox = load();
+
+  const unknown = parse(sandbox, { unsettledShows: "stack" });
+  const migrated = parse(sandbox, {
+    unsettledShows: "stack", revealMaskCandidate: true,
+  });
+
+  assert.equal(unknown.unsettledShows, "glyph");
+  assert.equal(migrated.unsettledShows, "guess");
+});
+
+test("a profile saved before either keeps the glyph", () => {
   // Unlike the hover highlight and the birth glow, which default on
   // when absent: this one changes what the canvas says rather than
   // how it looks, so it is not handed to anyone silently.
@@ -88,21 +128,18 @@ test("a profile saved before the reveal existed keeps blocks", () => {
 
   const older = parse(sandbox, { tokenBirthGlow: true });
 
-  assert.equal(older.revealMaskCandidate, false);
+  assert.equal(older.unsettledShows, "glyph");
   assert.equal(older.tokenBirthGlow, true);
 });
 
-test("a stored reveal is coerced to a boolean", () => {
-  // The value reaches the span builder, which asks whether it is
-  // truthy. Settling that here keeps a stale string out of a
-  // per-token decision.
+test("the old toggle is not carried forward", () => {
+  // Save writes what parseSettings returns, so the next save drops
+  // the toggle and the choice is all a profile holds.
   const sandbox = load();
 
-  const truthy = parse(sandbox, { revealMaskCandidate: "on" });
-  const falsy = parse(sandbox, { revealMaskCandidate: 0 });
+  const parsed = parse(sandbox, { revealMaskCandidate: true });
 
-  assert.equal(truthy.revealMaskCandidate, true);
-  assert.equal(falsy.revealMaskCandidate, false);
+  assert.equal("revealMaskCandidate" in parsed, false);
 });
 
 test("corrupt storage still yields the defaults", () => {
@@ -110,19 +147,43 @@ test("corrupt storage still yields the defaults", () => {
 
   const parsed = sandbox.parseSettings("{not json");
 
-  assert.equal(parsed.revealMaskCandidate, false);
+  assert.equal(parsed.unsettledShows, "glyph");
 });
 
-test("the reveal counts as a change the Save button sees", () => {
+test("the choice counts as a change the Save button sees", () => {
   // The Settings page enables Save by comparing the staged clone
-  // against the applied one. A key missing here is a toggle that
+  // against the applied one. A key missing here is a control that
   // moves and cannot be saved.
   const sandbox = load();
   const before = sandbox.parseSettings(null);
-  const after = parse(sandbox, { revealMaskCandidate: true });
+  const after = parse(sandbox, { unsettledShows: "candidates" });
 
   assert.equal(sandbox.settingsEqual(before, before), true);
   assert.equal(sandbox.settingsEqual(before, after), false);
+});
+
+test("the guess is drawn for every choice but the glyph", () => {
+  // Cycling starts from the guess and falls back to it wherever
+  // there are no candidates to cycle through.
+  const sandbox = load();
+
+  const draws = (choice) => sandbox.overlaysDrawsGuess(
+    parse(sandbox, { unsettledShows: choice })
+  );
+
+  assert.equal(draws("glyph"), false);
+  assert.equal(draws("guess"), true);
+  assert.equal(draws("candidates"), true);
+});
+
+test("the Settings dropdown offers exactly the three choices", () => {
+  const sandbox = load();
+
+  const values = sandbox.UNSETTLED_SHOWS_OPTIONS.map(
+    (option) => option.value
+  );
+
+  assert.deepEqual([...values], ["glyph", "guess", "candidates"]);
 });
 
 test("loading settings tolerates storage being unavailable", () => {
@@ -144,7 +205,7 @@ test("loading settings tolerates storage being unavailable", () => {
 
   const settings = sandbox.overlaysLoadSettings();
 
-  assert.equal(settings.revealMaskCandidate, false);
+  assert.equal(settings.unsettledShows, "glyph");
 });
 
 // ---- The state-space glow pair ----

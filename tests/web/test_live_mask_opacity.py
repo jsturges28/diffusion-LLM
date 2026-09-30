@@ -102,7 +102,7 @@ def test_the_reveal_preference_reaches_the_live_options() -> None:
 
     assert (
         "LIVE_TOKEN_OPTIONS.revealMask ="
-        " appSettings.revealMaskCandidate" in body
+        " overlaysDrawsGuess(appSettings)" in body
     )
 
 

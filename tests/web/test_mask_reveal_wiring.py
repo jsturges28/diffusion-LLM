@@ -27,7 +27,10 @@ property from finding a third gap.
 
 Passing proves each of those paths asks for the preference and for
 the curve, that Analytics reads the settings, and that the Settings
-page can set the one control.
+page can set the one control. The preference was a toggle and is now
+a choice of what an unsettled position shows; every path asks one
+helper whether that means drawing the guess, so the three choices
+cannot be read three ways.
 """
 
 from __future__ import annotations
@@ -39,9 +42,11 @@ STATIC = (
     Path(__file__).resolve().parents[2] / "src" / "web" / "static"
 )
 
-SETTING = "revealMaskCandidate"
+SETTING = "unsettledShows"
 FLAG = "revealMask"
 HOOK = "opacityFor"
+GENERATOR_GUESS = f"{FLAG}: overlaysDrawsGuess(appSettings)"
+ANALYTICS_GUESS = f"{FLAG}: overlaysDrawsGuess(analyticsSettings)"
 
 
 def _source(name: str) -> str:
@@ -68,7 +73,7 @@ def test_the_scrubbed_and_crossfaded_layers_ask_for_it() -> None:
         "app.js", "function tokenLayerOptions(isOriginal)", 400
     )
 
-    assert f"{FLAG}: appSettings.{SETTING}" in body
+    assert GENERATOR_GUESS in body
 
 
 def test_the_diff_overlay_asks_for_it() -> None:
@@ -77,7 +82,7 @@ def test_the_diff_overlay_asks_for_it() -> None:
     other would be actively misleading."""
     body = _region("app.js", "function renderDiffOverlay(", 900)
 
-    assert f"{FLAG}: appSettings.{SETTING}" in body
+    assert GENERATOR_GUESS in body
 
 
 def test_the_edit_preview_asks_for_it() -> None:
@@ -89,7 +94,7 @@ def test_the_edit_preview_asks_for_it() -> None:
         "app.js", "function renderTargetPlaceholder(frameIndex)", 3000
     )
 
-    assert f"{FLAG}: appSettings.{SETTING}" in body
+    assert GENERATOR_GUESS in body
     assert "overlaysBuildTokenSpan(" in body
 
 
@@ -149,7 +154,7 @@ def test_the_saved_run_view_asks_for_it() -> None:
     here still passes on the neighbour's copy of it."""
     body = _region("analytics.js", "var edited = {", 300)
 
-    assert f"{FLAG}: analyticsSettings.{SETTING}" in body
+    assert ANALYTICS_GUESS in body
     assert f"{HOOK}: overlayOpacityFn" in body
 
 
@@ -168,7 +173,7 @@ def test_the_analytics_diff_overlay_asks_for_it() -> None:
         "analytics.js", "overlayDiffOrigOpacity,\n", 300
     )
 
-    assert f"{FLAG}: analyticsSettings.{SETTING}" in body
+    assert ANALYTICS_GUESS in body
     assert f"{HOOK}: overlayOpacityFn" in body
 
 
@@ -231,30 +236,49 @@ def test_the_settings_page_carries_the_key_through_a_save() -> None:
     assert f"{SETTING}: source.{SETTING}" in body
 
 
-def test_the_toggle_exists_on_the_page() -> None:
+def test_the_choice_exists_on_the_page() -> None:
+    """A dropdown of the three shared options, mounted where the
+    toggle was, so the page cannot offer a choice the parser drops."""
     source = _source("settings.js")
     markup = _source("settings.html")
 
-    assert 'getElementById("setting-reveal-mask-candidate")' in source
-    assert 'id="setting-reveal-mask-candidate"' in markup
+    assert 'getElementById("unsettled-shows-mount")' in source
+    assert 'id="unsettled-shows-mount"' in markup
+    assert re.search(
+        r"createCustomSelect\(\s*UNSETTLED_SHOWS_OPTIONS", source
+    )
 
 
-def test_the_toggle_is_wired_both_ways() -> None:
-    """Staged state into the checkbox on load, and the checkbox back
+def test_the_choice_is_wired_both_ways() -> None:
+    """Staged state into the dropdown on load, and the dropdown back
     into staged state on change. One direction alone is a control
     that either forgets or lies."""
     source = _source("settings.js")
 
     into_control = re.search(
-        r"settingRevealMaskCb\.checked\s*=\s*"
+        r"selectUnsettledShows\.value\s*=\s*"
         rf"stagedSettings\.{SETTING}",
         source,
     )
     out_of_control = re.search(
         rf"stagedSettings\.{SETTING}\s*=\s*"
-        r"settingRevealMaskCb\.checked",
+        r"selectUnsettledShows\.value",
         source,
     )
 
     assert into_control is not None
     assert out_of_control is not None
+
+
+def test_one_helper_reads_the_choice_for_the_builder() -> None:
+    """Every page asks overlaysDrawsGuess rather than comparing the
+    choice itself, and the old toggle survives only in the migration
+    that reads a profile saved while it existed."""
+    helper = _region(
+        "overlays.js", "function overlaysDrawsGuess(settings)", 200
+    )
+
+    assert 'settings.unsettledShows !== "glyph"' in helper
+    for page in ("app.js", "analytics.js", "settings.js"):
+        assert "revealMaskCandidate" not in _source(page)
+    assert _source("overlays.js").count("revealMaskCandidate") == 1
