@@ -2602,6 +2602,15 @@ input[type="checkbox"].app-checkbox:checked::after {
   word-break: break-word;
 }
 
+/* An unsettled position cycling through its candidates. Its width is
+   reserved inline in ch, for its longest candidate, so a candidate
+   changing never moves the line; it cannot wrap inside for the same
+   reason. */
+.token-span[data-cycling] {
+  display: inline-block;
+  white-space: pre;
+}
+
 /* No text-shadow: the mask glow repainted across every masked token
    span, which was costly to scroll in the WebKitGTK desktop window. */
 .token-mask {

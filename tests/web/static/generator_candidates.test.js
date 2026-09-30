@@ -18,7 +18,10 @@
 // favoured run has nothing. It also proves the candidates, the
 // pre-edit run's among them, reach the save, land after the point a
 // resume branched from, come back on Retry, and survive the snapshot
-// a trip to Analytics depends on.
+// a trip to Analytics depends on. With the candidates chosen, a
+// finished run's unsettled positions cycle through them, each crossfade
+// layer its own run's, and nothing cycles while a run streams,
+// mid-edit, with motion reduced, or for the other two choices.
 
 "use strict";
 
@@ -630,4 +633,147 @@ test("over the quota, the pre-edit candidates give way first", () => {
   );
   context.runBlend = 0.2;
   assert.equal(popoverAt(context, registry, 3, 1).hidden, true);
+});
+
+// -- the candidates cycle --
+
+// What is cycling, as a plain array: one {span, position, texts} per
+// position the flicker is stepping.
+function cyclingAt(context, frame) {
+  context.navigateToFrame(frame);
+  const entries = [...context.flickerEntries];
+  context.flickerStop();
+  return entries;
+}
+
+function chooseCandidates(context) {
+  context.appSettings.unsettledShows = "candidates";
+}
+
+test("a finished run's unsettled positions cycle", () => {
+  // At frame 3 only position 3 is unsettled. Its set is " lead" at
+  // 0.6 and " seven" at 0.2, so a fifth of the cycle is the glyph.
+  const { context } = finishedRun();
+  chooseCandidates(context);
+
+  const cycling = cyclingAt(context, 3);
+
+  assert.deepEqual(cycling.map((entry) => entry.position), [3]);
+  const texts = [...cycling[0].texts];
+  assert.equal(texts.filter((t) => t === " lead").length, 12);
+  assert.equal(texts.filter((t) => t === " seven").length, 4);
+  assert.equal(texts.filter((t) => t === "\u2591").length, 4);
+  assert.equal(cycling[0].span.style.width, "6ch");
+});
+
+test("a tick shows the slot the clock is in", () => {
+  const { context } = finishedRun();
+  chooseCandidates(context);
+  context.navigateToFrame(3);
+  const entry = context.flickerEntries[0];
+
+  context.flickerNow = () => 0;
+  context.flickerTick();
+
+  assert.equal(
+    entry.span.textContent,
+    entry.texts[context.flickerSlotAt(0, 3)]
+  );
+  context.flickerStop();
+});
+
+test("the glyph and the guess never cycle", () => {
+  const { context } = finishedRun();
+
+  for (const choice of ["glyph", "guess"]) {
+    context.appSettings.unsettledShows = choice;
+    assert.equal(cyclingAt(context, 3).length, 0, choice);
+  }
+});
+
+test("nothing cycles while a run streams", () => {
+  // The candidates arrive as a run ends, so a streaming canvas shows
+  // its guesses even with them chosen.
+  const saved = [];
+  const page = loadPage({
+    WebSocket: OpenSocket,
+    fetchImpl: savingFetch(saved),
+    bootState: { ui_state: {}, models: MODELS },
+  });
+  const { context, registry } = page;
+  chooseCandidates(context);
+  context.ws = new OpenSocket("ws://test");
+  registry.get("prompt-input").value = "explain yeast";
+  context.startGeneration();
+
+  for (let index = 0; index <= 2; index++) {
+    context.handleFrame(canvasFrame(index));
+  }
+
+  assert.equal(context.flickerEntries.length, 0);
+});
+
+test("nothing cycles mid-edit", () => {
+  // The canvas is a click target there, not something to read.
+  const { context } = finishedRun();
+  chooseCandidates(context);
+  context.beginEditSession();
+
+  assert.equal(cyclingAt(context, 3).length, 0);
+});
+
+test("cycling needs a finished run the user is not editing", () => {
+  // The streaming canvas never reaches the scrubbed path, so these
+  // guards are what hold if some later path does.
+  const { context } = finishedRun();
+  chooseCandidates(context);
+  assert.equal(context.candidatesCycle(), true);
+
+  context.scrubberActive = false;
+  assert.equal(context.candidatesCycle(), false);
+  context.scrubberActive = true;
+  context.isGenerating = true;
+  assert.equal(context.candidatesCycle(), false);
+  context.isGenerating = false;
+  context.beginEditSession();
+  assert.equal(context.candidatesCycle(), false);
+});
+
+test("nothing cycles with motion reduced", () => {
+  const { context } = finishedRun();
+  chooseCandidates(context);
+  context.prefersReducedMotion = () => true;
+
+  assert.equal(cyclingAt(context, 3).length, 0);
+});
+
+// The resume's candidates, with the lead renamed so each crossfade
+// layer's source can be told apart.
+function branchMessage(frames) {
+  const message = candidatesMessage(frames);
+  message.sets = message.sets.map((frame) => frame.map((set) => ({
+    h: set.h,
+    c: [Object.assign({}, set.c[0], { t: " branch" }), set.c[1]],
+  })));
+  return message;
+}
+
+test("each crossfade layer cycles its own run's candidates", () => {
+  const { context } = finishedRun();
+  context.remaskEdits = [EDIT_AT_2];
+  resumeFrom(context, 2, 3);
+  context.handleMessage(branchMessage([1, 2]));
+  context.handleDone({ type: "done", final_text: WORDS.join("") });
+  chooseCandidates(context);
+  context.runBlend = 0.5;
+
+  const cycling = cyclingAt(context, 3);
+
+  assert.equal(cycling.length, 2);
+  const original = [...cycling[0].texts];
+  const edited = [...cycling[1].texts];
+  assert.ok(original.includes(" lead"));
+  assert.equal(original.includes(" branch"), false);
+  assert.ok(edited.includes(" branch"));
+  assert.equal(edited.includes(" lead"), false);
 });

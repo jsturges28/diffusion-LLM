@@ -2600,6 +2600,7 @@ var LIVE_TOKEN_OPTIONS = {
 };
 
 function renderLiveFrame(tokens, revealed) {
+  flickerStop();
   outputArea.classList.remove("token-layers");
   outputArea.classList.add("live-tokens");
   // Reuse only while our spans are still the ones on the page. Any
@@ -2747,6 +2748,7 @@ function onTokenBirthEnd(e) {
 }
 
 function renderFrame(text) {
+  flickerStop();
   outputArea.classList.remove("token-layers");
   outputArea.classList.remove("live-tokens");
   var fragment =
@@ -2831,6 +2833,7 @@ function computeDiff() {
 // construction is shared via overlaysBuildDiffLayers; this wrapper
 // resolves the per-frame tokens and owns the output container.
 function renderDiffOverlay(frameIndex) {
+  flickerStop();
   var diff = currentDiffData();
   var editedTokens = runFramesTokensAt(runFrames, frameIndex) || [];
   var oIdx = Math.min(
@@ -2842,21 +2845,23 @@ function renderDiffOverlay(frameIndex) {
   outputArea.textContent = "";
   tokenHighlightPos = null;
   outputArea.classList.add("token-layers");
-  outputArea.appendChild(
-    overlaysBuildDiffLayers(
-      origTokens,
-      editedTokens,
-      diff,
-      {
-        originalOpacity: diffOriginalOpacity,
-        editedOpacity: diffEditedOpacity,
-        blend: diffBlend,
-        revealMask: overlaysDrawsGuess(appSettings),
-        opacityFor: tokenOpacityFn,
-      },
-      MASK_CHAR
-    )
+  var layered = overlaysBuildDiffLayers(
+    origTokens,
+    editedTokens,
+    diff,
+    {
+      originalOpacity: diffOriginalOpacity,
+      editedOpacity: diffEditedOpacity,
+      blend: diffBlend,
+      revealMask: overlaysDrawsGuess(appSettings),
+      opacityFor: tokenOpacityFn,
+    },
+    MASK_CHAR
   );
+  // Taken before the append, which empties the fragment.
+  var stacked = [layered.children[0], layered.children[1]];
+  outputArea.appendChild(layered);
+  startStackedFlicker(stacked, frameIndex, editedTokens);
 }
 
 // Which coloring paints tokens: the overlay picker's selection
@@ -5547,6 +5552,7 @@ function renderFrameWithTokens(frameIndex) {
 }
 
 function renderFrameWithTokensDraw(frameIndex) {
+  flickerStop();
   // Leaving the live view: the mask glow this class restores is for
   // streaming only, and every branch below owns the container now.
   outputArea.classList.remove("live-tokens");
@@ -5567,21 +5573,64 @@ function renderFrameWithTokensDraw(frameIndex) {
   outputArea.textContent = "";
   if (runBlendActive()) {
     outputArea.classList.add("token-layers");
-    outputArea.appendChild(
-      buildCrossfadedLayers(frameIndex, tokens)
-    );
+    var layered = buildCrossfadedLayers(frameIndex, tokens);
+    // Taken before the append, which empties the fragment.
+    var stacked = [layered.children[0], layered.children[1]];
+    outputArea.appendChild(layered);
+    startStackedFlicker(stacked, frameIndex, tokens);
     return;
   }
 
   outputArea.classList.remove("token-layers");
   var options = tokenLayerOptions(false);
   var fragment = document.createDocumentFragment();
+  var spans = [];
   for (var i = 0; i < tokens.length; i++) {
-    fragment.appendChild(
+    spans.push(
       overlaysBuildTokenSpan(i, tokens[i], MASK_CHAR, options)
     );
+    fragment.appendChild(spans[i]);
   }
   outputArea.appendChild(fragment);
+  if (candidatesCycle()) {
+    flickerStart([flickerLayer(
+      spans, tokens, runCandidates, frameIndex, runFrameCanvas
+    )], MASK_CHAR);
+  }
+}
+
+// Whether a scrubbed frame's unsettled positions cycle through their
+// candidates: the choice is made, the run has finished rather than
+// streaming, and no edit phase has made the canvas a click target.
+// Reduced motion is answered where the cycling starts.
+function candidatesCycle() {
+  return appSettings.unsettledShows === "candidates"
+    && scrubberActive
+    && !isGenerating
+    && runPhase.mode === null;
+}
+
+// Cycle both stacked layers, each with its own run's candidates at
+// the frame it shows: the pre-edit run's for the original layer,
+// clamped as that layer is, and the live store for the branch.
+function startStackedFlicker(layers, frameIndex, editedTokens) {
+  if (!candidatesCycle()) {
+    return;
+  }
+  var index = Math.min(
+    frameIndex, originalRunTokenFrames(originalRun) - 1
+  );
+  var originalTokens = originalRunTokensAt(originalRun, index) || [];
+  flickerStart([
+    flickerLayer(
+      layers[0].children, originalTokens, originalCandidates, index,
+      singleCanvas
+    ),
+    flickerLayer(
+      layers[1].children, editedTokens, runCandidates, frameIndex,
+      runFrameCanvas
+    ),
+  ], MASK_CHAR);
 }
 
 // The pre-edit run and the branch drawn on top of each other, mixed
@@ -5618,6 +5667,7 @@ function buildCrossfadedLayers(frameIndex, editedTokens) {
 }
 
 function renderTargetPlaceholder(frameIndex) {
+  flickerStop();
   outputArea.classList.remove("token-layers");
   outputArea.classList.remove("live-tokens");
   outputArea.textContent = "";
@@ -5979,6 +6029,7 @@ function deactivateScrubber() {
   clearTokenMetrics();
   hideAltsPopover();
   clearRemaskedPositions();
+  flickerStop();
 }
 
 function updateScrubberLabel() {
@@ -7343,6 +7394,7 @@ function resetRunState() {
   updateEditFramesLock();
   updateGenerateButton();
   setSaveAvailable(false);
+  flickerStop();
 }
 
 // "New Run": reset to a clean slate for a new prompt once a run is

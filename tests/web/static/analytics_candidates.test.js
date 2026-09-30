@@ -14,7 +14,9 @@
 // branched at, opening on the one the crossfade favours, and a run
 // saved before the pre-edit candidates were kept has only its edited
 // page. An autoregressive run keeps its per-position popover,
-// untouched by any of it.
+// untouched by any of it. With the candidates chosen, a saved run's
+// unsettled positions cycle at the scrubbed frame, each crossfade
+// layer through its own run's candidates.
 
 "use strict";
 
@@ -27,6 +29,7 @@ const ANALYTICS_SCRIPTS = [
   "custom_select.js",
   "overlays.js",
   "run_candidates.js",
+  "candidate_flicker.js",
   "detail_requests.js",
   "collections_client.js",
   "download_client.js",
@@ -346,4 +349,62 @@ test("an autoregressive run keeps its per-position popover", () => {
   assert.equal(popover.hidden, false);
   assert.deepEqual(rowIds(popover), [1002]);
   assert.equal(withClass(popover, "alt-step").length, 0);
+});
+
+// -- the candidates cycle --
+
+function cyclingAt(page, frame) {
+  page.context.setOverlayFrame(frame);
+  const entries = [...page.context.flickerEntries];
+  page.context.flickerStop();
+  return entries;
+}
+
+// A store whose lead candidate is renamed, so each crossfade layer's
+// source can be told apart.
+function relabelled(store, text) {
+  return Object.assign({}, store, {
+    sets: store.sets.map((frame) => frame.map((set) => ({
+      h: set.h,
+      c: [Object.assign({}, set.c[0], { t: text }), set.c[1]],
+    }))),
+  });
+}
+
+test("a saved run's unsettled positions cycle", () => {
+  // At frame 3 only position 3 is unsettled.
+  const page = opened(payload());
+  page.context.analyticsSettings.unsettledShows = "candidates";
+
+  const cycling = cyclingAt(page, 3);
+
+  assert.deepEqual(cycling.map((entry) => entry.position), [3]);
+  assert.ok([...cycling[0].texts].includes(" lead"));
+});
+
+test("the guess keeps a saved run still", () => {
+  const page = opened(payload());
+  page.context.analyticsSettings.unsettledShows = "guess";
+
+  assert.equal(cyclingAt(page, 3).length, 0);
+});
+
+test("each saved crossfade layer cycles its own run's candidates", () => {
+  const edited = editedPayload();
+  const page = opened(editedPayload({
+    original_candidates: relabelled(candidatesAt([1, 3, 4]), " before"),
+    candidates: relabelled(edited.candidates, " after"),
+  }));
+  page.context.analyticsSettings.unsettledShows = "candidates";
+  page.context.compareBlend = 0.5;
+
+  const cycling = cyclingAt(page, 3);
+
+  assert.equal(cycling.length, 2);
+  const original = [...cycling[0].texts];
+  const branch = [...cycling[1].texts];
+  assert.ok(original.includes(" before"));
+  assert.equal(original.includes(" after"), false);
+  assert.ok(branch.includes(" after"));
+  assert.equal(branch.includes(" before"), false);
 });

@@ -63,6 +63,20 @@ def _region(name: str, anchor: str, chars: int) -> str:
     return source[start : start + chars]
 
 
+def _function(name: str, anchor: str) -> str:
+    """A top-level function whole, to the first closing brace in
+    column zero after its signature."""
+    source = _source(name)
+    start = source.find(anchor)
+    assert start != -1, (
+        f"anchor {anchor!r} is gone from {name}; update this test"
+        " rather than deleting it"
+    )
+    end = source.find("\n}\n", start)
+    assert end != -1, f"{anchor!r} has no closing brace"
+    return source[start:end]
+
+
 # -- the generator --
 
 
@@ -282,3 +296,78 @@ def test_one_helper_reads_the_choice_for_the_builder() -> None:
     for page in ("app.js", "analytics.js", "settings.js"):
         assert "revealMaskCandidate" not in _source(page)
     assert _source("overlays.js").count("revealMaskCandidate") == 1
+
+
+# -- the candidates cycle on every scrubbed path, and only there --
+
+
+def test_the_generators_scrubbed_paths_start_the_flicker() -> None:
+    """The single scrubbed layer, the run crossfade and the diff
+    overlay: the three places the reveal already reached after a
+    run, and so the three a cycling position has to reach."""
+    draw = _function("app.js", "function renderFrameWithTokensDraw(")
+    diff = _function("app.js", "function renderDiffOverlay(")
+
+    edited_call = (
+        "startStackedFlicker(stacked, frameIndex, editedTokens)"
+    )
+
+    assert "flickerStart([flickerLayer(" in draw
+    assert "startStackedFlicker(stacked, frameIndex, tokens)" in draw
+    assert edited_call in diff
+
+
+def test_every_other_generator_render_stops_it() -> None:
+    """A path that replaces the canvas without stopping the flicker
+    leaves it stepping spans nobody can see, until a tick notices."""
+    for anchor in (
+        "function renderLiveFrame(",
+        "function renderFrame(text)",
+        "function renderTargetPlaceholder(frameIndex)",
+        "function renderFrameWithTokensDraw(",
+        "function renderDiffOverlay(",
+        "function resetRunState()",
+        "function deactivateScrubber()",
+    ):
+        assert "flickerStop();" in _function("app.js", anchor), anchor
+
+
+def test_the_generator_cycles_after_a_run_outside_edits() -> None:
+    guard = _function("app.js", "function candidatesCycle()")
+
+    assert 'appSettings.unsettledShows === "candidates"' in guard
+    assert "scrubberActive" in guard
+    assert "runPhase.mode === null" in guard
+
+
+def test_the_analytics_paths_start_and_stop_the_flicker() -> None:
+    tokens = _function(
+        "analytics.js", "function renderOverlayTokens("
+    )
+    layers = _function(
+        "analytics.js", "function renderOverlayLayers("
+    )
+    diff = _function("analytics.js", "function renderDiffOverlay()")
+    clear = _function("analytics.js", "function clearOverlay()")
+
+    assert "flickerStart([flickerLayer(" in tokens
+    assert "overlayStackedFlicker(" in layers
+    assert "overlayStackedFlicker(stacked" in diff
+    for body in (tokens, diff, clear):
+        assert "flickerStop();" in body
+
+
+def test_both_pages_load_the_flicker_in_order() -> None:
+    """After overlays.js and run_candidates.js, which it calls, and
+    before the page script that calls it."""
+    for page, script in (
+        ("index.html", "app.js"), ("analytics.html", "analytics.js")
+    ):
+        markup = _source(page)
+        store = markup.find('src="/run_candidates.js"')
+        flicker = markup.find('src="/candidate_flicker.js"')
+        user = markup.find(f'src="/{script}"')
+
+        assert markup.find('src="/overlays.js"') < store, page
+        assert store != -1, page
+        assert store < flicker < user, page

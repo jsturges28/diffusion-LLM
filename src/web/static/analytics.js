@@ -4007,6 +4007,7 @@ function showOverlayUnavailable() {
 }
 
 function clearOverlay() {
+  flickerStop();
   overlayData = null;
   overlayCommitSteps = null;
   overlayOriginalCommitSteps = null;
@@ -4255,6 +4256,7 @@ function commitColorFor(steps, maxStep) {
 // is what makes the comparison mean anything: the pre-edit layer is
 // colored by its own confidence or entropy, not the branch's.
 function renderOverlayTokens(opts) {
+  flickerStop();
   overlayOutput.textContent = "";
   tokenHighlightPos = null;
   var edited = {
@@ -4279,14 +4281,51 @@ function renderOverlayTokens(opts) {
     return;
   }
   var fragment = document.createDocumentFragment();
+  var spans = [];
   for (var i = 0; i < opts.frame.length; i++) {
-    fragment.appendChild(
+    spans.push(
       overlaysBuildTokenSpan(
         i, opts.frame[i], OVERLAYS_MASK_CHAR, edited
       )
     );
+    fragment.appendChild(spans[i]);
   }
   overlayOutput.appendChild(fragment);
+  if (overlayCandidatesCycle()) {
+    flickerStart([flickerLayer(
+      spans, opts.frame, overlayData.candidateStore,
+      overlayFrameIndex, overlayCanvasOf
+    )], OVERLAYS_MASK_CHAR);
+  }
+}
+
+// Whether a saved run's unsettled positions cycle through their
+// candidates. A saved run has always finished, so the choice is the
+// question; reduced motion is answered where the cycling starts.
+function overlayCandidatesCycle() {
+  return analyticsSettings.unsettledShows === "candidates"
+    && overlayData !== null;
+}
+
+// Cycle both stacked layers, each with its own run's candidates at
+// the frame it shows, as the generator does: the pre-edit run's for
+// the original layer, clamped as that layer is.
+function overlayStackedFlicker(layers, origTokens, editedTokens) {
+  if (!overlayCandidatesCycle()) {
+    return;
+  }
+  var index = overlayClampedIndex(overlayBaseline());
+  flickerStart([
+    flickerLayer(
+      layers[0].children, origTokens,
+      overlayData.originalCandidateStore,
+      index === null ? -1 : index, singleCanvas
+    ),
+    flickerLayer(
+      layers[1].children, editedTokens, overlayData.candidateStore,
+      overlayFrameIndex, overlayCanvasOf
+    ),
+  ], OVERLAYS_MASK_CHAR);
 }
 
 // Fade an unsettled position by the confidence the run recorded for
@@ -4322,26 +4361,27 @@ function renderOverlayLayers(
   var editedTakes = overlaysEditedOwnsPointer(
     1 - compareBlend, compareBlend
   );
-  overlayOutput.appendChild(
-    overlaysBuildTokenLayer(origTokens, {
-      layerClass: "token-layer-original",
-      opacity: 1 - compareBlend,
-      interactive: !editedTakes,
-      colorFor: original.colorFor,
-      revealMask: original.revealMask,
-      opacityFor: original.opacityFor,
-    })
-  );
-  overlayOutput.appendChild(
-    overlaysBuildTokenLayer(editedTokens, {
-      layerClass: "token-layer-edited",
-      opacity: compareBlend,
-      interactive: editedTakes,
-      colorFor: edited.colorFor,
-      classFor: edited.classFor,
-      revealMask: edited.revealMask,
-      opacityFor: edited.opacityFor,
-    })
+  var originalLayer = overlaysBuildTokenLayer(origTokens, {
+    layerClass: "token-layer-original",
+    opacity: 1 - compareBlend,
+    interactive: !editedTakes,
+    colorFor: original.colorFor,
+    revealMask: original.revealMask,
+    opacityFor: original.opacityFor,
+  });
+  var editedLayer = overlaysBuildTokenLayer(editedTokens, {
+    layerClass: "token-layer-edited",
+    opacity: compareBlend,
+    interactive: editedTakes,
+    colorFor: edited.colorFor,
+    classFor: edited.classFor,
+    revealMask: edited.revealMask,
+    opacityFor: edited.opacityFor,
+  });
+  overlayOutput.appendChild(originalLayer);
+  overlayOutput.appendChild(editedLayer);
+  overlayStackedFlicker(
+    [originalLayer, editedLayer], origTokens, editedTokens
   );
 }
 
@@ -4654,6 +4694,7 @@ function metricsRunLabel() {
 // difference blend, driven by the control row. The shared builder in
 // overlays.js owns the layer construction.
 function renderDiffOverlay() {
+  flickerStop();
   // The change set is computed from the two runs' final frames (so it
   // is stable across the scrub) and memoized; only the rendered layers
   // vary per frame.
@@ -4679,20 +4720,22 @@ function renderDiffOverlay() {
   overlayOutput.textContent = "";
   tokenHighlightPos = null;
   overlayOutput.classList.add("token-layers");
-  overlayOutput.appendChild(
-    overlaysBuildDiffLayers(
-      origTokens,
-      editedTokens,
-      diff,
-      {
-        originalOpacity: overlayDiffOrigOpacity,
-        editedOpacity: overlayDiffEditOpacity,
-        blend: overlayDiffBlendOn,
-        revealMask: overlaysDrawsGuess(analyticsSettings),
-        opacityFor: overlayOpacityFn,
-      }
-    )
+  var layered = overlaysBuildDiffLayers(
+    origTokens,
+    editedTokens,
+    diff,
+    {
+      originalOpacity: overlayDiffOrigOpacity,
+      editedOpacity: overlayDiffEditOpacity,
+      blend: overlayDiffBlendOn,
+      revealMask: overlaysDrawsGuess(analyticsSettings),
+      opacityFor: overlayOpacityFn,
+    }
   );
+  // Taken before the append, which empties the fragment.
+  var stacked = [layered.children[0], layered.children[1]];
+  overlayOutput.appendChild(layered);
+  overlayStackedFlicker(stacked, origTokens, editedTokens);
 }
 
 // Wire the diff control row once: sliders and the blend toggle update
