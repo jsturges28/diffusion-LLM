@@ -184,8 +184,9 @@ it on a machine that has never fetched it (manual item 330). The
 reasoning, including why the tokenizer comes from SmolLM3 and why What If
 replays, is under the Mamba-3 direction in `docs/ROADMAP.md`. **Top-k for
 the diffusion models** followed on 2026-09-28 as the candidate popover,
-which follows the scrubber and pages between an edited run's two runs.
-Next is the stack and the flicker, two ways of drawing that capture on the
-canvas itself, scoped under "Two renderings, one capture" in
-`docs/ROADMAP.md`, which also carries the settled decisions and the
-longer backlog.
+which follows the scrubber and pages between an edited run's two runs,
+and on 2026-09-29 as the flicker, a Settings choice that cycles each
+unsettled position through those candidates on a finished run. The next
+direction is to be chosen from the backlog in `docs/ROADMAP.md` (a
+revision glow, frame-linked line charts, an adaptive-stopping readout,
+per-run notes), which also carries the settled decisions.

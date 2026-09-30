@@ -339,12 +339,11 @@ since shipped is noted on the item rather than left for a reader to infer.
    basis stays, because DiffusionGemma infers `m` from a token changing
    between steps, which is a property of renoising and not of this switch.
 
-5. **The stack and the flicker.** Chosen on 2026-09-29 as the next to
-   deliberate, once top-k was captured on both diffusion models: two ways
+5. **The flicker. Shipped on 2026-09-29, and the stack dropped.** Chosen
+   that day, once top-k was captured on both diffusion models, as a way
    of drawing that capture on the canvas itself rather than in a popover.
-   Scoped under "Two renderings, one capture" in the backlog below, whose
-   timing notes predate the capture and assume a live stream it does not
-   have, since the candidates arrive as the run ends.
+   What shipped, and why the stack did not, is under "Two renderings, one
+   capture" in the backlog below.
 
 ---
 
@@ -1318,6 +1317,33 @@ computation. DiffusionGemma keeps the guess in the frame already, so layer
 one is retroactive there; LLaDA wrote the glyph into `t`, so its reveal is
 forward-only and a run saved before this shows blocks, correctly, because
 nothing else was written down.
+
+**The flicker shipped on 2026-09-29, and the stack did not.** The bullets
+above were written for a live stream the capture never became. Candidates
+arrive in one message as a run ends, so the flicker draws on a scrubbed
+frame of a finished run and on saved runs in Analytics, and none of the
+timing work was needed: no display clock apart from the data clock, no
+choice between latching and smoothing, no capture rate tied to the
+display. LLaDA and DiffusionGemma are equally easy. It is one Settings
+choice, **Unsettled positions show**, which replaced the reveal toggle,
+because the glyph, the guess and the cycling are three readings of one
+position and never stack. A cycle is a second in 20 slots, each candidate
+holding slots for its probability by largest remainder, in rank order,
+and the probability outside the five shown as the glyph. So the
+time-average is the whole distribution, and an undecided position reads
+as mostly undecided rather than as five equally good words. Phases step
+by the golden ratio's fraction per position, at most 64 positions cycle
+per layer (the most contested first), and each reserves the width of its
+longest candidate. A control token draws as the glyph, as the worker's
+sanitizing already makes a guess draw, and a newline as a stand-in. A
+streaming run, a canvas mid-edit and reduced motion show the guess. The
+literal stack was mocked first on a real frame and dropped: five
+candidates overlaid at their shares smeared every contested stretch into
+ghosts, and reserving room for the widest spread the canvas out, settled
+text included. Where it stops: nothing cycles live, because the
+candidates are not there until the run ends, and settled positions never
+cycle, because their alternatives include long control tokens that would
+open the layout for little.
 
 **A live adaptive-stopping readout, which pairs with the above.** Same signal
 at a canvas scale rather than a token scale. DiffusionGemma halts a canvas

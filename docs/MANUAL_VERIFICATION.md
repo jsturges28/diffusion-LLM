@@ -240,6 +240,8 @@ kept when these were written:
   brought the run back without them. It passed once the snapshot
   packed them, rewritten, since its old wording asked for a trip after
   Confirm without saving, and Confirm saves. 351 was added with it.
+- **352 to 356**: **outstanding**, the candidate flicker and the
+  choice of what an unsettled position shows, added on 2026-09-29.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -4006,3 +4008,49 @@ candidates fit only packed.
     discarded edit started at, and resume: in the resume's first
     frame, the tokens you did not remask are the ones that frame
     showed, not the discarded edit's.
+
+## Candidates, cycling
+
+From 2026-09-29, **Unsettled positions show** in Settings replaced the
+**Reveal the mask candidate** toggle: the mask glyph, the model's
+guess, or its candidates, cycling. With the last, a finished run's
+unsettled positions cycle through their captured candidates, each for
+its probability's share of every second, with the glyph for the rest.
+
+352. **A LLaDA run cycles once it has finished.** In the desktop app,
+    choose **Its candidates, cycling** and generate with LLaDA at its
+    defaults. While it streams, unsettled positions show the model's
+    guesses and nothing moves. Once it finishes, scrub to an early
+    frame: most unsettled positions show the glyph, with brief words
+    passing through, and neighbouring positions change at different
+    moments rather than together. On a late frame they are mostly
+    words, and a position the model is sure of holds still. Settled
+    text never shifts while the frame plays, and hovering a cycling
+    position still opens its popover.
+
+353. **DiffusionGemma cycles on both canvases.** Run DiffusionGemma
+    with **Max Tokens** 512, so it chains two canvases. On a draft
+    frame of the second canvas its unsettled positions cycle through
+    their own candidates, never the first canvas's, and an
+    end-of-text candidate shows as the glyph rather than as
+    `<|endoftext|>` or `<eos>`.
+
+354. **Analytics cycles a saved run, each layer its own.** Open a
+    saved LLaDA run in Analytics with the same choice, and scrub: the
+    scrubbed frame cycles as it did live. Open the run from 348 as
+    well, an edited one, and drag its crossfade: past the edit frame
+    each layer cycles its own run's candidates, and at either end of
+    the slider the visible layer is the one moving.
+
+355. **Where it holds still.** Turn on the system's reduced-motion
+    setting and reload: unsettled positions show the model's guesses
+    and nothing cycles, live or in Analytics. Turn it off again, open
+    **Edit Frames** on a finished run: the frames being edited show
+    guesses, not cycling. Choose **The model's guess** or **The mask
+    glyph** instead: nothing cycles in either.
+
+356. **An old profile keeps what it had.** On a profile that had
+    **Reveal the mask candidate** switched on before 2026-09-29, open
+    Settings: **Unsettled positions show** reads **The model's
+    guess**, and the canvas looks as it did. Each of the three choices
+    saves, and survives a reload.
