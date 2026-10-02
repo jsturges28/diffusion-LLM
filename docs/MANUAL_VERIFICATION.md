@@ -256,8 +256,18 @@ kept when these were written:
   have opened on a class with no cyan words, so the item now says to
   set **Tune for** to **Diffusion** first.
 - **365**: confirmed on 2026-10-01, bursts in the desktop app.
-- **366 to 370**: **not yet validated.** Added on 2026-10-01:
-  DiffusionGemma's candidates cycling while it streams.
+- **366 to 367**: confirmed on 2026-10-01: DiffusionGemma cycling
+  between frames, and LLaDA and a run without Alternatives showing
+  guesses.
+- **368**: done by an agent on 2026-10-01, not on hardware, since the
+  maintainer's desktop has no reduced-motion setting to turn on. In the
+  desktop engine, run offscreen with reduced motion forced (see
+  *Forcing reduced motion*), a streaming DiffusionGemma frame that
+  cycled two positions with motion allowed cycled none and showed
+  their guesses. The other two choices are held by
+  `generator_live_cycling.test.js`.
+- **369 to 370**: confirmed on 2026-10-01: a resume cycling as it
+  streams, and smoothness in the desktop app.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -284,6 +294,17 @@ add an item here; a one-off confirmation belongs in the ledger.
 Several items need an activation to fail. The runbook for that is inline
 below, before item 58, because two items depend on it and an earlier
 revision of them gave advice that was wrong twice over.
+
+## Forcing reduced motion
+
+Several items ask for the system's reduced-motion setting, which not
+every desktop offers. Without one, launch the desktop app with
+`QTWEBENGINE_CHROMIUM_FLAGS=--force-prefers-reduced-motion` set in
+the environment: the window's Qt engine then reports reduced motion
+for the whole session, and `desktop.py` sets no engine flags of its own
+to override it. It applies to the Qt backend, which the app prefers;
+the GTK fallback ignores it. In a Chromium browser, DevTools can
+emulate the same preference under Rendering.
 
 ## The checklist
 
@@ -4176,9 +4197,9 @@ LLaDA's frames come too quickly for a cycle to read and carry none.
     **Alternatives** off: guesses while it streams, and no cycling
     after it finishes either, since nothing was captured.
 
-368. **Where it holds still.** With the system's reduced-motion
-    setting on, a streaming DiffusionGemma run shows guesses and
-    nothing cycles. With **The model's guess** or **The mask glyph**
+368. **Where it holds still.** With reduced motion on, by the system
+    setting or as *Forcing reduced motion* describes, a streaming
+    DiffusionGemma run shows guesses and nothing cycles. With **The model's guess** or **The mask glyph**
     chosen instead, nothing cycles, live or afterwards.
 
 369. **A resume cycles as it streams.** On a single-canvas
