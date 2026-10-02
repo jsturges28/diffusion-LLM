@@ -273,6 +273,8 @@ kept when these were written:
   the fix.
 - **380 to 384**: confirmed on 2026-10-02: the DiffusionGemma resume
   edges from the 2026-10 audit's `A2-XAI-01` and `A2-XAI-02`.
+- **385 and 386**: **outstanding**, saved entropy following the scrub
+  in Analytics, from the 2026-10 audit's `A2-XAI-03` and `A2-XAI-04`.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -4350,3 +4352,32 @@ Frames** on its run.
     above 256, so the run spans two canvases. Once it finishes,
     **Edit Frames** is not offered. A single-canvas run straight
     after offers it again.
+
+## Saved entropy follows the scrub
+
+From 2026-10-02, a saved run's entropy chart in Analytics reads the
+run's own signal manifest. A diffusion run's bars show the entropy of
+the frame under the scrubber and fade nowhere, since every position
+exists at every frame; an autoregressive run's bars hold still and
+fade past the scrubbed frame, as before. The page half is automated
+in `tests/web/static/analytics_signal_axes.test.js` and the endpoint
+half in `tests/web/test_save_signals.py`; these items check real
+runs.
+
+385. **A diffusion run's bars follow the scrubber.** Save a LLaDA run
+    and a single-canvas DiffusionGemma run, then open each in
+    Analytics:
+    - Scrub the token view from an early frame to the last. The
+      entropy bars change as you go, and hovering a bar names the
+      token that frame shows at that position.
+    - No bar is faded at any frame, the one the run opens on
+      included.
+    - On an edited run, the Original and Edited bars both follow the
+      scrubber, and the crossfade still blends the two.
+
+386. **Autoregressive and older runs.** Open a saved SmolLM3 or
+    Mamba-3 run: its bars hold still as you scrub, and those past the
+    scrubbed frame fade, exactly as before. Then open a diffusion run
+    saved before 2026-09-23, when runs began recording what their
+    signals vary over: its bars keep the final frame's values
+    whatever the scrubber says, and none fade.
