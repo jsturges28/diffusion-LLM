@@ -271,6 +271,9 @@ kept when these were written:
 - **379**: confirmed on 2026-10-02. The pass of 377 had found the
   tooltip's glow drawing a line across a commit's gap; this checked
   the fix.
+- **380 to 384**: **outstanding**, the DiffusionGemma resume edges
+  added on 2026-10-02 with the 2026-10 audit's `A2-XAI-01` and
+  `A2-XAI-02`.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -4292,3 +4295,59 @@ stopping. Analytics adds a Stopping page in the Confidence slot.
     through the box, and nothing crosses the gap where one canvas
     ended and the next began. Hover the Timing and Confidence charts
     the same way: their glow is unchanged.
+
+## DiffusionGemma resume edges
+
+From 2026-10-02, a DiffusionGemma resume keeps exactly the frames that
+reached the page: one stopped before its first draft leaves the run
+as it was, and a Run to Here ends with the text of its last frame,
+marked stopped only when **Stop** cut it short. The worker's half is
+automated in `tests/backends/test_dgemma_resume_state.py`; these are
+the parts only a card can show. Except where an item says otherwise,
+use a single-canvas run (**Max Tokens** 256 or fewer), and generate
+afresh for each scenario that saves, since a saved edit locks **Edit
+Frames** on its run.
+
+380. **A stop before the first draft.** Open **Edit Frames**, remask a
+    few tokens on a mid-run frame, choose **Edit Another Frame**, move
+    a few frames on and press **Run to Here**, then **Stop** at once,
+    before the first resumed draft appears. If one lands first, that
+    is item 381; try again. The status reads *Stopped.*, the GPU goes
+    idle, and the page sits on the frame before the one you edited.
+    Remask a token there and **Resume to End**: it runs without an
+    out-of-range error and starts from the canvas on screen.
+
+381. **A stop after several drafts.** Edit a mid-run frame, **Resume
+    to End**, and press **Stop** once several resumed drafts have
+    arrived. It reads *Stopped.* **Confirm**, and open the run in
+    Analytics: its frames end at the last draft that was on screen,
+    and it is marked *(stopped)*. Its final text can read one draft
+    past that frame, because a stopped DiffusionGemma run takes its
+    text from the last draft it built rather than the last one sent.
+    That gap is known, and is not what this item checks.
+
+382. **Run to Here, three ways.** Edit a mid-run frame, choose **Edit
+    Another Frame** and **Run to Here** a few frames later, each time
+    on a fresh run:
+    - Let it arrive. It reads *Done.* (item 170). Save it and open it
+      in Analytics: the output is the text of the target frame,
+      unsettled positions included as blocks, rather than the
+      original run's output, and `reproducibility.attested` is still
+      `true` (item 138).
+    - Press **Stop** after the target frame appears but before the
+      status settles, while the model finishes in the background. It
+      still reads *Done.*, since every frame you asked for arrived.
+    - Press **Stop** after one or two drafts, short of the target. It
+      reads *Stopped.*, and a save shows *(stopped)* in Analytics with
+      the last frame's text as its output.
+
+383. **Resume to End, uninterrupted.** Edit a mid-run frame and
+    **Resume to End**. The first resumed frame shows the canvas you
+    branched from (items 181 and 201), the run ends *Done.*, and
+    after **Confirm** it reopens intact in Analytics with the model's
+    own final text.
+
+384. **No edit for a multi-canvas run.** Generate with **Max Tokens**
+    above 256, so the run spans two canvases. Once it finishes,
+    **Edit Frames** is not offered. A single-canvas run straight
+    after offers it again.
