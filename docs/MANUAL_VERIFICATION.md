@@ -271,9 +271,8 @@ kept when these were written:
 - **379**: confirmed on 2026-10-02. The pass of 377 had found the
   tooltip's glow drawing a line across a commit's gap; this checked
   the fix.
-- **380 to 384**: **outstanding**, the DiffusionGemma resume edges
-  added on 2026-10-02 with the 2026-10 audit's `A2-XAI-01` and
-  `A2-XAI-02`.
+- **380 to 384**: confirmed on 2026-10-02: the DiffusionGemma resume
+  edges from the 2026-10 audit's `A2-XAI-01` and `A2-XAI-02`.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
