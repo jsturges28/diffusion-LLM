@@ -20,11 +20,12 @@ LLaDA has had a suite like this since a failed resume truncated its
 history (``test_llada_resume_state.py``). DiffusionGemma had only
 sampler tests, which cannot see the history the worker keeps or the
 terminal frame it builds for a guided edit. Passing proves that a
-resume keeps exactly the frames the page received, whether it
-completes, stops at a guided budget, is stopped by the user or
-fails; that a rewind returns the generated run, object for object;
-and that a request the worker cannot honour, a multi-canvas run
-first among them, is refused before the sampler runs.
+resume keeps exactly the frames the page received, and changes
+nothing when none did, whether it completes, stops at a guided
+budget, is stopped by the user or fails; that a rewind returns the
+generated run, object for object; and that a request the worker
+cannot honour, a multi-canvas run or a malformed budget among them,
+is refused before the sampler runs.
 """
 
 from __future__ import annotations
@@ -602,6 +603,52 @@ def test_a_stop_after_two_frames_keeps_exactly_those(
     assert terminal[TERMINAL_CANCELLED] is True
 
 
+def test_a_stop_before_the_first_frame_keeps_the_run(
+    worker: ModuleType,
+) -> None:
+    """The real sampler, stopped before its first draft landed.
+
+    DiffusionGemma's first resumed frame needs a denoising step, so
+    unlike LLaDA's resume, which sends the remasked canvas before it
+    can see a stop, this one can end having sent nothing. No frame of
+    a branch reached the page, so there is no branch to adopt, and
+    the worker holds the run it held before.
+    """
+    backend = _with_real_sampler(_backend(worker))
+    original = _history(backend)
+    stop = threading.Event()
+    stop.set()
+    socket = _RecordingSocket()
+
+    _resume(backend, socket, stop)
+
+    assert socket.frames() == []
+    assert socket.errors() == []
+    terminal = _assert_one_terminal(socket)
+    assert terminal[TERMINAL_CANCELLED] is True
+    _assert_same_objects(_history(backend), original)
+
+
+def test_a_guided_stop_before_the_first_frame_keeps_the_run(
+    monkeypatch: pytest.MonkeyPatch, worker: ModuleType
+) -> None:
+    """The same stop on a Run to Here, whose terminal frame is the
+    worker's own rather than the sampler's."""
+    _install_scripted_sampler(monkeypatch, worker, frames=6)
+    backend = _backend(worker)
+    original = _history(backend)
+    stop = threading.Event()
+    stop.set()
+    socket = _RecordingSocket()
+
+    _resume(backend, socket, stop, max_frames=2)
+
+    assert socket.frames() == []
+    assert socket.errors() == []
+    _assert_one_terminal(socket)
+    _assert_same_objects(_history(backend), original)
+
+
 def test_a_guided_stop_keeps_what_arrived(
     monkeypatch: pytest.MonkeyPatch, worker: ModuleType
 ) -> None:
@@ -1039,6 +1086,38 @@ def test_an_out_of_range_frame_is_refused(
     _assert_same_objects(_history(backend), original)
     error = _assert_one_error(socket, code=ERROR_INVALID_REQUEST)
     assert "out of range" in error["message"]
+
+
+@pytest.mark.parametrize(
+    "max_frames",
+    [0, -1, True, "2", 1.5],
+    ids=["zero", "negative", "a flag", "a string", "a fraction"],
+)
+def test_a_budget_that_is_not_a_frame_count_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+    worker: ModuleType,
+    max_frames: object,
+) -> None:
+    """A Run to Here budget counts the frames the page will receive,
+    so anything but a positive whole number is a malformed request.
+    It is refused before the model runs rather than discovered after,
+    when the frames it would have counted are already drafted."""
+    calls: List[Dict[str, Any]] = []
+    _install_scripted_sampler(
+        monkeypatch, worker, frames=3, calls=calls
+    )
+    backend = _backend(worker)
+    original = _history(backend)
+    socket = _RecordingSocket()
+
+    _resume(
+        backend, socket, threading.Event(), max_frames=max_frames
+    )
+
+    assert calls == []
+    _assert_same_objects(_history(backend), original)
+    error = _assert_one_error(socket, code=ERROR_INVALID_REQUEST)
+    assert "max_frames" in error["message"]
 
 
 def test_a_stale_window_cannot_resume(

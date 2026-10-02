@@ -3,8 +3,8 @@
 Runs in ``.venv-dgemma`` (Transformers v5). Loads the NF4
 checkpoint via ``dgemma_nf4.load_quantized`` and streams denoising
 frames through the shared worker contract. Text-only (uses the
-tokenizer, not the multimodal processor). Resume is not supported
-in phase 1.
+tokenizer, not the multimodal processor). A resume re-enters a
+single canvas, so a run that spans more than one is refused.
 """
 
 from __future__ import annotations
@@ -48,6 +48,53 @@ from src.inference.dgemma_sampler import (
 )
 
 logger = logging.getLogger("dgemma_worker")
+
+
+def _commit_resume(
+    state: Dict[str, Any],
+    base_history: List[FrameCheckpoint],
+    forwarded: List[FrameCheckpoint],
+) -> None:
+    """Swap the frames the client received in as the retained run.
+
+    Called once the terminal frame has reached the client, with the
+    checkpoints of exactly the frames that did. Nothing forwarded is
+    an outcome here rather than a broken caller, unlike LLaDA's
+    commit: this resume's first frame needs a denoising step, so a
+    stop can end it having sent none. No branch reached the client
+    then, and the run stays as it was.
+    """
+    if len(forwarded) == 0:
+        return
+    candidate = base_history + forwarded
+    assert len(candidate) > len(base_history), (
+        "a committed branch extends the surviving prefix"
+    )
+    state["frame_history"] = candidate
+
+
+def _validate_resume_budget(
+    data: Dict[str, Any],
+) -> Optional[int]:
+    """A guided edit's frame budget, or None to resume to the end.
+
+    The commit keeps as many frames as were sent, so the budget has
+    to be a count: a whole number, at least one. A bool is refused
+    although Python counts it as an int, because ``true`` off the
+    wire is a malformed request rather than a budget of one.
+    """
+    raw = data.get("max_frames")
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise ValueError(
+            "max_frames must be a whole number of frames."
+        )
+    if raw < 1:
+        raise ValueError(
+            f"max_frames must be at least 1, not {raw}."
+        )
+    return raw
 
 
 class DgemmaBackend(Backend):
@@ -293,6 +340,7 @@ class DgemmaBackend(Backend):
             "frame_index": frame_index,
             "remask_positions": positions,
             "remaining_steps": remaining,
+            "max_frames": _validate_resume_budget(data),
         }
 
     async def handle_resume(
@@ -336,9 +384,12 @@ class DgemmaBackend(Backend):
         assert state is not None
         start = time.monotonic()
         frame_index = resume_params["frame_index"]
-        max_frames: Optional[int] = data.get("max_frames")
+        max_frames: Optional[int] = resume_params["max_frames"]
         base = state["frame_history"][frame_index]
         base_history = state["frame_history"][:frame_index]
+        assert len(base_history) == frame_index, (
+            "the staged prefix stops at the resume frame"
+        )
         resume_frames: List[FrameCheckpoint] = []
         try:
             generator = streaming_resume(
@@ -367,18 +418,18 @@ class DgemmaBackend(Backend):
                 cancel_event=cancel_event,
                 frame_history=resume_frames,
             )
-            await self._forward_resume(
+            sent = await self._forward_resume(
                 ws, stream, generator, start, max_frames
             )
-            # Splice: keep only the frames the client received so
-            # the worker history stays aligned with the browser's
-            # for any subsequent resume.
-            kept = (
-                resume_frames
-                if max_frames is None
-                else resume_frames[:max_frames]
+            # Keep only the frames the client received, so the
+            # worker history stays aligned with the browser's for
+            # any subsequent resume.
+            assert sent <= len(resume_frames), (
+                "every forwarded frame left a checkpoint"
             )
-            state["frame_history"] = base_history + kept
+            _commit_resume(
+                state, base_history, resume_frames[:sent]
+            )
         except Exception as exc:  # noqa: BLE001
             logger.exception("resume failed")
             await ws.send_json(
@@ -397,7 +448,7 @@ class DgemmaBackend(Backend):
         generator: Any,
         start: float,
         max_frames: Optional[int],
-    ) -> None:
+    ) -> int:
         """Forward resume frames, always draining the generator.
 
         DiffusionGemma runs ``generate`` in a background thread, so
@@ -415,6 +466,9 @@ class DgemmaBackend(Backend):
         Candidates go out only when every frame did. A guided edit's
         would name frames past its budget, which the page never
         receives, so it sends none, as a guided LLaDA edit does.
+
+        Returns how many frames reached the client, which is how many
+        of the staged checkpoints the run may keep.
         """
         sent = 0
         async for frame in generator:
@@ -432,9 +486,13 @@ class DgemmaBackend(Backend):
             if ftype == "done" and max_frames is None:
                 await stream.send_done(frame, start)
         if max_frames is not None:
+            assert sent <= max_frames, (
+                "a guided edit sends no more than its budget"
+            )
             await stream.send_done(
                 {"type": "done", "final_text": ""}, start
             )
+        return sent
 
 
 def build_backend() -> Backend:
