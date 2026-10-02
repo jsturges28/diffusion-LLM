@@ -1490,6 +1490,16 @@ class's brightness and fade rather than adding a second pair of sliders,
 and the Settings preview's Diffusion copy changes its mind twice so the
 cyan can be judged there.
 
+*Reworked after the first hardware pass, the same day.* The first cut was
+the birth glow's two blurred copies in cyan, and on hardware it read as a
+tint rather than a glow, and went unseen in the preview: white copies
+merge with white text into light, but cyan copies behind white text only
+colour its edges. Measured in the desktop engine, it was firing exactly
+as built. The revision flash now lights the glyph itself pale cyan, with
+a bright core inside a wider halo, and hands the word back to its own
+colour as the halo fades; its layers have their own table, still scaled
+by the shared brightness.
+
 Not built, on purpose: marks left on the scrubber for recent revisions,
 since the overlay is the reviewable record and a trail would add a third
 reading of the same event.

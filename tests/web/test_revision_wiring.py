@@ -104,20 +104,63 @@ def test_the_legend_swatches_are_the_overlay_colours() -> None:
 # -- the styles --
 
 
-def test_the_live_flash_has_keyframes_in_the_scripts_colour() -> None:
+Layer = tuple[float, str, float]
+
+
+def _script_revision_layers() -> list[Layer]:
+    """GLOW_REVISION_LAYERS at 100%, as (blur, channels, alpha)."""
+    script = _read("overlays.js")
+    channels = dict(re.findall(
+        r'var (GLOW_REVISION(?:_CORE)?_RGB) = "([\d, ]+)";', script
+    ))
+    table = _after(script, "var GLOW_REVISION_LAYERS = [", 260)
+    rows = re.findall(
+        r"blurPx: ([\d.]+), alpha: ([\d.]+), rgb: (\w+) \}", table
+    )
+    return [
+        (float(blur), channels[name], float(alpha))
+        for blur, alpha, name in rows
+    ]
+
+
+def _keyframe_revision_layers(css: str) -> list[Layer]:
+    """The fallback layers in the keyframes' `from`, alike."""
+    start = _after(css, "@keyframes token-revision", 600)
+    peak = start[: start.find("to {")]
+    rows = re.findall(
+        r"0 0 ([\d.]+)px rgba\((\d+, \d+, \d+), ([\d.]+)\)", peak
+    )
+    return [
+        (float(blur), rgb, float(alpha)) for blur, rgb, alpha in rows
+    ]
+
+
+def test_the_live_flash_falls_back_to_the_scripts_layers() -> None:
+    # The script writes the flash per brightness; the keyframes'
+    # fallback is what shows before it does, so it is the same flash
+    # at 100% rather than a second description of it.
     css = _read("style.css")
-    keyframes = _after(css, "@keyframes token-revision", 400)
     rule = _after(
         css, "#output-area.live-tokens .token-span[data-revised]", 120
     )
-    channels = re.search(
-        r'var GLOW_REVISION_RGB = "([\d, ]+)";', _read("overlays.js")
-    )
 
-    assert channels is not None
-    assert "--token-revision-shadow" in keyframes
-    assert f"rgba({channels.group(1)}, 0.9)" in keyframes
+    script = _script_revision_layers()
+
+    assert len(script) == 3
+    assert _keyframe_revision_layers(css) == script
     assert "animation: token-revision" in rule
+
+
+def test_the_flash_lights_the_glyph_and_hands_it_back() -> None:
+    css = _read("style.css")
+    start = _after(css, "@keyframes token-revision", 600)
+    peak = start[: start.find("to {")]
+    end = start[start.find("to {") : start.find("to {") + 200]
+    root = _after(css, ":root {", 2000)
+
+    assert "--revision-glow-glyph: rgb(" in root
+    assert "color: var(--revision-glow-glyph)" in peak
+    assert "color" not in end
 
 
 def test_the_live_flash_stops_under_reduced_motion() -> None:
@@ -145,3 +188,4 @@ def test_the_preview_flash_animates_and_holds_still() -> None:
     assert "animation: token-revision" in rule
     assert len(held) == 1
     assert "var(--token-revision-shadow)" in held[0]
+    assert "color: var(--revision-glow-glyph)" in held[0]

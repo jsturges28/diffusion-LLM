@@ -321,12 +321,48 @@ function styled() {
 }
 
 function radii(shadow) {
-  return shadow.match(/[\d.]+px/g);
+  return [...shadow.match(/[\d.]+px/g)];
 }
 
-test("the cyan flash has the white one's radii and fade", () => {
-  // One brightness drives both, so at any setting the two differ in
-  // colour alone, and the fade they share is one property.
+test("the birth glow is the two white copies it always was", () => {
+  // The layers became a table so the revision flash could have three.
+  // The birth glow's strings must not have moved with it.
+  const sandbox = load();
+  const el = styled();
+
+  sandbox.overlaysApplyGlowVars(el, 100, 500);
+
+  assert.equal(
+    el.props["--token-birth-shadow"],
+    "0 0 6.0px rgba(255, 255, 255, 0.900), "
+      + "0 0 12.0px rgba(255, 255, 255, 0.500)"
+  );
+  assert.equal(
+    el.props["--token-birth-shadow-off"],
+    "0 0 6.0px rgba(255, 255, 255, 0), "
+      + "0 0 12.0px rgba(255, 255, 255, 0)"
+  );
+});
+
+test("the cyan flash blooms around a bright core", () => {
+  // A cyan halo behind white text reads as a tint, so the revision
+  // flash has a pale core inside a wider cyan halo; its keyframes
+  // light the glyph as well (style.css).
+  const sandbox = load();
+  const el = styled();
+
+  sandbox.overlaysApplyGlowVars(el, 100, 500);
+
+  assert.equal(
+    el.props["--token-revision-shadow"],
+    "0 0 3.0px rgba(225, 252, 255, 0.950), "
+      + "0 0 8.0px rgba(0, 220, 255, 0.900), "
+      + "0 0 16.0px rgba(0, 220, 255, 0.550)"
+  );
+});
+
+test("brightness scales both flashes alike, fade is shared", () => {
+  // Each lands on its own peak's radii, so only the alpha animates.
   const sandbox = load();
   const el = styled();
 
@@ -334,20 +370,18 @@ test("the cyan flash has the white one's radii and fade", () => {
 
   const white = el.props["--token-birth-shadow"];
   const cyan = el.props["--token-revision-shadow"];
-  assert.deepEqual(radii(cyan), radii(white));
-  assert.match(cyan, /rgba\(0, 220, 255, /);
-  assert.match(white, /rgba\(255, 255, 255, /);
-  assert.deepEqual(
-    radii(el.props["--token-revision-shadow-off"]), radii(white)
-  );
-  assert.doesNotMatch(
-    el.props["--token-revision-shadow-off"], /, 0\.\d+\)/
-  );
+  const cyanOff = el.props["--token-revision-shadow-off"];
+  assert.deepEqual(radii(white), ["9.0px", "18.0px"]);
+  assert.deepEqual(radii(cyan), ["4.5px", "12.0px", "24.0px"]);
+  assert.deepEqual(radii(cyanOff), radii(cyan));
+  assert.match(cyan, /rgba\(225, 252, 255, 1\.000\)/);
+  assert.doesNotMatch(cyanOff, /, 0\.\d+\)/);
   assert.equal(el.props["--token-birth-duration"], "800ms");
 });
 
-test("a shadow without its colour is refused", () => {
+test("a shadow without its layers is refused", () => {
   const sandbox = load();
 
-  assert.throws(() => sandbox.overlaysGlowShadow(100), /colour/);
+  assert.throws(() => sandbox.overlaysGlowShadow(100), /layers/);
+  assert.throws(() => sandbox.overlaysGlowShadow(100, []), /layers/);
 });

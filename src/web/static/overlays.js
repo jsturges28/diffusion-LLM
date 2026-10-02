@@ -1616,11 +1616,35 @@ var GLOW_OUTER_BLUR_PX = 12;
 var GLOW_INNER_ALPHA = 0.9;
 var GLOW_OUTER_ALPHA = 0.5;
 
-// The flash's colour, as the channels of an rgba(): white for a
-// birth, cyan for a revision. One brightness and one fade drive both,
-// so a change of mind differs from a new token in colour alone.
+// Each flash as blurred copies of the text at 100% brightness, as the
+// channels of an rgba(). A birth is two white copies, which merge
+// with white text into a glow. Two cyan copies behind white text read
+// as a tint rather than a glow, which is how the revision flash first
+// looked on hardware, so a revision adds a bright pale core inside a
+// wider halo, and its keyframes light the glyph itself (style.css).
+// One brightness and one fade scale both.
 var GLOW_BIRTH_RGB = "255, 255, 255";
 var GLOW_REVISION_RGB = "0, 220, 255";
+var GLOW_REVISION_CORE_RGB = "225, 252, 255";
+
+var GLOW_BIRTH_LAYERS = [
+  {
+    blurPx: GLOW_INNER_BLUR_PX,
+    alpha: GLOW_INNER_ALPHA,
+    rgb: GLOW_BIRTH_RGB,
+  },
+  {
+    blurPx: GLOW_OUTER_BLUR_PX,
+    alpha: GLOW_OUTER_ALPHA,
+    rgb: GLOW_BIRTH_RGB,
+  },
+];
+
+var GLOW_REVISION_LAYERS = [
+  { blurPx: 3, alpha: 0.95, rgb: GLOW_REVISION_CORE_RGB },
+  { blurPx: 8, alpha: 0.9, rgb: GLOW_REVISION_RGB },
+  { blurPx: 16, alpha: 0.55, rgb: GLOW_REVISION_RGB },
+];
 
 // The settings keys each model class reads, keyed on the family from
 // ModelCapabilities. Family rather than generation shape: these are
@@ -1803,8 +1827,8 @@ function clampGlowValue(value, min, max, fallback) {
   return rounded;
 }
 
-// The glow's two shadow layers at full strength, plus the same layers
-// at zero alpha for the animation to land on.
+// A flash's shadow layers at full strength, plus the same layers at
+// zero alpha for the animation to land on.
 //
 // Brightness scales the blur radii as well as the alphas: alpha alone
 // tops out barely above the default 0.9, which is nowhere near enough
@@ -1815,9 +1839,9 @@ function clampGlowValue(value, min, max, fallback) {
 // would have the browser interpolate the blur size and re-rasterize a
 // different-sized shadow on every tick, which is the expensive shape
 // this animation has always avoided.
-function overlaysGlowShadow(brightnessPercent, rgb) {
-  if (typeof rgb !== "string") {
-    throw new Error("glow: a shadow needs its colour channels");
+function overlaysGlowShadow(brightnessPercent, layers) {
+  if (!Array.isArray(layers) || layers.length === 0) {
+    throw new Error("glow: a shadow needs its layers");
   }
   var scale = clampGlowValue(
     brightnessPercent,
@@ -1825,18 +1849,16 @@ function overlaysGlowShadow(brightnessPercent, rgb) {
     GLOW_BRIGHTNESS_MAX,
     GLOW_BRIGHTNESS_DEFAULT
   ) / 100;
-  var inner = (GLOW_INNER_BLUR_PX * scale).toFixed(1);
-  var outer = (GLOW_OUTER_BLUR_PX * scale).toFixed(1);
-  var innerAlpha = Math.min(GLOW_INNER_ALPHA * scale, 1);
-  var outerAlpha = Math.min(GLOW_OUTER_ALPHA * scale, 1);
-  return {
-    peak:
-      glowShadowLayer(inner, innerAlpha.toFixed(3), rgb)
-      + ", " + glowShadowLayer(outer, outerAlpha.toFixed(3), rgb),
-    off:
-      glowShadowLayer(inner, "0", rgb)
-      + ", " + glowShadowLayer(outer, "0", rgb),
-  };
+  var peak = [];
+  var off = [];
+  for (var i = 0; i < layers.length; i++) {
+    var layer = layers[i];
+    var blur = (layer.blurPx * scale).toFixed(1);
+    var alpha = Math.min(layer.alpha * scale, 1).toFixed(3);
+    peak.push(glowShadowLayer(blur, alpha, layer.rgb));
+    off.push(glowShadowLayer(blur, "0", layer.rgb));
+  }
+  return { peak: peak.join(", "), off: off.join(", ") };
 }
 
 function glowShadowLayer(blurPx, alpha, rgb) {
@@ -1851,9 +1873,11 @@ function overlaysApplyGlowVars(el, brightnessPercent, fadeMs) {
   if (!el) {
     return;
   }
-  var birth = overlaysGlowShadow(brightnessPercent, GLOW_BIRTH_RGB);
+  var birth = overlaysGlowShadow(
+    brightnessPercent, GLOW_BIRTH_LAYERS
+  );
   var revision = overlaysGlowShadow(
-    brightnessPercent, GLOW_REVISION_RGB
+    brightnessPercent, GLOW_REVISION_LAYERS
   );
   var duration = clampGlowValue(
     fadeMs,

@@ -212,6 +212,7 @@
 
   .glow-preview-word[data-revised] {
     animation: none;
+    color: var(--revision-glow-glyph);
     text-shadow: var(--token-revision-shadow);
   }
 }

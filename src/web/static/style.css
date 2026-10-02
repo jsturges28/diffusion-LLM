@@ -42,6 +42,9 @@
   --accent-glow: rgba(0, 255, 65, 0.35);
   --mask-color: #00ff41;
   --mask-glow: rgba(0, 255, 65, 0.08);
+  /* The colour a revised word lights to at the peak of its flash, on
+     the live canvas and in the Settings preview alike. */
+  --revision-glow-glyph: rgb(205, 248, 255);
   --danger: #ff4444;
   /* Amber: the "this will not work as you expect" tier between the
      accent and --danger. Already the edit-mark hue, kept as one
@@ -2667,24 +2670,30 @@ input[type="checkbox"].app-checkbox:checked::after {
     ease-out forwards;
 }
 
-/* Revision glow: the same flash in cyan, for a position that settles
-   on a different token from the one it last settled on. Same radii
-   and fade as a birth, for the same reasons, so a change of mind
-   differs from a new token in colour alone. The fallbacks are the
+/* Revision glow: a cyan flash for a position that settles on a
+   different token from the one it last settled on, with the birth
+   glow's fade and the same constant radii. A cyan halo behind white
+   text reads as a tint rather than a glow, so the glyph itself lights
+   pale cyan at the peak and returns to its own colour as the halo
+   fades: `color` is set only in `from`, so the end of the animation
+   is whatever the word's colour is underneath. The fallbacks are the
    100% / 500ms defaults, as above. */
 @keyframes token-revision {
   from {
+    color: var(--revision-glow-glyph);
     text-shadow: var(
       --token-revision-shadow,
-      0 0 6px rgba(0, 220, 255, 0.9),
-      0 0 12px rgba(0, 220, 255, 0.5)
+      0 0 3px rgba(225, 252, 255, 0.95),
+      0 0 8px rgba(0, 220, 255, 0.9),
+      0 0 16px rgba(0, 220, 255, 0.55)
     );
   }
   to {
     text-shadow: var(
       --token-revision-shadow-off,
-      0 0 6px rgba(0, 220, 255, 0),
-      0 0 12px rgba(0, 220, 255, 0)
+      0 0 3px rgba(225, 252, 255, 0),
+      0 0 8px rgba(0, 220, 255, 0),
+      0 0 16px rgba(0, 220, 255, 0)
     );
   }
 }
