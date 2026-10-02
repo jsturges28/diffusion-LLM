@@ -9,10 +9,12 @@ assertions read the messages a worker would forward.
 Passing proves the sampler's half of the contract. Every draft is
 captured and no committed frame is, since a commit arrives without
 logits; the candidates are the draft's own processed distribution,
-with the draft's argmax as the held token; they travel with their
-frame and never reach the page on it; and a stopped run's candidates
-name only frames the consumer forwarded, although the generate
-thread had run ahead of it.
+with the draft's argmax as the held token; the raw step travels with
+its frame and never leaves the process; and a stopped run's
+candidates name only frames the consumer forwarded, although the
+generate thread had run ahead of it. Each draft also carries, for
+live cycling, the sets of exactly the positions that changed on it,
+identical to the end-of-run message's, and nothing else does.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from src.backends.text_adapter import DGEMMA_TEXT
 from src.inference import dgemma_sampler
 from src.inference.dgemma_sampler import (
     CANDIDATES_KEY,
+    LIVE_CANDIDATES_KEY,
     FrameQueueStreamer,
     _run_streamed,
 )
@@ -79,11 +82,27 @@ class _StubModel:
         return torch.arange(CANVAS_LENGTH).unsqueeze(0)
 
 
+class _RepeatingModel:
+    """Drafts the same logits twice, so the second draft changes
+    nothing, then commits."""
+
+    device = "cpu"
+
+    def generate(self, *, streamer: Any, **_: Any) -> Any:
+        streamer.put(torch.zeros((1, 2), dtype=torch.long))
+        streamer.put_draft(logits=_draft_logits(0))
+        streamer.put_draft(logits=_draft_logits(0))
+        streamer.put(torch.arange(CANVAS_LENGTH).unsqueeze(0))
+        streamer.end()
+        return torch.arange(CANVAS_LENGTH).unsqueeze(0)
+
+
 def _run(
     *,
     alternatives: bool = True,
     canvases: int = 1,
     stop_after: int = -1,
+    model: Any = None,
 ) -> List[Dict[str, Any]]:
     """Every message a worker would forward. ``stop_after`` names
     the frame on whose arrival the user presses Stop, which waits
@@ -91,6 +110,8 @@ def _run(
     out_queue = frame_queue_create()
     stop = threading.Event()
     ahead = threading.Event()
+    if model is None:
+        model = _StubModel(canvases, ahead)
     streamer = FrameQueueStreamer(
         _StubTokenizer(),
         DGEMMA_TEXT,
@@ -103,7 +124,7 @@ def _run(
 
     async def drive() -> None:
         generator = _run_streamed(
-            model=_StubModel(canvases, ahead),
+            model=model,
             tokenizer=_StubTokenizer(),
             inputs={},
             prompt_len=0,
@@ -174,9 +195,10 @@ def test_the_draft_pass_reads_five_only_for_a_capture(
     assert asked == [5] * DRAFTS
 
 
-def test_candidates_never_ride_a_frame_to_the_page() -> None:
-    """The frame carries them across the queue; the consumer takes
-    them off before the frame leaves the process."""
+def test_the_raw_capture_never_leaves_the_process() -> None:
+    """The frame carries the raw step across the queue; the consumer
+    takes it off before the frame leaves the process. What reaches
+    the page is the decoded slice below, never the tensors."""
     for frame in _of_type(_run(), "frame"):
         assert CANDIDATES_KEY not in frame
 
@@ -258,6 +280,94 @@ def test_candidate_text_is_the_raw_decode() -> None:
 
     row = message["sets"][0][0]["c"][0]
     assert row["t"] == f"<{row['id']}>"
+
+
+# -- the sets each frame carries for live cycling --
+
+
+def _unsettled(frame: Dict[str, Any]) -> List[int]:
+    found: List[int] = []
+    for position, token in enumerate(frame["tokens"]):
+        if token["m"]:
+            found.append(position)
+    return found
+
+
+def test_a_draft_carries_the_sets_of_exactly_its_changes() -> None:
+    """The positions that changed on a draft are the ones the page
+    cycles, so theirs are the sets that ride the frame."""
+    frames = _of_type(_run(), "frame")
+    drafts = [frame for frame in frames if _unsettled(frame)]
+
+    assert drafts, "the fixture's drafts change something"
+    for frame in drafts:
+        live = frame[LIVE_CANDIDATES_KEY]
+        assert live["positions"] == _unsettled(frame)
+        assert len(live["sets"]) == len(live["positions"])
+
+
+def test_each_live_set_is_the_end_of_run_set() -> None:
+    """A position cycles live through exactly what its popover shows
+    once the run has ended."""
+    messages = _run()
+    message = _candidates(messages)
+    assert message is not None
+    kept = dict(zip(message["frames"], message["sets"], strict=True))
+
+    checked = 0
+    for frame in _of_type(messages, "frame"):
+        live = frame.get(LIVE_CANDIDATES_KEY)
+        if live is None:
+            continue
+        for position, entry in zip(
+            live["positions"], live["sets"], strict=True
+        ):
+            assert entry == kept[frame["index"]][position]
+            checked += 1
+
+    assert checked > 0
+
+
+def test_a_draft_that_changed_nothing_carries_no_sets() -> None:
+    frames = _of_type(_run(model=_RepeatingModel()), "frame")
+
+    assert LIVE_CANDIDATES_KEY in frames[0]
+    assert _unsettled(frames[1]) == []
+    assert LIVE_CANDIDATES_KEY not in frames[1]
+
+
+def test_a_commit_carries_no_sets() -> None:
+    """Frames 3 and 7 commit their canvases, which arrives without
+    logits and so without candidates."""
+    frames = {
+        m["index"]: m for m in _of_type(_run(canvases=2), "frame")
+    }
+
+    assert LIVE_CANDIDATES_KEY not in frames[3]
+    assert LIVE_CANDIDATES_KEY not in frames[7]
+    assert LIVE_CANDIDATES_KEY in frames[4]
+
+
+def test_a_run_without_alternatives_carries_no_sets() -> None:
+    for frame in _of_type(_run(alternatives=False), "frame"):
+        assert LIVE_CANDIDATES_KEY not in frame
+
+
+def test_the_live_texts_stay_within_their_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(dgemma_sampler, "LIVE_TEXT_CACHE_LIMIT", 3)
+    streamer = FrameQueueStreamer(
+        _StubTokenizer(),
+        DGEMMA_TEXT,
+        frame_queue_create(),
+        alternatives=True,
+    )
+
+    texts = [streamer._live_decode(token) for token in range(10)]
+
+    assert texts == [f"<{token}>" for token in range(10)]
+    assert len(streamer._live_texts) <= 3
 
 
 # -- the hand-off itself --

@@ -37,6 +37,7 @@ from src.backends.text_adapter import TextAdapter
 from src.inference.candidate_capture import (
     CandidateCapture,
     StepCandidates,
+    position_sets,
     step_candidates,
 )
 from src.inference.checkpoint import (
@@ -79,6 +80,17 @@ LOGIT_CHUNK_POSITIONS = _LOGIT_CHUNK_POSITIONS
 # does receive.
 CANDIDATES_KEY = "_candidates"
 
+# What the page does receive instead, read there as
+# `data.live_candidates`: the decoded sets of the positions that
+# changed on the frame, for it to cycle until the next frame lands.
+LIVE_CANDIDATES_KEY = "live_candidates"
+
+# The decoded texts kept for those sets. A run reuses most of its
+# candidate ids from frame to frame, so a cache saves nearly every
+# decode after the first frames; cleared when full rather than
+# allowed to grow with a run that ranges over the vocabulary.
+LIVE_TEXT_CACHE_LIMIT = 16384
+
 class FrameQueueStreamer(BaseStreamer):
     """Turns generate's streamer callbacks into protocol frames.
 
@@ -113,6 +125,8 @@ class FrameQueueStreamer(BaseStreamer):
         self.capture: Optional[CandidateCapture] = None
         if alternatives:
             self.capture = CandidateCapture()
+        # Filled and read on the event loop only, as the capture is.
+        self._live_texts: Dict[int, str] = {}
         # Present only when a caller intends to collect checkpoints.
         # Without it nothing is recorded, so a run whose frames are
         # never claimed cannot accumulate them.
@@ -207,34 +221,55 @@ class FrameQueueStreamer(BaseStreamer):
 
     def offer_forwarded(self, frame: Dict[str, Any]) -> None:
         """Hand a frame's candidates to the capture as the frame
-        leaves for the page.
+        leaves for the page, and give the page the sets of the
+        positions that changed on it, decoded, to cycle while the
+        run streams.
 
         The consumer calls this, not the generate thread, because the
         thread runs ahead by the queue's depth: offering there would
-        let a stopped run capture frames the page never received.
+        let a stopped run capture frames the page never received, and
+        decode sets nobody will see.
         """
         step = frame.pop(CANDIDATES_KEY, None)
         if step is None:
             return
         assert self.capture is not None, "candidates need a capture"
         self.capture.offer(step)
-
-    def candidates_message(self) -> Optional[Dict[str, Any]]:
-        """The run's candidates message, or None without a capture.
-
-        The raw decode, control tokens intact, as the autoregressive
-        sampler's candidates are; the popover renders them legibly.
-        """
-        if self.capture is None:
-            return None
-        tokenizer = self.tokenizer
-
-        def decode(token: int) -> str:
-            return str(
-                tokenizer.decode([token], skip_special_tokens=False)
+        unsettled = [
+            position
+            for position, token in enumerate(frame["tokens"])
+            if token["m"]
+        ]
+        if unsettled:
+            frame[LIVE_CANDIDATES_KEY] = position_sets(
+                step, unsettled, self._live_decode
             )
 
-        return self.capture.flush(decode)
+    def candidates_message(self) -> Optional[Dict[str, Any]]:
+        """The run's candidates message, or None without a capture."""
+        if self.capture is None:
+            return None
+        return self.capture.flush(self._decode)
+
+    def _decode(self, token: int) -> str:
+        """The raw decode, control tokens intact, as the
+        autoregressive sampler's candidates are; the popover and the
+        cycling render them legibly."""
+        return str(
+            self.tokenizer.decode([token], skip_special_tokens=False)
+        )
+
+    def _live_decode(self, token: int) -> str:
+        """The raw decode through a bounded cache, for the sets each
+        frame carries."""
+        text = self._live_texts.get(token)
+        if text is not None:
+            return text
+        if len(self._live_texts) >= LIVE_TEXT_CACHE_LIMIT:
+            self._live_texts.clear()
+        text = self._decode(token)
+        self._live_texts[token] = text
+        return text
 
     def _emit(
         self,

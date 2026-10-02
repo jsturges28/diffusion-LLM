@@ -245,18 +245,19 @@ kept when these were written:
   smooth at the shipped cycle, slots and cap.
 - **357 to 361**: confirmed on 2026-10-01: a remasked DiffusionGemma
   position born again on resume, and the Revisions overlay.
-- **362**: **not yet validated.** Failed on 2026-10-01: the flash
-  fired, but its cyan halo behind white text read as a tint rather
-  than a glow. Reworked the same day to light the word pale cyan
-  inside a brighter, wider halo.
+- **362**: confirmed on 2026-10-01 on its second pass. The first
+  failed: the flash fired, but its cyan halo behind white text read
+  as a tint rather than a glow, so it was reworked the same day to
+  light the word pale cyan inside a brighter, wider halo.
 - **363**: confirmed on 2026-10-01, the revision glow's two off
   switches.
-- **364**: **not yet validated.** Failed on 2026-10-01: the preview's
-  cyan went unseen, for the reason in 362, and the page may also have
-  opened on another model class, which has no cyan words. Reworked
-  with 362, and the item now says to set **Tune for** to **Diffusion**
-  first.
+- **364**: confirmed on 2026-10-01 on its second pass, after the same
+  rework; the preview's cyan had gone unseen, and the page may also
+  have opened on a class with no cyan words, so the item now says to
+  set **Tune for** to **Diffusion** first.
 - **365**: confirmed on 2026-10-01, bursts in the desktop app.
+- **366 to 370**: **not yet validated.** Added on 2026-10-01:
+  DiffusionGemma's candidates cycling while it streams.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -4151,3 +4152,42 @@ DiffusionGemma's worker reports it as one.
     frames of each canvas, where births and revisions crowd into
     the same frames: the canvas keeps up, and the flashes still
     fade rather than stopping short.
+
+## Candidates cycling while DiffusionGemma streams
+
+From 2026-10-01, each DiffusionGemma frame carries the candidates of
+the positions that changed on it, and with **Its candidates,
+cycling** chosen those positions cycle until the next frame lands.
+LLaDA's frames come too quickly for a cycle to read and carry none.
+
+366. **DiffusionGemma cycles between frames.** In the desktop app,
+    choose **Its candidates, cycling**, keep **Alternatives** on, and
+    run DiffusionGemma at its defaults. While it streams, the
+    positions that changed on the latest frame cycle through words
+    and the glyph until the next frame lands, then settle into plain
+    text or start again. The opening frame of each canvas cycles many
+    positions at once. Text around a cycling word never shifts, and a
+    word that settles keeps no gap where its longer candidates were.
+
+367. **LLaDA, and a run without Alternatives, show guesses.** Run
+    LLaDA with the same choice: while it streams, its unsettled
+    positions show guesses changing in place, as before, and cycling
+    starts only once it finishes. Run DiffusionGemma with
+    **Alternatives** off: guesses while it streams, and no cycling
+    after it finishes either, since nothing was captured.
+
+368. **Where it holds still.** With the system's reduced-motion
+    setting on, a streaming DiffusionGemma run shows guesses and
+    nothing cycles. With **The model's guess** or **The mask glyph**
+    chosen instead, nothing cycles, live or afterwards.
+
+369. **A resume cycles as it streams.** On a single-canvas
+    DiffusionGemma run, edit a middle frame and **Resume to End**: the
+    resumed frames cycle as they arrive, and once the run finishes,
+    scrubbing cycles from the stored candidates as before.
+
+370. **Smooth in the desktop app.** In the desktop app, run
+    DiffusionGemma with **Max Tokens** 512, both glows on and cycling
+    chosen: frames keep their usual pace, cycling carries on across
+    the canvas boundary, and births and revisions still glow as
+    positions settle.

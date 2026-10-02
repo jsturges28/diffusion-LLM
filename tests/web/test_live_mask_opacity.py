@@ -79,7 +79,8 @@ def test_both_live_paths_pass_the_same_options() -> None:
     rebuilds them. Handing hooks to one and not the other is the
     exact shape of the bug this file was written after."""
     live = _region(
-        "function renderLiveFrame(tokens, revealed, revised)", 900
+        "function renderLiveFrame(tokens, revealed, revised, live)",
+        900,
     )
     rebuild = _region("function rebuildLiveTokens(tokens)", 700)
 

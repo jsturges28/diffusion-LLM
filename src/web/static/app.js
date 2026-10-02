@@ -2209,7 +2209,9 @@ function handleFrame(data) {
     var revised = liveRevisionsAt(
       runFramesLength(runFrames) - 1, data.tokens
     );
-    renderLiveFrame(data.tokens, data.revealed, revised);
+    renderLiveFrame(
+      data.tokens, data.revealed, revised, data.live_candidates
+    );
   } else {
     renderFrame(data.text);
   }
@@ -2610,7 +2612,7 @@ var LIVE_TOKEN_OPTIONS = {
   opacityFor: tokenOpacityFn,
 };
 
-function renderLiveFrame(tokens, revealed, revised) {
+function renderLiveFrame(tokens, revealed, revised, live) {
   flickerStop();
   outputArea.classList.remove("token-layers");
   outputArea.classList.add("live-tokens");
@@ -2636,6 +2638,7 @@ function renderLiveFrame(tokens, revealed, revised) {
   // A held pointer keeps reading the same position while the text
   // under it resolves, so the strip has to follow the frame.
   refreshTokenMetrics();
+  startLiveCycling(tokens, live);
 }
 
 function rebuildLiveTokens(tokens) {
@@ -5844,6 +5847,57 @@ function startStackedFlicker(layers, frameIndex, editedTokens) {
       runFrameCanvas
     ),
   ], MASK_CHAR);
+}
+
+// While DiffusionGemma streams, each frame carries the sets of the
+// positions that changed on it, and those positions cycle until the
+// next frame lands, which renderLiveFrame stops first. LLaDA sends
+// none: its frames come about twenty-five a second, too quickly for a
+// cycle to read, so its guesses change in place instead.
+function startLiveCycling(tokens, live) {
+  if (appSettings.unsettledShows !== "candidates") {
+    return;
+  }
+  var sets = liveCyclingSets(live, tokens.length);
+  if (sets === null) {
+    return;
+  }
+  flickerStart([{
+    spans: liveTokenSpans,
+    tokens: tokens,
+    sets: sets,
+  }], MASK_CHAR);
+}
+
+// A frame's sets by position, or null where it carries none or they
+// do not describe this canvas. A payload whose lists disagree, or
+// that names a position the canvas lacks, is dropped whole rather
+// than cycled at the wrong place.
+function liveCyclingSets(live, width) {
+  if (!live || !Array.isArray(live.positions)) {
+    return null;
+  }
+  if (!Array.isArray(live.sets)) {
+    return null;
+  }
+  if (live.positions.length !== live.sets.length) {
+    return null;
+  }
+  var sets = [];
+  for (var at = 0; at < width; at++) {
+    sets.push(null);
+  }
+  for (var i = 0; i < live.positions.length; i++) {
+    var position = live.positions[i];
+    if (!Number.isInteger(position)) {
+      return null;
+    }
+    if (position < 0 || position >= width) {
+      return null;
+    }
+    sets[position] = live.sets[i];
+  }
+  return sets;
 }
 
 // The pre-edit run and the branch drawn on top of each other, mixed

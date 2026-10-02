@@ -18,11 +18,17 @@ kept whatever the stride, since the finished canvas is the frame a
 reader lands on first. A default LLaDA run is exactly the budget, so
 it is captured at every step.
 
-Nothing is decoded while the run is going. Steps are held as small
+The record is decoded only at the end. Steps are held as small
 tensors of ids and probabilities, and `flush` decodes each distinct
-id once at the end, which is also where the wire message is built:
-the candidates reach the page once, when the run ends, and never
-slow the live stream down.
+id once, which is also where the wire message is built: the whole
+capture reaches the page once, when the run ends.
+
+One narrow slice travels sooner. DiffusionGemma's frames arrive about
+a second apart, so as each leaves for the page it carries the sets of
+the positions that changed on it (`position_sets`), decoded, for the
+page to cycle until the next frame lands: a median of about 10 KiB a
+frame on saved runs. LLaDA's frames arrive about twenty-five a
+second, too quickly for a cycle to read, and carry none.
 """
 
 from __future__ import annotations
@@ -181,11 +187,49 @@ def _decode_once(
     return {token: decode(token) for token in sorted(distinct)}
 
 
+def position_sets(
+    step: StepCandidates,
+    positions: List[int],
+    decode: Callable[[int], str],
+) -> Dict[str, Any]:
+    """The sets of `positions` in one step, as a frame carries them
+    for the page to cycle while the run streams.
+
+    The rows are the end-of-run message's, for those positions alone,
+    so a position cycles live through exactly what its popover shows
+    once the run has ended. ``decode`` is called once per distinct id
+    here; a caller decoding every frame passes one that caches.
+    """
+    for position in positions:
+        assert 0 <= position < step.positions, "a position in range"
+    assert len(set(positions)) == len(positions), "each position once"
+    index = torch.tensor(positions, dtype=torch.long)
+    ids = step.candidates.ids[index].tolist()
+    probs = step.candidates.probs[index].tolist()
+    held = step.held[index].tolist()
+    held_probs = step.candidates.held_probs[index].tolist()
+    held_ranks = step.candidates.held_ranks[index].tolist()
+    distinct = set(held)
+    for row in ids:
+        distinct.update(row)
+    texts = {token: decode(token) for token in sorted(distinct)}
+    sets: List[Dict[str, Any]] = []
+    for at, token in enumerate(held):
+        sets.append(_position_set(
+            token=token,
+            ids=ids[at],
+            probs=probs[at],
+            held_prob=held_probs[at],
+            held_rank=held_ranks[at],
+            texts=texts,
+        ))
+    return {"positions": list(positions), "sets": sets}
+
+
 def _step_sets(
     step: StepCandidates, texts: Dict[int, str]
 ) -> List[Dict[str, Any]]:
-    """Each position's set: the token it held, and the candidates,
-    with the held token appended with its rank when they omit it."""
+    """Every position's set, in canvas order."""
     ids = step.candidates.ids.tolist()
     probs = step.candidates.probs.tolist()
     held = step.held.tolist()
@@ -193,22 +237,40 @@ def _step_sets(
     held_ranks = step.candidates.held_ranks.tolist()
     sets: List[Dict[str, Any]] = []
     for position, token in enumerate(held):
-        rows: List[Dict[str, Any]] = [
-            {
-                "id": candidate,
-                "t": texts[candidate],
-                "p": round(probability, PROBABILITY_PLACES),
-            }
-            for candidate, probability in zip(
-                ids[position], probs[position], strict=True
-            )
-        ]
-        if token not in ids[position]:
-            rows.append({
-                "id": token,
-                "t": texts[token],
-                "p": held_probs[position],
-                "rank": held_ranks[position],
-            })
-        sets.append({"h": token, "c": rows})
+        sets.append(_position_set(
+            token=token,
+            ids=ids[position],
+            probs=probs[position],
+            held_prob=held_probs[position],
+            held_rank=held_ranks[position],
+            texts=texts,
+        ))
     return sets
+
+
+def _position_set(
+    *,
+    token: int,
+    ids: List[int],
+    probs: List[float],
+    held_prob: float,
+    held_rank: int,
+    texts: Dict[int, str],
+) -> Dict[str, Any]:
+    """One position's set: the token it held, and the candidates,
+    with the held token appended with its rank when they omit it."""
+    rows: List[Dict[str, Any]] = []
+    for candidate, probability in zip(ids, probs, strict=True):
+        rows.append({
+            "id": candidate,
+            "t": texts[candidate],
+            "p": round(probability, PROBABILITY_PLACES),
+        })
+    if token not in ids:
+        rows.append({
+            "id": token,
+            "t": texts[token],
+            "p": held_prob,
+            "rank": held_rank,
+        })
+    return {"h": token, "c": rows}

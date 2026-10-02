@@ -32,6 +32,7 @@ from src.inference.candidate_capture import (
     MESSAGE_TYPE,
     CandidateCapture,
     StepCandidates,
+    position_sets,
     step_candidates,
 )
 from src.inference.logit_signals import Candidates
@@ -275,3 +276,46 @@ def test_five_candidates_match_the_autoregressive_popover() -> None:
     """One number for both kinds of run, so a popover reads the same
     whichever model produced it."""
     assert CANDIDATES_PER_POSITION == TOP_K_ALTERNATIVES
+
+
+# -- a slice of one step, for a frame to carry --
+
+
+def test_a_slice_is_the_whole_steps_sets_at_its_positions() -> None:
+    """What a frame carries for live cycling is the end-of-run rows
+    for those positions, held row and rank included."""
+    step = _step(1, held=[0, 999, 20, 30])
+    step.candidates.held_probs[1] = 0.000012
+    step.candidates.held_ranks[1] = 4321
+    capture = _capture(budget_steps=2)
+    capture.offer(step)
+    message = capture.flush(str)
+    assert message is not None
+
+    sliced = position_sets(step, [1, 3], str)
+
+    assert sliced["positions"] == [1, 3]
+    assert sliced["sets"] == [
+        message["sets"][0][1], message["sets"][0][3],
+    ]
+    assert sliced["sets"][0]["c"][-1]["rank"] == 4321
+
+
+def test_a_slice_decodes_only_its_own_ids_once() -> None:
+    calls: Counter[int] = Counter()
+
+    def decode(token: int) -> str:
+        calls[token] += 1
+        return str(token)
+
+    position_sets(_step(1), [2], decode)
+
+    assert sorted(calls) == [20, 21, 22, 23, 24]
+    assert max(calls.values()) == 1
+
+
+def test_a_slice_off_the_canvas_is_a_programmer_error() -> None:
+    with pytest.raises(AssertionError):
+        position_sets(_step(1), [POSITIONS], str)
+    with pytest.raises(AssertionError):
+        position_sets(_step(1), [1, 1], str)

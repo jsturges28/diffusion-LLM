@@ -12,12 +12,16 @@
 // contested one churns; confidence is the amount of motion, and no
 // rule has to pick which positions deserve it.
 //
-// Only on a finished run, because the candidates arrive as it ends,
-// and only at unsettled positions. Each one reserves the width of its
-// longest scheduled text, so settled text keeps its layout and
-// nothing moves while a frame plays. A literal stack of the five,
-// overlaid at their shares, was mocked on a real frame first: it
-// smeared every contested stretch and spread the canvas out.
+// Only at unsettled positions, and only where their sets are in
+// hand: on a finished run from the run's store, and on DiffusionGemma
+// while it streams from each frame's own sets, since its frames
+// arrive about a second apart. LLaDA's arrive about twenty-five a
+// second, too quickly for a cycle to read, so a streaming LLaDA run
+// shows its guesses. Each position reserves the width of its longest
+// scheduled text, so settled text keeps its layout and nothing moves
+// while a frame plays. A literal stack of the five, overlaid at their
+// shares, was mocked on a real frame first: it smeared every
+// contested stretch and spread the canvas out.
 
 "use strict";
 
@@ -70,12 +74,27 @@ function flickerStart(layers, mask) {
   flickerTimer = setInterval(flickerTick, FLICKER_SLOT_MS);
 }
 
+// Stop cycling and hand every span back as it was drawn: no cycling
+// mark, no reserved width, its own text. The live view keeps its
+// spans from one frame to the next, so a position that settles must
+// not keep the room its candidates needed.
 function flickerStop() {
   if (flickerTimer !== null) {
     clearInterval(flickerTimer);
     flickerTimer = null;
   }
+  for (var i = 0; i < flickerEntries.length; i++) {
+    flickerRelease(flickerEntries[i]);
+  }
   flickerEntries = [];
+}
+
+function flickerRelease(entry) {
+  entry.span.removeAttribute("data-cycling");
+  entry.span.style.width = "";
+  if (entry.span.textContent !== entry.drawn) {
+    entry.span.textContent = entry.drawn;
+  }
 }
 
 // Step every cycling position to its slot for now. Writes a span only
@@ -133,13 +152,14 @@ function flickerBind(layer, mask) {
     if (!span) {
       continue;
     }
-    span.setAttribute("data-cycling", "");
-    span.style.width = plan[i].width + "ch";
     bound.push({
       span: span,
       position: plan[i].position,
       texts: plan[i].texts,
+      drawn: span.textContent,
     });
+    span.setAttribute("data-cycling", "");
+    span.style.width = plan[i].width + "ch";
   }
   return bound;
 }

@@ -637,11 +637,17 @@ test("over the quota, the pre-edit candidates give way first", () => {
 
 // -- the candidates cycle --
 
-// What is cycling, as a plain array: one {span, position, texts} per
-// position the flicker is stepping.
+// What is cycling, as a plain array: one {span, position, texts,
+// width} per position the flicker is stepping. The width is read
+// before it stops, since stopping hands each span back as drawn.
 function cyclingAt(context, frame) {
   context.navigateToFrame(frame);
-  const entries = [...context.flickerEntries];
+  const entries = [...context.flickerEntries].map((entry) => ({
+    span: entry.span,
+    position: entry.position,
+    texts: entry.texts,
+    width: entry.span.style.width,
+  }));
   context.flickerStop();
   return entries;
 }
@@ -663,7 +669,7 @@ test("a finished run's unsettled positions cycle", () => {
   assert.equal(texts.filter((t) => t === " lead").length, 12);
   assert.equal(texts.filter((t) => t === " seven").length, 4);
   assert.equal(texts.filter((t) => t === "\u2591").length, 4);
-  assert.equal(cycling[0].span.style.width, "6ch");
+  assert.equal(cycling[0].width, "6ch");
 });
 
 test("a tick shows the slot the clock is in", () => {

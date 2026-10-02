@@ -14,7 +14,7 @@
 // keeps only positions that would move and caps them by contest, the
 // phases are fixed and spread, and the timer writes only changes,
 // stops when its spans leave the page and never starts with motion
-// reduced.
+// reduced, and that stopping hands each span back as it was drawn.
 //
 // Run with: node --test tests/web/static/
 
@@ -82,6 +82,9 @@ function fakeSpan(text) {
     value: text,
     setAttribute(name, value) {
       span.attributes[name] = value;
+    },
+    removeAttribute(name) {
+      delete span.attributes[name];
     },
   };
   Object.defineProperty(span, "textContent", {
@@ -346,6 +349,23 @@ test("stopping clears the timer; starting again replaces it", () => {
   assert.deepEqual(api.timers.cleared.slice(0, 1), [first]);
   assert.equal(api.timers.active.size, 0);
   assert.equal(api.flickerEntries.length, 0);
+});
+
+test("stopping hands each span back as it was drawn", () => {
+  // The live view keeps its spans between frames, so a position that
+  // settles must not keep the cycling mark, the reserved width or a
+  // candidate's text.
+  const api = load();
+  const span = started(api, "guess");
+  api.flickerNow = () => 0;
+  api.flickerTick();
+  assert.notEqual(span.textContent, "guess");
+
+  api.flickerStop();
+
+  assert.equal("data-cycling" in span.attributes, false);
+  assert.equal(span.style.width, "");
+  assert.equal(span.textContent, "guess");
 });
 
 test("a layer with nothing to cycle starts no timer", () => {

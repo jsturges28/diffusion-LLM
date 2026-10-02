@@ -352,6 +352,41 @@ since shipped is noted on the item rather than left for a reader to infer.
    shipped, and why it marks every revision, is at the end of "A second
    glow for a revision, distinct from a birth" in the backlog below.
 
+7. **Live cycling on DiffusionGemma. Shipped on 2026-10-01.** Raised in the
+   revision glow's hardware pass: with **Its candidates, cycling** chosen,
+   LLaDA looked as if it cycled while it streamed and DiffusionGemma did
+   not. Neither did; the flicker needed a finished run, because the
+   candidates reached the page in one message as it ended. What looked
+   like cycling on LLaDA was its guesses, changing in place at 22 to 25
+   frames a second. DiffusionGemma streams about one frame a second, and
+   only the positions that changed on a step read as unsettled, so its
+   canvas sat still between frames, which is exactly where a cycle would
+   show the most.
+
+   **What shipped.** DiffusionGemma already computed each draft's five
+   likeliest tokens for every position, in the pass that gives its
+   confidence. Each frame now also carries, decoded, the sets of the
+   positions that changed on it, under `live_candidates`, and those
+   positions cycle with the existing flicker until the next frame lands.
+   The decode happens as the frame leaves for the page, on the event loop
+   where the end-of-run message is built, and only for frames the page
+   receives, through a bounded cache.
+
+   *Only the changed positions, and only DiffusionGemma.* On the saved
+   runs a frame changes a median of 50 positions, about 10 KiB of sets,
+   and a canvas's opening frame changes all 256, about 49 KiB: negligible
+   at a frame a second on a local socket. LLaDA sends none, since a frame
+   lasting 40 ms cannot show a one-second cycle. The worker sends every
+   changed position and the page keeps its own 64-position cap, so the
+   two sides do not share a constant.
+
+   *The end-of-run message stays the record.* The live sets are never
+   stored: scrubbing, saving, the session snapshot and the popover all
+   read the finished run's capture as before, which may be strided where
+   the live sets are not. Making the live view reuse its spans safely
+   meant the flicker now hands each span back as drawn when it stops,
+   which the scrubbed views never needed because they rebuild theirs.
+
 ---
 
 ## Autoregressive model support (Phases A and C shipped)
