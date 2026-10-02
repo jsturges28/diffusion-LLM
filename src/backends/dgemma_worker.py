@@ -26,6 +26,7 @@ from src.backends.protocol import (
     ERROR_STALE_RUN,
     MSG_GENERATE,
     MSG_RESUME,
+    TERMINAL_CANCELLED,
     request_error,
     request_id_of,
 )
@@ -95,6 +96,30 @@ def _validate_resume_budget(
             f"max_frames must be at least 1, not {raw}."
         )
     return raw
+
+
+async def _send_guided_terminal(
+    stream: FrameStreamer,
+    start: float,
+    *,
+    final_text: str,
+    cut_short: bool,
+) -> None:
+    """End a guided edit with the text of the last frame it sent.
+
+    The sampler's own terminal frame describes drafts past the
+    budget, which the client never receives, so the worker builds
+    this one from what did arrive. A stop that came before the budget
+    was met cut the request short and says so, as every stopped run
+    does. A stop during the drain after it, or none at all, leaves a
+    completed request: the client has every frame it asked for.
+    """
+    if cut_short:
+        await stream.send_cancelled(final_text, start)
+    else:
+        await stream.send_done(
+            {"type": "done", "final_text": final_text}, start
+        )
 
 
 class DgemmaBackend(Backend):
@@ -457,6 +482,9 @@ class DgemmaBackend(Backend):
         request finishes). When ``max_frames`` is set (guided "run to
         here"), frames past the budget are drained silently and an
         explicit ``done`` is sent so the client stops at the target.
+        It carries the text of the last frame the client received,
+        and says the run stopped only when a stop cut the budget
+        short (``_send_guided_terminal``).
 
         Both terminal frames go out through the streamer even though
         the ordinary ones do not, because that is what stamps the
@@ -471,6 +499,8 @@ class DgemmaBackend(Backend):
         of the staged checkpoints the run may keep.
         """
         sent = 0
+        last_text = ""
+        stopped = False
         async for frame in generator:
             ftype = frame.get("type")
             if ftype == "frame":
@@ -480,17 +510,26 @@ class DgemmaBackend(Backend):
                     )
                     await ws.send_json(frame)
                     sent += 1
+                    last_text = frame["text"]
                 continue
             if ftype == "candidates" and max_frames is None:
                 await ws.send_json(frame)
-            if ftype == "done" and max_frames is None:
-                await stream.send_done(frame, start)
+            if ftype == "done":
+                stopped = frame.get(TERMINAL_CANCELLED) is True
+                if max_frames is None:
+                    await stream.send_done(frame, start)
         if max_frames is not None:
             assert sent <= max_frames, (
                 "a guided edit sends no more than its budget"
             )
-            await stream.send_done(
-                {"type": "done", "final_text": ""}, start
+            assert isinstance(last_text, str), (
+                "a frame's text is a string"
+            )
+            await _send_guided_terminal(
+                stream,
+                start,
+                final_text=last_text,
+                cut_short=stopped and sent < max_frames,
             )
         return sent
 

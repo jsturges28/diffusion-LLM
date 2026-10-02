@@ -22,10 +22,12 @@ sampler tests, which cannot see the history the worker keeps or the
 terminal frame it builds for a guided edit. Passing proves that a
 resume keeps exactly the frames the page received, and changes
 nothing when none did, whether it completes, stops at a guided
-budget, is stopped by the user or fails; that a rewind returns the
-generated run, object for object; and that a request the worker
-cannot honour, a multi-canvas run or a malformed budget among them,
-is refused before the sampler runs.
+budget, is stopped by the user or fails; that a guided edit ends
+with the text of the last frame the page received, marked stopped
+only when a stop cut it short; that a rewind returns the generated
+run, object for object; and that a request the worker cannot
+honour, a multi-canvas run or a malformed budget among them, is
+refused before the sampler runs.
 """
 
 from __future__ import annotations
@@ -704,6 +706,109 @@ def test_run_to_here_keeps_only_the_frames_it_sent(
     terminal = _assert_one_terminal(socket)
     assert terminal["run_token"] == backend.run_token
     assert terminal["provenance"] == PROVENANCE
+
+
+# -- a guided edit's terminal frame names its branch --
+#
+# On Run to Here the sampler's own terminal frame describes drafts
+# past the budget, which the page never receives, so the worker ends
+# the run itself. The page adopts any text that frame carries, and a
+# save, the rescue when another window takes the model included,
+# writes it beside the branch's frames, so it has to be the text of
+# the branch the page is showing.
+
+
+def test_run_to_here_ends_with_its_last_frames_text(
+    monkeypatch: pytest.MonkeyPatch, worker: ModuleType
+) -> None:
+    """A budget of two out of six: the terminal frame carries the
+    second frame's text, rather than the sampler's or none."""
+    _install_scripted_sampler(monkeypatch, worker, frames=6)
+    backend = _backend(worker)
+    socket = _RecordingSocket()
+
+    _resume(backend, socket, threading.Event(), max_frames=2)
+
+    terminal = _assert_one_terminal(socket)
+    assert terminal["final_text"] == socket.frames()[-1]["text"]
+    assert terminal["final_text"] == _branch_text(1)
+    assert TERMINAL_CANCELLED not in terminal
+
+
+def test_run_to_here_stopped_short_says_it_stopped(
+    monkeypatch: pytest.MonkeyPatch, worker: ModuleType
+) -> None:
+    """Stopped one frame into a budget of four, so the request was
+    cut short, and the terminal frame says so as every stopped run
+    does (``LIFE-04``). The page then reads Stopped rather than Done,
+    and a save records the run as partial."""
+    _install_scripted_sampler(monkeypatch, worker, frames=6)
+    backend = _backend(worker)
+    stop = threading.Event()
+    socket = _RecordingSocket(stop=stop, stop_after=1)
+
+    _resume(backend, socket, stop, max_frames=4)
+
+    terminal = _assert_one_terminal(socket)
+    assert terminal.get(TERMINAL_CANCELLED) is True
+    assert terminal["final_text"] == _branch_text(0)
+
+
+def test_a_stop_after_the_target_is_not_a_cancellation(
+    monkeypatch: pytest.MonkeyPatch, worker: ModuleType
+) -> None:
+    """The distinction this path has to keep (manual item 170).
+
+    Once the budget's frames are out, the worker still drains the
+    sampler until its model thread finishes, and the page waits for
+    the terminal frame meanwhile. A stop pressed then arrives after
+    the request was met: it ends the drain early, and the edit still
+    reads as completed.
+    """
+    _install_scripted_sampler(monkeypatch, worker, frames=6)
+    backend = _backend(worker)
+    stop = threading.Event()
+    socket = _RecordingSocket(stop=stop, stop_after=2)
+
+    _resume(backend, socket, stop, max_frames=2)
+
+    terminal = _assert_one_terminal(socket)
+    assert TERMINAL_CANCELLED not in terminal
+    assert terminal["final_text"] == _branch_text(1)
+
+
+def test_a_branch_that_ends_inside_its_budget_is_done(
+    monkeypatch: pytest.MonkeyPatch, worker: ModuleType
+) -> None:
+    """The branch settled after two frames of a budget of four, so
+    the request ran out of work rather than being cut short."""
+    _install_scripted_sampler(monkeypatch, worker, frames=2)
+    backend = _backend(worker)
+    socket = _RecordingSocket()
+
+    _resume(backend, socket, threading.Event(), max_frames=4)
+
+    terminal = _assert_one_terminal(socket)
+    assert TERMINAL_CANCELLED not in terminal
+    assert terminal["final_text"] == _branch_text(1)
+
+
+def test_run_to_here_stopped_before_any_frame_names_no_text(
+    monkeypatch: pytest.MonkeyPatch, worker: ModuleType
+) -> None:
+    """Nothing reached the page, so the terminal frame is a stop
+    that names no text, and the page keeps the text it holds."""
+    _install_scripted_sampler(monkeypatch, worker, frames=6)
+    backend = _backend(worker)
+    stop = threading.Event()
+    stop.set()
+    socket = _RecordingSocket()
+
+    _resume(backend, socket, stop, max_frames=2)
+
+    terminal = _assert_one_terminal(socket)
+    assert terminal.get(TERMINAL_CANCELLED) is True
+    assert terminal["final_text"] == ""
 
 
 # -- a completed resume --
