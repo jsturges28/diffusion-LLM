@@ -280,6 +280,9 @@ kept when these were written:
   frame, and DiffusionGemma's is a committed canvas, which carries
   none.
 - **386**: confirmed on 2026-10-02.
+- **387 and 388**: **outstanding**, DiffusionGemma's entropy at a
+  commit frame on both pages, and the generator's profile on a
+  diffusion run. Passing 387 also completes 385's DiffusionGemma half.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -4386,3 +4389,42 @@ runs.
     saved before 2026-09-23, when runs began recording what their
     signals vary over: its bars keep the final frame's values
     whatever the scrubber says, and none fade.
+
+## Diffusion entropy at commit frames
+
+From 2026-10-02, a DiffusionGemma commit, which carries no entropy of
+its own, is read through its canvas's last draft by every entropy
+view, which says *as of step N*. Before this a finished DiffusionGemma
+run, which ends on a commit, was offered no entropy view on either
+page. The generator's entropy profile also follows a diffusion run's
+frames now, as the Analytics chart does. The page halves are
+automated in `tests/web/static/analytics_signal_axes.test.js`,
+`tests/web/static/generator_entropy_profile.test.js` and
+`tests/web/static/overlays_entropy_frame.test.js`.
+
+387. **A finished DiffusionGemma run in Analytics.** Save a
+    DiffusionGemma run with **Max Tokens** 512, so it spans two
+    canvases, and open it in Analytics:
+    - **Entropy** is offered in the overlay picker, and the entropy
+      chart is shown. It opens on the final commit, with bars that
+      are not faded and a tooltip whose rows end *as of step N*.
+    - Scrub to a draft: the bars change and lose the label. Scrub
+      to the first canvas's commit: the bars show that canvas's last
+      draft, not the second canvas's.
+    - With the Entropy overlay on, a commit's tokens are colored,
+      and hovering one gives an entropy reading with *entropy as of
+      step N* in the metrics strip.
+    - Repeat 385's first two bullets on this run, which completes
+      its DiffusionGemma half.
+
+388. **The generator's profile on a diffusion run.** Generate with
+    LLaDA, then with DiffusionGemma, and scrub each once it
+    finishes:
+    - The entropy profile under the scrubber changes with the frame,
+      no column stands out as the scrubber's own, and none fades.
+    - On DiffusionGemma the profile and the **Entropy** overlay are
+      offered once the run finishes, and at a commit hovering a token
+      reads *as of step N* beside the profile.
+    - Generate with SmolLM3 or Mamba-3: the profile holds still as
+      you scrub, the scrubbed frame's column stands out, and the
+      columns past it fade, exactly as before.
