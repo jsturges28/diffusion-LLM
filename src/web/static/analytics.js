@@ -3672,8 +3672,29 @@ function entropyAvailability(data) {
   return framesHaveEntropy(series) ? "ok" : "absent";
 }
 
+// Whether the series carries entropy anywhere it can be read. Not
+// only on its final frame: a DiffusionGemma run ends on a committed
+// canvas, which carries none, while every draft before it does.
 function framesHaveEntropy(series) {
-  return framesHaveTokenValue(series, "e");
+  if (!series) {
+    return false;
+  }
+  var last = overlaySeriesLength(series) - 1;
+  return overlaySeriesEntropyFrame(series, last, singleCanvas) >= 0;
+}
+
+// The frame whose entropy describes frame `index` of a series, or -1
+// (see overlaysEntropyFrame), read through the series as the page
+// holds it.
+function overlaySeriesEntropyFrame(series, index, canvasOf) {
+  return overlaysEntropyFrame(
+    function (frame) {
+      return overlaySeriesAt(series, frame);
+    },
+    canvasOf,
+    index,
+    !!series.positions
+  );
 }
 
 // Whether any token in the series' final frame carries a number under
@@ -4140,11 +4161,12 @@ function refreshEntropyLayers(sets, channel) {
         "entropy layer reads no series: " + sets[i].seriesKey
       );
     }
-    var layer = entropySeriesFrom(
-      source, channelFrameIndex(channel, source)
+    var layer = entropyLayerAt(
+      source, channel, entropyLayerCanvasOf(sets[i].seriesKey)
     );
     sets[i].data = layer.values;
     sets[i].texts = layer.texts;
+    sets[i].asOfStep = layer.asOfStep;
     sets[i].hoverBackgroundColor = entropyGlowColors(layer.values);
     count = Math.max(count, layer.values.length);
   }
@@ -4351,22 +4373,61 @@ function renderHeatmapOverlay() {
   });
 }
 
-// Entropy profile: recolor resolved tokens at the current frame by
-// the sampling-time entropy persisted with each token, on a
-// decisive (cool) to torn (hot) ramp. Autoregressive runs sample each
-// position once, so a position's entropy never changes across frames.
+// Entropy: recolor resolved tokens at the current frame by the
+// entropy recorded with each, on a decisive (cool) to torn (hot)
+// ramp. That is the frame's own reading, since a diffusion position
+// is re-decided at every step; a commit, which carries none, is
+// colored from its canvas's last draft. Each layer borrows from its
+// own run.
 function renderEntropyOverlay() {
   overlayReadout.hidden = true;
   overlayReadout.textContent = "";
   renderOverlayTokens({
     frame: overlayFrameAt(overlayFrameIndex),
-    colorFor: function (index, tok) {
-      if (typeof tok.e === "number") {
-        return entropyColor(tok.e);
-      }
-      return null;
-    },
+    colorFor: entropyColorFor(overlayPrimary(), overlayCanvasOf),
+    originalColorFor: entropyColorFor(
+      overlayBaseline(), singleCanvas
+    ),
   });
+}
+
+// One layer's token colors under the Entropy overlay. What it borrows
+// is found once per render rather than once per token.
+function entropyColorFor(series, canvasOf) {
+  var borrow = entropyBorrowFor(series, canvasOf);
+  var borrowed = borrow ? borrow.tokens : null;
+  return function (index, tok) {
+    var value = entropyOfToken(tok, borrowed, index);
+    return value === null ? null : entropyColor(value);
+  };
+}
+
+// What a layer's frame on screen borrows its entropy from, as
+// {step, tokens}, or null when that frame carries its own or there is
+// none to borrow.
+function entropyBorrowFor(series, canvasOf) {
+  var at = overlayClampedIndex(series);
+  if (at === null) {
+    return null;
+  }
+  var source = overlaySeriesEntropyFrame(series, at, canvasOf);
+  if (source < 0 || source === at) {
+    return null;
+  }
+  return { step: source, tokens: overlaySeriesAt(series, source) };
+}
+
+// A position's entropy: its token's own, else the borrowed frame's at
+// the same position, else null.
+function entropyOfToken(tok, borrowed, index) {
+  if (tok && typeof tok.e === "number") {
+    return tok.e;
+  }
+  var other = borrowed ? borrowed[index] : null;
+  if (other && typeof other.e === "number") {
+    return other.e;
+  }
+  return null;
 }
 
 // Forgetting: recolor tokens by what reading each one erased from a
@@ -4895,6 +4956,7 @@ function buildTokenMetricsReading() {
   var index = metricsHoverPos;
   var tok = tokens[index];
   var masked = !tok || !!tok.m;
+  var entropy = metricsEntropyReading(index, tok);
   return {
     position: index,
     total: tokens.length,
@@ -4902,12 +4964,32 @@ function buildTokenMetricsReading() {
     masked: masked,
     maskChar: OVERLAYS_MASK_CHAR,
     confidence: metricsConfidence(tok, masked),
-    entropy:
-      tok && typeof tok.e === "number" ? tok.e : null,
-    extra: metricsExtra(index, tok),
+    entropy: entropy.value,
+    extra: overlaysEntropyNote(
+      metricsExtra(index, tok), entropy.asOfStep
+    ),
     candidate: metricsCandidate,
     runLabel: metricsRunLabel(),
   };
+}
+
+// The hovered position's entropy: its token's own, or on a commit the
+// value its canvas's last draft held there, with that draft's step so
+// the strip can say whose reading it is.
+function metricsEntropyReading(index, tok) {
+  if (tok && typeof tok.e === "number") {
+    return { value: tok.e, asOfStep: null };
+  }
+  var borrow = metricsHoverOriginal
+    ? entropyBorrowFor(overlayBaseline(), singleCanvas)
+    : entropyBorrowFor(overlayPrimary(), overlayCanvasOf);
+  var value = borrow
+    ? entropyOfToken(null, borrow.tokens, index)
+    : null;
+  if (value === null) {
+    return { value: null, asOfStep: null };
+  }
+  return { value: value, asOfStep: borrow.step };
 }
 
 // A resolved token from a run saved before confidence was recorded
@@ -6358,14 +6440,16 @@ function divergencePosition(data) {
 //
 // `texts` are the tokens the bars stand for, and `seriesKey` names
 // the overlayData series the layer was read from, "series" or
-// "baseline", so a scrub can read both again in place. The fills are
-// left to entropyRecolor, which the scrub shares.
+// "baseline", so a scrub can read both again in place. `asOfStep` is
+// the earlier draft a commit's bars were borrowed from, or null. The
+// fills are left to entropyRecolor, which the scrub shares.
 function entropyDataset(label, series, seriesKey) {
   return {
     label: label,
     data: series.values,
     texts: series.texts,
     seriesKey: seriesKey,
+    asOfStep: series.asOfStep,
     hoverBackgroundColor: entropyGlowColors(series.values),
     borderWidth: 0,
     barPercentage: 1,
@@ -6453,9 +6537,28 @@ function entropyOriginalSeries(data, divergence) {
     return null;
   }
   var channel = signalChannel(data, "entropy");
-  return entropySeriesFrom(
-    baseline, channelFrameIndex(channel, baseline)
-  );
+  return entropyLayerAt(baseline, channel, singleCanvas);
+}
+
+// One layer's bars at the frame its channel's axes name, read through
+// the frame whose entropy describes it, so a commit shows its
+// canvas's last draft. `asOfStep` is that draft, or null when the
+// layer read the frame itself.
+function entropyLayerAt(series, channel, canvasOf) {
+  var at = channelFrameIndex(channel, series);
+  var source = overlaySeriesEntropyFrame(series, at, canvasOf);
+  var layer = entropySeriesFrom(series, source < 0 ? at : source);
+  layer.asOfStep = source >= 0 && source !== at ? source : null;
+  return layer;
+}
+
+// Which canvases a layer's frames sit on. The pre-edit run of an
+// edited one is single-canvas, since only those can be edited.
+function entropyLayerCanvasOf(seriesKey) {
+  if (seriesKey === "baseline") {
+    return singleCanvas;
+  }
+  return overlayCanvasOf;
 }
 
 // One bar per generated position, tall and hot where the model was
@@ -6498,8 +6601,7 @@ function renderEntropyChart(data) {
   var divergence = divergencePosition(data);
   var series = overlaySeriesOf(data, false);
   var channel = signalChannel(data, "entropy");
-  var at = channelFrameIndex(channel, series);
-  var edited = entropySeriesFrom(series, at);
+  var edited = entropyLayerAt(series, channel, overlayCanvasOf);
   var original = entropyOriginalSeries(data, divergence);
 
   // Labels span the longer run: a branch can outlive or fall short
@@ -6710,6 +6812,9 @@ function entropyTooltipLabel(ctx, divergence) {
   var series = ctx.dataset.texts || [];
   var text = series[ctx.dataIndex];
   var row = text ? value + "  \u2022  " + text : value;
+  if (typeof ctx.dataset.asOfStep === "number") {
+    row += ", " + overlaysEntropyAsOf(ctx.dataset.asOfStep);
+  }
   if (divergence === null || ctx.dataIndex < divergence) {
     return row;
   }

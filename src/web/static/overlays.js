@@ -887,6 +887,75 @@ function overlaysFrameReader(frames) {
   };
 }
 
+// ---- Entropy at a frame ----
+//
+// A DiffusionGemma canvas ends on a committed frame, and a commit
+// carries no entropy of its own: the model accepted the canvas rather
+// than drawing it from a distribution. So every view that reads
+// entropy at a frame asks which frame's entropy describes it. A frame
+// carrying any answers for itself. A commit borrows its canvas's last
+// draft, which is what the model weighed when it committed, and the
+// views say "as of step N", as the candidate popover does when it
+// borrows an earlier frame.
+
+// Whether any position of a frame carries entropy.
+function overlaysFrameHasEntropy(tokens) {
+  if (!tokens) {
+    return false;
+  }
+  for (var i = 0; i < tokens.length; i++) {
+    var tok = tokens[i];
+    if (tok && typeof tok.e === "number" && isFinite(tok.e)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// The frame whose entropy describes frame `index`: `index` itself
+// when it carries any, else the latest earlier frame on the same
+// canvas that does, else -1. `frameAt(f)` reads a frame's tokens and
+// `canvasOf(f)` names its canvas. On an append stream every earlier
+// frame is a prefix of this one, so it holds nothing this frame does
+// not, and the search is not made.
+function overlaysEntropyFrame(frameAt, canvasOf, index, isAppend) {
+  if (index < 0) {
+    return -1;
+  }
+  if (overlaysFrameHasEntropy(frameAt(index))) {
+    return index;
+  }
+  if (isAppend) {
+    return -1;
+  }
+  var canvas = canvasOf(index);
+  for (var f = index - 1; f >= 0; f--) {
+    if (canvasOf(f) !== canvas) {
+      return -1;
+    }
+    if (overlaysFrameHasEntropy(frameAt(f))) {
+      return f;
+    }
+  }
+  return -1;
+}
+
+// How a view says its entropy was read at an earlier draft.
+function overlaysEntropyAsOf(step) {
+  return "as of step " + step;
+}
+
+// The metrics strip's trailing line, with that note added when the
+// entropy it shows was borrowed. Joined to whatever the active
+// overlay already says there, so neither hides the other.
+function overlaysEntropyNote(extra, asOfStep) {
+  if (typeof asOfStep !== "number") {
+    return extra;
+  }
+  var note = "entropy " + overlaysEntropyAsOf(asOfStep);
+  return extra ? extra + "  \u2022  " + note : note;
+}
+
 // ---- Adaptive stopping ----
 //
 // DiffusionGemma ends a canvas once two things hold at once: it is

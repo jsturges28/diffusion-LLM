@@ -16,10 +16,12 @@
 // frame-by-position channel follows the scrub, a run with no manifest
 // behaves exactly as it did before, and a channel whose shape this
 // build cannot draw says so instead of leaving an empty space that
-// looks identical to a dropped signal. The last two sections prove
+// looks identical to a dropped signal. The sections after that prove
 // the same of the chart itself, opened the way Analytics opens a
-// saved run and then scrubbed, and that a bar fades only where its
-// position does not exist yet at the scrubbed frame.
+// saved run and then scrubbed; that a bar fades only where its
+// position does not exist yet at the scrubbed frame; and that a
+// DiffusionGemma commit, which carries no entropy of its own, is read
+// through its canvas's last draft by every view, and says so.
 
 "use strict";
 
@@ -493,5 +495,183 @@ test("as does one saved before manifests", () => {
   assert.deepEqual(
     fullStrength(context, layer(context, "Edited")),
     [true, true, false, false]
+  );
+});
+
+// -- a DiffusionGemma run, whose canvases end on commits --
+//
+// A committed canvas carries no entropy of its own, and a finished
+// DiffusionGemma run opens on one. Every entropy view at a commit
+// reads its canvas's last draft instead and says "as of step N", as
+// the candidate popover does when it borrows an earlier frame.
+
+// Frames following `plan`, one entry per frame naming its canvas and
+// whether it is a commit. A draft's every position carries entropy,
+// draft N's being `base` + N + 1 plus a tenth of the position; a
+// commit's carries none, since the model accepted its canvas rather
+// than drew it.
+function committedFrames(plan, base) {
+  return plan.map((step, frame) =>
+    ["a", "b", "c", "d"].map((letter, position) => {
+      const token = {
+        t: letter + frame,
+        m: false,
+        id: 100 + position,
+        c: step.commit ? 1 : 0.5,
+      };
+      if (!step.commit) {
+        token.e = base + frame + 1 + position / 10;
+      }
+      return token;
+    })
+  );
+}
+
+// What draft `frame`'s bars hold, rounded as the chart rounds them.
+function draftValues(frame, base) {
+  return [0, 1, 2, 3].map(
+    (position) => +(base + frame + 1 + position / 10).toFixed(3)
+  );
+}
+
+// Two drafts and a commit on canvas 0, then a draft and a commit on
+// canvas 1: how DiffusionGemma streams a run of two canvases.
+const TWO_CANVASES = [
+  { canvas: 0, commit: false },
+  { canvas: 0, commit: false },
+  { canvas: 0, commit: true },
+  { canvas: 1, commit: false },
+  { canvas: 1, commit: true },
+];
+
+function committedPayload() {
+  return framesPayload({
+    frames: committedFrames(TWO_CANVASES, 0),
+    canvas_index: TWO_CANVASES.map((step) => step.canvas),
+    signals: [FRAME_BY_POSITION],
+  });
+}
+
+function pickerValues(context, data) {
+  context.buildOverlaySelect(data);
+  const list = context.overlaySelect.children.find(
+    (child) => child.tag === "ul"
+  );
+  return list.children.map((item) => item.getAttribute("data-value"));
+}
+
+// Every token span drawn into `element`, through the fragments the
+// stub keeps as children rather than flattening.
+function drawnSpans(element) {
+  const spans = [];
+  for (const child of element.children || []) {
+    if (child.tag === "span") {
+      spans.push(child);
+    } else {
+      spans.push(...drawnSpans(child));
+    }
+  }
+  return spans;
+}
+
+test("a DiffusionGemma run's entropy is found past commits", () => {
+  // Its final frame is a commit, and that frame is where every probe
+  // used to look, so the chart and the overlay were never offered.
+  const { context } = page();
+  const payload = committedPayload();
+
+  assert.equal(context.entropyAvailability(payload), "ok");
+  assert.equal(context.overlayEntropyAvailable(payload), true);
+});
+
+test("the picker offers its Entropy overlay", () => {
+  const context = openedRun(committedPayload());
+
+  assert.ok(
+    pickerValues(context, context.overlayData).includes("entropy")
+  );
+});
+
+test("opened on a commit, the bars borrow the last draft", () => {
+  const context = openedRun(committedPayload());
+  const edited = layer(context, "Edited");
+
+  assert.deepEqual(host(edited.data), draftValues(3, 0));
+  assert.equal(edited.asOfStep, 3);
+  const row = context.entropyTooltipLabel({
+    formattedValue: "4.1",
+    dataIndex: 1,
+    datasetIndex: 0,
+    dataset: edited,
+  }, null);
+  assert.match(row, /as of step 3$/);
+});
+
+test("a draft reads its own entropy, unlabeled", () => {
+  const context = openedRun(committedPayload());
+
+  context.setOverlayFrame(1);
+
+  const edited = layer(context, "Edited");
+  assert.deepEqual(host(edited.data), draftValues(1, 0));
+  assert.equal(edited.asOfStep, null);
+});
+
+test("a commit borrows from its own canvas's draft", () => {
+  // Canvas 0's commit reads canvas 0's last draft, frame 1, rather
+  // than anything of canvas 1's.
+  const context = openedRun(committedPayload());
+
+  context.setOverlayFrame(2);
+
+  const edited = layer(context, "Edited");
+  assert.deepEqual(host(edited.data), draftValues(1, 0));
+  assert.equal(edited.asOfStep, 1);
+});
+
+test("a pre-edit layer borrows from its own draft", () => {
+  // The pre-edit run is a frame shorter, so at the branch's commit it
+  // is clamped to its own commit, which borrows its own draft.
+  const context = openedRun(framesPayload({
+    frames: committedFrames(TWO_CANVASES.slice(0, 3), 0),
+    original_frames: committedFrames(
+      [{ canvas: 0, commit: false }, { canvas: 0, commit: true }], 10
+    ),
+    remask_edits: [{ frame_index: 1, token_positions: [2] }],
+    canvas_index: [0, 0, 0],
+    signals: [FRAME_BY_POSITION],
+  }));
+
+  const pre = layer(context, "Original");
+  assert.deepEqual(host(pre.data), draftValues(0, 10));
+  assert.equal(pre.asOfStep, 0);
+});
+
+test("the metrics strip reads a commit through its draft", () => {
+  const context = openedRun(committedPayload());
+  context.metricsHoverPos = 1;
+  context.metricsHoverOriginal = false;
+
+  const reading = context.buildTokenMetricsReading();
+
+  assert.equal(reading.entropy, draftValues(3, 0)[1]);
+  assert.match(reading.extra, /entropy as of step 3/);
+});
+
+test("the Entropy overlay colors a commit from its draft", () => {
+  const context = openedRun(committedPayload());
+  context.overlayMode = "entropy";
+  // The stub keeps children when text is cleared, so the spans the
+  // opening render drew are dropped by hand.
+  context.overlayOutput.children = [];
+
+  context.renderCurrentOverlay();
+
+  const colors = drawnSpans(context.overlayOutput).map(
+    (span) => span.style.color
+  );
+  assert.deepEqual(
+    colors,
+    draftValues(3, 0).map((value) => context.entropyColor(value))
   );
 });
