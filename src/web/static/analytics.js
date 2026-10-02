@@ -4124,9 +4124,7 @@ function refreshEntropyChart() {
   if (channelShape(channel) === "frame|position") {
     refreshEntropyLayers(sets, channel);
   }
-  for (var i = 0; i < sets.length; i++) {
-    sets[i].backgroundColor = entropyFillColors(sets[i].data);
-  }
+  entropyRecolor(sets, entropyDimsFuture(overlayData));
   chartEntropy.update("none");
 }
 
@@ -4674,7 +4672,7 @@ function clearTokenHighlight() {
 // already owns this highlight (the hover plugin's column guide and
 // the bars' own hoverBackgroundColor both key off active elements),
 // so driving it from a token hover is a matter of setting those.
-// A no-op for runs without the chart, which is every diffusion run.
+// A no-op for runs without the chart.
 function setEntropyBarHighlight(pos) {
   if (!chartEntropy) {
     return;
@@ -6360,14 +6358,14 @@ function divergencePosition(data) {
 //
 // `texts` are the tokens the bars stand for, and `seriesKey` names
 // the overlayData series the layer was read from, "series" or
-// "baseline", so a scrub can read both again in place.
+// "baseline", so a scrub can read both again in place. The fills are
+// left to entropyRecolor, which the scrub shares.
 function entropyDataset(label, series, seriesKey) {
   return {
     label: label,
     data: series.values,
     texts: series.texts,
     seriesKey: seriesKey,
-    backgroundColor: entropyFillColors(series.values),
     hoverBackgroundColor: entropyGlowColors(series.values),
     borderWidth: 0,
     barPercentage: 1,
@@ -6394,24 +6392,46 @@ function entropyLabels(count) {
   return labels;
 }
 
-// Per-bar fills, faded past the position the scrubbed frame reached,
-// so the chart and the canvas above it agree about which tokens exist
-// at this frame. Position and frame index are the same number here:
-// this chart is autoregressive-only, and frame k is the frame that
-// introduced position k.
+// Whether a bar past the scrubbed frame stands for a position that
+// does not exist yet. True only on an append stream, where frame k is
+// the frame that introduced position k, and never for a channel the
+// run declares to vary by frame: a diffusion canvas holds every
+// position at every frame. A run saved without a manifest is decided
+// by its stream alone, so an old autoregressive run still fades its
+// tail and an old diffusion run no longer does.
+function entropyDimsFuture(data) {
+  var channel = signalChannel(data, "entropy");
+  if (channelShape(channel) === "frame|position") {
+    return false;
+  }
+  return overlaySeriesOf(data, false).positions !== null;
+}
+
+// Every layer's fills for the scrubbed frame, at open and on scrub.
+function entropyRecolor(sets, dimsFuture) {
+  for (var i = 0; i < sets.length; i++) {
+    sets[i].backgroundColor = entropyFillColors(
+      sets[i].data, dimsFuture
+    );
+  }
+}
+
+// Per-bar fills. When `dimsFuture` holds, bars past the scrubbed
+// frame fade, so the chart and the canvas above it agree about which
+// tokens exist at this frame.
 //
 // Baked into the color because Chart.js has no per-bar opacity. It
 // multiplies with the whole-dataset globalAlpha the crossfade sets in
 // compareBlendPlugin, which is the wanted composition: a dim bar in
 // the receding run is dimmer still.
-function entropyFillColors(values) {
+function entropyFillColors(values, dimsFuture) {
   var colors = [];
   for (var i = 0; i < values.length; i++) {
-    colors.push(
-      i <= overlayFrameIndex
-        ? entropyColor(values[i])
-        : entropyDimColor(values[i])
-    );
+    if (dimsFuture && i > overlayFrameIndex) {
+      colors.push(entropyDimColor(values[i]));
+    } else {
+      colors.push(entropyColor(values[i]));
+    }
   }
   return colors;
 }
@@ -6496,6 +6516,7 @@ function renderEntropyChart(data) {
     datasets.push(entropyDataset("Original", original, "baseline"));
   }
   datasets.push(entropyDataset("Edited", edited, "series"));
+  entropyRecolor(datasets, entropyDimsFuture(data));
 
   var markerPositions = editedPositions(data);
 

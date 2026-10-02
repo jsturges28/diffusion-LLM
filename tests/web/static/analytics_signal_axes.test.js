@@ -16,9 +16,10 @@
 // frame-by-position channel follows the scrub, a run with no manifest
 // behaves exactly as it did before, and a channel whose shape this
 // build cannot draw says so instead of leaving an empty space that
-// looks identical to a dropped signal. The last section proves the
-// same of the chart itself, opened the way Analytics opens a saved
-// run and then scrubbed.
+// looks identical to a dropped signal. The last two sections prove
+// the same of the chart itself, opened the way Analytics opens a
+// saved run and then scrubbed, and that a bar fades only where its
+// position does not exist yet at the scrubbed frame.
 
 "use strict";
 
@@ -402,4 +403,95 @@ test("an autoregressive run's bars stay put", () => {
 
   assert.deepEqual(opened, [0, 0.1, 0.2, 0.3]);
   assert.deepEqual(host(layer(context, "Edited").data), opened);
+});
+
+// -- which bars fade --
+//
+// A bar past the scrubbed frame fades when the position it stands
+// for does not exist yet at that frame, so the chart agrees with the
+// canvas above it. That holds on an append stream, where frame N
+// introduced position N, and never on a diffusion canvas, which
+// holds every position at every frame.
+
+// Each bar of a layer: true when drawn at full strength, false when
+// faded. Built here rather than mapped over the page's own arrays,
+// so it compares by value across the vm boundary.
+function fullStrength(context, set) {
+  const strengths = [];
+  for (let i = 0; i < set.data.length; i++) {
+    const fill = set.backgroundColor[i];
+    if (fill === context.entropyColor(set.data[i])) {
+      strengths.push(true);
+    } else {
+      assert.equal(
+        fill,
+        context.entropyDimColor(set.data[i]),
+        "bar " + i + " is neither drawn nor faded"
+      );
+      strengths.push(false);
+    }
+  }
+  return strengths;
+}
+
+test("a diffusion run draws every bar at full strength", () => {
+  // Three frames over four positions: every bar past the frame
+  // number is a position the canvas already holds.
+  const context = openedRun(framesPayload({
+    frames: canvasFrames(3),
+    canvas_index: [0, 0, 0],
+    signals: [FRAME_BY_POSITION],
+  }));
+  const opened = fullStrength(context, layer(context, "Edited"));
+
+  context.setOverlayFrame(0);
+
+  assert.deepEqual(opened, [true, true, true, true]);
+  assert.deepEqual(
+    fullStrength(context, layer(context, "Edited")),
+    [true, true, true, true]
+  );
+});
+
+test("so does a diffusion run saved before manifests", () => {
+  // Decided by its stream, which is a canvas of snapshots.
+  const context = openedRun(framesPayload({
+    frames: canvasFrames(3),
+    canvas_index: [0, 0, 0],
+  }));
+
+  context.setOverlayFrame(0);
+
+  assert.deepEqual(
+    fullStrength(context, layer(context, "Edited")),
+    [true, true, true, true]
+  );
+});
+
+test("an autoregressive run fades the positions to come", () => {
+  const context = openedRun(framesPayload({
+    positions: appendPositions(4),
+    signals: [channel(["position"])],
+  }));
+
+  context.setOverlayFrame(1);
+
+  assert.deepEqual(
+    fullStrength(context, layer(context, "Edited")),
+    [true, true, false, false]
+  );
+});
+
+test("as does one saved before manifests", () => {
+  // Decided by its stream too, which is an append.
+  const context = openedRun(framesPayload({
+    positions: appendPositions(4),
+  }));
+
+  context.setOverlayFrame(1);
+
+  assert.deepEqual(
+    fullStrength(context, layer(context, "Edited")),
+    [true, true, false, false]
+  );
 });
