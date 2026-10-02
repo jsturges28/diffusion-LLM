@@ -2172,7 +2172,19 @@ function frameIsAppend(data) {
   return data.shape === "append";
 }
 
+// What the worker attests about the run in progress. A run's opening
+// frame carries the worker's half of it, so a run whose connection
+// drops before its terminal frame still saves as the model that drew
+// it rather than as whichever one is resident by then; the terminal
+// frame replaces it with the whole envelope, the run's cost included.
+function adoptRunProvenance(data) {
+  if (data.provenance && typeof data.provenance === "object") {
+    lastRunProvenance = data.provenance;
+  }
+}
+
 function handleFrame(data) {
+  adoptRunProvenance(data);
   if (frameIsAppend(data)) {
     handleAppendFrame(data);
     return;
@@ -2512,9 +2524,7 @@ function handleDone(data) {
   // Every terminal frame carries this, including the ones the
   // worker synthesizes for a guided edit, so a resumed run keeps
   // describing the worker that resumed it.
-  if (data.provenance && typeof data.provenance === "object") {
-    lastRunProvenance = data.provenance;
-  }
+  adoptRunProvenance(data);
   // Stamped by the same hand and read for the same reason: which run
   // the worker is now holding state for. Sent back on resume,
   // substitution and probe, so a second window finishing a
@@ -3338,7 +3348,7 @@ var ENTROPY_SHAPES = ["position", "frame|position"];
 // The active model's declared channel of this name, or null. Read
 // off capabilities rather than off the run, because a view has to be
 // offered or withheld before the first frame arrives, and provenance
-// does not turn up until the terminal one.
+// turns up with that frame at the earliest.
 function declaredChannel(name) {
   if (!activeModel || !activeModel.capabilities) {
     return null;

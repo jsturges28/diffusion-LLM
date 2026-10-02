@@ -9,12 +9,14 @@ of this path are tested by execution, in
 `tests/web/test_run_provenance.py` (the save prefers it).
 
 What passing proves is that the middle of the path exists at every
-point it has to. The envelope arrives on the done frame, is held
-across the run, is sent with the save, survives a trip to Analytics
-and back, and is dropped when a new run starts. Miss any one of
-those and the fix silently reverts to the old behavior: the save
-just goes back to describing whichever model is resident, which
-looks completely normal until the moment it does not.
+point it has to. The envelope arrives on a run's opening frame and
+again on its done frame, is held across the run, is sent with the
+save, survives a trip to Analytics and back, and is dropped when a
+new run starts. Miss any one of those and the fix silently reverts
+to the old behavior: the save just goes back to describing whichever
+model is resident, which looks completely normal until the moment it
+does not. The frame and done halves are also driven for real, in
+`tests/web/static/generator_run_provenance.test.js`.
 
 The last one is the easiest to forget and the worst to get wrong. A
 provenance left over from a previous run would attach one run's facts
@@ -51,6 +53,20 @@ def _region(anchor: str, chars: int) -> str:
 
 def test_the_envelope_is_captured_from_the_done_frame() -> None:
     region = _region("function handleDone(data)", 2000)
+
+    assert "adoptRunProvenance(data)" in region
+
+
+def test_the_envelope_is_captured_from_the_opening_frame() -> None:
+    """A run whose connection drops never sends a done frame, so its
+    first frame is the only place its envelope can come from."""
+    region = _region("function handleFrame(data)", 200)
+
+    assert "adoptRunProvenance(data)" in region
+
+
+def test_adopting_an_envelope_records_it() -> None:
+    region = _region("function adoptRunProvenance(data)", 300)
 
     assert "data.provenance" in region
     assert "lastRunProvenance = data.provenance" in region

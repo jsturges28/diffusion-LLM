@@ -2,10 +2,11 @@
 
 Strategy: two halves, both without a model. First, `FrameStreamer`
 against a stub socket, checking that a terminal frame acquires the
-envelope and an ordinary frame does not, through both of the paths a
-`done` can leave by. Second, `provenance_envelope` against a stub
-backend, checking it reports the loaded placement rather than the
-requested one.
+envelope through both of the paths a `done` can leave by, that a
+run's opening frame acquires the worker's half of it, and that no
+other frame acquires anything. Second, `provenance_envelope` against
+a stub backend, checking it reports the loaded placement rather than
+the requested one.
 
 What passing proves is the missing link in `DATA-04`. The supervisor
 records the device it *asked* for. Two of the three backends fall back
@@ -43,6 +44,14 @@ ENVELOPE: Dict[str, Any] = {
     "tokenizer": {},
 }
 
+# What a run's first frame carries: the worker, without the run's
+# cost. Told apart from ENVELOPE so an assertion can say which of the
+# two a frame was stamped with.
+OPENING: Dict[str, Any] = {
+    "model_id": "stub",
+    "device": "cpu",
+}
+
 
 class _StubSocket:
     def __init__(self) -> None:
@@ -63,6 +72,7 @@ def _streamer(socket: _StubSocket) -> FrameStreamer:
     return FrameStreamer(
         socket,  # type: ignore[arg-type]
         provenance=lambda: dict(ENVELOPE),
+        opening=lambda: dict(OPENING),
     )
 
 
@@ -86,10 +96,37 @@ def test_a_done_frame_carries_the_envelope() -> None:
     assert socket.sent[-1]["provenance"] == ENVELOPE
 
 
-def test_an_ordinary_frame_does_not() -> None:
-    """Once per run, not once per step. A diffusion run emits
+def test_later_frames_carry_nothing() -> None:
+    """Twice per run, never once per step. A diffusion run emits
     hundreds of frames and the envelope re-describes the same
     worker every time."""
+    socket = _StubSocket()
+    stream = _streamer(socket)
+
+    asyncio.run(
+        stream.run(
+            _frames(
+                {"type": "frame", "text": "a"},
+                {"type": "frame", "text": "ab"},
+                {"type": "frame", "text": "abc"},
+                {"type": "done", "final_text": "abc"},
+            ),
+            0.0,
+        )
+    )
+
+    assert "provenance" not in socket.sent[1]
+    assert "provenance" not in socket.sent[2]
+
+
+# -- what a run's opening frame carries --
+
+
+def test_the_opening_frame_carries_the_worker() -> None:
+    """For the run that never reaches a terminal frame. A dropped
+    connection leaves the page holding frames and no ``done``, and
+    the save made from them still has to name the worker that drew
+    them, not whichever one is resident by then."""
     socket = _StubSocket()
     stream = _streamer(socket)
 
@@ -103,7 +140,71 @@ def test_an_ordinary_frame_does_not() -> None:
         )
     )
 
+    assert socket.sent[0]["provenance"] == OPENING
+
+
+def test_only_a_frame_opens_a_run() -> None:
+    """Keyed on the message, not its place in the stream. Anything
+    sent ahead of the first frame is not a frame of the run."""
+    socket = _StubSocket()
+    stream = _streamer(socket)
+
+    asyncio.run(
+        stream.run(
+            _frames(
+                {"type": "candidates"},
+                {"type": "frame", "text": "a"},
+                {"type": "done", "final_text": "a"},
+            ),
+            0.0,
+        )
+    )
+
     assert "provenance" not in socket.sent[0]
+    assert socket.sent[1]["provenance"] == OPENING
+
+
+def test_the_opening_frame_names_no_run() -> None:
+    """The token is what lets a page edit a run, and a run that never
+    finished holds state its page may never have received. Only the
+    terminal frame hands it over."""
+    socket = _StubSocket()
+    stream = FrameStreamer(
+        socket,  # type: ignore[arg-type]
+        provenance=lambda: dict(ENVELOPE),
+        run_token=lambda: "nonce:1",
+        opening=lambda: dict(OPENING),
+    )
+
+    asyncio.run(
+        stream.run(
+            _frames(
+                {"type": "frame", "text": "a"},
+                {"type": "done", "final_text": "a"},
+            ),
+            0.0,
+        )
+    )
+
+    assert "run_token" not in socket.sent[0]
+    assert socket.sent[-1]["run_token"] == "nonce:1"
+
+
+def test_an_opening_that_claims_a_cost_is_refused() -> None:
+    """A run's cost is measured over the whole run, so an opening
+    envelope reporting one is wired to the wrong function."""
+    socket = _StubSocket()
+    stream = FrameStreamer(
+        socket,  # type: ignore[arg-type]
+        opening=lambda: {"model_id": "stub", "resources": {}},
+    )
+
+    with pytest.raises(AssertionError):
+        asyncio.run(
+            stream.run(
+                _frames({"type": "frame", "text": "a"}), 0.0
+            )
+        )
 
 
 def test_a_worker_sent_done_carries_it_too() -> None:
@@ -156,9 +257,16 @@ def test_a_streamer_without_provenance_stamps_nothing() -> None:
     stream = FrameStreamer(socket)  # type: ignore[arg-type]
 
     asyncio.run(
-        stream.run(_frames({"type": "done"}), 0.0)
+        stream.run(
+            _frames(
+                {"type": "frame", "text": "a"},
+                {"type": "done"},
+            ),
+            0.0,
+        )
     )
 
+    assert "provenance" not in socket.sent[0]
     assert "provenance" not in socket.sent[-1]
 
 

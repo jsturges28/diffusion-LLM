@@ -279,10 +279,12 @@ def _budget_reached(
 class FrameStreamer:
     """Forwards frames from an async generator to a WebSocket.
 
-    Also the single place a terminal frame is stamped with what the
-    worker attests about the run. Every ``done`` leaves through
-    ``run`` or ``send_done``, so a backend cannot finish a run
-    without saying which model, device and tokenizer produced it.
+    Also the single place a run's frames are stamped with what the
+    worker attests about it. Every ``done`` leaves through ``run`` or
+    ``send_done``, so a backend cannot finish a run without saying
+    which model, device and tokenizer produced it. A run's first
+    frame says so too, for the run that never finishes: see
+    ``worker_envelope``.
     """
 
     def __init__(
@@ -290,6 +292,7 @@ class FrameStreamer:
         ws: WebSocket,
         provenance: Optional[Callable[[], Dict[str, Any]]] = None,
         run_token: Optional[Callable[[], str]] = None,
+        opening: Optional[Callable[[], Dict[str, Any]]] = None,
     ) -> None:
         self._ws = ws
         # A callable rather than a dict because a worker's tokenizer
@@ -301,6 +304,11 @@ class FrameStreamer:
         # the run being finished, so it can only be read at the
         # moment the terminal frame leaves.
         self._run_token = run_token
+        # The envelope less the run's cost, called once per run at its
+        # first frame. The token is not stamped there, deliberately:
+        # it is what lets a page edit a run, and a run that never
+        # finished holds state its page may never have received.
+        self._opening = opening
 
     async def run(
         self,
@@ -329,6 +337,8 @@ class FrameStreamer:
                 kind = frame.get("type")
                 elapsed = time.monotonic() - start_time
                 frame["elapsed"] = round(elapsed, 2)
+                if kind == "frame" and frame_count == 0:
+                    self._stamp_opening(frame)
                 if kind == "done":
                     self._stamp_terminal(frame)
                 await self._ws.send_json(frame)
@@ -386,6 +396,16 @@ class FrameStreamer:
             start_time,
         )
 
+    def _stamp_opening(self, frame: Dict[str, Any]) -> None:
+        """What the worker attests, on the frame that opens a run."""
+        if self._opening is None:
+            return
+        envelope = self._opening()
+        assert "resources" not in envelope, (
+            "a run's cost is not known at its first frame"
+        )
+        frame["provenance"] = envelope
+
     def _stamp_terminal(self, frame: Dict[str, Any]) -> None:
         """What the worker attests, and which run it attests it of.
 
@@ -413,6 +433,25 @@ def provenance_envelope(backend: Backend) -> Dict[str, Any]:
     ``device`` in particular is the placement the model actually got,
     which is not always the one requested: two backends fall back to
     CPU when CUDA is unavailable.
+    """
+    envelope = worker_envelope(backend)
+    resources = _resource_cost(backend)
+    if resources:
+        envelope["resources"] = resources
+    return envelope
+
+
+def worker_envelope(backend: Backend) -> Dict[str, Any]:
+    """The envelope less what the run cost, true from its first frame.
+
+    A run's cost is a measurement over the whole run, so it exists
+    only once the run ends; everything else here describes the worker
+    and is as true at the first frame as at the last. That is what
+    lets a run's opening frame carry it, for the run that never
+    reaches a terminal frame: a dropped connection leaves the page
+    holding frames and no ``done``, and the save it makes from them
+    has to name the worker that drew them rather than whichever one
+    is resident by then.
     """
     envelope: Dict[str, Any] = {
         "model_id": backend.model_info.id,
@@ -451,9 +490,6 @@ def provenance_envelope(backend: Backend) -> Dict[str, Any]:
     )
     if context is not None:
         envelope["context_length"] = context
-    resources = _resource_cost(backend)
-    if resources:
-        envelope["resources"] = resources
     return envelope
 
 
@@ -1467,6 +1503,7 @@ def _open_session(ws: WebSocket, backend: Backend) -> _Session:
             ws,
             provenance=lambda: provenance_envelope(backend),
             run_token=lambda: backend.run_token,
+            opening=lambda: worker_envelope(backend),
         ),
         # The three that stream frames. Identical but for the method
         # they reach, so they share one path rather than three copies

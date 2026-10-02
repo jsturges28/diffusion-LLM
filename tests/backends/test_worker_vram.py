@@ -35,6 +35,7 @@ from src.backends.worker_base import (
     provenance_envelope,
     reset_vram_peak,
     vram_peak_bytes,
+    worker_envelope,
 )
 from tests.backends.test_worker_provenance import _StubBackend
 
@@ -267,6 +268,28 @@ def test_the_transient_is_the_difference(
     )
 
     assert above == TRANSIENT_BYTES
+
+
+def test_the_worker_half_leaves_the_cost_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """What a run's first frame carries. A peak read there would be a
+    measurement of nothing yet, so the block the terminal frame
+    reports is the one thing the opening frame's half lacks."""
+    peak = WEIGHTS_BYTES + TRANSIENT_BYTES
+    _install(
+        monkeypatch,
+        _FakeCuda(allocated=WEIGHTS_BYTES, peak=peak),
+    )
+    backend = _StubBackend("cuda", vram_start_bytes=WEIGHTS_BYTES)
+
+    whole = provenance_envelope(backend)  # type: ignore[arg-type]
+    half = worker_envelope(backend)  # type: ignore[arg-type]
+
+    assert "resources" in whole
+    assert "resources" not in half
+    del whole["resources"]
+    assert half == whole
 
 
 def test_a_resume_keeps_its_generation_s_measurement(
