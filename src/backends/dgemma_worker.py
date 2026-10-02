@@ -172,6 +172,12 @@ class DgemmaBackend(Backend):
                 ],
                 t_max=params["t_max"],
                 t_min=params["t_min"],
+                confidence_threshold=params[
+                    "confidence_threshold"
+                ],
+                stability_threshold=params[
+                    "stability_threshold"
+                ],
                 thinking=params["thinking"],
                 seed=params["seed"],
                 alternatives=params["alternatives"],
@@ -207,6 +213,15 @@ class DgemmaBackend(Backend):
             "prompt": params["prompt"],
             "t_max": params["t_max"],
             "t_min": params["t_min"],
+            # So an edit stops its canvas by the rule the run it
+            # branches from used, which is the rule the page's
+            # readout is still drawn against.
+            "confidence_threshold": params[
+                "confidence_threshold"
+            ],
+            "stability_threshold": params[
+                "stability_threshold"
+            ],
             "thinking": params["thinking"],
             "seed": params["seed"],
             # So an edit captures candidates exactly when the run it
@@ -340,6 +355,12 @@ class DgemmaBackend(Backend):
                 ],
                 t_max=state["t_max"],
                 t_min=state["t_min"],
+                confidence_threshold=state[
+                    "confidence_threshold"
+                ],
+                stability_threshold=state[
+                    "stability_threshold"
+                ],
                 thinking=state["thinking"],
                 seed=state["seed"],
                 alternatives=state["alternatives"],

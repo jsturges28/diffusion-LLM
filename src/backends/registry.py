@@ -265,6 +265,10 @@ DGEMMA = ModelInfo(
         # Resume renoises remasked positions instead of hard-masking
         # them, so committed neighbours can move as well.
         remask_renoises=True,
+        # A canvas ends once it is steady and confident, by the two
+        # parameters below; the readout above the canvas shows how
+        # far it has left to go.
+        adaptive_stopping=True,
         unresolved_char="\u2591",
         # The NF4 experts run through bitsandbytes, which needs a
         # CUDA compute path. The worker has always refused anything
@@ -314,6 +318,37 @@ DGEMMA = ModelInfo(
             recommended=(0.0, 2.0),
             experimental=(0.0, 5.0),
             help="Final temperature in the schedule.",
+        ),
+        # The stopping rule, which the checkpoint's own
+        # generation_config.json used to set out of sight. The
+        # defaults are its values, so a run that leaves them alone
+        # stops where every earlier run did; the worker now passes
+        # them explicitly, so the rule on screen is the rule the run
+        # used. Placed after the temperatures because a Compare label
+        # names the first three parameters, and these would push
+        # Temp Start out of every DiffusionGemma label.
+        ParamSpec(
+            name="confidence_threshold",
+            label="Stop Entropy",
+            type=ParamType.FLOAT,
+            default=0.005,
+            step=0.001,
+            recommended=(0.001, 0.05),
+            experimental=(0.0001, 1.0),
+            help="Stop a canvas once its mean entropy (nats)"
+            " is below this and it has held still for"
+            " Steady Steps.",
+        ),
+        ParamSpec(
+            name="stability_threshold",
+            label="Steady Steps",
+            type=ParamType.INT,
+            default=1,
+            step=1,
+            recommended=(0, 4),
+            experimental=(0, 16),
+            help="Steps a canvas must stay unchanged before"
+            " it can stop; 0 drops the condition.",
         ),
         ParamSpec(
             name="seed",

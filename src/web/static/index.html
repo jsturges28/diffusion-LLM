@@ -538,9 +538,13 @@
           <dt>Max Tokens</dt>
           <dd>The output budget. DiffusionGemma generates in fixed 256-token canvases; when this exceeds 256 it chains multiple canvases block-autoregressively, committing one before starting the next.</dd>
           <dt>Denoising Steps</dt>
-          <dd>The upper bound on denoising iterations per canvas. Thanks to adaptive stopping, a canvas often finishes early, once its predictions stop changing and the model is confident, so simpler prompts run faster than complex ones.</dd>
+          <dd>The upper bound on denoising iterations per canvas. Thanks to adaptive stopping, a canvas often finishes early, once it has held still for <strong>Steady Steps</strong> and its mean entropy has fallen below <strong>Stop Entropy</strong>, so simpler prompts run faster than complex ones.</dd>
           <dt>Temp Start / Temp End</dt>
           <dd>Endpoints of a linear temperature schedule across the denoising steps. Starting hotter and cooling down lets the model explore broadly early, then sharpen toward a confident answer as the canvas converges.</dd>
+          <dt>Stop Entropy</dt>
+          <dd>The confident half of adaptive stopping: a canvas can stop once the mean entropy over all its positions, in nats, is below this. The default, 0.005, is the checkpoint's own. Raise it and canvases stop sooner and less settled; lower it and they keep refining, up to <strong>Denoising Steps</strong>.</dd>
+          <dt>Steady Steps</dt>
+          <dd>The steady half: how many steps in a row the canvas must come out unchanged before it can stop. The default is 1; at 0 only the entropy has to hold.</dd>
           <dt>Seed</dt>
           <dd>Fixes the random number generator so a run is reproducible. Use &minus;1 for a fresh, nondeterministic run each time.</dd>
           <dt>Thinking</dt>

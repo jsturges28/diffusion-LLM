@@ -91,6 +91,13 @@ LIVE_CANDIDATES_KEY = "live_candidates"
 # allowed to grow with a run that ranges over the vocabulary.
 LIVE_TEXT_CACHE_LIMIT = 16384
 
+# The stopping rule's defaults: the checkpoint's own
+# generation_config.json values, which every run used before the rule
+# became two parameters. The registry's specs carry the same numbers,
+# and a test holds the two together.
+CONFIDENCE_THRESHOLD_DEFAULT = 0.005
+STABILITY_THRESHOLD_DEFAULT = 1
+
 class FrameQueueStreamer(BaseStreamer):
     """Turns generate's streamer callbacks into protocol frames.
 
@@ -644,6 +651,32 @@ def _terminal_frame(
     return done
 
 
+def stopping_kwargs(
+    *, confidence_threshold: float, stability_threshold: int
+) -> Dict[str, Any]:
+    """The stopping rule as ``generate``'s keyword arguments.
+
+    Passed explicitly rather than left to the checkpoint's
+    generation_config.json, because the page draws a readout against
+    these two numbers and has to know they are the ones the run used.
+    transformers checks both again, but its message names a config
+    field rather than the parameter the user set.
+    """
+    assert not isinstance(stability_threshold, bool), (
+        "steady steps is a count, not a flag"
+    )
+    assert confidence_threshold > 0, (
+        "a stop entropy of zero could never be reached"
+    )
+    assert stability_threshold >= 0, (
+        "steady steps cannot be negative"
+    )
+    return {
+        "confidence_threshold": float(confidence_threshold),
+        "stability_threshold": int(stability_threshold),
+    }
+
+
 async def streaming_generate(
     model: Any,
     tokenizer: Any,
@@ -654,6 +687,8 @@ async def streaming_generate(
     max_denoising_steps: int = 48,
     t_max: float = 0.8,
     t_min: float = 0.4,
+    confidence_threshold: float = CONFIDENCE_THRESHOLD_DEFAULT,
+    stability_threshold: int = STABILITY_THRESHOLD_DEFAULT,
     thinking: bool = False,
     seed: int = -1,
     alternatives: bool = False,
@@ -669,6 +704,10 @@ async def streaming_generate(
     position, sent once as a ``candidates`` message before ``done``.
     Committed frames arrive without logits and have none of their
     own; the page shows them their canvas's last draft.
+
+    ``confidence_threshold`` and ``stability_threshold`` are the
+    stopping rule: a canvas ends once its mean entropy is below the
+    first and it has held still for the second's number of steps.
     """
     inputs = adapter.build_inputs(
         tokenizer, model, prompt, thinking=thinking
@@ -691,6 +730,10 @@ async def streaming_generate(
         "max_denoising_steps": max_denoising_steps,
         "t_max": t_max,
         "t_min": t_min,
+        **stopping_kwargs(
+            confidence_threshold=confidence_threshold,
+            stability_threshold=stability_threshold,
+        ),
     }
     async for item in _run_streamed(
         model=model,
@@ -718,6 +761,8 @@ async def streaming_resume(
     remaining_steps: int,
     t_max: float = 0.8,
     t_min: float = 0.4,
+    confidence_threshold: float = CONFIDENCE_THRESHOLD_DEFAULT,
+    stability_threshold: int = STABILITY_THRESHOLD_DEFAULT,
     thinking: bool = False,
     seed: int = -1,
     alternatives: bool = False,
@@ -793,6 +838,10 @@ async def streaming_resume(
         "max_denoising_steps": remaining_steps,
         "t_max": t_max,
         "t_min": t_min,
+        **stopping_kwargs(
+            confidence_threshold=confidence_threshold,
+            stability_threshold=stability_threshold,
+        ),
         "decoder_input_ids": seed_canvas,
     }
     async for item in _run_streamed(

@@ -187,6 +187,16 @@ class ModelCapabilities(BaseModel):
     # One boolean beside the three above. It is not a signal channel:
     # ``signals`` below is where those are declared.
     remask_renoises: bool = False
+    # Whether a canvas ends early once it is steady and confident:
+    # unchanged for ``stability_threshold`` steps and below
+    # ``confidence_threshold`` nats of mean entropy. A model that says
+    # so declares those two parameters and ``max_denoising_steps``,
+    # which the readout and the Stopping chart read the rule from.
+    #
+    # A flag rather than a check for the parameters, for the reason
+    # ``remask_renoises`` is one: the page should be told what a model
+    # does, not left to infer it from which fields happen to exist.
+    adaptive_stopping: bool = False
     # Character shown for an unresolved token in the UI.
     unresolved_char: str = "\u2591"
     # Placements this model can actually load onto, and the single

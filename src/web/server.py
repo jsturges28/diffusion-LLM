@@ -83,6 +83,7 @@ from src.backends.protocol import (
     SAVED_MODEL_TYPE_DIFFUSION,
     HubFiles,
     ModelInfo,
+    ParamSpec,
     is_hub_checkpoint,
     saved_model_type,
     wire_error,
@@ -92,6 +93,7 @@ from src.backends.environments import (
     interpreter_for,
     lock_for,
 )
+from src.backends.params import ParamValue, coerce, default_of
 from src.backends.registry import DEFAULT_MODEL, REGISTRY
 from src.inference.render_gif import history_to_gif
 from src.inference.vision_encoders import (
@@ -3384,7 +3386,61 @@ def _compute_run_frames(run_id: str) -> Dict[str, Any]:
         "original_candidates": data["original_candidates"],
         "remask_edits": meta.get("remask_edits", []),
         "canvas_index": meta.get("canvas_index"),
+        "stop_rule": _stop_rule(meta),
     }
+
+
+# The parameters a model that stops adaptively declares, and that a
+# saved run's rule is read back from. The step budget rides along
+# because the readout's verdict on a committed canvas compares its
+# length with it.
+STOP_RULE_PARAMS: Tuple[str, ...] = (
+    "confidence_threshold",
+    "stability_threshold",
+    "max_denoising_steps",
+)
+
+
+def _stop_rule(
+    meta: Dict[str, Any],
+) -> Optional[Dict[str, ParamValue]]:
+    """The stopping rule a saved run ran under, or None.
+
+    None for a model that does not stop adaptively, which is how the
+    Analytics page knows to offer neither the readout nor the
+    Stopping chart. Each value comes from the run's own parameters,
+    held to the experimental bounds, the widest a run could have
+    used. One that is missing or malformed takes the registry
+    default, so a run saved before the rule was a parameter reads as
+    0.005 and 1: what the checkpoint applied to it.
+    """
+    entry = REGISTRY.get(str(meta.get("backend", "")))
+    if entry is None:
+        return None
+    if not entry.capabilities.adaptive_stopping:
+        return None
+    saved = meta.get("params")
+    if not isinstance(saved, dict):
+        saved = {}
+    specs = {spec.name: spec for spec in entry.param_specs}
+    rule: Dict[str, ParamValue] = {}
+    for name in STOP_RULE_PARAMS:
+        assert name in specs, (
+            f"{entry.id} stops adaptively without {name}"
+        )
+        rule[name] = _stop_rule_value(specs[name], saved.get(name))
+    return rule
+
+
+def _stop_rule_value(spec: ParamSpec, given: Any) -> ParamValue:
+    """One saved value of the rule, or its default."""
+    default = default_of(spec, device=None)
+    if given is None:
+        return default
+    try:
+        return coerce(spec, given, device=None, experimental=True)
+    except ValueError:
+        return default
 
 
 @app.get("/api/analytics/runs/{run_id}/frames")

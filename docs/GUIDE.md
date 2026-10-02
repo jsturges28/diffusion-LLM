@@ -352,6 +352,8 @@ Because the value describes reading a token, each token is shown only once the m
 | Max Tokens | Output budget. Generation happens in 256-token canvases; larger budgets chain multiple canvases. |
 | Denoising Steps | Upper bound on steps per canvas. Adaptive stopping may use fewer. |
 | Temp Start / Temp End | Endpoints of a linear temperature schedule across the denoising steps (hotter early, cooler late). |
+| Stop Entropy | The confident half of adaptive stopping: a canvas can stop once its mean entropy, in nats over every position, is below this. Default 0.005, the checkpoint's own value; recommended 0.001 to 0.05. |
+| Steady Steps | The steady half: how many consecutive steps the canvas must come out unchanged before it can stop. Default 1; 0 drops the condition. |
 | Seed | Random seed for reproducibility; -1 is nondeterministic. |
 | Thinking | Enables the step-by-step reasoning channel, shown in a separate panel. |
 | Alternatives | As for LLaDA, from each draft's temperature-scheduled distribution. Long runs, which chain canvases, keep every few steps. |
