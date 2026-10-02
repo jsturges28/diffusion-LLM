@@ -273,8 +273,13 @@ kept when these were written:
   the fix.
 - **380 to 384**: confirmed on 2026-10-02: the DiffusionGemma resume
   edges from the 2026-10 audit's `A2-XAI-01` and `A2-XAI-02`.
-- **385 and 386**: **outstanding**, saved entropy following the scrub
-  in Analytics, from the 2026-10 audit's `A2-XAI-03` and `A2-XAI-04`.
+- **385**: half confirmed on 2026-10-02: LLaDA's bars follow the
+  scrubber. The DiffusionGemma half could not be run and stays
+  **outstanding**: a finished DiffusionGemma run shows no entropy
+  chart, because Analytics looks for entropy only on a run's final
+  frame, and DiffusionGemma's is a committed canvas, which carries
+  none.
+- **386**: confirmed on 2026-10-02.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
