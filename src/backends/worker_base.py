@@ -15,6 +15,7 @@ import secrets
 import threading
 import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import (
     Any,
     AsyncGenerator,
@@ -1311,90 +1312,65 @@ async def _send_load_error(
     )
 
 
+# The backend method a request type reaches.
+_Handler = Callable[..., Coroutine[Any, Any, None]]
+
+
+@dataclass
+class _LoadState:
+    """A worker's load, which its routes share: whether the model is
+    ready, whether it failed, and why."""
+
+    ready: asyncio.Event = field(default_factory=asyncio.Event)
+    failed: asyncio.Event = field(default_factory=asyncio.Event)
+    error: Dict[str, str] = field(default_factory=dict)
+    # asyncio keeps only a weak reference to a running task, so the
+    # load is held here or it could be collected before it finishes.
+    task: Optional["asyncio.Task[None]"] = None
+
+
+@dataclass
+class _Session:
+    """One socket's side of the worker.
+
+    Its own cancel flag, frame streamer and in-flight generation,
+    which is not necessarily the worker's: another window may hold
+    that one, and closing this page must not wait for theirs.
+    """
+
+    ws: WebSocket
+    cancel_event: threading.Event
+    stream: FrameStreamer
+    streaming: Dict[str, _Handler]
+    concurrent: Dict[str, _Handler]
+    exclusive: Dict[str, _Handler]
+    mine: Optional["asyncio.Task[None]"] = None
+
+
 def create_worker_app(
     backend: Backend, *, device: str = "cuda"
 ) -> FastAPI:
     """Build the FastAPI app hosting a single model worker.
 
     ``device`` is forwarded to ``backend.load`` so the supervisor can
-    place a model on CPU or GPU per activation.
+    place a model on CPU or GPU per activation. The routes only
+    register here; what each one does is in the functions below.
     """
     app = FastAPI(title=f"worker:{backend.model_info.id}")
-    model_ready = asyncio.Event()
-    load_failed = asyncio.Event()
-    load_error: Dict[str, str] = {}
+    load = _LoadState()
     # Worker-scoped, like the lock it replaces: one model on one
     # device, so two connected windows contend for the same slot.
     generation = _Generation()
 
     @app.on_event("startup")
     async def _startup() -> None:
-        async def _load() -> None:
-            try:
-                await asyncio.to_thread(
-                    backend.load, device=device
-                )
-            except Exception as exc:  # noqa: BLE001
-                load_error["message"] = str(exc)
-                load_failed.set()
-                logger.exception(
-                    "model %s failed to load",
-                    backend.model_info.id,
-                )
-                return
-            model_ready.set()
-            logger.info(
-                "model %s ready", backend.model_info.id
-            )
-
-        asyncio.create_task(_load())
+        load.task = asyncio.create_task(
+            _load_model(backend, device, load)
+        )
 
     @app.get("/health")
     async def _health() -> JSONResponse:
-        progress = getattr(backend, "load_progress", None)
-        status = resolve_load_status(
-            failed=load_failed.is_set(),
-            ready=model_ready.is_set(),
-            progress=progress,
-        )
-        payload: Dict[str, Any] = {
-            "status": status,
-            "id": backend.model_info.id,
-            "versions": library_versions(),
-        }
-        # Only once ready: there is no tokenizer to describe before
-        # the load finishes, and the supervisor caches this on the
-        # same transition it caches versions on.
-        if status == "ready":
-            payload["tokenizer"] = describe_tokenizer(
-                getattr(backend, "tokenizer", None),
-                getattr(backend, "model", None),
-            )
-            # Where the model landed, which is not always where it
-            # was sent: the supervisor knows only what it asked for,
-            # and a CUDA request on a GPU-less host becomes CPU here.
-            payload["device"] = (
-                backend.effective_device or "unknown"
-            )
-            # Omitted rather than sent as null when unreadable, so the
-            # client's "is there a ceiling to check against" test is a
-            # plain key check and cannot mistake null for zero.
-            context = describe_context_length(
-                getattr(backend, "model", None),
-                getattr(backend, "tokenizer", None),
-            )
-            if context is not None:
-                payload["context_length"] = context
-        # "loading" is reported with or without progress: the sampler
-        # only attaches once the load starts and can measure the
-        # checkpoint, and everything before that is still a load.
-        if status in ("downloading", "loading") and progress:
-            payload["progress"] = progress
-        if status == "error":
-            payload["message"] = load_error.get(
-                "message", "Model failed to load."
-            )
-        return JSONResponse(payload)
+        return JSONResponse(_health_payload(backend, load))
 
     @app.get("/params")
     async def _params() -> JSONResponse:
@@ -1402,30 +1378,104 @@ def create_worker_app(
 
     @app.websocket("/ws")
     async def _ws(ws: WebSocket) -> None:
-        await ws.accept()
+        await _serve_socket(ws, backend, load, generation)
+
+    return app
+
+
+async def _load_model(
+    backend: Backend, device: str, load: _LoadState
+) -> None:
+    """Load the model off the event loop and record how it went."""
+    try:
+        await asyncio.to_thread(backend.load, device=device)
+    except Exception as exc:  # noqa: BLE001
+        load.error["message"] = str(exc)
+        load.failed.set()
+        logger.exception(
+            "model %s failed to load", backend.model_info.id
+        )
+        return
+    load.ready.set()
+    logger.info("model %s ready", backend.model_info.id)
+
+
+def _health_payload(
+    backend: Backend, load: _LoadState
+) -> Dict[str, Any]:
+    """What ``/health`` reports: the load's status, and once it is
+    ready, what only a loaded model can say about itself."""
+    progress = getattr(backend, "load_progress", None)
+    status = resolve_load_status(
+        failed=load.failed.is_set(),
+        ready=load.ready.is_set(),
+        progress=progress,
+    )
+    payload: Dict[str, Any] = {
+        "status": status,
+        "id": backend.model_info.id,
+        "versions": library_versions(),
+    }
+    # Only once ready: there is no tokenizer to describe before the
+    # load finishes, and the supervisor caches this on the same
+    # transition it caches versions on.
+    if status == "ready":
+        payload.update(_ready_details(backend))
+    # "loading" is reported with or without progress: the sampler
+    # only attaches once the load starts and can measure the
+    # checkpoint, and everything before that is still a load.
+    if status in ("downloading", "loading") and progress:
+        payload["progress"] = progress
+    if status == "error":
+        payload["message"] = load.error.get(
+            "message", "Model failed to load."
+        )
+    return payload
+
+
+def _ready_details(backend: Backend) -> Dict[str, Any]:
+    """The loaded model's tokenizer, device and context window."""
+    model = getattr(backend, "model", None)
+    tokenizer = getattr(backend, "tokenizer", None)
+    details: Dict[str, Any] = {
+        "tokenizer": describe_tokenizer(tokenizer, model),
+        # Where the model landed, which is not always where it was
+        # sent: the supervisor knows only what it asked for, and a
+        # CUDA request on a GPU-less host becomes CPU here.
+        "device": backend.effective_device or "unknown",
+    }
+    # Omitted rather than sent as null when unreadable, so the
+    # client's "is there a ceiling to check against" test is a plain
+    # key check and cannot mistake null for zero.
+    context = describe_context_length(model, tokenizer)
+    if context is not None:
+        details["context_length"] = context
+    return details
+
+
+def _open_session(ws: WebSocket, backend: Backend) -> _Session:
+    """A socket's cancel flag, streamer and request tables."""
+    return _Session(
+        ws=ws,
         # A threading.Event rather than an asyncio one because the
         # readers are model threads: the autoregressive decode loop
-        # and DiffusionGemma's streamer both check it from inside
-        # the thread running the forward pass, and only the event
-        # loop ever sets it.
-        cancel_event = threading.Event()
-        stream = FrameStreamer(
+        # and DiffusionGemma's streamer both check it from inside the
+        # thread running the forward pass, and only the event loop
+        # ever sets it.
+        cancel_event=threading.Event(),
+        stream=FrameStreamer(
             ws,
             provenance=lambda: provenance_envelope(backend),
             run_token=lambda: backend.run_token,
-        )
-        # This socket's own in-flight generation, which is not
-        # necessarily the worker's: another window may hold that
-        # one, and closing this page must not wait for theirs.
-        mine: Optional["asyncio.Task[None]"] = None
+        ),
         # The three that stream frames. Identical but for the method
-        # they reach, so they share one branch below rather than three
-        # copies of the same busy check and spawn.
-        streaming = {
+        # they reach, so they share one path rather than three copies
+        # of the same busy check and spawn.
+        streaming={
             MSG_GENERATE: backend.handle_generate,
             MSG_RESUME: backend.handle_resume,
             MSG_SUBSTITUTE: backend.handle_substitute,
-        }
+        },
         # Answered even while a generation runs: both are tokenizer
         # reads costing microseconds, and refusing them would stall a
         # preview or a prompt count behind a running model, which is
@@ -1436,123 +1486,168 @@ def create_worker_app(
         # reply is a single complete WebSocket text frame and the
         # transport writes frames in order, so a reply lands between
         # two frames rather than inside one.
-        concurrent = {
+        concurrent={
             MSG_TOKENIZE: backend.handle_tokenize,
             MSG_COUNT_PROMPT: backend.handle_count_prompt,
-        }
+        },
         # Refused while a generation runs, unlike the two above, and
-        # for a different reason each. The probe runs a forward
-        # pass, so admitting it alongside a generation would put two
-        # passes on one device and its memory. The rewind rewrites
-        # the retained history, which is the very thing a running
-        # resume is in the middle of deciding.
+        # for a different reason each. The probe runs a forward pass,
+        # so admitting it alongside a generation would put two passes
+        # on one device and its memory. The rewind rewrites the
+        # retained history, which is the very thing a running resume
+        # is in the middle of deciding.
         #
         # Awaited inline once accepted, which holds the loop for one
         # pass and cannot deadlock, because nothing else can be
         # running by then.
-        exclusive = {
+        exclusive={
             MSG_PROBE: backend.handle_probe,
             MSG_REWIND: backend.handle_rewind,
+        },
+    )
+
+
+async def _serve_socket(
+    ws: WebSocket,
+    backend: Backend,
+    load: _LoadState,
+    generation: _Generation,
+) -> None:
+    """One socket, from accepting it to settling its generation."""
+    await ws.accept()
+    session = _open_session(ws, backend)
+    # This socket's resource meter, started before the readiness wait
+    # so it also runs for a client that arrives while this worker is
+    # still loading.
+    #
+    # That case is narrow, and the comment used to claim more. The
+    # supervisor's proxy refuses a socket until ``load_state`` is
+    # "ready", which it only becomes once this worker reports its
+    # model loaded, so a browser cannot watch a load through it and
+    # the meter does not cover one. Reaching this handler mid-load
+    # means connecting to the worker directly. The placement is kept
+    # because it costs nothing and is honest about the case it
+    # serves; it is not a view of a load.
+    #
+    # Created just before the ``try`` rather than inside it, so the
+    # ``finally`` can stop it without first asking whether it exists.
+    # Nothing can happen in between, and a task needing a guard would
+    # be one the cleanup could miss.
+    meter = asyncio.create_task(
+        pump_resource_samples(ws, backend, CpuSampler())
+    )
+    try:
+        if not await _greet(ws, backend, load):
+            return
+        while True:
+            data = await ws.receive_json()
+            await _dispatch(session, generation, data)
+    except WebSocketDisconnect:
+        logger.info("worker client disconnected")
+    finally:
+        # Cancelled without being awaited, unlike the generation
+        # below. Its only await is a sleep, so it stops at once and
+        # holds nothing; waiting on it would add a step to every
+        # disconnect to settle a task that owns no device.
+        meter.cancel()
+        # The socket is going away for some reason, and every reason
+        # means nothing will read this run's frames again. Stopping
+        # and then waiting is what makes the disconnect bounded
+        # rather than hidden: without the wait, the supervisor
+        # believes this worker is idle while a model still holds the
+        # device.
+        session.cancel_event.set()
+        await _settle_generation(session.mine)
+
+
+async def _greet(
+    ws: WebSocket, backend: Backend, load: _LoadState
+) -> bool:
+    """Hold the socket until the model is usable, then say so.
+
+    False when it never will be, the reason already sent.
+    """
+    ready = await _await_model_ready(
+        ws,
+        load.ready,
+        load.failed,
+        load.error,
+        backend.model_info.id,
+    )
+    if not ready:
+        return False
+    await ws.send_json(
+        {
+            "type": MSG_MODEL_STATUS,
+            "status": "ready",
+            "model": backend.model_info.id,
         }
-        # This socket's resource meter, started before the readiness
-        # wait so it also runs for a client that arrives while this
-        # worker is still loading.
-        #
-        # That case is narrow, and the comment used to claim more. The
-        # supervisor's proxy refuses a socket until ``load_state`` is
-        # "ready", which it only becomes once this worker reports its
-        # model loaded, so a browser cannot watch a load through it
-        # and the meter does not cover one. Reaching this handler
-        # mid-load means connecting to the worker directly. The
-        # placement is kept because it costs nothing and is honest
-        # about the case it serves; it is not a view of a load.
-        #
-        # Created just before the ``try`` rather than inside it, so
-        # the ``finally`` can stop it without first asking whether it
-        # exists. Nothing can happen in between, and a task needing a
-        # guard would be one the cleanup could miss.
-        meter = asyncio.create_task(
-            pump_resource_samples(ws, backend, CpuSampler())
+    )
+    return True
+
+
+async def _dispatch(
+    session: _Session,
+    generation: _Generation,
+    data: Dict[str, Any],
+) -> None:
+    """Route one message by its type."""
+    mtype = data.get("type")
+    if mtype == MSG_CANCEL:
+        # Reachable during a run, which is the whole point: the loop
+        # is parked on receive_json rather than inside the handler it
+        # would stop.
+        session.cancel_event.set()
+        return
+    if mtype in session.streaming:
+        await _start_streaming(session, generation, mtype, data)
+        return
+    if mtype in session.concurrent:
+        await session.concurrent[mtype](session.ws, data)
+        return
+    if mtype in session.exclusive:
+        await _run_exclusive(session, generation, mtype, data)
+        return
+    # A client bug rather than a worker one, and scoped to the
+    # request so it disturbs nothing: there is no owner to route it
+    # to, and a page that has just sent something unrecognisable is
+    # not helped by also losing whatever it was doing.
+    await session.ws.send_json(
+        wire_error(
+            message=f"Unknown message type: {mtype}",
+            code=ERROR_UNKNOWN_MESSAGE,
+            scope=ERROR_SCOPE_REQUEST,
+            request_id=request_id_of(data),
         )
-        try:
-            ready = await _await_model_ready(
-                ws,
-                model_ready,
-                load_failed,
-                load_error,
-                backend.model_info.id,
-            )
-            if not ready:
-                return
-            await ws.send_json(
-                {
-                    "type": MSG_MODEL_STATUS,
-                    "status": "ready",
-                    "model": backend.model_info.id,
-                }
-            )
-            while True:
-                data = await ws.receive_json()
-                mtype = data.get("type")
+    )
 
-                if mtype == MSG_CANCEL:
-                    # Reachable during a run, which is the whole
-                    # point: this loop is parked on receive_json
-                    # rather than inside the handler it would stop.
-                    cancel_event.set()
-                    continue
 
-                if mtype in streaming:
-                    if generation.busy():
-                        await _send_busy(ws, mtype, data)
-                        continue
-                    cancel_event.clear()
-                    mine = generation.start(
-                        streaming[mtype](
-                            ws, data, cancel_event, stream
-                        )
-                    )
-                    continue
+async def _start_streaming(
+    session: _Session,
+    generation: _Generation,
+    mtype: str,
+    data: Dict[str, Any],
+) -> None:
+    """Start a frame-streaming run, unless one holds the device."""
+    if generation.busy():
+        await _send_busy(session.ws, mtype, data)
+        return
+    session.cancel_event.clear()
+    session.mine = generation.start(
+        session.streaming[mtype](
+            session.ws, data, session.cancel_event, session.stream
+        )
+    )
 
-                if mtype in concurrent:
-                    await concurrent[mtype](ws, data)
-                    continue
 
-                if mtype in exclusive:
-                    if generation.busy():
-                        await _send_busy(ws, mtype, data)
-                        continue
-                    await exclusive[mtype](ws, data)
-                    continue
-
-                # A client bug rather than a worker one, and scoped
-                # to the request so it disturbs nothing: there is no
-                # owner to route it to, and a page that has just sent
-                # something unrecognisable is not helped by also
-                # losing whatever it was doing.
-                await ws.send_json(
-                    wire_error(
-                        message=f"Unknown message type: {mtype}",
-                        code=ERROR_UNKNOWN_MESSAGE,
-                        scope=ERROR_SCOPE_REQUEST,
-                        request_id=request_id_of(data),
-                    )
-                )
-        except WebSocketDisconnect:
-            logger.info("worker client disconnected")
-        finally:
-            # Cancelled without being awaited, unlike the generation
-            # below. Its only await is a sleep, so it stops at once
-            # and holds nothing; waiting on it would add a step to
-            # every disconnect to settle a task that owns no device.
-            meter.cancel()
-            # The socket is going away for some reason, and every
-            # reason means nothing will read this run's frames
-            # again. Stopping and then waiting is what makes the
-            # disconnect bounded rather than hidden: without the
-            # wait, the supervisor believes this worker is idle
-            # while a model still holds the device.
-            cancel_event.set()
-            await _settle_generation(mine)
-
-    return app
+async def _run_exclusive(
+    session: _Session,
+    generation: _Generation,
+    mtype: str,
+    data: Dict[str, Any],
+) -> None:
+    """Run a request that may not share the device, if it is free."""
+    if generation.busy():
+        await _send_busy(session.ws, mtype, data)
+        return
+    await session.exclusive[mtype](session.ws, data)

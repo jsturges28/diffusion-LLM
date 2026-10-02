@@ -1,10 +1,5 @@
 {
   "_comment": "Accepted Ruff findings per file and rule. Written by scripts/lint_ratchet.py --update. These may only go down; see audit finding QUALITY-02.",
-  "total": 3,
-  "counts": {
-    "src/backends/worker_base.py": {
-      "C901": 1,
-      "PLR1702": 2
-    }
-  }
+  "total": 0,
+  "counts": {}
 }

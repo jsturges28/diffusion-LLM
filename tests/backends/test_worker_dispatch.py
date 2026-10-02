@@ -28,11 +28,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import threading
+import time
 from typing import Any, Dict, Iterator, List, Optional
 
 import pytest
 from fastapi.testclient import TestClient
 
+from src.backends import worker_base
 from src.backends.protocol import (
     ERROR_BUSY,
     ERROR_NO_TOKENIZER,
@@ -497,6 +499,69 @@ def test_the_worker_takes_work_again_after_a_cancel(
         token = _generate(socket, "a fresh run")
 
     assert token != ""
+
+
+def test_a_cancel_does_not_carry_into_the_next_run(
+    backend: _StubBackend, client: TestClient
+) -> None:
+    """The stop flag is lowered as each run starts.
+
+    One flag per socket, raised by Cancel and read by every run that
+    socket starts, so a run begun after a cancelled one must not find
+    it still raised and stop on its first step. The test above cannot
+    see that, because its second run never looks at the flag.
+    """
+    with _window(client) as socket:
+        _park(backend, socket)
+        socket.send_json({"type": "cancel"})
+        assert backend.cancelled.wait(
+            timeout=HOLD_TIMEOUT_SECONDS
+        )
+        assert socket.receive_json()["type"] == "done"
+        backend.cancelled.clear()
+        backend.parked.clear()
+
+        _park(backend, socket)
+        backend.release()
+        done = socket.receive_json()
+
+    assert not backend.cancelled.is_set()
+    assert done["final_text"] == "slow"
+
+
+def test_a_disconnect_waits_for_its_own_run(
+    backend: _StubBackend,
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The socket hands its own run to the settle on its way out.
+
+    Settling nothing would let the disconnect return while a model
+    still held the device, the hidden work `LIFE-04` is about. The
+    stop signal alone, which the test above checks, cannot show it:
+    it is raised whether or not anything then waits.
+
+    What is checked is the hand-over, not the wait. The test client
+    cancels the server's handler once its socket is gone, which the
+    real server does not, so the wait itself never finishes here.
+    """
+    settled: List[Any] = []
+    real = worker_base._settle_generation
+
+    async def recording(task: Any) -> None:
+        settled.append(task)
+        await real(task)
+
+    monkeypatch.setattr(worker_base, "_settle_generation", recording)
+    with _window(client) as socket:
+        _park(backend, socket)
+
+    for _ in range(int(HOLD_TIMEOUT_SECONDS / HOLD_POLL_SECONDS)):
+        if settled:
+            break
+        time.sleep(HOLD_POLL_SECONDS)
+    assert len(settled) == 1, "the socket never settled its run"
+    assert isinstance(settled[0], asyncio.Task), "it settled nothing"
 
 
 def test_a_generation_reaches_the_backend(
