@@ -266,8 +266,10 @@ kept when these were written:
   allowed.
 - **369 to 370**: confirmed on 2026-10-01: a resume cycling as it
   streams, and smoothness in the desktop app.
-- **371 to 378**: **not yet validated.** The adaptive-stopping
-  readout and the Stopping chart, from 2026-10-02.
+- **371 to 378**: confirmed on 2026-10-02: the adaptive-stopping
+  readout and the Stopping chart.
+- **379**: **not yet validated.** The pass of 377 found the tooltip's
+  glow drawing a line across a commit's gap; this checks the fix.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -4282,3 +4284,10 @@ stopping. Analytics adds a Stopping page in the Confidence slot.
     the rule as 0.005 and 1. LLaDA, SmolLM3 and Mamba-3 show no
     readout on either page and no Stopping page, and the Timing pager
     still flips between its two charts.
+
+379. **A tooltip adds no line to the Stopping chart.** On a
+    multi-canvas run, hover the Stopping chart just after a commit, so
+    the tooltip box sits over the line: the stretch it covers glows
+    through the box, and nothing crosses the gap where one canvas
+    ended and the next began. Hover the Timing and Confidence charts
+    the same way: their glow is unchanged.

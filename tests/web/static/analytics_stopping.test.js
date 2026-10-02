@@ -232,6 +232,69 @@ test("boundaries fall where the canvas index changes", () => {
   assert.deepEqual(host(context.stoppingBoundaries(null)), []);
 });
 
+// -- the tooltip's glow --
+
+// A canvas context that keeps the path it is asked to draw.
+function pathRecorder() {
+  const calls = [];
+  const ctx = {
+    save() {}, restore() {}, beginPath() {}, rect() {}, clip() {},
+    stroke() {}, fill() {}, arc() {},
+    moveTo(x, y) { calls.push(["move", x, y]); },
+    lineTo(x, y) { calls.push(["line", x, y]); },
+  };
+  return { calls, ctx };
+}
+
+// Two points, a gap where a commit carries no entropy, and a third.
+const GAPPED = [
+  { x: 0, y: 10 }, { x: 10, y: 20 }, { skip: true, x: 20, y: NaN },
+  { x: 30, y: 5 },
+];
+
+test("the glow breaks where a line that spans no gaps breaks", () => {
+  const { context } = pageWith(twoCanvases(), 5);
+  const { calls, ctx } = pathRecorder();
+
+  context.burnThroughTrace(ctx, GAPPED, false);
+
+  assert.deepEqual(calls, [
+    ["move", 0, 10], ["line", 10, 20], ["move", 30, 5],
+  ]);
+});
+
+test("the glow bridges a gap the line itself bridges", () => {
+  const { context } = pageWith(twoCanvases(), 5);
+  const { calls, ctx } = pathRecorder();
+
+  context.burnThroughTrace(ctx, GAPPED, true);
+
+  assert.deepEqual(calls, [
+    ["move", 0, 10], ["line", 10, 20], ["line", 30, 5],
+  ]);
+});
+
+test("a tooltip over the Stopping line adds no segment", () => {
+  // The whole plugin, as Chart.js calls it with the box up: the
+  // dataset's own spanGaps decides, as it does for the line.
+  const { context } = pageWith(twoCanvases(), 5);
+  const { calls, ctx } = pathRecorder();
+  const chart = {
+    tooltip: { opacity: 1, x: 0, y: 0, width: 100, height: 50 },
+    ctx: ctx,
+    canvas: { id: "chart-stopping" },
+    data: { datasets: [{ spanGaps: false, borderColor: "#a98bff" }] },
+    getDatasetMeta: () => ({ hidden: false, data: GAPPED }),
+    getActiveElements: () => [],
+  };
+
+  context.burnThroughPlugin.afterDraw(chart);
+
+  assert.deepEqual(calls, [
+    ["move", 0, 10], ["line", 10, 20], ["move", 30, 5],
+  ]);
+});
+
 // -- the slot --
 
 test("with only Stopping drawable, the slot shows it", () => {

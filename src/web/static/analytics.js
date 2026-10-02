@@ -489,17 +489,7 @@ var burnThroughPlugin = {
         ctx.rect(bx, by, bw, bh);
         ctx.clip();
         ctx.beginPath();
-        var started = false;
-        for (var pi = 0; pi < meta.data.length; pi++) {
-          var p = meta.data[pi];
-          if (!p || p.skip) { continue; }
-          if (!started) {
-            ctx.moveTo(p.x, p.y);
-            started = true;
-          } else {
-            ctx.lineTo(p.x, p.y);
-          }
-        }
+        burnThroughTrace(ctx, meta.data, ds.spanGaps === true);
         ctx.strokeStyle = color;
         ctx.lineWidth = 2.5;
         ctx.shadowColor = color;
@@ -534,6 +524,27 @@ var burnThroughPlugin = {
     }
   },
 };
+
+// A line's path through its points, broken at a gap exactly where
+// Chart.js breaks the line itself: always, unless the dataset spans
+// gaps. The glow is the line redrawn, so it may not add a segment
+// the chart does not draw.
+function burnThroughTrace(ctx, points, bridges) {
+  var started = false;
+  for (var i = 0; i < points.length; i++) {
+    var p = points[i];
+    if (!p || p.skip) {
+      started = started && bridges;
+      continue;
+    }
+    if (started) {
+      ctx.lineTo(p.x, p.y);
+    } else {
+      ctx.moveTo(p.x, p.y);
+      started = true;
+    }
+  }
+}
 
 // Per-chart tooltip-box visibility (the eye toggle in each header).
 var tooltipEnabled = {
