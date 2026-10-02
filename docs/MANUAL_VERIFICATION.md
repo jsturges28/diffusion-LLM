@@ -240,8 +240,11 @@ kept when these were written:
   brought the run back without them. It passed once the snapshot
   packed them, rewritten, since its old wording asked for a trip after
   Confirm without saving, and Confirm saves. 351 was added with it.
-- **352 to 356**: **outstanding**, the candidate flicker and the
-  choice of what an unsettled position shows, added on 2026-09-29.
+- **352 to 356**: confirmed on 2026-10-01, the candidate flicker and
+  the choice of what an unsettled position shows; the motion read as
+  smooth at the shipped cycle, slots and cap.
+- **357**: **not yet validated.** Added on 2026-10-01: a
+  remasked DiffusionGemma position born again on resume.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -4054,3 +4057,20 @@ its probability's share of every second, with the glyph for the rest.
     Settings: **Unsettled positions show** reads **The model's
     guess**, and the canvas looks as it did. Each of the three choices
     saves, and survives a reload.
+
+## Revisions
+
+From 2026-10-01, a diffusion position that settles on a different
+token from the one it last settled on is a revision. DiffusionGemma
+makes hundreds per run and LLaDA none. The token a remasked position
+settles on next is a birth, not a revision, and from the same date
+DiffusionGemma's worker reports it as one.
+
+357. **A remasked DiffusionGemma position flashes as it re-settles.**
+    With **Token birth glow** on, run DiffusionGemma at its defaults,
+    open **Edit Frames** on a middle frame, remask a few settled
+    words, and **Resume to End**. Each remasked word flashes white
+    the moment it settles again, whatever token it lands on, as a
+    LLaDA word does after the same edit. Before this they changed
+    with no mark. The text you did not touch does not flash white on
+    the first resumed frame.

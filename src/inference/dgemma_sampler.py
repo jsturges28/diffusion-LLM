@@ -17,7 +17,14 @@ from __future__ import annotations
 import asyncio
 import queue
 import threading
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import (
+    Any,
+    AsyncGenerator,
+    Dict,
+    List,
+    Optional,
+    Sequence,
+)
 
 import torch
 from transformers.generation.streamers import BaseStreamer
@@ -366,20 +373,38 @@ class FrameQueueStreamer(BaseStreamer):
         )
         return checkpoint
 
-    def restore(self, checkpoint: FrameCheckpoint) -> None:
+    def restore(
+        self,
+        checkpoint: FrameCheckpoint,
+        *,
+        remasked: Sequence[int] = (),
+    ) -> None:
         """Re-enter a frame with the state that produced it.
 
         Without this a resumed run builds a fresh streamer, whose
         empty ``_prev`` makes every position read as changed, so the
         first resumed frame renders as an entirely masked canvas and
         the inherited prefix is reported born a second time.
+
+        ``remasked`` leave the born set, so each is reported born
+        again when it settles, as LLaDA's resume reports them. The
+        client counts a remasked position's next settle as a birth
+        rather than a revision, so kept here they would re-settle
+        with no mark at all, on exactly the positions the user
+        asked about.
         """
         extra = checkpoint.extra
         assert isinstance(extra, DgemmaFrame), (
             "a DiffusionGemma checkpoint carries its born set"
         )
+        canvas_length = int(checkpoint.ids.numel())
+        for position in remasked:
+            assert 0 <= position < canvas_length, (
+                "a remasked position lies on the canvas"
+            )
         self._prev = checkpoint.ids.tolist()
-        self._seen_revealed = set(extra.seen_revealed)
+        seen = set(extra.seen_revealed)
+        self._seen_revealed = seen - set(remasked)
 
     def put(self, value: torch.Tensor) -> None:
         if not self._prompt_seen:
@@ -726,7 +751,7 @@ async def streaming_resume(
         alternatives=alternatives,
     )
     streamer._takes_logits = True
-    streamer.restore(base)
+    streamer.restore(base, remasked=remask_positions)
 
     generate_kwargs: Dict[str, Any] = {
         "max_new_tokens": canvas_length,

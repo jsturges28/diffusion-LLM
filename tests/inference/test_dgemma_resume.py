@@ -23,7 +23,8 @@ below that says so is the replacement for two that used to pin the
 counter across a resume.
 
 Passing proves the streamer can re-enter a recorded frame with the
-state that produced it, that checkpoints are recorded only for
+state that produced it, that a position the user remasked is born
+again when it settles, that checkpoints are recorded only for
 frames the consumer actually received, and that a token carries
 confidence exactly when that confidence was measured.
 """
@@ -33,8 +34,10 @@ from __future__ import annotations
 import asyncio
 import queue
 import threading
-from typing import Any, Dict, List, Optional
+from types import SimpleNamespace
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import pytest
 import torch
 
 from src.inference.checkpoint import (
@@ -46,6 +49,7 @@ from src.backends.text_adapter import DGEMMA_TEXT
 from src.inference.dgemma_sampler import (
     FrameQueueStreamer,
     _run_streamed,
+    streaming_resume,
 )
 from src.inference.frame_queue import (
     FrameQueueCancelled,
@@ -119,6 +123,7 @@ def _drive(
     restore: bool,
     logits: bool = False,
     history: Optional[List[FrameCheckpoint]] = None,
+    remasked: Sequence[int] = (),
 ) -> List[Dict[str, Any]]:
     """Stream a short run, optionally re-entering a recorded frame."""
     out_queue = frame_queue_create()
@@ -133,7 +138,7 @@ def _drive(
     )
     streamer._takes_logits = logits
     if restore:
-        streamer.restore(_checkpoint())
+        streamer.restore(_checkpoint(), remasked=remasked)
     frames: List[Dict[str, Any]] = []
 
     async def drive() -> None:
@@ -217,6 +222,84 @@ def test_a_fresh_prefix_is_born_and_proves_the_contrast() -> None:
     born = [f["revealed"] for f in _drive(restore=False)]
 
     assert any(len(positions) > 0 for positions in born)
+
+
+def test_a_remasked_position_is_born_again_when_it_settles(
+) -> None:
+    """The user's remask sends a position back to be redrawn, so it
+    is reported born when it settles, once, and nothing else on the
+    inherited canvas is. LLaDA's resume reports the same."""
+    frames = _drive(restore=True, remasked=[1])
+
+    assert frames[0]["revealed"] == [1]
+    assert all(f["revealed"] == [] for f in frames[1:])
+
+
+def test_a_remasked_position_off_the_canvas_is_refused() -> None:
+    """The worker validates positions before resuming, so one off
+    the canvas reaching the streamer is a programmer error."""
+    streamer = FrameQueueStreamer(
+        _StubTokenizer(),
+        DGEMMA_TEXT,
+        frame_queue_create(),
+        stop_event=threading.Event(),
+    )
+
+    with pytest.raises(AssertionError):
+        streamer.restore(_checkpoint(), remasked=[CANVAS_LENGTH])
+
+
+class _ResumableStubModel(_StubModel):
+    """The stub above, plus the two config values a resume reads."""
+
+    config = SimpleNamespace(
+        canvas_length=CANVAS_LENGTH,
+        text_config=SimpleNamespace(vocab_size=64),
+    )
+
+
+class _StubAdapter:
+    """DiffusionGemma's text conventions over a fixed two-token
+    prompt, so a resume can run without a chat template."""
+
+    def build_inputs(
+        self, tokenizer: Any, model: Any, prompt: str, *,
+        thinking: bool,
+    ) -> Dict[str, torch.Tensor]:
+        return {"input_ids": torch.zeros((1, 2), dtype=torch.long)}
+
+    def sanitize(self, text: str) -> str:
+        return DGEMMA_TEXT.sanitize(text)
+
+    def split_channels(self, raw: str) -> Tuple[str, str]:
+        return DGEMMA_TEXT.split_channels(raw)
+
+
+def test_a_resume_hands_its_remasked_positions_to_the_streamer(
+) -> None:
+    """The same rebirth, driven through the entry point the worker
+    calls, so the positions cannot be dropped on their way from the
+    resume to the streamer."""
+
+    async def collect() -> List[Dict[str, Any]]:
+        items: List[Dict[str, Any]] = []
+        async for item in streaming_resume(
+            _ResumableStubModel(),
+            _StubTokenizer(),
+            _StubAdapter(),
+            prompt="continue",
+            base=_checkpoint(),
+            remask_positions=[1],
+            remaining_steps=3,
+        ):
+            items.append(item)
+        return items
+
+    items = asyncio.run(collect())
+    frames = [f for f in items if f.get("type") == "frame"]
+
+    assert frames[0]["revealed"] == [1]
+    assert all(f["revealed"] == [] for f in frames[1:])
 
 
 # -- what gets recorded --
