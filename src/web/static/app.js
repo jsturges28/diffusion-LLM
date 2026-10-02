@@ -185,6 +185,7 @@ var entropyProfileReadout =
   document.getElementById("entropy-profile-readout");
 var tokenMetricsStrip =
   document.getElementById("token-metrics");
+var stopReadout = document.getElementById("stop-readout");
 var diffOverlayControls =
   document.getElementById("diff-overlay-controls");
 var diffOriginalSlider =
@@ -2215,6 +2216,7 @@ function handleFrame(data) {
   } else {
     renderFrame(data.text);
   }
+  refreshStopReadout();
 
   updateLiveFrameStatus(data);
 }
@@ -4800,6 +4802,9 @@ function refreshTokenMetrics() {
   overlaysRenderTokenMetrics(
     tokenMetricsStrip, buildTokenMetricsReading()
   );
+  // The strip's width changes with what it reads, the readout's
+  // words with nothing a hover does, so only the fit is redone.
+  overlaysFitStopReadout(tokenMetricsStrip, stopReadout);
 }
 
 function clearTokenMetrics() {
@@ -4807,6 +4812,7 @@ function clearTokenMetrics() {
   metricsHoverOriginal = false;
   metricsCandidate = null;
   overlaysRenderTokenMetrics(tokenMetricsStrip, null);
+  overlaysFitStopReadout(tokenMetricsStrip, stopReadout);
 }
 
 // A crossfade hands the pointer to the other layer at the midpoint.
@@ -4817,6 +4823,9 @@ function refreshTokenMetricsLayer() {
     metricsHoverOriginal = metricsLayerIsOriginal(null);
   }
   refreshTokenMetrics();
+  // The readout follows the same layer, so a crossfade past the
+  // midpoint moves it to the other run as well.
+  refreshStopReadout();
 }
 
 // Ask the hovered span which layer it belongs to. Chart hover has no
@@ -4949,6 +4958,93 @@ function metricsRunLabel() {
     return "";
   }
   return metricsHoverOriginal ? "Original" : "Edited";
+}
+
+// ---- The stopping readout ----
+//
+// How far the canvas on screen is from stopping, beside the metrics
+// strip; overlays.js holds the rule and how it is drawn. The strip
+// reads the hovered position and this reads the canvas, so it
+// follows the frame and the run on screen rather than the pointer:
+// the newest frame while a run streams, the scrubbed frame
+// otherwise, and whichever stacked layer takes the pointer, which is
+// the rule the strip names its run by.
+
+function refreshStopReadout() {
+  overlaysRenderStopReadout(stopReadout, stopReadoutReading());
+  overlaysFitStopReadout(tokenMetricsStrip, stopReadout);
+}
+
+// The whole run is walked on every call. A canvas is at most a few
+// dozen frames of 256 positions, and the walk is what lets a scrub,
+// an edit and a crossfade all be right without a cache to keep.
+function stopReadoutReading() {
+  var rule = stopReadoutRule();
+  if (rule === null) {
+    return null;
+  }
+  var original = metricsLayered() && metricsLayerIsOriginal(null);
+  var source = original
+    ? stopReadoutOriginalSource()
+    : stopReadoutRunSource();
+  if (source.count === 0) {
+    return null;
+  }
+  var index = scrubberActive
+    ? Math.min(currentScrubFrame, source.count - 1)
+    : source.count - 1;
+  return overlaysStopReadingAt(
+    overlaysStopTrack(source), index, rule
+  );
+}
+
+// The rule the run on screen stopped by: its own parameters, with
+// the model's defaults for any it did not record, which is a session
+// restored from before the rule was a parameter. Null for a model
+// that does not stop adaptively, which keeps the readout off its
+// runs entirely.
+function stopReadoutRule() {
+  var capabilities = activeModel ? activeModel.capabilities : null;
+  if (!capabilities || !capabilities.adaptive_stopping) {
+    return null;
+  }
+  var defaults = {};
+  var specs = activeModel.param_specs || [];
+  for (var i = 0; i < specs.length; i++) {
+    defaults[specs[i].name] = specDefault(specs[i]);
+  }
+  return overlaysStopRuleFrom(lastRunParams, defaults);
+}
+
+// The run as shown, with each resume's first frame: an edit's
+// frame_index, where the page truncated and the branch began.
+function stopReadoutRunSource() {
+  return {
+    count: runFramesLength(runFrames),
+    readFrame: function (f) {
+      return runFramesTokensAt(runFrames, f);
+    },
+    canvasAt: runFrameCanvas,
+    segmentStarts: remaskEdits.map(function (edit) {
+      return edit.frame_index;
+    }),
+  };
+}
+
+// The run as first generated, which no edit touches. One canvas,
+// because DiffusionGemma resumes nothing longer, and no resumes of
+// its own.
+function stopReadoutOriginalSource() {
+  return {
+    count: originalRunTokenFrames(originalRun),
+    readFrame: function (f) {
+      return originalRunTokensAt(originalRun, f);
+    },
+    canvasAt: function () {
+      return 0;
+    },
+    segmentStarts: [],
+  };
 }
 
 // Map a pointer x on the profile back to a token position by
@@ -6340,6 +6436,7 @@ function navigateToFrame(index) {
   } else {
     renderTargetPlaceholder(index);
   }
+  refreshStopReadout();
   // The token spans were just replaced, so any open popover now
   // points at a detached element.
   hideAltsPopover();
@@ -7662,6 +7759,7 @@ function resetRunState() {
   updateGenerateButton();
   setSaveAvailable(false);
   flickerStop();
+  refreshStopReadout();
 }
 
 // "New Run": reset to a clean slate for a new prompt once a run is
@@ -9780,6 +9878,7 @@ function boot() {
   updatePromptHistoryUI();
   updateHoverHighlight();
   overlaysBuildTokenMetrics(tokenMetricsStrip);
+  overlaysBuildStopReadout(stopReadout);
   refreshAnalyticsCue();
   var inlined = bootModelInfo();
   if (inlined !== null) {

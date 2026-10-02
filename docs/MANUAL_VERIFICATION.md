@@ -259,15 +259,15 @@ kept when these were written:
 - **366 to 367**: confirmed on 2026-10-01: DiffusionGemma cycling
   between frames, and LLaDA and a run without Alternatives showing
   guesses.
-- **368**: done by an agent on 2026-10-01, not on hardware, since the
-  maintainer's desktop has no reduced-motion setting to turn on. In the
-  desktop engine, run offscreen with reduced motion forced (see
-  *Forcing reduced motion*), a streaming DiffusionGemma frame that
-  cycled two positions with motion allowed cycled none and showed
-  their guesses. The other two choices are held by
-  `generator_live_cycling.test.js`.
+- **368**: confirmed on 2026-10-01, with reduced motion forced by the
+  launch flag under *Forcing reduced motion*, since the maintainer's
+  desktop has no setting for it. An agent had checked the same in the
+  desktop engine offscreen first, against a control with motion
+  allowed.
 - **369 to 370**: confirmed on 2026-10-01: a resume cycling as it
   streams, and smoothness in the desktop app.
+- **371 to 378**: **not yet validated.** The adaptive-stopping
+  readout and the Stopping chart, from 2026-10-02.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -4212,3 +4212,73 @@ LLaDA's frames come too quickly for a cycle to read and carry none.
     chosen: frames keep their usual pace, cycling carries on across
     the canvas boundary, and births and revisions still glow as
     positions settle.
+
+## How close a canvas is to stopping
+
+From 2026-10-02, DiffusionGemma's two stop thresholds are parameters,
+and a readout beside the metrics strip, on the generator and in the
+Analytics detail modal, shows how far the canvas on screen is from
+stopping. Analytics adds a Stopping page in the Confidence slot.
+
+371. **The rule's two parameters.** Load DiffusionGemma: after the
+    temperatures, **Stop Entropy** reads 0.005 and **Steady Steps**
+    1, and **Reset** returns them there. A run at those values stops
+    its canvases in about as many steps as runs did before. Save it:
+    Analytics' run summary lists both.
+
+372. **The readout follows a canvas live.** Run DiffusionGemma with
+    **Max Tokens** 512. At the right of the metrics strip, **Stop:**
+    shows a small trace and words such as *entropy 0.041 of 0.005,
+    13 changing*. As the canvas settles, the trace falls toward its
+    dashed line, the count falls, and each part turns green once it
+    holds. At the commit it reads *Canvas 1 stopped after N steps*,
+    then the next canvas starts a reading of its own. It stays bright
+    while nothing is hovered, when the strip beside it dims.
+
+373. **Scrubbing reads the frame on screen.** After the run, scrub
+    back and forth: the readout follows the frame, and a commit frame
+    says how its canvas ended. Hovering the readout states the rule
+    with the run's own numbers.
+
+374. **Moving the rule moves the readout.** Set **Stop Entropy** to
+    0.05 and run: canvases stop sooner and the readout's threshold
+    reads 0.05. Set **Steady Steps** to 2: a still canvas reads
+    *steady 1 of 2* before *steady*. Set it to 0: the steadiness part
+    is gone. Set **Denoising Steps** to 8: a canvas that cannot settle
+    in time reads *used all 8 steps*.
+
+375. **An edit, and the crossfade.** On a single-canvas run, edit a
+    middle frame and **Resume to End**. The first resumed frame never
+    reads *steady*, even with nothing changing, and the commit's
+    verdict still counts the whole canvas against **Denoising
+    Steps**. Drag the **Original** / **Edited** crossfade past the
+    middle: the readout moves to the original run's frame, and back.
+
+376. **The words give way; the trace stays.** Narrow the window, or
+    hover a popover candidate under **Revisions** with both runs
+    stacked: the readout's words go, leaving **Stop:** and its trace,
+    and nothing in the strip is cut. They come back with the room.
+    Open the same run in the Analytics detail modal at your usual
+    window width: the same holds there.
+
+377. **The Stopping chart.** Open a multi-canvas DiffusionGemma run in
+    Analytics and flip the arrows beside **Confidence** to
+    **Stopping**. Check the following:
+    - a log axis labelled at powers of ten;
+    - a violet line per canvas, broken at each commit, with amber
+      canvas boundaries;
+    - a dashed green line labelled *stops below 0.005*;
+    - rings where nothing changed, and a green dot where each canvas
+      stopped;
+    - a tooltip giving the readout's words.
+
+    On an edited run the original draws beneath, the pins switch the
+    two lines, and dragging the crossfade borrows them. The slot keeps
+    the chosen page from run to run, and shows Confidence for a run
+    with no Stopping page.
+
+378. **Older runs and other models.** Open a DiffusionGemma run saved
+    before this change: the readout and the chart both show, reading
+    the rule as 0.005 and 1. LLaDA, SmolLM3 and Mamba-3 show no
+    readout on either page and no Stopping page, and the Timing pager
+    still flips between its two charts.

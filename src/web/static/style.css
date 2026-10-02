@@ -1210,6 +1210,69 @@ button {
   display: none;
 }
 
+/* The strip and the stopping readout beside it, as one row of the
+   page's column. The strip yields width to the readout rather than
+   the reverse, because the readout's words already know how to give
+   way (data-compact below) and the strip's numbers do not. */
+.token-metrics-row {
+  flex-shrink: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 18px;
+}
+
+.token-metrics-row > .token-metrics {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* How far the canvas on screen is from stopping, for a model that
+   stops adaptively. The strip's idiom and padding, so the two read
+   as one line, and a trace the size of the footer's resource meter,
+   so the page draws its small charts alike. */
+.stop-readout {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+  padding: 11px 2px 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.stop-readout-label::after {
+  content: ":";
+}
+
+.stop-readout-trace {
+  width: 62px;
+  height: 13px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+}
+
+.stop-readout-value {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A condition that holds takes the accent, values and all, so which
+   of the two is still holding the canvas up shows at a glance. */
+.stop-readout-clause.is-met,
+.stop-readout-clause.is-met .stop-readout-value {
+  color: var(--accent);
+}
+
+/* Set by overlaysFitStopReadout when the strip runs out of room.
+   The words go first; the label and the trace stay, so the canvas's
+   progress is still on screen. */
+.stop-readout[data-compact] .stop-readout-text {
+  display: none;
+}
+
 /* ---- Output area ---- */
 
 /* A column, so the reasoning panel and the canvas divide this space

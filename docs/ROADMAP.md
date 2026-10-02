@@ -387,6 +387,49 @@ since shipped is noted on the item rather than left for a reader to infer.
    meant the flicker now hands each span back as drawn when it stops,
    which the scrubbed views never needed because they rebuild theirs.
 
+8. **The adaptive-stopping readout. Shipped on 2026-10-02.** Chosen
+   from the backlog after live cycling, once the saved runs showed the
+   frames alone reproduce DiffusionGemma's stops: on five runs, nine
+   canvases and 144 drafts, "mean entropy under the threshold and
+   nothing changed" held on exactly the frame each canvas stopped. The
+   backlog entry below, "A live adaptive-stopping readout", carries the
+   reasoning it was built on.
+
+   **What shipped.** The rule, which the checkpoint's
+   generation_config.json used to set out of sight, became two
+   DiffusionGemma parameters, **Stop Entropy** (`confidence_threshold`)
+   and **Steady Steps** (`stability_threshold`). They default to the
+   checkpoint's 0.005 and 1 and are passed to `generate` explicitly, so
+   the rule on screen is the rule the run used, and an edit reuses its
+   run's values. A readout beside the metrics strip, on the generator
+   and in the Analytics detail modal, shows how far the frame on screen
+   is from stopping, as a log-scale trace and words. Analytics adds a
+   Stopping page to the Confidence slot. Both read one track in
+   `overlays.js`, and the frames endpoint reports the rule each saved
+   run stopped by, so a run from before this reads as the defaults.
+
+   *A distance, not a probability.* The rule is a threshold, so the
+   readout says how far each condition is from holding rather than
+   inventing a chance of stopping.
+
+   *A committed canvas is judged by its length.* A canvas can end early
+   only by the rule, so "fewer drafts than the budget" is exactly
+   "stopped", which no rounding can get wrong. The live conditions can
+   disagree with the model only within about 0.0001 nats of the
+   threshold, from the four-decimal entropies of a bf16 copy of the
+   logits the model judged.
+
+   *Beside the strip, not in the status bar.* Mocked in both places and
+   moved on the maintainer's call: it describes the canvas, so it sits
+   above it, next to the per-token Entropy field it pairs with, and it
+   comes along to Analytics in the strip there. Its words give way
+   before the strip loses anything.
+
+   *Where it stops.* Nothing predicts how many steps a canvas has left;
+   the trace shows the descent so far. The original run's Stopping
+   series is a plain line without marks, read as one canvas, because
+   DiffusionGemma resumes only single-canvas runs.
+
 ---
 
 ## Autoregressive model support (Phases A and C shipped)
@@ -1417,6 +1460,13 @@ sample. The `c` change removing that bias shipped with `XAI-01` on
 2026-08-28, so a run recorded with the Entropy Signal on since then carries
 the unsettled positions too and needs no such allowance. Anything measured
 before that date does.
+
+**The readout shipped on 2026-10-02**, as accepted direction 8 above, and
+as the exact version rather than the cheap one, at no cost to the worker:
+every draft now carries each position's entropy, the reduction this entry
+asked for, so the page averages it directly. The two thresholds became
+parameters on the way, passed to `generate` rather than read from the
+checkpoint, which is what lets the page know the rule it draws against.
 
 **A second glow for a revision, distinct from a birth.** Raised on
 2026-08-28 while confirming that mask opacity had started grading live. The

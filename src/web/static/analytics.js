@@ -47,6 +47,7 @@ var overlayOutput =
   document.getElementById("overlay-output");
 var tokenMetricsStrip =
   document.getElementById("token-metrics");
+var stopReadout = document.getElementById("stop-readout");
 var overlayReadout =
   document.getElementById("overlay-readout");
 var overlayLegend =
@@ -540,6 +541,7 @@ var tooltipEnabled = {
   timing: true,
   tps: true,
   confidence: true,
+  stopping: true,
   entropy: true,
 };
 
@@ -570,10 +572,14 @@ var COMPARE_REQUEST_KEY = "compare";
 
 var chartConvergence = null;
 var chartTiming = null;
-// Shares the Timing slot with chartTiming; timingPage says which of
-// the two is on screen.
+// Shares the Timing slot with chartTiming; slotPage.timing says
+// which of the two is on screen.
 var chartTps = null;
 var chartConfidence = null;
+// Shares the Confidence slot, and like chartEntropy is built from the
+// frames payload in renderRunOverlays, because it needs every
+// position's entropy rather than the metrics payload's means.
+var chartStopping = null;
 // Per-position, so it is built from the frames payload in
 // loadRunOverlays rather than the metrics payload in loadRunCharts.
 var chartEntropy = null;
@@ -2945,6 +2951,9 @@ function chartSeriesAlpha(chart, index) {
   if (id === "chart-confidence") {
     return seriesBlendAlpha("confidence", index);
   }
+  if (id === "chart-stopping") {
+    return seriesBlendAlpha("stopping", index);
+  }
   return 1;
 }
 
@@ -2975,6 +2984,9 @@ function updateLineCharts() {
   }
   if (chartConfidence) {
     chartConfidence.update("none");
+  }
+  if (chartStopping) {
+    chartStopping.update("none");
   }
 }
 
@@ -3064,6 +3076,7 @@ function resetTooltipToggles() {
   tooltipEnabled.timing = true;
   tooltipEnabled.tps = true;
   tooltipEnabled.confidence = true;
+  tooltipEnabled.stopping = true;
   tooltipEnabled.entropy = true;
   var btns = document.querySelectorAll(
     ".tooltip-toggle-btn"
@@ -3083,6 +3096,7 @@ var linePinState = {
   timing: { original: true, edited: true },
   tps: { original: true, edited: true },
   confidence: { original: true, edited: true },
+  stopping: { original: true, edited: true },
 };
 
 // Each newly-opened run starts with both runs pinned on, and with
@@ -3137,85 +3151,128 @@ function updateComparePins(name, hasOriginal) {
   refreshComparePins(name);
 }
 
-// ---- The Timing slot's two pages ----
+// ---- Two-page chart slots ----
 //
+// Two charts read together share one section's worth of vertical
+// space and a pager rather than each claiming a slot of their own.
 // Elapsed time and tokens per second are the same measurement read
-// two ways, so they share one section's worth of vertical space and a
-// pager rather than each claiming a chart slot of its own.
-var timingPage = "elapsed";
+// two ways; confidence and the stopping chart are the model's
+// certainty and how far it had left to fall before a canvas could
+// stop. Each slot lists its pages in order, with the section and the
+// chart behind each; its buttons carry `data-<slot>-page`.
+var SLOT_PAGES = {
+  timing: [
+    { page: "elapsed", section: "timing-section", chart: "timing" },
+    { page: "tps", section: "tps-section", chart: "tps" },
+  ],
+  confidence: [
+    {
+      page: "confidence",
+      section: "confidence-section",
+      chart: "confidence",
+    },
+    {
+      page: "stopping",
+      section: "stopping-section",
+      chart: "stopping",
+    },
+  ],
+};
+// The page each slot last chose, kept from one run to the next.
+var slotPage = { timing: "elapsed", confidence: "confidence" };
 // Which pages the open run can actually draw. A run saved before a
 // signal existed may have one and not the other, and flipping to a
 // blank panel would read as a bug rather than as an absence.
-var timingPageReady = { elapsed: false, tps: false };
+var slotReady = {
+  timing: { elapsed: false, tps: false },
+  confidence: { confidence: false, stopping: false },
+};
 
-function setTimingPage(page) {
-  if (page !== "elapsed" && page !== "tps") {
+function setSlotPage(slot, page) {
+  var ready = slotReady[slot];
+  if (!ready || !Object.prototype.hasOwnProperty.call(ready, page)) {
     return;
   }
-  timingPage = page;
-  applyTimingPage();
+  slotPage[slot] = page;
+  applySlotPage(slot);
 }
 
-function timingPageActive() {
-  if (timingPageReady[timingPage]) {
-    return timingPage;
+function slotPageActive(slot) {
+  var ready = slotReady[slot];
+  if (ready[slotPage[slot]]) {
+    return slotPage[slot];
   }
-  if (timingPageReady.elapsed) {
-    return "elapsed";
-  }
-  if (timingPageReady.tps) {
-    return "tps";
+  var pages = SLOT_PAGES[slot];
+  for (var i = 0; i < pages.length; i++) {
+    if (ready[pages[i].page]) {
+      return pages[i].page;
+    }
   }
   return null;
 }
 
-function applyTimingPage() {
-  var active = timingPageActive();
-  var tpsSection = document.getElementById("tps-section");
-  timingSection.hidden = active !== "elapsed";
-  if (tpsSection) {
-    tpsSection.hidden = active !== "tps";
+// Each chart is built while its section is visible and may be hidden
+// again here: Chart.js sizes itself off the canvas it is handed, and
+// a canvas in a hidden section measures zero. Hiding one changes the
+// height the survivor has to fill, hence the resize.
+function applySlotPage(slot) {
+  var active = slotPageActive(slot);
+  var pages = SLOT_PAGES[slot];
+  var shown = null;
+  for (var i = 0; i < pages.length; i++) {
+    var section = document.getElementById(pages[i].section);
+    if (section) {
+      section.hidden = active !== pages[i].page;
+    }
+    if (active === pages[i].page) {
+      shown = chartInstances[pages[i].chart];
+    }
   }
-  refreshTimingPagers(active);
-  // Both charts were built while both sections were visible; hiding
-  // one changes the height the survivor has to fill.
-  var chart = active === "tps" ? chartTps : chartTiming;
-  if (chart) {
-    chart.resize();
+  // After every section has its final visibility, so the survivor
+  // measures the height it is actually left with.
+  if (shown) {
+    shown.resize();
   }
+  refreshSlotPagers(slot, active);
 }
 
-function refreshTimingPagers(active) {
-  var both =
-    timingPageReady.elapsed && timingPageReady.tps;
-  var pagers = document.querySelectorAll(
-    ".chart-title-group .alt-pager"
-  );
-  for (var i = 0; i < pagers.length; i++) {
-    pagers[i].hidden = !both;
+// Scoped to the slot's own buttons. A page-wide query for every
+// pager would let one slot's readiness hide the other's.
+function refreshSlotPagers(slot, active) {
+  var ready = slotReady[slot];
+  var pages = SLOT_PAGES[slot];
+  var all = true;
+  for (var i = 0; i < pages.length; i++) {
+    all = all && ready[pages[i].page];
   }
-  var buttons = document.querySelectorAll(
-    "[data-timing-page]"
-  );
+  var attribute = "data-" + slot + "-page";
+  var buttons = document.querySelectorAll("[" + attribute + "]");
   for (var j = 0; j < buttons.length; j++) {
     buttons[j].disabled =
-      buttons[j].getAttribute("data-timing-page") === active;
+      buttons[j].getAttribute(attribute) === active;
+    var pager = buttons[j].closest(".alt-pager");
+    if (pager) {
+      pager.hidden = !all;
+    }
   }
 }
 
-function wireTimingPager() {
-  var buttons = document.querySelectorAll(
-    "[data-timing-page]"
-  );
+function wireSlotPagers() {
+  var slots = Object.keys(SLOT_PAGES);
+  for (var s = 0; s < slots.length; s++) {
+    wireSlotPager(slots[s]);
+  }
+}
+
+function wireSlotPager(slot) {
+  var attribute = "data-" + slot + "-page";
+  var buttons = document.querySelectorAll("[" + attribute + "]");
   for (var i = 0; i < buttons.length; i++) {
-    buttons[i].addEventListener(
-      "click",
-      function (event) {
-        setTimingPage(
-          event.currentTarget.getAttribute("data-timing-page")
-        );
-      }
-    );
+    buttons[i].addEventListener("click", function (event) {
+      setSlotPage(
+        slot, event.currentTarget.getAttribute(attribute)
+      );
+    });
   }
 }
 
@@ -3257,8 +3314,11 @@ function clearRunCharts() {
   chartTiming = destroyChart(chartTiming);
   chartTps = destroyChart(chartTps);
   chartConfidence = destroyChart(chartConfidence);
-  timingPageReady.elapsed = false;
-  timingPageReady.tps = false;
+  slotReady.timing.elapsed = false;
+  slotReady.timing.tps = false;
+  // The stopping page is the overlay load's to reset, since that is
+  // the payload it is built from; see clearStoppingChart.
+  slotReady.confidence.confidence = false;
 }
 
 // Shown when the charting library itself is missing, as opposed to
@@ -3311,7 +3371,7 @@ function renderRunCharts(data, run) {
   renderTpsChart(data, remaskSet, runIsAutoregressive(run));
   // Last, so both charts have been sized while visible and the
   // slot settles on one page in the same paint.
-  applyTimingPage();
+  applySlotPage("timing");
   renderConfidenceChart(data);
   // The fourth chart, Entropy by Position, is built in
   // loadRunOverlays instead: it needs per-token records from the
@@ -3943,6 +4003,10 @@ function loadRunOverlays(runId, run, token) {
   clearOverlay();
   hideAltsPopover();
   clearEntropyChart();
+  clearStoppingChart();
+  // clearOverlay forgot the run, so this hides the readout until
+  // the new run's frames say whether it has one.
+  refreshStopReadout();
   overlayIsAutoregressive = runIsAutoregressive(run);
   fetchFrames(runId, token && token.signal).then(
     function (data) {
@@ -3987,6 +4051,8 @@ function renderRunOverlays(data) {
   setupOverlayScrubber(data);
   setOverlayMode("none");
   renderEntropyChart(data);
+  renderStoppingChart(data);
+  refreshStopReadout();
 }
 
 // Configure the per-frame scrubber for the loaded run. Opens on the
@@ -4028,6 +4094,7 @@ function setOverlayFrame(index) {
   // anchored to a detached element.
   hideAltsPopover();
   renderCurrentOverlay();
+  refreshStopReadout();
 }
 
 // Recolor the entropy bars for the frame the scrubber now sits on.
@@ -4074,6 +4141,7 @@ function showOverlayUnavailable() {
   }
   resetRunBlend(false);
   clearTokenMetrics();
+  refreshStopReadout();
   overlayEmpty.hidden = false;
 }
 
@@ -4658,6 +4726,9 @@ function refreshTokenMetrics() {
   overlaysRenderTokenMetrics(
     tokenMetricsStrip, buildTokenMetricsReading()
   );
+  // The strip's width changes with what it reads, the readout's
+  // words with nothing a hover does, so only the fit is redone.
+  overlaysFitStopReadout(tokenMetricsStrip, stopReadout);
 }
 
 function clearTokenMetrics() {
@@ -4665,6 +4736,7 @@ function clearTokenMetrics() {
   metricsHoverOriginal = false;
   metricsCandidate = null;
   overlaysRenderTokenMetrics(tokenMetricsStrip, null);
+  overlaysFitStopReadout(tokenMetricsStrip, stopReadout);
 }
 
 // A crossfade hands the pointer to the other layer at the midpoint.
@@ -4675,6 +4747,63 @@ function refreshTokenMetricsLayer() {
     metricsHoverOriginal = metricsLayerIsOriginal(null);
   }
   refreshTokenMetrics();
+  // The readout follows the same layer, so a crossfade past the
+  // midpoint moves it to the other run as well.
+  refreshStopReadout();
+}
+
+// ---- The stopping readout ----
+//
+// The generator's readout for a saved run; overlays.js holds the
+// rule and its drawing. It reads the scrubbed frame of whichever run
+// takes the pointer, which is the rule the strip names its run by,
+// and shows only for a run whose model stops adaptively: the frames
+// payload says so by carrying the rule that run stopped by.
+
+function refreshStopReadout() {
+  overlaysRenderStopReadout(stopReadout, stopReadoutReading());
+  overlaysFitStopReadout(tokenMetricsStrip, stopReadout);
+}
+
+function stopReadoutReading() {
+  if (!overlayData) {
+    return null;
+  }
+  var rule = overlaysStopRuleFrom(overlayData.stop_rule, null);
+  if (rule === null) {
+    return null;
+  }
+  var original = metricsLayered() && metricsLayerIsOriginal(null);
+  var series = original ? overlayBaseline() : overlayPrimary();
+  var index = overlayClampedIndex(series);
+  if (index === null) {
+    return null;
+  }
+  return overlaysStopReadingAt(
+    overlaysStopTrack(stopSourceOf(series, original)), index, rule
+  );
+}
+
+// A series as the stopping track reads it. The branch carries the
+// payload's canvas indices and starts a resumed segment at each
+// edit's frame_index. The run it forked from is one canvas with no
+// resumes, because DiffusionGemma resumes nothing longer.
+function stopSourceOf(series, original) {
+  var canvases = original ? null : overlayData.canvas_index;
+  var edits = original ? [] : overlayData.remask_edits || [];
+  return {
+    count: overlaySeriesLength(series),
+    readFrame: function (f) {
+      return overlaySeriesAt(series, f);
+    },
+    canvasAt: function (f) {
+      var canvas = canvases ? canvases[f] : 0;
+      return typeof canvas === "number" ? canvas : 0;
+    },
+    segmentStarts: edits.map(function (edit) {
+      return edit.frame_index;
+    }),
+  };
 }
 
 // Chart hover has no span, so it falls back to whichever layer takes
@@ -5132,11 +5261,11 @@ function renderTimingChart(data, remaskSet) {
     return;
   }
   // Shown before the chart is constructed, and possibly hidden again
-  // by applyTimingPage once its sibling has been built too: Chart.js
+  // by applySlotPage once its sibling has been built too: Chart.js
   // sizes itself off the canvas it is handed, and a canvas in a
   // hidden section measures zero.
   timingSection.hidden = false;
-  timingPageReady.elapsed = true;
+  slotReady.timing.elapsed = true;
 
   var canvas = document.getElementById(
     "chart-timing"
@@ -5209,7 +5338,7 @@ function renderTpsChart(data, remaskSet, isAutoregressive) {
   }
   // See renderTimingChart on why this is shown before building.
   if (section) { section.hidden = false; }
-  timingPageReady.tps = true;
+  slotReady.timing.tps = true;
 
   var values = tokenRateSeries(produced, elapsed);
   var original = tpsOriginalValues(data, isAutoregressive);
@@ -5565,9 +5694,13 @@ function renderConfidenceChart(data) {
   var meanConf = data.mean_conf;
   if (!meanConf || meanConf.length === 0) {
     if (section) { section.hidden = true; }
+    // The slot may still have its stopping page to show.
+    applySlotPage("confidence");
     return;
   }
+  // See renderTimingChart on why this is shown before building.
   if (section) { section.hidden = false; }
+  slotReady.confidence.confidence = true;
 
   var canvas = document.getElementById(
     "chart-confidence"
@@ -5603,6 +5736,9 @@ function renderConfidenceChart(data) {
   );
   chartInstances.confidence = chartConfidence;
   updateComparePins("confidence", !!original);
+  // The stopping page arrives with the frames payload, in either
+  // order with this one, so each settles the slot as it lands.
+  applySlotPage("confidence");
 }
 
 // Fractions to whole percents, preserving nulls so a frame that
@@ -5693,6 +5829,323 @@ function confidenceOptions() {
         beginAtZero: true,
         max: 100,
       },
+    },
+  };
+}
+
+// ---- Stopping ----
+//
+// Each frame's mean entropy against the stop threshold the run ran
+// under, for a model that stops adaptively. A log axis, because a
+// canvas falls three or four orders of magnitude on its way to the
+// line and a linear one would put all but its first frames on the
+// floor. The track is the readout's own (overlays.js), so the chart
+// and the readout above the canvas cannot disagree about a frame. A
+// committed canvas carries no entropy, so the line breaks there,
+// which is also where one canvas ends and the next begins.
+
+var STOPPING_COLOR = "#a98bff";
+// Where a canvas stopped, in the readout's green for a met rule.
+var STOPPING_MET_COLOR = "#00ff41";
+var STOPPING_THRESHOLD_COLOR = "rgba(0, 255, 65, 0.55)";
+// Chart.defaults' own face and size, set at the top of this file.
+var STOPPING_LABEL_FONT = "10px 'JetBrains Mono', monospace";
+// A ring on a frame where nothing changed, a dot where it stopped.
+var STOPPING_STEADY_RADIUS = 2.5;
+var STOPPING_STOP_RADIUS = 4;
+
+// Tear the chart down and take its page out of the slot. Called
+// before a new run's frames are fetched, beside clearEntropyChart.
+function clearStoppingChart() {
+  chartStopping = destroyChart(chartStopping);
+  chartInstances.stopping = null;
+  slotReady.confidence.stopping = false;
+  var section = document.getElementById("stopping-section");
+  if (section) {
+    section.hidden = true;
+  }
+  updateComparePins("stopping", false);
+}
+
+function renderStoppingChart(data) {
+  var rule = overlaysStopRuleFrom(data.stop_rule, null);
+  var edited = rule
+    ? stoppingSeries(overlayPrimary(), false, rule)
+    : null;
+  if (!edited) {
+    applySlotPage("confidence");
+    return;
+  }
+  var original = stoppingSeries(overlayBaseline(), true, rule);
+  var section = document.getElementById("stopping-section");
+  // See renderTimingChart on why this is shown before building.
+  if (section) {
+    section.hidden = false;
+  }
+  slotReady.confidence.stopping = true;
+  var datasets = [];
+  if (original) {
+    datasets.push(stoppingOriginalDataset(original));
+  }
+  datasets.push(stoppingEditedDataset(edited, !!original));
+  var canvas = document.getElementById("chart-stopping");
+  chartStopping = new Chart(canvas.getContext("2d"), {
+    type: "line",
+    data: {
+      labels: compareFrameLabels(
+        edited.values, original ? original.values : null
+      ),
+      datasets: datasets,
+    },
+    options: stoppingOptions(rule, edited),
+    plugins: [
+      stopThresholdPlugin(rule.threshold),
+      canvasBoundaryPlugin(stoppingBoundaries(data.canvas_index)),
+      burnThroughPlugin,
+      seriesBlendPlugin("stopping"),
+    ],
+  });
+  chartInstances.stopping = chartStopping;
+  updateComparePins("stopping", !!original);
+  applySlotPage("confidence");
+}
+
+// One run's series: each frame's mean entropy, null where the frame
+// is a commit or was never measured, with the track behind it and the
+// frames where a canvas stopped. Null when no frame carries entropy,
+// which is every run saved before entropy was recorded everywhere.
+function stoppingSeries(series, original, rule) {
+  var count = overlaySeriesLength(series);
+  if (count === 0) {
+    return null;
+  }
+  var track = overlaysStopTrack(stopSourceOf(series, original));
+  var values = [];
+  var drafts = 0;
+  for (var f = 0; f < count; f++) {
+    var draft = track[f].kind === OVERLAYS_STOP_DRAFT;
+    values.push(draft ? track[f].entropy : null);
+    drafts += draft ? 1 : 0;
+  }
+  if (drafts === 0) {
+    return null;
+  }
+  return {
+    values: values,
+    track: track,
+    stops: stoppingStops(track, rule),
+  };
+}
+
+// The last draft of every canvas that ended by the rule, by frame,
+// judged as the readout judges a commit: by its length against the
+// budget.
+function stoppingStops(track, rule) {
+  var stops = {};
+  for (var f = 1; f < track.length; f++) {
+    if (track[f].kind !== OVERLAYS_STOP_COMMIT) {
+      continue;
+    }
+    var reading = overlaysStopReadingAt(track, f, rule);
+    var last = track[f - 1].kind === OVERLAYS_STOP_DRAFT;
+    if (reading && reading.stopped && last) {
+      stops[f - 1] = true;
+    }
+  }
+  return stops;
+}
+
+// Which mark a frame wears: where its canvas stopped, a frame on
+// which nothing changed, or none.
+function stoppingMark(series, frame) {
+  if (series.stops[frame]) {
+    return "stop";
+  }
+  var entry = series.track[frame];
+  if (entry.kind === OVERLAYS_STOP_DRAFT && entry.changed === 0) {
+    return "steady";
+  }
+  return "none";
+}
+
+function stoppingMarkStyles(series) {
+  var radius = { stop: STOPPING_STOP_RADIUS,
+    steady: STOPPING_STEADY_RADIUS, none: 0 };
+  var fill = { stop: STOPPING_MET_COLOR, steady: "transparent",
+    none: STOPPING_COLOR };
+  var border = { stop: STOPPING_MET_COLOR, steady: STOPPING_COLOR,
+    none: STOPPING_COLOR };
+  var styles = { radius: [], fill: [], border: [] };
+  for (var f = 0; f < series.values.length; f++) {
+    var mark = stoppingMark(series, f);
+    styles.radius.push(radius[mark]);
+    styles.fill.push(fill[mark]);
+    styles.border.push(border[mark]);
+  }
+  return styles;
+}
+
+// See timingEditedDataset for what ``paired`` switches and why. Gaps
+// stay gaps: a line drawn across a commit would join two canvases
+// that have nothing to do with each other.
+function stoppingEditedDataset(series, paired) {
+  var styles = stoppingMarkStyles(series);
+  return {
+    label: paired ? "Edited" : "Mean entropy",
+    data: series.values,
+    borderColor: STOPPING_COLOR,
+    borderDash: paired ? COMPARE_EDITED_DASH : [],
+    fill: false,
+    tension: 0.2,
+    borderWidth: 1.5,
+    spanGaps: false,
+    pointRadius: styles.radius,
+    pointBackgroundColor: styles.fill,
+    pointBorderColor: styles.border,
+    pointBorderWidth: 1,
+  };
+}
+
+function stoppingOriginalDataset(series) {
+  var dataset = compareOriginalDataset(series.values);
+  dataset.spanGaps = false;
+  return dataset;
+}
+
+function stoppingOptions(rule, edited) {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    layout: chartGutterLayout(),
+    interaction: {
+      mode: "index",
+      intersect: false,
+    },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        position: "smart",
+        caretSize: 0,
+        xAlign: "left",
+        yAlign: "top",
+        filter: function (item) {
+          return seriesRowVisible("stopping", item);
+        },
+        callbacks: {
+          title: tooltipTitle,
+          labelColor: lineLabelColor,
+          label: function (ctx) {
+            return ctx.dataset.label + ": "
+              + overlaysStopEntropyText(ctx.parsed.y) + " nats";
+          },
+          afterLabel: function (ctx) {
+            if (!isEditedDataset(ctx)) { return ""; }
+            return stoppingNote(edited, ctx.dataIndex, rule);
+          },
+        },
+      },
+      zoom: zoomPluginOptions(),
+    },
+    scales: stoppingScales(rule),
+  };
+}
+
+function stoppingScales(rule) {
+  return {
+    x: {
+      title: {
+        display: true,
+        text: "Frame",
+      },
+      ticks: { maxTicksLimit: 12 },
+    },
+    y: {
+      type: "logarithmic",
+      title: {
+        display: true,
+        text: "Mean entropy (nats)",
+      },
+      // The readout's own range, so the threshold always sits a
+      // decade above the floor whatever the run set it to.
+      suggestedMin:
+        rule.threshold * OVERLAYS_STOP_TRACE_FLOOR_RATIO,
+      suggestedMax: OVERLAYS_STOP_TRACE_TOP_NATS,
+      ticks: { callback: stoppingTickLabel },
+    },
+  };
+}
+
+// The branch's line in the tooltip: the readout's words for the
+// frame, and where a canvas stopped, that it stopped there.
+function stoppingNote(series, frame, rule) {
+  var reading = overlaysStopReadingAt(series.track, frame, rule);
+  if (!reading) {
+    return "";
+  }
+  var words = overlaysStopWords(reading);
+  return series.stops[frame]
+    ? words + "; the canvas stopped here"
+    : words;
+}
+
+// Labels only the powers of ten, which is where a log axis keeps
+// its meaning; the ticks between stay as unlabelled gridlines.
+function stoppingTickLabel(value) {
+  var power = Math.log10(value);
+  if (Math.abs(power - Math.round(power)) > 1e-9) {
+    return "";
+  }
+  return String(Number(value.toPrecision(1)));
+}
+
+// The frames where a new canvas begins: canvas_boundaries in
+// src/analytics/metrics.py, for a payload that carries the indices.
+function stoppingBoundaries(canvasIndex) {
+  var boundaries = [];
+  if (!Array.isArray(canvasIndex)) {
+    return boundaries;
+  }
+  for (var i = 1; i < canvasIndex.length; i++) {
+    if (canvasIndex[i] !== canvasIndex[i - 1]) {
+      boundaries.push(i);
+    }
+  }
+  return boundaries;
+}
+
+// Inline Chart.js plugin: the threshold as a dashed line across the
+// plot, labelled so "below the line" reads without a legend. Drawn
+// before the datasets, so a line or a mark always sits on top of the
+// annotation rather than under it. The label hangs under the line at
+// its left end: every canvas approaches the threshold from above and
+// only its last draft or two dip below, and a run opens far above it.
+function stopThresholdPlugin(threshold) {
+  return {
+    id: "stopThreshold",
+    beforeDatasetsDraw: function (chart) {
+      var xScale = chart.scales.x;
+      var yScale = chart.scales.y;
+      var y = yScale.getPixelForValue(threshold);
+      if (!(y >= yScale.top && y <= yScale.bottom)) {
+        return;
+      }
+      var ctx = chart.ctx;
+      ctx.save();
+      ctx.strokeStyle = STOPPING_THRESHOLD_COLOR;
+      ctx.fillStyle = STOPPING_THRESHOLD_COLOR;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(xScale.left, y);
+      ctx.lineTo(xScale.right, y);
+      ctx.stroke();
+      ctx.font = STOPPING_LABEL_FONT;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      ctx.fillText(
+        "stops below " + threshold, xScale.left + 4, y + 3
+      );
+      ctx.restore();
     },
   };
 }
@@ -7039,7 +7492,7 @@ modalCollectionDelete.addEventListener("click", function (e) {
 
 wireOverlayDiffControls();
 wireOverlayScrubber();
-wireTimingPager();
+wireSlotPagers();
 
 if (overlayHighlightCheckbox) {
   overlayHighlightCheckbox.addEventListener(
@@ -7093,6 +7546,7 @@ if (runBlendInput) {
 // persistHydrate is synchronous when that state was inlined, and
 // always runs its callback either way.
 overlaysBuildTokenMetrics(tokenMetricsStrip);
+overlaysBuildStopReadout(stopReadout);
 
 persistHydrate(function () {
   updateOverlayHoverHighlight();

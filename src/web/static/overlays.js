@@ -887,6 +887,506 @@ function overlaysFrameReader(frames) {
   };
 }
 
+// ---- Adaptive stopping ----
+//
+// DiffusionGemma ends a canvas once two things hold at once: it is
+// steady, unchanged for `stability_threshold` steps, and confident,
+// its mean entropy below `confidence_threshold` nats. Everything
+// needed to watch that happen is already on the frames: every
+// position of a draft carries its entropy, `e`, and whether it
+// changed since the last draft, `m`. A committed canvas carries no
+// entropy at all, which is how its frame is told apart.
+//
+// Read off the frames rather than reported by the worker, and checked
+// before it was built: on five saved runs, nine canvases and 144
+// drafts, "both hold" was true on exactly the frame each canvas
+// stopped. What it can get wrong is bounded by what the page is
+// sent, each position's entropy to four decimals from a bf16 copy of
+// the logits the model judged, so a mean within about 0.0001 nats of
+// the threshold could read either way. The verdict on a committed
+// canvas does not depend on that; see overlaysStopReadingAt.
+//
+// A rule is { threshold, steadySteps, budget }: the two parameters
+// and the canvas's step budget, `max_denoising_steps`.
+
+var OVERLAYS_STOP_DRAFT = "draft";
+var OVERLAYS_STOP_COMMIT = "commit";
+var OVERLAYS_STOP_NONE = "none";
+
+// The trace's vertical scale, in nats. A canvas opens near 4.5, so
+// ten leaves headroom; the floor sits a decade under the threshold,
+// so the dashed line is never on the frame's edge whatever the run
+// set it to.
+var OVERLAYS_STOP_TRACE_TOP_NATS = 10;
+var OVERLAYS_STOP_TRACE_FLOOR_RATIO = 0.1;
+// The resource meter's footprint, so the two read as one family.
+var OVERLAYS_STOP_TRACE_WIDTH = 62;
+var OVERLAYS_STOP_TRACE_HEIGHT = 13;
+var OVERLAYS_STOP_TRACE_LINE = "#b8b8b8";
+var OVERLAYS_STOP_TRACE_RULE = "rgba(0, 255, 65, 0.45)";
+var OVERLAYS_STOP_TRACE_MET = "#00ff41";
+var OVERLAYS_STOP_TRACE_DOT = "#e6e6e6";
+
+// The rule a run stopped by, from its parameters by their registry
+// names, or null when they do not make a rule. `fallback` supplies
+// any the run did not record: the generator passes the model's
+// defaults, Analytics passes nothing because the server already did.
+function overlaysStopRuleFrom(params, fallback) {
+  var pick = function (name) {
+    if (params && params[name] !== undefined) {
+      return Number(params[name]);
+    }
+    return fallback ? Number(fallback[name]) : NaN;
+  };
+  var rule = {
+    threshold: pick("confidence_threshold"),
+    steadySteps: pick("stability_threshold"),
+    budget: pick("max_denoising_steps"),
+  };
+  if (!(isFinite(rule.threshold) && rule.threshold > 0)) {
+    return null;
+  }
+  var steady = rule.steadySteps;
+  if (!(Number.isInteger(steady) && steady >= 0)) {
+    return null;
+  }
+  if (!(Number.isInteger(rule.budget) && rule.budget >= 1)) {
+    return null;
+  }
+  return rule;
+}
+
+// One frame's two measurements: the mean of `e` when every position
+// carries one, and how many positions changed. Entropy is null where
+// no position carries it, which is a committed canvas or a run saved
+// before entropy was recorded everywhere. A frame where only some
+// positions carry it reads as nothing at all rather than as a mean
+// over that subset, which was the bias the 2026-08-28 change removed.
+function overlaysStopSummary(tokens) {
+  if (!tokens || tokens.length === 0) {
+    return null;
+  }
+  var sum = 0;
+  var measured = 0;
+  var changed = 0;
+  for (var i = 0; i < tokens.length; i++) {
+    var tok = tokens[i];
+    if (tok && typeof tok.e === "number" && isFinite(tok.e)) {
+      sum += tok.e;
+      measured += 1;
+    }
+    if (tok && tok.m) {
+      changed += 1;
+    }
+  }
+  if (measured === tokens.length) {
+    return { entropy: sum / measured, changed: changed };
+  }
+  if (measured === 0) {
+    return { entropy: null, changed: changed };
+  }
+  return null;
+}
+
+// The stopping state of every frame of a run, in one pass.
+//
+// `source` reads the run the way the pages hold it:
+//   { count, readFrame(f), canvasAt(f), segmentStarts }
+// where segmentStarts lists the first frame of each resumed segment,
+// which is each edit's frame_index: the page truncates at that frame
+// and the resume's first frame takes its place.
+//
+// Each entry is { kind, entropy, changed, steady, step, canvas }.
+// `steady` counts consecutive drafts with nothing changed, as
+// transformers keeps it: it restarts with every canvas and every
+// resume, since each begins a history that cannot yet be steady.
+// `step` is a draft's place in its canvas, from 1, and a resume
+// carries on counting the canvas it branched from; a commit holds
+// the number of drafts before it.
+function overlaysStopTrack(source) {
+  var starts = {};
+  var segments = source.segmentStarts || [];
+  for (var s = 0; s < segments.length; s++) {
+    starts[segments[s]] = true;
+  }
+  var state = { canvas: null, steady: 0, step: 0 };
+  var track = [];
+  for (var f = 0; f < source.count; f++) {
+    track.push(overlaysStopStep(
+      state,
+      overlaysStopSummary(source.readFrame(f)),
+      source.canvasAt(f),
+      starts[f] === true
+    ));
+  }
+  return track;
+}
+
+// One frame of the track, advancing `state` in place.
+function overlaysStopStep(state, summary, canvas, segmentStart) {
+  if (canvas !== state.canvas) {
+    state.canvas = canvas;
+    state.steady = 0;
+    state.step = 0;
+  }
+  var entry = {
+    kind: OVERLAYS_STOP_NONE,
+    entropy: null,
+    changed: summary ? summary.changed : 0,
+    steady: 0,
+    step: state.step,
+    canvas: canvas,
+  };
+  if (summary === null) {
+    return entry;
+  }
+  if (summary.entropy === null) {
+    // Only a commit if drafts with entropy came before it in this
+    // canvas; otherwise this is a run that never measured any.
+    if (state.step > 0 && summary.changed === 0) {
+      entry.kind = OVERLAYS_STOP_COMMIT;
+    }
+    return entry;
+  }
+  state.step += 1;
+  // A canvas's first draft and a resume's first frame begin a fresh
+  // history, which cannot be steady whatever `m` says about them.
+  var fresh = segmentStart || state.step === 1;
+  if (fresh || summary.changed > 0) {
+    state.steady = 0;
+  } else {
+    state.steady += 1;
+  }
+  entry.kind = OVERLAYS_STOP_DRAFT;
+  entry.entropy = summary.entropy;
+  entry.steady = state.steady;
+  entry.step = state.step;
+  return entry;
+}
+
+// What the readout shows for frame `index`, or null for nothing.
+//
+// The verdict on a committed canvas compares its draft count with the
+// budget rather than re-judging its last draft. A canvas ends early
+// only by the rule, a stopped run commits nothing, and a resumed
+// canvas keeps frame_index drafts and is given budget - frame_index
+// more, so "fewer drafts than the budget" is exactly "stopped by the
+// rule", with no rounding to get wrong.
+function overlaysStopReadingAt(track, index, rule) {
+  var entry = track[index];
+  if (!rule || !entry || entry.kind === OVERLAYS_STOP_NONE) {
+    return null;
+  }
+  var reading = {
+    kind: entry.kind,
+    canvas: entry.canvas,
+    step: entry.step,
+    trace: overlaysStopTrace(track, index),
+    rule: rule,
+  };
+  if (entry.kind === OVERLAYS_STOP_COMMIT) {
+    reading.stopped = entry.step < rule.budget;
+    return reading;
+  }
+  reading.entropy = entry.entropy;
+  reading.changed = entry.changed;
+  reading.steady = entry.steady;
+  reading.entropyMet = entry.entropy < rule.threshold;
+  reading.steadyMet = entry.steady >= rule.steadySteps;
+  return reading;
+}
+
+// The drafts of frame `index`'s canvas up to it, as
+// { step, entropy }, which is everything the trace draws.
+function overlaysStopTrace(track, index) {
+  var canvas = track[index].canvas;
+  var start = index;
+  while (start > 0 && track[start - 1].canvas === canvas) {
+    start -= 1;
+  }
+  var points = [];
+  for (var f = start; f <= index; f++) {
+    if (track[f].kind === OVERLAYS_STOP_DRAFT) {
+      points.push({ step: track[f].step, entropy: track[f].entropy });
+    }
+  }
+  return points;
+}
+
+// Two significant figures below one nat and two decimals above, so
+// 4.51 and 0.0047 take the same room and 0.0047 still shows how close
+// it is to 0.005.
+function overlaysStopEntropyText(value) {
+  if (value === 0) {
+    return "0";
+  }
+  if (value >= 1) {
+    return value.toFixed(2);
+  }
+  return value.toPrecision(2);
+}
+
+function overlaysStopPlural(count, noun) {
+  return count === 1 ? noun : noun + "s";
+}
+
+// The readout's words, as clauses that each know whether they are
+// met. A part is plain text or a value, which the strip's idiom
+// draws brighter.
+function overlaysStopClauses(reading) {
+  if (reading.kind === OVERLAYS_STOP_COMMIT) {
+    return [overlaysStopVerdictClause(reading)];
+  }
+  var clauses = [{
+    met: reading.entropyMet,
+    parts: [
+      { text: "entropy " },
+      { text: overlaysStopEntropyText(reading.entropy), value: true },
+      { text: " of " + reading.rule.threshold },
+    ],
+  }];
+  if (reading.rule.steadySteps > 0) {
+    clauses.push({ met: false, parts: [{ text: ", " }] });
+    clauses.push(overlaysStopSteadyClause(reading));
+  }
+  return clauses;
+}
+
+// The same words as plain text, for a surface that cannot colour
+// them: the Stopping chart's tooltip says what the readout says.
+function overlaysStopWords(reading) {
+  var clauses = overlaysStopClauses(reading);
+  var text = "";
+  for (var c = 0; c < clauses.length; c++) {
+    for (var p = 0; p < clauses[c].parts.length; p++) {
+      text += clauses[c].parts[p].text;
+    }
+  }
+  return text;
+}
+
+// "13 changing" while anything moves, then "steady 1 of 2" as the
+// count builds, and "steady" once it is enough.
+function overlaysStopSteadyClause(reading) {
+  if (reading.changed > 0) {
+    return {
+      met: false,
+      parts: [
+        { text: String(reading.changed), value: true },
+        { text: " changing" },
+      ],
+    };
+  }
+  if (reading.steadyMet) {
+    return { met: true, parts: [{ text: "steady" }] };
+  }
+  return {
+    met: false,
+    parts: [
+      { text: "steady " },
+      { text: String(reading.steady), value: true },
+      { text: " of " + reading.rule.steadySteps },
+    ],
+  };
+}
+
+function overlaysStopVerdictClause(reading) {
+  var steps = reading.step;
+  var noun = overlaysStopPlural(steps, " step");
+  var parts = [
+    { text: "Canvas " },
+    { text: String(reading.canvas + 1), value: true },
+  ];
+  if (reading.stopped) {
+    parts.push({ text: " stopped after " });
+  } else {
+    parts.push({ text: " used all " });
+  }
+  parts.push({ text: String(steps), value: true });
+  parts.push({ text: noun });
+  return { met: reading.stopped, parts: parts };
+}
+
+// The rule in a sentence, with the run's own numbers, for the
+// readout's tooltip.
+function overlaysStopRuleText(rule) {
+  var steps = rule.steadySteps;
+  var steady = steps > 0
+    ? " and no position has changed for " + steps
+      + overlaysStopPlural(steps, " step")
+    : "";
+  return "A canvas stops once its mean entropy is below "
+    + rule.threshold + " nats" + steady
+    + ", or once it has used all " + rule.budget
+    + overlaysStopPlural(rule.budget, " step") + ".";
+}
+
+// Build the readout's children once; each page calls this at boot,
+// as it does for the strip, so the structure lives in one place.
+function overlaysBuildStopReadout(el) {
+  if (!el) {
+    return;
+  }
+  el.textContent = "";
+  var label = document.createElement("span");
+  label.className = "stop-readout-label";
+  label.textContent = "Stop";
+  var trace = document.createElement("canvas");
+  trace.className = "stop-readout-trace";
+  var text = document.createElement("span");
+  text.className = "stop-readout-text";
+  el.appendChild(label);
+  el.appendChild(trace);
+  el.appendChild(text);
+  el.overlaysStopNodes = { trace: trace, text: text };
+  el.hidden = true;
+}
+
+// Render a reading, or hide the readout when it is null. Hidden
+// rather than blanked, because a model that does not stop adaptively
+// has nothing to report and an empty frame would read as one waiting.
+function overlaysRenderStopReadout(el, reading) {
+  if (!el || !el.overlaysStopNodes) {
+    return;
+  }
+  if (!reading) {
+    el.hidden = true;
+    el.removeAttribute("title");
+    return;
+  }
+  el.hidden = false;
+  el.setAttribute("title", overlaysStopRuleText(reading.rule));
+  overlaysStopWriteClauses(
+    el.overlaysStopNodes.text, overlaysStopClauses(reading)
+  );
+  overlaysDrawStopTrace(el.overlaysStopNodes.trace, reading);
+}
+
+function overlaysStopWriteClauses(target, clauses) {
+  target.innerHTML = "";
+  for (var c = 0; c < clauses.length; c++) {
+    var clause = document.createElement("span");
+    clause.className = clauses[c].met
+      ? "stop-readout-clause is-met"
+      : "stop-readout-clause";
+    var parts = clauses[c].parts;
+    for (var p = 0; p < parts.length; p++) {
+      var part = document.createElement("span");
+      if (parts[p].value) {
+        part.className = "stop-readout-value";
+      }
+      part.textContent = parts[p].text;
+      clause.appendChild(part);
+    }
+    target.appendChild(clause);
+  }
+}
+
+// Where the trace's marks fall in a box of `width` by `height`: the
+// threshold's height, and one point per draft. Log scale, because a
+// canvas's entropy falls three or four orders of magnitude on its
+// way to the threshold; across the step budget, so a canvas that
+// runs to its limit reaches the right edge.
+function overlaysStopTraceLayout(reading, width, height) {
+  var top = Math.log(OVERLAYS_STOP_TRACE_TOP_NATS);
+  var floor =
+    reading.rule.threshold * OVERLAYS_STOP_TRACE_FLOOR_RATIO;
+  var span = top - Math.log(floor);
+  var yOf = function (entropy) {
+    var clamped = Math.min(
+      OVERLAYS_STOP_TRACE_TOP_NATS, Math.max(floor, entropy)
+    );
+    return ((top - Math.log(clamped)) / span) * height;
+  };
+  var budget = reading.rule.budget;
+  var xOf = function (step) {
+    if (budget <= 1) {
+      return width / 2;
+    }
+    return (Math.min(step, budget) - 1) / (budget - 1) * width;
+  };
+  var points = [];
+  for (var i = 0; i < reading.trace.length; i++) {
+    var mark = reading.trace[i];
+    points.push({ x: xOf(mark.step), y: yOf(mark.entropy) });
+  }
+  return { threshold: yOf(reading.rule.threshold), points: points };
+}
+
+function overlaysDrawStopTrace(canvas, reading) {
+  var ratio = window.devicePixelRatio || 1;
+  var width = canvas.clientWidth || OVERLAYS_STOP_TRACE_WIDTH;
+  var height = canvas.clientHeight || OVERLAYS_STOP_TRACE_HEIGHT;
+  canvas.width = Math.round(width * ratio);
+  canvas.height = Math.round(height * ratio);
+  var ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return;
+  }
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  var layout = overlaysStopTraceLayout(reading, width, height);
+  ctx.setLineDash([2, 2]);
+  ctx.strokeStyle = OVERLAYS_STOP_TRACE_RULE;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, layout.threshold);
+  ctx.lineTo(width, layout.threshold);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  overlaysDrawStopTraceLine(ctx, layout.points, reading);
+}
+
+function overlaysDrawStopTraceLine(ctx, points, reading) {
+  if (points.length === 0) {
+    return;
+  }
+  ctx.strokeStyle = OVERLAYS_STOP_TRACE_LINE;
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  for (var i = 1; i < points.length; i++) {
+    ctx.lineTo(points[i].x, points[i].y);
+  }
+  ctx.stroke();
+  var last = points[points.length - 1];
+  var final = reading.trace[reading.trace.length - 1];
+  ctx.fillStyle = final.entropy < reading.rule.threshold
+    ? OVERLAYS_STOP_TRACE_MET
+    : OVERLAYS_STOP_TRACE_DOT;
+  ctx.beginPath();
+  ctx.arc(last.x, last.y, 1.6, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// Let the readout's words give way before the strip's own content is
+// cut. The strip is nowrap with its overflow hidden, so without this
+// whatever is widest simply falls off its end. Measured with the
+// words shown and hidden only if the strip then comes up short, or
+// its overlay note is cut; the label and trace stay, so the canvas's
+// progress is still on screen. Each page calls it after drawing
+// either the strip or the readout.
+function overlaysFitStopReadout(strip, readout) {
+  if (!strip || !readout) {
+    return;
+  }
+  readout.removeAttribute("data-compact");
+  if (readout.hidden) {
+    return;
+  }
+  if (overlaysStripClipped(strip)) {
+    readout.setAttribute("data-compact", "");
+  }
+}
+
+function overlaysStripClipped(strip) {
+  if (strip.scrollWidth > strip.clientWidth) {
+    return true;
+  }
+  var nodes = strip.overlaysMetricNodes;
+  var extra = nodes ? nodes.extra : null;
+  return !!extra && extra.scrollWidth > extra.clientWidth;
+}
+
 // ---- Revisions ----
 //
 // A revision is a position settling on a different token from the

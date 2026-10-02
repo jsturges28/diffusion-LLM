@@ -173,6 +173,8 @@ Per-token **confidence** and **entropy** on every model, declared by
 the unit and the axes they vary over, so a reader knows whether a
 signal belongs to a position or to a position at a frame. Optional
 top-5 **alternatives** capture with a hover popover and true ranks.
+For DiffusionGemma, a **stopping readout** shows how far each canvas
+is from its adaptive stop, by two thresholds you can set.
 
 An **Analytics Suite** with a run browser, collections and favourites,
 a detail modal carrying the token canvas and four charts, run

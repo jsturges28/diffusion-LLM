@@ -224,8 +224,18 @@
                      element and same renderer as the generator's, so
                      the two pages read identically. Distinct id from
                      #overlay-readout, which is the drawer's diff
-                     summary. -->
-                <div id="token-metrics" class="token-metrics"></div>
+                     summary.
+
+                     Beside it, for a run whose model stops
+                     adaptively, how far the canvas at the scrubbed
+                     frame was from stopping: the generator's readout,
+                     set as a sibling for the same reason, so the
+                     strip's idle dimming never reaches it. -->
+                <div class="token-metrics-row">
+                  <div id="token-metrics" class="token-metrics"></div>
+                  <div id="stop-readout" class="stop-readout"
+                    hidden></div>
+                </div>
                 <!-- Bordered canvas; the overlay drawer tucks into
                      its top-right corner, like the generator's. -->
                 <div id="overlay-output-wrap">
@@ -437,10 +447,27 @@
                 </div>
               </div>
 
+              <!-- Confidence and Stopping are one slot, paged like
+                   Timing: the model's certainty per frame, and how
+                   far that certainty had left to fall before the
+                   canvas could stop. The pager shows only for a run
+                   that can draw both. -->
               <div class="chart-section" id="confidence-section"
                 hidden>
                 <div class="chart-header-row">
-                  <h3>Confidence</h3>
+                  <div class="chart-title-group">
+                    <h3>Confidence</h3>
+                    <span class="alt-pager">
+                      <button type="button" class="alt-pager-btn"
+                        data-confidence-page="confidence" disabled
+                        title="Confidence"
+                        aria-label="Confidence">&#8249;</button>
+                      <button type="button" class="alt-pager-btn"
+                        data-confidence-page="stopping"
+                        title="Stopping"
+                        aria-label="Stopping">&#8250;</button>
+                    </span>
+                  </div>
                   <div class="zoom-controls">
                     <button class="zoom-btn tooltip-toggle-btn" data-chart="confidence"
                       title="Toggle tooltip box" aria-label="Toggle tooltip box">
@@ -471,6 +498,64 @@
                     <button class="zoom-btn" data-chart="confidence"
                       data-action="out" title="Zoom out">&minus;</button>
                     <button class="zoom-btn" data-chart="confidence"
+                      data-action="reset"
+                      title="Reset zoom">&#8634;</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Each frame's mean entropy against the run's stop
+                   threshold, for a model that stops adaptively. A log
+                   axis, because a canvas falls three or four orders
+                   of magnitude on its way to the line. Built from the
+                   frames payload, like Entropy by Position, because
+                   it needs every position's entropy. -->
+              <div class="chart-section" id="stopping-section"
+                hidden>
+                <div class="chart-header-row">
+                  <div class="chart-title-group">
+                    <h3>Stopping</h3>
+                    <span class="alt-pager">
+                      <button type="button" class="alt-pager-btn"
+                        data-confidence-page="confidence"
+                        title="Confidence"
+                        aria-label="Confidence">&#8249;</button>
+                      <button type="button" class="alt-pager-btn"
+                        data-confidence-page="stopping" disabled
+                        title="Stopping"
+                        aria-label="Stopping">&#8250;</button>
+                    </span>
+                  </div>
+                  <div class="zoom-controls">
+                    <button class="zoom-btn tooltip-toggle-btn" data-chart="stopping"
+                      title="Toggle tooltip box" aria-label="Toggle tooltip box">
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" /><circle cx="12" cy="12" r="3" /><line class="eye-slash" x1="3" y1="3" x2="21" y2="21" /></svg>
+                    </button>
+                    <div class="compare-pins" data-chart="stopping"
+                      hidden>
+                      <button class="zoom-btn compare-pin-btn"
+                        data-chart="stopping"
+                        data-series="original"
+                        title="Show the original run"
+                        aria-label="Show the original run"
+                        aria-pressed="true">1</button>
+                      <button class="zoom-btn compare-pin-btn"
+                        data-chart="stopping"
+                        data-series="edited"
+                        title="Show the edited run"
+                        aria-label="Show the edited run"
+                        aria-pressed="true">2</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="chart-wrap">
+                  <canvas id="chart-stopping"></canvas>
+                  <div class="chart-zoom-dock">
+                    <button class="zoom-btn" data-chart="stopping"
+                      data-action="in" title="Zoom in">+</button>
+                    <button class="zoom-btn" data-chart="stopping"
+                      data-action="out" title="Zoom out">&minus;</button>
+                    <button class="zoom-btn" data-chart="stopping"
                       data-action="reset"
                       title="Reset zoom">&#8634;</button>
                   </div>
