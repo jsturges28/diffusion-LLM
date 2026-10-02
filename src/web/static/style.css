@@ -4084,6 +4084,41 @@ input[type="checkbox"].app-checkbox:checked::after {
   );
 }
 
+/* The Revisions overlay's three steps, matching revisionColor in
+   overlays.js. Swatches rather than a bar: the counts are whole
+   numbers, so there is nothing between the steps to draw. */
+#revision-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+#revision-legend[hidden] {
+  display: none;
+}
+
+.revision-legend-swatch {
+  width: 10px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.revision-once {
+  background: #7fe8ff;
+}
+
+.revision-twice {
+  background: #2fd4ff;
+}
+
+.revision-more {
+  background: #00a8e0;
+}
+
 /* Settings rows that pair a label + description with a toggle. */
 .settings-label-group {
   display: flex;

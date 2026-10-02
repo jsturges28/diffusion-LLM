@@ -163,10 +163,11 @@ state-space generation alongside it, replayed through the same tooling.
 Interactive **remasking and resume**: pick tokens at any frame, remask
 them, and regenerate from there, keeping the pre-edit run for
 comparison. **What If?** substitution for the two left-to-right models.
-Five token overlays: a confidence heatmap, commit order, entropy, a
-diff against the pre-edit run with an Original/Edited crossfade, and
-Mamba-3's **forgetting**, what reading each token erased from its
-state.
+Six token overlays: a confidence heatmap, commit order, entropy,
+DiffusionGemma's **revisions**, how often each position changed its
+mind, a diff against the pre-edit run with an Original/Edited
+crossfade, and Mamba-3's **forgetting**, what reading each token
+erased from its state.
 
 Per-token **confidence** and **entropy** on every model, declared by
 the unit and the axes they vary over, so a reader knows whether a

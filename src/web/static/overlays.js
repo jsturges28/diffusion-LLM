@@ -887,6 +887,150 @@ function overlaysFrameReader(frames) {
   };
 }
 
+// ---- Revisions ----
+//
+// A revision is a position settling on a different token from the
+// last one it settled on, in the same canvas. Only DiffusionGemma
+// does it: LLaDA never revisits a settled position, and a model that
+// appends never revisits anything, so on those runs every count here
+// comes out zero and nothing is offered.
+//
+// A first settle is a birth, which the worker reports and the birth
+// glow marks, so it is never also a revision; nor is a return to the
+// token a position already held. An edit resets the positions it
+// remasked, so their next settle is a birth as well. That is what the
+// worker reports on a resume, on both models, and a change the user
+// asked for is not the model changing its mind.
+//
+// The fold is what one frame hands the next: the canvas it belongs
+// to, and the id each position last settled on.
+function overlaysRevisionFold() {
+  return { canvas: null, settled: [] };
+}
+
+// One frame's revised positions, and the fold after it. ``remasked``
+// lists the positions an edit sent back at this frame; they forget
+// their token before the frame is read. A new canvas starts empty,
+// because its positions are unrelated to the last canvas's.
+function overlaysRevisionStep(fold, tokens, canvas, remasked) {
+  var settled = fold.canvas === canvas ? fold.settled.slice() : [];
+  for (var r = 0; r < remasked.length; r++) {
+    settled[remasked[r]] = undefined;
+  }
+  var revised = [];
+  for (var i = 0; i < tokens.length; i++) {
+    var token = tokens[i];
+    if (!token || token.m) {
+      continue;
+    }
+    var last = settled[i];
+    if (typeof last === "number" && last !== token.id) {
+      revised.push(i);
+    }
+    settled[i] = token.id;
+  }
+  return {
+    revised: revised,
+    fold: { canvas: canvas, settled: settled },
+  };
+}
+
+// Every frame's revised positions, one array per frame. Takes a
+// reader and a count for the reason overlaysComputeCommitSteps does,
+// and the run's edit log so a remasked position starts over at the
+// frame its edit's branch begins.
+function overlaysComputeRevisions(
+  readFrame, frameCount, canvasOf, edits
+) {
+  if (typeof readFrame !== "function") {
+    throw new Error("revisions: readFrame must be a function");
+  }
+  if (typeof canvasOf !== "function") {
+    throw new Error("revisions: canvasOf must be a function");
+  }
+  var log = edits || [];
+  var revisions = new Array(frameCount);
+  var fold = overlaysRevisionFold();
+  for (var f = 0; f < frameCount; f++) {
+    var step = overlaysRevisionStep(
+      fold,
+      readFrame(f) || [],
+      canvasOf(f),
+      overlaysRemaskedAt(log, f)
+    );
+    revisions[f] = step.revised;
+    fold = step.fold;
+  }
+  return revisions;
+}
+
+// The positions an edit log remasked at ``frame``: the frame its
+// branch begins at, which replaced the frame the edit was made on.
+function overlaysRemaskedAt(edits, frame) {
+  var positions = [];
+  for (var e = 0; e < edits.length; e++) {
+    if (edits[e].frame_index === frame) {
+      positions = positions.concat(edits[e].token_positions || []);
+    }
+  }
+  return positions;
+}
+
+// Whether a run revised anything at all, which is what decides if
+// the overlay is offered.
+function overlaysHasRevisions(revisions) {
+  for (var f = 0; f < revisions.length; f++) {
+    if (revisions[f].length > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// How many times each position had been revised by ``frame``,
+// counted from the first frame of that frame's canvas. Sparse: a
+// position never revised has no entry.
+function overlaysRevisionCounts(revisions, frame, canvasOf) {
+  var counts = [];
+  if (frame < 0 || frame >= revisions.length) {
+    return counts;
+  }
+  var canvas = canvasOf(frame);
+  for (var f = frame; f >= 0 && canvasOf(f) === canvas; f--) {
+    var revised = revisions[f];
+    for (var i = 0; i < revised.length; i++) {
+      counts[revised[i]] = (counts[revised[i]] || 0) + 1;
+    }
+  }
+  return counts;
+}
+
+// Cyan, deepening with how often a position changed its mind: pale
+// for once, saturated for twice, deep for three times or more. Steps
+// rather than a ramp, because the counts are small whole numbers (on
+// saved DiffusionGemma runs nearly every revised position changed one
+// to three times) and three swatches read at a glance where a
+// gradient would need a scale. Its own hue: white is the birth glow,
+// orange is an edit, and the heatmap and the mask are green.
+var OVERLAYS_REVISION_COLORS = ["#7fe8ff", "#2fd4ff", "#00a8e0"];
+
+function revisionColor(count) {
+  if (typeof count !== "number" || count < 1) {
+    return null;
+  }
+  var at = Math.min(count, OVERLAYS_REVISION_COLORS.length) - 1;
+  return OVERLAYS_REVISION_COLORS[at];
+}
+
+// The metrics strip's line for a position under the Revisions
+// overlay, blank where it has not changed.
+function overlaysRevisionReading(count) {
+  if (typeof count !== "number" || count < 1) {
+    return "";
+  }
+  return "Revisions: " + count;
+}
+
 // Per-token color for one layer of the counterfactual diff overlay.
 // The original layer reads cyan in ghost mode (blend off); with the
 // difference blend on it adopts the edited layer's diff colors so

@@ -51,6 +51,8 @@ var overlayReadout =
   document.getElementById("overlay-readout");
 var overlayLegend =
   document.getElementById("overlay-legend");
+var overlayRevisionLegend =
+  document.getElementById("overlay-revision-legend");
 var overlayEmpty =
   document.getElementById("overlay-empty");
 var overlayScrubber =
@@ -85,6 +87,11 @@ var overlayFrameIndex = 0;
 var overlayCommitSteps = null;
 var overlayOriginalCommitSteps = null;
 var overlayDiffData = null;
+// Every frame's revised positions, for the open run and its pre-edit
+// snapshot. What is memoized is the walk; the counts depend on the
+// scrubbed frame, so they are taken at render time.
+var overlayRevisions = null;
+var overlayOriginalRevisions = null;
 // Whether the open run is autoregressive; gates Commit Order off
 // (diffusion-only for now), keeping None + Heatmap + Entropy.
 var overlayIsAutoregressive = false;
@@ -3453,6 +3460,69 @@ function overlaySeriesCommitSteps(series) {
   );
 }
 
+// Every frame's revised positions for a series. A run that only grows
+// never revisits a position, so it has none to find.
+function overlaySeriesRevisions(series, canvasOf, edits) {
+  if (!series || series.positions) {
+    return [];
+  }
+  return overlaysComputeRevisions(
+    overlaysFrameReader(series.frames || []),
+    overlaySeriesLength(series),
+    canvasOf,
+    edits
+  );
+}
+
+// Revisions for whichever run a layer draws, memoized per run. The
+// pre-edit snapshot carries no edits of its own, and an edited run
+// never spans more than one canvas.
+function overlayRevisionsFor(isOriginal) {
+  if (isOriginal) {
+    if (overlayOriginalRevisions === null) {
+      overlayOriginalRevisions = overlaySeriesRevisions(
+        overlayBaseline(), singleCanvas, []
+      );
+    }
+    return overlayOriginalRevisions;
+  }
+  if (overlayRevisions === null) {
+    overlayRevisions = overlaySeriesRevisions(
+      overlayPrimary(),
+      overlayCanvasOf,
+      overlayData ? overlayData.remask_edits : []
+    );
+  }
+  return overlayRevisions;
+}
+
+// How many times each position of a layer had been revised by the
+// frame that layer shows: the scrubbed frame for the run, and that
+// frame clamped to the snapshot's length for the pre-edit layer.
+function overlayRevisionCountsFor(isOriginal) {
+  if (!isOriginal) {
+    return overlaysRevisionCounts(
+      overlayRevisionsFor(false), overlayFrameIndex, overlayCanvasOf
+    );
+  }
+  var index = overlayClampedIndex(overlayBaseline());
+  if (index === null) {
+    return [];
+  }
+  return overlaysRevisionCounts(
+    overlayRevisionsFor(true), index, singleCanvas
+  );
+}
+
+// Whether the Revisions overlay would paint anything: a diffusion run
+// that revised at least one position, asked of its saved frames.
+function overlayRevisionsAvailable() {
+  if (overlayIsAutoregressive || overlayData === null) {
+    return false;
+  }
+  return overlaysHasRevisions(overlayRevisionsFor(false));
+}
+
 // Whether a frame series carries per-token entropy. Checked on the
 // final frame, which is the series' ground truth. Split out from
 // overlayEntropyAvailable so the pre-edit snapshot can be tested the
@@ -3995,6 +4065,7 @@ function showOverlayUnavailable() {
   overlayReadout.textContent = "";
   overlayReadout.hidden = true;
   overlayLegend.hidden = true;
+  overlayRevisionLegend.hidden = true;
   if (overlayDiffControls) {
     overlayDiffControls.hidden = true;
   }
@@ -4012,6 +4083,8 @@ function clearOverlay() {
   overlayCommitSteps = null;
   overlayOriginalCommitSteps = null;
   overlayDiffData = null;
+  overlayRevisions = null;
+  overlayOriginalRevisions = null;
   overlayViewer.hidden = true;
   overlaySelectGroup.hidden = true;
   overlayOutput.textContent = "";
@@ -4020,6 +4093,7 @@ function clearOverlay() {
   overlayReadout.textContent = "";
   overlayReadout.hidden = true;
   overlayLegend.hidden = true;
+  overlayRevisionLegend.hidden = true;
   if (overlayDiffControls) {
     overlayDiffControls.hidden = true;
   }
@@ -4079,6 +4153,11 @@ function buildOverlaySelect(data) {
       disabled: !data.records_available,
     });
   }
+  // How often each position changed its mind, for a run that revised
+  // something: DiffusionGemma, today.
+  if (overlayRevisionsAvailable()) {
+    options.push({ value: "revisions", label: "Revisions" });
+  }
   // A What If substitution gives autoregressive runs a real branch to
   // diff, so list it for them too once the data is there.
   if (!overlayIsAutoregressive || canDiff) {
@@ -4107,6 +4186,7 @@ function setOverlayMode(mode) {
     overlaySelect.value = mode;
   }
   overlayLegend.hidden = mode !== "commit";
+  overlayRevisionLegend.hidden = mode !== "revisions";
   if (overlayDiffControls) {
     overlayDiffControls.hidden = mode !== "diff";
   }
@@ -4123,6 +4203,8 @@ function renderCurrentOverlay() {
     renderDiffOverlay();
   } else if (overlayMode === "commit") {
     renderCommitOverlay();
+  } else if (overlayMode === "revisions") {
+    renderRevisionsOverlay();
   } else if (overlayMode === "heatmap") {
     renderHeatmapOverlay();
   } else if (overlayMode === "entropy") {
@@ -4243,6 +4325,28 @@ function commitColorFor(steps, maxStep) {
       return commitColor(step, maxStep);
     }
     return null;
+  };
+}
+
+// Revisions: tint each settled token by how many times its position
+// had changed its mind by the scrubbed frame. Its colors come from
+// the frame stream, as Commit Order's do, so the pre-edit layer
+// counts its own run at the frame that layer shows.
+function renderRevisionsOverlay() {
+  overlayReadout.hidden = true;
+  overlayReadout.textContent = "";
+  renderOverlayTokens({
+    frame: overlayFrameAt(overlayFrameIndex),
+    colorFor: revisionColorFor(overlayRevisionCountsFor(false)),
+    originalColorFor: revisionColorFor(
+      overlayRevisionCountsFor(true)
+    ),
+  });
+}
+
+function revisionColorFor(counts) {
+  return function (index) {
+    return revisionColor(counts[index]);
   };
 }
 
@@ -4668,6 +4772,11 @@ function metricsExtra(index, tok) {
       return "";
     }
     return "Resolved at step: " + step;
+  }
+  if (overlayMode === "revisions") {
+    return overlaysRevisionReading(
+      overlayRevisionCountsFor(metricsHoverOriginal)[index]
+    );
   }
   if (overlayMode === "diff" && overlayDiffData) {
     if (overlayDiffData.origins[index]) {

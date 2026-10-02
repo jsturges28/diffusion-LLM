@@ -173,6 +173,8 @@ var diffSummary =
   document.getElementById("diff-summary");
 var commitLegend =
   document.getElementById("commit-legend");
+var revisionLegend =
+  document.getElementById("revision-legend");
 var altsPopover =
   document.getElementById("token-alts-popover");
 var entropyProfileRow =
@@ -195,10 +197,9 @@ var runBlendRow =
   document.getElementById("run-blend-row");
 var runBlendInput =
   document.getElementById("run-blend");
-// Active visual overlay chosen in the picker:
-// "none" | "conf" (heatmap) | "diff". Commit-order tinting is a
-// separate persistent setting applied only when no overlay is
-// selected (see effectiveColorMode).
+// Active visual overlay chosen in the picker: "none" | "conf"
+// (heatmap) | "entropy" | "forgetting" | "commit" | "revisions" |
+// "diff". effectiveColorMode drops a selection the run cannot draw.
 var overlayMode = "none";
 // Memoized per-run commit steps (position index -> settle step),
 // null until first needed and invalidated whenever runFrames.tokens
@@ -211,6 +212,13 @@ var originalCommitSteps = null;
 // Memoized intervention diff (branch vs original final frame),
 // null until needed and invalidated alongside commitSteps.
 var diffData = null;
+// Every frame's revised positions, for the live run and for the
+// retained pre-edit run, memoized and invalidated like the commit
+// steps. The counts each layer paints are kept for the frame they
+// were counted at, since every token of a render asks for one.
+var runRevisions = null;
+var originalRevisions = null;
+var revisionCounts = { original: null, branch: null };
 // Diff-overlay layer opacities (0-100) and the "difference" blend
 // toggle, controlled by the sliders shown in the overlay drawer.
 var diffOriginalOpacity = 50;
@@ -2802,13 +2810,31 @@ function computeCommitSteps() {
   );
 }
 
+// Every frame's revised positions for the current run, with its edit
+// log so a remasked position starts over at its edit. A run that only
+// grows never revisits a position, so it has none to find.
+function computeRevisions() {
+  if (runFramesIsAppend(runFrames)) {
+    return [];
+  }
+  return overlaysComputeRevisions(
+    overlaysFrameReader(runFrames.tokens),
+    runFrames.tokens.length,
+    runFrameCanvas,
+    remaskEdits
+  );
+}
+
 // Drop every memo derived from the frame arrays. Called wherever
-// those arrays are replaced or truncated, in one place so the three
+// those arrays are replaced or truncated, in one place so the memos
 // can never fall out of step with each other.
 function invalidateRunMemos() {
   commitSteps = null;
   originalCommitSteps = null;
   diffData = null;
+  runRevisions = null;
+  originalRevisions = null;
+  revisionCounts = { original: null, branch: null };
 }
 
 // commitColor now lives in overlays.js (shared with Analytics).
@@ -2864,12 +2890,15 @@ function renderDiffOverlay(frameIndex) {
   startStackedFlicker(stacked, frameIndex, editedTokens);
 }
 
-// Which coloring paints tokens: the overlay picker's selection
-// (Heatmap/Commit Order/Diff), or none. Commit Order and Diff are
-// diffusion-only and omitted from the picker for AR runs; the guard
-// keeps a stale selection from tinting them.
+// Which coloring paints tokens: the overlay picker's selection, or
+// none. Commit Order and Revisions are diffusion-only and omitted
+// from the picker for AR runs; the guard keeps a stale selection
+// from tinting them.
 function effectiveColorMode() {
   if (overlayMode === "commit" && isAppendOnly()) {
+    return "none";
+  }
+  if (overlayMode === "revisions" && isAppendOnly()) {
     return "none";
   }
   return overlayMode;
@@ -2917,6 +2946,86 @@ function tokenCommitStep(index, isOriginal) {
   return step;
 }
 
+// Revisions for whichever of the two runs a layer is drawing. The
+// pre-edit run carries no edits of its own, and an edited run never
+// spans more than one canvas. The live run's memo is also checked
+// against its frame count, so one taken while the run was still
+// growing can never outlive the frames it was counted from.
+function revisionsFor(isOriginal) {
+  if (isOriginal) {
+    if (originalRevisions === null) {
+      originalRevisions = originalRunIsAppend(originalRun)
+        ? []
+        : overlaysComputeRevisions(
+          overlaysFrameReader(originalRun.tokens),
+          originalRun.tokens.length,
+          singleCanvas,
+          []
+        );
+    }
+    return originalRevisions;
+  }
+  if (runRevisions === null
+    || runRevisions.length !== runFrames.tokens.length) {
+    runRevisions = computeRevisions();
+  }
+  return runRevisions;
+}
+
+// Whether the Revisions overlay would paint anything: a diffusion run
+// that revised at least one position. Asked of the frames rather
+// than the model, so it is offered exactly where there is something
+// to see.
+function revisionsAvailable() {
+  if (isAppendOnly()) {
+    return false;
+  }
+  return overlaysHasRevisions(revisionsFor(false));
+}
+
+// The frame a layer shows: the scrubbed frame for the branch, and
+// that frame clamped to the pre-edit run's length for the original,
+// as buildCrossfadedLayers draws it.
+function layerFrameFor(isOriginal) {
+  if (isOriginal) {
+    return Math.min(
+      currentScrubFrame, originalRunTokenFrames(originalRun) - 1
+    );
+  }
+  return currentScrubFrame;
+}
+
+// How many times each position of a layer had been revised by the
+// frame that layer shows.
+function revisionCountsFor(isOriginal) {
+  var layer = isOriginal ? "original" : "branch";
+  var frame = layerFrameFor(isOriginal);
+  var held = revisionCounts[layer];
+  if (held === null || held.frame !== frame) {
+    held = {
+      frame: frame,
+      counts: overlaysRevisionCounts(
+        revisionsFor(isOriginal),
+        frame,
+        isOriginal ? singleCanvas : runFrameCanvas
+      ),
+    };
+    revisionCounts[layer] = held;
+  }
+  return held.counts;
+}
+
+// One position's count under the Revisions overlay. Nothing while a
+// run streams: the overlay counts up to the scrubbed frame, and
+// mid-stream that frame belongs to the run being replaced.
+function tokenRevisionCount(index, isOriginal) {
+  if (isGenerating) {
+    return 0;
+  }
+  var count = revisionCountsFor(isOriginal)[index];
+  return typeof count === "number" ? count : 0;
+}
+
 // The active overlay's color for one resolved token, or null to let
 // the token's own class color it. Kept separate from the line the
 // same overlay contributes to the metrics strip (metricsExtra), which
@@ -2948,6 +3057,9 @@ function tokenColorAt(index, tok, isOriginal) {
     }
     var frames = isOriginal ? originalRun.tokens : runFrames.tokens;
     return commitColor(step, frames.length - 1);
+  }
+  if (mode === "revisions") {
+    return revisionColor(tokenRevisionCount(index, isOriginal));
   }
   if (mode === "diff") {
     var diff = currentDiffData();
@@ -2988,18 +3100,22 @@ function setOverlayMode(mode) {
   updateDiffSummary();
   updateDiffOverlayControls();
   updateRunBlendControls();
-  updateCommitLegend();
+  updateOverlayLegends();
   hideAltsPopover();
   if (scrubberActive) {
     renderFrameWithTokens(currentScrubFrame);
   }
 }
 
-// The commit-order legend (early -> late gradient) shows only while
-// the Commit Order overlay is the active selection.
-function updateCommitLegend() {
+// Each legend in the status bar shows only while its overlay is the
+// active selection: the early-to-late gradient for Commit Order, the
+// three steps for Revisions.
+function updateOverlayLegends() {
   if (commitLegend) {
     commitLegend.hidden = overlayMode !== "commit";
+  }
+  if (revisionLegend) {
+    revisionLegend.hidden = overlayMode !== "revisions";
   }
 }
 
@@ -4723,6 +4839,11 @@ function metricsExtra(index, tok) {
     var step = tokenCommitStep(index, metricsHoverOriginal);
     return step === null ? "" : "Resolved at step: " + step;
   }
+  if (mode === "revisions") {
+    return overlaysRevisionReading(
+      tokenRevisionCount(index, metricsHoverOriginal)
+    );
+  }
   if (mode === "diff" && diffAvailable()) {
     var diff = currentDiffData();
     if (diff.origins[index]) {
@@ -4837,6 +4958,7 @@ function buildOverlaySelect() {
   var hasDiff = diffAvailable();
   var hasEntropy = entropyAvailable();
   var hasForgetting = forgettingAvailable();
+  var hasRevisions = revisionsAvailable();
   if (overlayMode === "diff" && !hasDiff) {
     overlayMode = "none";
   }
@@ -4846,13 +4968,16 @@ function buildOverlaySelect() {
   if (overlayMode === "forgetting" && !hasForgetting) {
     overlayMode = "none";
   }
+  if (overlayMode === "revisions" && !hasRevisions) {
+    overlayMode = "none";
+  }
   // Commit Order is diffusion-only; drop a stale selection for AR runs.
   if (overlayMode === "commit" && isAppendOnly()) {
     overlayMode = "none";
   }
-  // Keep the commit legend in sync with the (possibly reset) mode on
-  // every (re)build or reuse, not just on an explicit picker change.
-  updateCommitLegend();
+  // Keep the legends in sync with the (possibly reset) mode on every
+  // (re)build or reuse, not just on an explicit picker change.
+  updateOverlayLegends();
   // Rebuilt unconditionally. This used to be skipped when the option
   // set was unchanged, not as an optimisation but because every
   // createCustomSelect leaked a document listener; the widget owns
@@ -4879,6 +5004,12 @@ function buildOverlaySelect() {
   // stays diffusion-only.
   if (!isAppendOnly()) {
     options.push({ value: "commit", label: "Commit Order" });
+  }
+  // How often each position changed its mind, listed only for a run
+  // that revised something: DiffusionGemma, today. Beside Commit
+  // Order, since both read the run's frames rather than a token.
+  if (hasRevisions) {
+    options.push({ value: "revisions", label: "Revisions" });
   }
   // Diff needs a branch to compare against. Diffusion runs list it
   // up front (disabled until Edit Frames produces one); autoregressive

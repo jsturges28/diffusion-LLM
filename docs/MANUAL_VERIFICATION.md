@@ -243,8 +243,9 @@ kept when these were written:
 - **352 to 356**: confirmed on 2026-10-01, the candidate flicker and
   the choice of what an unsettled position shows; the motion read as
   smooth at the shipped cycle, slots and cap.
-- **357**: **not yet validated.** Added on 2026-10-01: a
-  remasked DiffusionGemma position born again on resume.
+- **357 to 361**: **not yet validated.** Added on 2026-10-01: a
+  remasked DiffusionGemma position born again on resume, and the
+  Revisions overlay.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -4074,3 +4075,34 @@ DiffusionGemma's worker reports it as one.
     LLaDA word does after the same edit. Before this they changed
     with no mark. The text you did not touch does not flash white on
     the first resumed frame.
+
+358. **The Revisions overlay on a DiffusionGemma run.** Run
+    DiffusionGemma with **Max Tokens** 512, so it chains two
+    canvases, and let it finish. The **Overlay** drawer lists
+    **Revisions** after **Commit Order**. Choose it: the status bar
+    shows three cyan swatches, *once*, *twice* and *3+*, and a good
+    share of the settled words are tinted while the rest keep their
+    own colour. Scrub back: the tints recede, and on the first frame
+    of the second canvas they are all gone, since that canvas has
+    revised nothing yet. Hover a tinted word: the strip ends in
+    *Revisions: N*, and the word's shade is the legend's step for N.
+
+359. **Only where something was revised.** Run LLaDA at its
+    defaults, then SmolLM3 and Mamba-3: none of them lists
+    **Revisions**.
+
+360. **An edited run counts each layer's own run.** On a finished
+    single-canvas DiffusionGemma run, choose **Revisions**, open
+    **Edit Frames** on a middle frame, remask a few words that are
+    untinted there, **Resume to End**, and choose **Revisions**
+    again. Drag the crossfade: at full **Original** the tints are
+    the original run's, at full **Edited** the branch's, and the
+    words you remasked stay untinted once they settle, unless the
+    model changes them again. The strip reads the layer that takes
+    the pointer.
+
+361. **Analytics shows the same overlay.** Save the run from 358 and
+    open it in Analytics: **Revisions** is listed, and scrubbing
+    gives the tints and readings the generator gave. A DiffusionGemma
+    run saved before 2026-10-01 lists it too, since the counts come
+    from its saved frames, and a saved LLaDA run does not.
