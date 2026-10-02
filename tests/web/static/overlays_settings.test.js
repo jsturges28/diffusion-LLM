@@ -276,3 +276,78 @@ test("the Settings picker offers the state-space class", () => {
   );
   assert.ok(values.includes("state_space"));
 });
+
+// ---- The revision glow ----
+//
+// Its toggle held to the same three places, and its flash to the
+// birth glow's shape in another colour.
+
+test("the revision glow is on by default", () => {
+  const sandbox = load();
+
+  assert.equal(sandbox.parseSettings(null).revisionGlow, true);
+});
+
+test("a profile saved before it existed meets it on", () => {
+  // Like the birth glow: absent is not a choice to have it off.
+  const sandbox = load();
+
+  const older = parse(sandbox, { tokenBirthGlow: true });
+  const chose = parse(sandbox, { revisionGlow: false });
+
+  assert.equal(older.revisionGlow, true);
+  assert.equal(chose.revisionGlow, false);
+});
+
+test("the revision toggle is a change the Save button sees", () => {
+  const sandbox = load();
+  const before = sandbox.parseSettings(null);
+  const after = parse(sandbox, { revisionGlow: false });
+
+  assert.equal(sandbox.settingsEqual(before, after), false);
+});
+
+// An element that records the custom properties written onto it.
+function styled() {
+  const props = {};
+  return {
+    props,
+    style: {
+      setProperty: (name, value) => {
+        props[name] = value;
+      },
+    },
+  };
+}
+
+function radii(shadow) {
+  return shadow.match(/[\d.]+px/g);
+}
+
+test("the cyan flash has the white one's radii and fade", () => {
+  // One brightness drives both, so at any setting the two differ in
+  // colour alone, and the fade they share is one property.
+  const sandbox = load();
+  const el = styled();
+
+  sandbox.overlaysApplyGlowVars(el, 150, 800);
+
+  const white = el.props["--token-birth-shadow"];
+  const cyan = el.props["--token-revision-shadow"];
+  assert.deepEqual(radii(cyan), radii(white));
+  assert.match(cyan, /rgba\(0, 220, 255, /);
+  assert.match(white, /rgba\(255, 255, 255, /);
+  assert.deepEqual(
+    radii(el.props["--token-revision-shadow-off"]), radii(white)
+  );
+  assert.doesNotMatch(
+    el.props["--token-revision-shadow-off"], /, 0\.\d+\)/
+  );
+  assert.equal(el.props["--token-birth-duration"], "800ms");
+});
+
+test("a shadow without its colour is refused", () => {
+  const sandbox = load();
+
+  assert.throws(() => sandbox.overlaysGlowShadow(100), /colour/);
+});

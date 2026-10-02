@@ -1616,6 +1616,12 @@ var GLOW_OUTER_BLUR_PX = 12;
 var GLOW_INNER_ALPHA = 0.9;
 var GLOW_OUTER_ALPHA = 0.5;
 
+// The flash's colour, as the channels of an rgba(): white for a
+// birth, cyan for a revision. One brightness and one fade drive both,
+// so a change of mind differs from a new token in colour alone.
+var GLOW_BIRTH_RGB = "255, 255, 255";
+var GLOW_REVISION_RGB = "0, 220, 255";
+
 // The settings keys each model class reads, keyed on the family from
 // ModelCapabilities. Family rather than generation shape: these are
 // per-class visual preferences, so a state-space model wants its own
@@ -1664,6 +1670,7 @@ var SETTINGS_DEFAULTS = {
   diffusionTextMode: "default",
   gpuTicker: true,
   tokenBirthGlow: true,
+  revisionGlow: true,
   // The glyph by default. A canvas of blocks is what a diffusion run
   // looks like, and reading a page of plausible words that are not
   // the answer yet is a thing to opt into, not to be handed.
@@ -1690,6 +1697,7 @@ function parseSettings(raw) {
     diffusionTextMode: SETTINGS_DEFAULTS.diffusionTextMode,
     gpuTicker: SETTINGS_DEFAULTS.gpuTicker,
     tokenBirthGlow: SETTINGS_DEFAULTS.tokenBirthGlow,
+    revisionGlow: SETTINGS_DEFAULTS.revisionGlow,
     unsettledShows: SETTINGS_DEFAULTS.unsettledShows,
     glowBrightnessDiffusion:
       SETTINGS_DEFAULTS.glowBrightnessDiffusion,
@@ -1721,6 +1729,7 @@ function parseSettings(raw) {
       // saved before this setting existed should still meet the
       // effect rather than having it silently off forever.
       settings.tokenBirthGlow = parsed.tokenBirthGlow !== false;
+      settings.revisionGlow = parsed.revisionGlow !== false;
       settings.unsettledShows = parseUnsettledShows(parsed);
       parseGlowInto(settings, parsed);
       settings.tpsMode =
@@ -1806,7 +1815,10 @@ function clampGlowValue(value, min, max, fallback) {
 // would have the browser interpolate the blur size and re-rasterize a
 // different-sized shadow on every tick, which is the expensive shape
 // this animation has always avoided.
-function overlaysGlowShadow(brightnessPercent) {
+function overlaysGlowShadow(brightnessPercent, rgb) {
+  if (typeof rgb !== "string") {
+    throw new Error("glow: a shadow needs its colour channels");
+  }
   var scale = clampGlowValue(
     brightnessPercent,
     GLOW_BRIGHTNESS_MIN,
@@ -1819,36 +1831,42 @@ function overlaysGlowShadow(brightnessPercent) {
   var outerAlpha = Math.min(GLOW_OUTER_ALPHA * scale, 1);
   return {
     peak:
-      glowShadowLayer(inner, innerAlpha.toFixed(3))
-      + ", " + glowShadowLayer(outer, outerAlpha.toFixed(3)),
+      glowShadowLayer(inner, innerAlpha.toFixed(3), rgb)
+      + ", " + glowShadowLayer(outer, outerAlpha.toFixed(3), rgb),
     off:
-      glowShadowLayer(inner, "0")
-      + ", " + glowShadowLayer(outer, "0"),
+      glowShadowLayer(inner, "0", rgb)
+      + ", " + glowShadowLayer(outer, "0", rgb),
   };
 }
 
-function glowShadowLayer(blurPx, alpha) {
-  return (
-    "0 0 " + blurPx + "px rgba(255, 255, 255, " + alpha + ")"
-  );
+function glowShadowLayer(blurPx, alpha, rgb) {
+  return "0 0 " + blurPx + "px rgba(" + rgb + ", " + alpha + ")";
 }
 
 // Write the glow's custom properties onto `el`, which is where the
 // keyframes read them from. Shared so the Settings page preview and
-// the live canvas cannot drift apart.
+// the live canvas cannot drift apart. Both flashes take the class's
+// one brightness and one fade.
 function overlaysApplyGlowVars(el, brightnessPercent, fadeMs) {
   if (!el) {
     return;
   }
-  var shadow = overlaysGlowShadow(brightnessPercent);
+  var birth = overlaysGlowShadow(brightnessPercent, GLOW_BIRTH_RGB);
+  var revision = overlaysGlowShadow(
+    brightnessPercent, GLOW_REVISION_RGB
+  );
   var duration = clampGlowValue(
     fadeMs,
     GLOW_FADE_MS_MIN,
     GLOW_FADE_MS_MAX,
     GLOW_FADE_MS_DEFAULT
   );
-  el.style.setProperty("--token-birth-shadow", shadow.peak);
-  el.style.setProperty("--token-birth-shadow-off", shadow.off);
+  el.style.setProperty("--token-birth-shadow", birth.peak);
+  el.style.setProperty("--token-birth-shadow-off", birth.off);
+  el.style.setProperty("--token-revision-shadow", revision.peak);
+  el.style.setProperty(
+    "--token-revision-shadow-off", revision.off
+  );
   el.style.setProperty(
     "--token-birth-duration", duration + "ms"
   );
@@ -1924,6 +1942,7 @@ function settingsEqual(a, b) {
     && a.diffusionTextMode === b.diffusionTextMode
     && a.gpuTicker === b.gpuTicker
     && a.tokenBirthGlow === b.tokenBirthGlow
+    && a.revisionGlow === b.revisionGlow
     && a.unsettledShows === b.unsettledShows
     && a.glowBrightnessDiffusion === b.glowBrightnessDiffusion
     && a.glowFadeMsDiffusion === b.glowFadeMsDiffusion

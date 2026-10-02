@@ -11,6 +11,8 @@ var settingGpuTickerCb =
   document.getElementById("setting-gpu-ticker");
 var settingBirthGlowCb =
   document.getElementById("setting-token-birth-glow");
+var settingRevisionGlowCb =
+  document.getElementById("setting-revision-glow");
 var unsettledShowsMount =
   document.getElementById("unsettled-shows-mount");
 var selectUnsettledShows = null;
@@ -72,6 +74,7 @@ function cloneSettings(source) {
     diffusionTextMode: source.diffusionTextMode,
     gpuTicker: source.gpuTicker,
     tokenBirthGlow: source.tokenBirthGlow,
+    revisionGlow: source.revisionGlow,
     unsettledShows: source.unsettledShows,
     glowBrightnessDiffusion: source.glowBrightnessDiffusion,
     glowFadeMsDiffusion: source.glowFadeMsDiffusion,
@@ -95,6 +98,9 @@ function syncControls() {
   if (settingBirthGlowCb) {
     settingBirthGlowCb.checked =
       stagedSettings.tokenBirthGlow;
+  }
+  if (settingRevisionGlowCb) {
+    settingRevisionGlowCb.checked = stagedSettings.revisionGlow;
   }
   if (selectUnsettledShows) {
     selectUnsettledShows.value = stagedSettings.unsettledShows;
@@ -132,7 +138,9 @@ function syncGlowControls() {
   overlaysApplyGlowVars(
     glowPreview, glow.brightness, glow.fadeMs
   );
-  var on = stagedSettings.tokenBirthGlow;
+  // Both glows read these rows, so they stay live while either is on.
+  var on = stagedSettings.tokenBirthGlow
+    || stagedSettings.revisionGlow;
   setSubRowEnabled(glowClassRow, selectGlowClass, on);
   setSubRowEnabled(glowBrightnessRow, glowBrightnessInput, on);
   setSubRowEnabled(glowFadeRow, glowFadeInput, on);
@@ -219,6 +227,21 @@ var GLOW_PREVIEW_BURST_MAX = 6;
 // word count and invalidates all of that.
 var GLOW_PREVIEW_SEED = 662;
 
+// Where the Diffusion preview changes its mind, as a live run does: a
+// beat's word reads as `draft` until `tick`, then becomes the copy's
+// word and flashes cyan. Each draft is its word's length, so the
+// paragraph never reflows, and each word is born, white, ticks before
+// its beat; buildGlowPreviewCopy refuses a beat that breaks either.
+// The beats ride ticks the schedule already has, so the preview's
+// length and the seed's measurement above are untouched. The
+// appending classes never revise, so they have none.
+var GLOW_PREVIEW_REVISIONS = {
+  diffusion: [
+    { word: 2, draft: "resolve", tick: 5 },
+    { word: 17, draft: "screen", tick: 7 },
+  ],
+};
+
 // Fade cannot be shown without movement, so reduced motion gets
 // brightness only: a fixed handful held at peak. Lit words against
 // unlit neighbours is what makes the level legible, where running
@@ -232,6 +255,8 @@ var GLOW_PREVIEW_STATIC_COUNT = 8;
 var GLOW_PREVIEW_SETTLE_MS = 180;
 
 var glowPreviewWords = [];
+// The copy's own words, which a beat's word returns to.
+var glowPreviewText = [];
 var glowPreviewGroups = [];
 var glowPreviewAt = 0;
 var glowPreviewTimer = null;
@@ -262,7 +287,60 @@ function buildGlowPreviewCopy() {
       );
     }
   }
+  glowPreviewText = words;
   glowPreviewGroups = glowPreviewSchedule(words.length);
+  checkGlowPreviewBeats();
+}
+
+// The beats are placed by hand against a seeded schedule, so a change
+// to the copy, the seed or the bursts could move a word past its beat
+// or change its length. Refused loudly rather than played as the
+// revision of a word that was never there.
+function checkGlowPreviewBeats() {
+  var beats = GLOW_PREVIEW_REVISIONS[glowClass] || [];
+  for (var i = 0; i < beats.length; i++) {
+    var beat = beats[i];
+    if (glowPreviewText[beat.word].length !== beat.draft.length) {
+      throw new Error("glow preview: a draft must fit its word");
+    }
+    if (glowPreviewBirthTick(beat.word) >= beat.tick) {
+      throw new Error("glow preview: revised before it is born");
+    }
+    if (beat.tick >= glowPreviewGroups.length) {
+      throw new Error("glow preview: a beat past the schedule");
+    }
+  }
+}
+
+// The tick a word lights on, or the schedule's length if none does.
+function glowPreviewBirthTick(word) {
+  for (var tick = 0; tick < glowPreviewGroups.length; tick++) {
+    if (glowPreviewGroups[tick].indexOf(word) !== -1) {
+      return tick;
+    }
+  }
+  return glowPreviewGroups.length;
+}
+
+// The beats the preview plays: the selected class's, while the
+// revision glow is on.
+function glowPreviewBeats() {
+  if (!stagedSettings.revisionGlow) {
+    return [];
+  }
+  return GLOW_PREVIEW_REVISIONS[glowClass] || [];
+}
+
+// The beats that fall on `tick`.
+function glowPreviewBeatsAt(tick) {
+  var beats = glowPreviewBeats();
+  var due = [];
+  for (var i = 0; i < beats.length; i++) {
+    if (beats[i].tick === tick) {
+      due.push(beats[i]);
+    }
+  }
+  return due;
 }
 
 // Which words light on each tick, as an array of ticks. One seeded
@@ -343,17 +421,22 @@ function glowPreviewRandom(seed) {
 
 function playGlowPreview() {
   stopGlowPreview();
-  if (!glowPreviewCopy || !stagedSettings.tokenBirthGlow) {
+  if (!glowPreviewCopy || glowPreviewGroups.length === 0) {
     return;
   }
-  if (glowPreviewGroups.length === 0) {
+  var beats = glowPreviewBeats();
+  if (!stagedSettings.tokenBirthGlow && beats.length === 0) {
     return;
   }
   clearGlowPreviewWords();
   if (prefersReducedMotion()) {
-    lightGlowPreviewSample();
+    if (stagedSettings.tokenBirthGlow) {
+      lightGlowPreviewSample();
+    }
+    reviseGlowPreviewWords(beats);
     return;
   }
+  showGlowPreviewDrafts(beats);
   // One forced reflow for the whole block, so the clear above lands
   // before the first group is re-lit. Without it the browser
   // coalesces the two writes and a repeat play does nothing. This is
@@ -366,13 +449,10 @@ function playGlowPreview() {
 }
 
 function stepGlowPreview() {
-  var group = glowPreviewGroups[glowPreviewAt];
-  for (var i = 0; i < group.length; i++) {
-    var span = glowPreviewWords[group[i]];
-    if (span) {
-      span.setAttribute("data-born", "");
-    }
+  if (stagedSettings.tokenBirthGlow) {
+    lightGlowPreviewGroup(glowPreviewGroups[glowPreviewAt]);
   }
+  reviseGlowPreviewWords(glowPreviewBeatsAt(glowPreviewAt));
   glowPreviewAt += 1;
   if (glowPreviewAt >= glowPreviewGroups.length) {
     glowPreviewTimer = null;
@@ -408,9 +488,39 @@ function stopGlowPreview() {
   }
 }
 
+function lightGlowPreviewGroup(group) {
+  for (var i = 0; i < group.length; i++) {
+    var span = glowPreviewWords[group[i]];
+    if (span) {
+      span.setAttribute("data-born", "");
+    }
+  }
+}
+
+// Each beat's word starts out as its draft.
+function showGlowPreviewDrafts(beats) {
+  for (var i = 0; i < beats.length; i++) {
+    glowPreviewWords[beats[i].word].textContent = beats[i].draft;
+  }
+}
+
+// Each beat's word turns from its draft into the copy's word and
+// flashes cyan. A white flash still running on it gives way, as the
+// newer flash does on the live canvas.
+function reviseGlowPreviewWords(beats) {
+  for (var i = 0; i < beats.length; i++) {
+    var span = glowPreviewWords[beats[i].word];
+    span.textContent = glowPreviewText[beats[i].word];
+    span.removeAttribute("data-born");
+    span.setAttribute("data-revised", "");
+  }
+}
+
 function clearGlowPreviewWords() {
   for (var i = 0; i < glowPreviewWords.length; i++) {
     glowPreviewWords[i].removeAttribute("data-born");
+    glowPreviewWords[i].removeAttribute("data-revised");
+    glowPreviewWords[i].textContent = glowPreviewText[i];
   }
 }
 
@@ -541,6 +651,14 @@ function wireControls() {
       syncGlowControls();
       // Turning it back on should show what was turned back on.
       // Off is a no-op: playGlowPreview returns early.
+      playGlowPreview();
+      updateButtons();
+    });
+  }
+  if (settingRevisionGlowCb) {
+    settingRevisionGlowCb.addEventListener("change", function () {
+      stagedSettings.revisionGlow = settingRevisionGlowCb.checked;
+      syncGlowControls();
       playGlowPreview();
       updateButtons();
     });

@@ -2667,10 +2667,38 @@ input[type="checkbox"].app-checkbox:checked::after {
     ease-out forwards;
 }
 
+/* Revision glow: the same flash in cyan, for a position that settles
+   on a different token from the one it last settled on. Same radii
+   and fade as a birth, for the same reasons, so a change of mind
+   differs from a new token in colour alone. The fallbacks are the
+   100% / 500ms defaults, as above. */
+@keyframes token-revision {
+  from {
+    text-shadow: var(
+      --token-revision-shadow,
+      0 0 6px rgba(0, 220, 255, 0.9),
+      0 0 12px rgba(0, 220, 255, 0.5)
+    );
+  }
+  to {
+    text-shadow: var(
+      --token-revision-shadow-off,
+      0 0 6px rgba(0, 220, 255, 0),
+      0 0 12px rgba(0, 220, 255, 0)
+    );
+  }
+}
+
+#output-area.live-tokens .token-span[data-revised] {
+  animation: token-revision var(--token-birth-duration, 0.5s)
+    ease-out forwards;
+}
+
 /* The generator also checks this in JS before marking anything, so
    the bookkeeping is skipped too. This is the backstop. */
 @media (prefers-reduced-motion: reduce) {
-  #output-area.live-tokens .token-span[data-born] {
+  #output-area.live-tokens .token-span[data-born],
+  #output-area.live-tokens .token-span[data-revised] {
     animation: none;
   }
 }

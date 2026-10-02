@@ -83,6 +83,16 @@
                 <span class="toggle-slider"></span>
               </label>
             </div>
+            <div class="settings-row settings-row-parent">
+              <div class="settings-label-group">
+                <label>Revision glow</label>
+                <span class="settings-desc">Flash a soft cyan glow when a diffusion model settles a position on a different token from the one it had settled on, so a change of mind is as visible as a new token. DiffusionGemma does this; LLaDA never revisits a settled token. Live generation only, and it shares the brightness and fade below. Skipped automatically if your system prefers reduced motion.</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="setting-revision-glow" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
             <div class="settings-row settings-row-sub"
               id="glow-class-row">
               <div class="settings-label-group">

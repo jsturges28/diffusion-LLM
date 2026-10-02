@@ -1,4 +1,5 @@
-// The generator's Revisions overlay, driven for real.
+// The generator's revisions: the Revisions overlay and the live
+// revision glow, driven for real.
 //
 // Strategy: load the generator page into the DOM stub with a
 // DiffusionGemma entry, start a real run through startGeneration and
@@ -8,14 +9,20 @@
 // two positions settle, change and settle again. A LLaDA-shaped run,
 // where every position settles once, is the control. Then scrub, pick
 // the overlay, and read the picker, the colours, the strip and the
-// legend; take an edit and a resume the way the page does.
+// legend; read the flashes each streamed frame marks; take an edit
+// and a resume the way the page does.
 //
 // Passing proves the overlay is offered exactly when a run revised
 // something, that each token is tinted by how often it had changed by
 // the scrubbed frame, that the strip reads the same count, that the
 // legend follows the selection, that each crossfade layer counts its
 // own run, with a remasked position starting over, and that nothing
-// is counted from a run still streaming.
+// is counted from a run still streaming. For the glow it proves a
+// revision flashes cyan where a birth flashes white, that the setting
+// and reduced motion each turn it off, that the two flashes share one
+// capped queue in which revisions survive, that a newer flash on a
+// span replaces an older one, and that the live check is rebuilt from
+// the run's own frames, edits included, after any cut.
 
 "use strict";
 
@@ -122,8 +129,9 @@ function quietFetch(url) {
   });
 }
 
-// A page mid-run: started for real, with `specs` streamed.
-function streaming(specs) {
+// A page mid-run: started for real, with `specs` streamed. `prepare`
+// adjusts the page once the run has started, before any frame lands.
+function streaming(specs, prepare) {
   const page = loadPage({
     WebSocket: OpenSocket,
     fetchImpl: quietFetch,
@@ -133,6 +141,9 @@ function streaming(specs) {
   context.ws = new OpenSocket("ws://test");
   registry.get("prompt-input").value = "explain yeast";
   context.startGeneration();
+  if (prepare) {
+    prepare(context);
+  }
   specs.forEach((spec, index) => {
     context.handleFrame(frameOf(spec, index, specs.length - 1));
   });
@@ -375,4 +386,183 @@ test("each crossfade layer is painted from its own counts", () => {
     context.tokenColorAt(3, token, false), context.revisionColor(1)
   );
   assert.equal(context.tokenColorAt(3, token, true), null);
+});
+
+// -- the live glow --
+//
+// The stub links children through `parent` rather than `parentNode`,
+// so the live view rebuilds its spans on every frame and an attribute
+// set on one frame is never seen on the next. What a single frame
+// marks is read off the stream; what happens to a span across frames
+// is driven on a span directly.
+
+function flashes(span) {
+  return {
+    born: span.hasAttribute("data-born"),
+    revised: span.hasAttribute("data-revised"),
+  };
+}
+
+const DARK = { born: false, revised: false };
+const WHITE = { born: true, revised: false };
+const CYAN = { born: false, revised: true };
+
+// What matchMedia answers for a system that prefers reduced motion.
+function prefersStill() {
+  return { matches: true, addEventListener() {} };
+}
+
+test("a streamed revision flashes cyan, and a birth white", () => {
+  const { context } = streaming(REVISING.slice(0, 4));
+  const spans = context.liveTokenSpans;
+
+  assert.deepEqual(flashes(spans[0]), CYAN);
+  assert.deepEqual(flashes(spans[3]), WHITE);
+  assert.deepEqual(flashes(spans[1]), DARK);
+});
+
+test("a return to the token it held does not flash", () => {
+  const returning = [
+    { tokens: [changing(1)], revealed: [] },
+    { tokens: [settled(10)], revealed: [0] },
+    { tokens: [changing(20)], revealed: [] },
+    { tokens: [settled(10)], revealed: [] },
+  ];
+  const { context } = streaming(returning);
+
+  assert.deepEqual(flashes(context.liveTokenSpans[0]), DARK);
+});
+
+test("the setting off leaves revisions dark, births lit", () => {
+  const { context } = streaming(REVISING.slice(0, 4), (page) => {
+    page.appSettings.revisionGlow = false;
+  });
+  const spans = context.liveTokenSpans;
+
+  assert.equal(spans[0].hasAttribute("data-revised"), false);
+  assert.equal(spans[3].hasAttribute("data-born"), true);
+});
+
+test("reduced motion flashes nothing", () => {
+  const { context } = streaming(REVISING.slice(0, 4), (page) => {
+    page.matchMedia = prefersStill;
+  });
+  const spans = context.liveTokenSpans;
+
+  assert.deepEqual(flashes(spans[0]), DARK);
+  assert.deepEqual(flashes(spans[3]), DARK);
+});
+
+test("a full queue keeps the frame's revisions", () => {
+  // Frame 3 has one birth and one revision. With room for a single
+  // flash, the revision, marked last, is the one left glowing.
+  const { context } = streaming(REVISING.slice(0, 4), (page) => {
+    page.tokenBirthMaxConcurrent = 1;
+  });
+  const spans = context.liveTokenSpans;
+
+  assert.deepEqual(flashes(spans[0]), CYAN);
+  assert.deepEqual(flashes(spans[3]), DARK);
+  assert.equal(context.tokenBirthQueue.length, 1);
+});
+
+test("a newer flash on a span replaces the older one", () => {
+  const { context, document } = streaming([]);
+  const span = document.createElement("span");
+
+  context.startTokenGlow(span, "data-born", "data-revised");
+  context.startTokenGlow(span, "data-revised", "data-born");
+  assert.deepEqual(flashes(span), CYAN);
+  assert.equal(context.tokenBirthQueue.length, 1);
+
+  // A birth on the next canvas, over a revision still glowing.
+  context.startTokenGlow(span, "data-born", "data-revised");
+  assert.deepEqual(flashes(span), WHITE);
+  assert.equal(context.tokenBirthQueue.length, 1);
+});
+
+test("a flash that ends leaves the queue", () => {
+  const { context, document } = streaming([]);
+  const span = document.createElement("span");
+  context.startTokenGlow(span, "data-revised", "data-born");
+
+  context.onTokenGlowEnd({ animationName: "other", target: span });
+  assert.equal(span.hasAttribute("data-revised"), true);
+
+  const ended = { animationName: "token-revision", target: span };
+  context.onTokenGlowEnd(ended);
+  assert.equal(span.hasAttribute("data-revised"), false);
+  assert.equal(context.tokenBirthQueue.length, 0);
+});
+
+test("a resume's remasked position is born live, not revised", () => {
+  const page = finishedRun(REVISING);
+  const { context } = page;
+  context.remaskEdits = [{ frame_index: 4, token_positions: [2] }];
+  context.truncateRunArraysAt(4);
+  context.invalidateRunMemos();
+  context.isResuming = true;
+
+  context.handleFrame(frameOf(BRANCH[0], 0, BRANCH.length));
+  context.handleFrame(frameOf(BRANCH[1], 1, BRANCH.length));
+  assert.deepEqual(flashes(context.liveTokenSpans[2]), WHITE);
+
+  context.handleFrame(frameOf(BRANCH[2], 2, BRANCH.length));
+  assert.deepEqual(flashes(context.liveTokenSpans[3]), CYAN);
+});
+
+test("a cut drops the live fold", () => {
+  const { context } = streaming(REVISING);
+  assert.notEqual(context.liveRevisionFold, null);
+
+  context.invalidateRunMemos();
+
+  assert.equal(context.liveRevisionFold, null);
+});
+
+test("a cut nobody reported still rebuilds the fold", () => {
+  // The fold read all seven frames, so position 0 last held 30.
+  // Cut back to four frames without a word, the next frame settling
+  // it on 20 matches what frame 3 held: not a revision.
+  const { context } = finishedRun(REVISING);
+  context.runFramesTruncate(context.runFrames, 4);
+
+  context.handleFrame(frameOf(REVISING[3], 4, REVISING.length - 1));
+
+  assert.equal(
+    context.liveTokenSpans[0].hasAttribute("data-revised"), false
+  );
+});
+
+test("a rebuilt fold still starts a remasked position over", () => {
+  // Position 2 is remasked at frame 4 and has not settled again when
+  // the fold is dropped, so the rebuild has to apply the edit itself.
+  const { context } = finishedRun(REVISING);
+  context.remaskEdits = [{ frame_index: 4, token_positions: [2] }];
+  context.truncateRunArraysAt(4);
+  context.invalidateRunMemos();
+  context.handleFrame(frameOf(BRANCH[0], 0, BRANCH.length));
+
+  context.invalidateRunMemos();
+  context.handleFrame(frameOf(BRANCH[1], 1, BRANCH.length));
+
+  assert.equal(
+    context.liveTokenSpans[2].hasAttribute("data-revised"), false
+  );
+});
+
+test("a new run is checked against its own frames only", () => {
+  // Position 0 ended the last run on 30. The new run settling it on
+  // 10 is a birth, not a change from the old run's token.
+  const page = finishedRun(REVISING);
+  const { context, registry } = page;
+  registry.get("prompt-input").value = "again";
+  context.startGeneration();
+  SETTLING.forEach((spec, index) => {
+    context.handleFrame(frameOf(spec, index, SETTLING.length - 1));
+  });
+
+  assert.equal(
+    context.liveTokenSpans[0].hasAttribute("data-revised"), false
+  );
 });

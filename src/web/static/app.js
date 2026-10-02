@@ -2206,7 +2206,10 @@ function handleFrame(data) {
   // The token view needs per-position metadata; a model that does not
   // send it still gets the character renderer.
   if (data.tokens) {
-    renderLiveFrame(data.tokens, data.revealed);
+    var revised = liveRevisionsAt(
+      runFramesLength(runFrames) - 1, data.tokens
+    );
+    renderLiveFrame(data.tokens, data.revealed, revised);
   } else {
     renderFrame(data.text);
   }
@@ -2607,7 +2610,7 @@ var LIVE_TOKEN_OPTIONS = {
   opacityFor: tokenOpacityFn,
 };
 
-function renderLiveFrame(tokens, revealed) {
+function renderLiveFrame(tokens, revealed, revised) {
   flickerStop();
   outputArea.classList.remove("token-layers");
   outputArea.classList.add("live-tokens");
@@ -2629,6 +2632,7 @@ function renderLiveFrame(tokens, revealed) {
     rebuildLiveTokens(tokens);
   }
   markTokenBirths(revealed);
+  markTokenRevisions(revised);
   // A held pointer keeps reading the same position while the text
   // under it resolves, so the strip has to follow the frame.
   refreshTokenMetrics();
@@ -2673,8 +2677,13 @@ var TOKEN_BIRTH_RATE_CEILING = 96;
 var TOKEN_BIRTH_CONCURRENT_MIN = 48;
 var TOKEN_BIRTH_CONCURRENT_MAX = 192;
 var TOKEN_BIRTH_ANIMATION = "token-birth";
+var TOKEN_REVISION_ANIMATION = "token-revision";
 var tokenBirthQueue = [];
 var tokenBirthMaxConcurrent = TOKEN_BIRTH_CONCURRENT_MIN;
+// What the frames streamed so far hand the next one when it is
+// checked for revisions, and how many frames that is.
+var liveRevisionFold = null;
+var liveRevisionFrames = 0;
 
 // Set the live canvas' glow to the active model class' preferences,
 // and size the concurrency cap to the fade it asks for. Called once
@@ -2721,38 +2730,110 @@ function markTokenBirths(revealed) {
   for (var i = 0; i < revealed.length; i++) {
     var span = liveTokenSpans[revealed[i]];
     if (span) {
-      startTokenBirth(span);
+      startTokenGlow(span, "data-born", "data-revised");
     }
   }
 }
 
-function startTokenBirth(span) {
-  if (span.hasAttribute("data-born")) {
+// ---- Revision glow ----
+
+// The birth glow's sibling: a position that settles on a different
+// token from the one it last settled on flashes cyan, as a new token
+// flashes white. Marked after the births, because the queue drops its
+// oldest flash first, so in a frame that overflows it the revisions,
+// the rarer and more telling mark, are the flashes that survive.
+function markTokenRevisions(revised) {
+  if (!revised || revised.length === 0) {
+    return;
+  }
+  if (!appSettings.revisionGlow) {
+    return;
+  }
+  if (prefersReducedMotion()) {
+    return;
+  }
+  for (var i = 0; i < revised.length; i++) {
+    var span = liveTokenSpans[revised[i]];
+    if (span) {
+      startTokenGlow(span, "data-revised", "data-born");
+    }
+  }
+}
+
+// The positions a streamed frame revised. The fold is rebuilt from
+// the kept frames whenever it has not read exactly the frames before
+// this one, which is the state a new run, a resume's cut and a
+// restore all leave, so none of them has to remember to reset it.
+function liveRevisionsAt(index, tokens) {
+  if (liveRevisionFold === null || liveRevisionFrames !== index) {
+    liveRevisionFold = liveRevisionFoldThrough(index);
+  }
+  var step = overlaysRevisionStep(
+    liveRevisionFold,
+    tokens,
+    runFrameCanvas(index),
+    overlaysRemaskedAt(remaskEdits, index)
+  );
+  liveRevisionFold = step.fold;
+  liveRevisionFrames = index + 1;
+  return step.revised;
+}
+
+// The fold after the run's first `count` frames.
+function liveRevisionFoldThrough(count) {
+  var fold = overlaysRevisionFold();
+  for (var f = 0; f < count; f++) {
+    fold = overlaysRevisionStep(
+      fold,
+      runFramesTokensAt(runFrames, f) || [],
+      runFrameCanvas(f),
+      overlaysRemaskedAt(remaskEdits, f)
+    ).fold;
+  }
+  return fold;
+}
+
+// Flash `span` by setting `attribute`, through the one queue both
+// glows share: the cap bounds blurred repaint regions, and a cyan one
+// costs what a white one does.
+function startTokenGlow(span, attribute, other) {
+  if (span.hasAttribute(attribute)) {
     // Already mid-flash. Restarting the animation would need a
     // forced reflow per span, which is the cost this whole path
     // exists to avoid, and a token that is already glowing looks
     // the same either way.
     return;
   }
-  span.setAttribute("data-born", "");
+  if (span.hasAttribute(other)) {
+    // The newer event wins. Both rules set the animation, so the
+    // older flash would otherwise replay once the newer one ended.
+    endTokenGlow(span);
+  }
+  span.setAttribute(attribute, "");
   tokenBirthQueue.push(span);
   while (tokenBirthQueue.length > tokenBirthMaxConcurrent) {
-    tokenBirthQueue.shift().removeAttribute("data-born");
+    endTokenGlow(tokenBirthQueue[0]);
+  }
+}
+
+// End whichever flash `span` is showing, and take it off the queue.
+function endTokenGlow(span) {
+  span.removeAttribute("data-born");
+  span.removeAttribute("data-revised");
+  var at = tokenBirthQueue.indexOf(span);
+  if (at !== -1) {
+    tokenBirthQueue.splice(at, 1);
   }
 }
 
 // Delegated: animationend bubbles, so one listener on the container
 // serves every span and none of them needs its own.
-function onTokenBirthEnd(e) {
-  if (e.animationName !== TOKEN_BIRTH_ANIMATION) {
+function onTokenGlowEnd(e) {
+  if (e.animationName !== TOKEN_BIRTH_ANIMATION
+    && e.animationName !== TOKEN_REVISION_ANIMATION) {
     return;
   }
-  var span = e.target;
-  span.removeAttribute("data-born");
-  var at = tokenBirthQueue.indexOf(span);
-  if (at !== -1) {
-    tokenBirthQueue.splice(at, 1);
-  }
+  endTokenGlow(e.target);
 }
 
 function renderFrame(text) {
@@ -2835,6 +2916,7 @@ function invalidateRunMemos() {
   runRevisions = null;
   originalRevisions = null;
   revisionCounts = { original: null, branch: null };
+  liveRevisionFold = null;
 }
 
 // commitColor now lives in overlays.js (shared with Analytics).
@@ -8569,7 +8651,7 @@ btnExitEdit.addEventListener(
 );
 
 outputArea.addEventListener(
-  "animationend", onTokenBirthEnd
+  "animationend", onTokenGlowEnd
 );
 
 statusTps.addEventListener("click", toggleTpsMode);

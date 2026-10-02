@@ -32,7 +32,8 @@ incompatible ones.
 The audit remediation campaign that ran from 2026-08-10 is complete except
 for a short remainder, tracked finding by finding in
 `docs/audit/IMPLEMENTATION_LEDGER.md`. Every accepted direction below has
-shipped, Mamba-3 last on 2026-09-28, and the fifth is next to deliberate.
+shipped, the revision glow last on 2026-10-01, and the next is to be
+chosen from the backlog.
 
 **What answers what**, because this is one document of five and this
 section previously tried to be three of them:
@@ -344,6 +345,12 @@ since shipped is noted on the item rather than left for a reader to infer.
    of drawing that capture on the canvas itself rather than in a popover.
    What shipped, and why the stack did not, is under "Two renderings, one
    capture" in the backlog below.
+
+6. **The revision glow and the Revisions overlay. Shipped on
+   2026-10-01.** Chosen that day from the backlog, after measuring how
+   often DiffusionGemma changes its mind on the runs already saved. What
+   shipped, and why it marks every revision, is at the end of "A second
+   glow for a revision, distinct from a birth" in the backlog below.
 
 ---
 
@@ -899,7 +906,8 @@ Two things fell out of looking that were not what the item asked:
   which is the most interesting thing it does, currently produces no visual
   at all. Scoped in the XAI backlog as a second glow rather than a wider
   first one, because the suppression that hides it is the same mechanism
-  that stops a churning position from strobing.
+  that stops a churning position from strobing. Built on 2026-10-01 as
+  the revision glow and the Revisions overlay; the backlog entry says how.
 
 **Collections ship without storage eviction.** The original framing paired
 favorites with storage-pressure relief; the measurement killed that half. 175
@@ -1437,6 +1445,54 @@ subsumed, but it should be built against a canvas that already names its
 candidates: with the reveal off, a revision is a block that stays a block,
 and a mark is the only evidence there is. That, rather than the `" the"`
 example, is the case to design for.
+
+**Shipped on 2026-10-01, in two forms.** Live, a revision flashes cyan the
+way a birth flashes white, under its own **Revision glow** toggle. Scrubbed
+or saved, the **Revisions** overlay tints each settled token by how many
+times its position had changed by the frame shown: three steps of cyan,
+because the counts are small whole numbers. Both read one rule, a position
+settling on a different token from the one it last settled on in the same
+canvas, computed in the browser from the frames each page holds. That
+needed nothing from the sampler, and it gave older saved runs the overlay
+too.
+
+*Every revision is marked, with no threshold and no decay.* The worry above
+was a mark that strobes. Measured before building on all nineteen saved
+DiffusionGemma runs with token records: every run revised, 144 to 1,549
+times; outside an edit, every revision passes through a frame where the
+position reads as changed, so no position swaps settled words from one
+frame to the next; and on the run the design was tested against, the token
+a revision replaced had held for two to nine frames. Returns to the token
+already held, 6 to 155 a run, are not revisions. There was no thrashing to
+filter out, and a threshold would only have hidden real changes.
+
+*An edit resets the positions it remasked.* Their next token is a birth: a
+change the user asked for is not the model changing its mind, and it is
+what keeps LLaDA, edited or not, at zero revisions, so the overlay is
+offered by the data rather than by model family. Applying edits removed
+17 to 26 false revisions from each of the three edited runs. What remained
+at the edit frame, 23 to 26 settled-to-settled swaps a run at positions
+nobody remasked, is genuine: a branch's first frame replaces the frame the
+edit was made on, so a change the model made in that step loses its
+changed frame. They count.
+
+*A worker fix rode along.* DiffusionGemma's resume restored its born set
+from the checkpoint, remasked positions included, so those positions
+re-settled with no glow of either kind. `FrameQueueStreamer.restore` now
+takes the remasked positions out, as LLaDA's resume always has.
+
+*One cap for both flashes.* Each is a blurred repaint region, so they share
+the birth glow's queue, and revisions are marked after births: the two
+together overflow the 48-flash default on 3 to 17 frames a run, the worst
+of them a canvas's opening births, and in such a frame the rarer, more
+telling mark is the one kept. The two also share each model
+class's brightness and fade rather than adding a second pair of sliders,
+and the Settings preview's Diffusion copy changes its mind twice so the
+cyan can be judged there.
+
+Not built, on purpose: marks left on the scrubber for recent revisions,
+since the overlay is the reviewable record and a trail would add a third
+reading of the same event.
 
 **Frame-to-frame linking for the line charts.** Raised on 2026-09-24, out of
 the hardware pass on `ROADMAP-03`. The original thought was to give the

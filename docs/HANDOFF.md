@@ -186,7 +186,9 @@ replays, is under the Mamba-3 direction in `docs/ROADMAP.md`. **Top-k for
 the diffusion models** followed on 2026-09-28 as the candidate popover,
 which follows the scrubber and pages between an edited run's two runs,
 and on 2026-09-29 as the flicker, a Settings choice that cycles each
-unsettled position through those candidates on a finished run. The next
-direction is to be chosen from the backlog in `docs/ROADMAP.md` (a
-revision glow, frame-linked line charts, an adaptive-stopping readout,
-per-run notes), which also carries the settled decisions.
+unsettled position through those candidates on a finished run. The
+**revision glow** and the **Revisions** overlay, which mark DiffusionGemma
+changing its mind, shipped on 2026-10-01. The next direction is to be
+chosen from the backlog in `docs/ROADMAP.md` (frame-linked line charts,
+an adaptive-stopping readout, per-run notes), which also carries the
+settled decisions.

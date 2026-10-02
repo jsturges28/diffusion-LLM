@@ -243,9 +243,9 @@ kept when these were written:
 - **352 to 356**: confirmed on 2026-10-01, the candidate flicker and
   the choice of what an unsettled position shows; the motion read as
   smooth at the shipped cycle, slots and cap.
-- **357 to 361**: **not yet validated.** Added on 2026-10-01: a
-  remasked DiffusionGemma position born again on resume, and the
-  Revisions overlay.
+- **357 to 365**: **not yet validated.** Added on 2026-10-01: a
+  remasked DiffusionGemma position born again on resume, the
+  Revisions overlay, and the revision glow.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -4106,3 +4106,34 @@ DiffusionGemma's worker reports it as one.
     gives the tints and readings the generator gave. A DiffusionGemma
     run saved before 2026-10-01 lists it too, since the counts come
     from its saved frames, and a saved LLaDA run does not.
+
+362. **A revision flashes cyan while the run streams.** With both
+    glows on, run DiffusionGemma at its defaults and watch the
+    canvas: new words flash white as before, and every so often a
+    word that had already settled turns into another and flashes
+    cyan. The cyan reads as its own event, not a second birth, and
+    no word strobes from one frame to the next. Run LLaDA: no cyan
+    at all.
+
+363. **The setting and reduced motion each turn it off.** Turn
+    **Revision glow** off in Settings, save, and run DiffusionGemma:
+    births still flash white and nothing flashes cyan. Turn it back
+    on, turn on the system's reduced-motion setting and reload:
+    neither glow fires.
+
+364. **The Settings preview shows the cyan.** On the Settings page
+    with **Tune for** on **Diffusion**, click the preview: partway
+    through, *resolve* turns into *denoise* and *screen* into
+    *canvas*, each with a cyan flash, and the paragraph does not
+    reflow. Drag **Brightness** and **Fade time**: the cyan follows
+    them as the white does. Turn **Token birth glow** off with the
+    revision glow on: the sliders stay live and the preview plays
+    only the two cyan words. Turn both off: the rows dim. With
+    reduced motion on, the two words are held cyan beside the lit
+    sample.
+
+365. **Bursts stay smooth in the desktop app.** In the desktop app,
+    run DiffusionGemma with **Max Tokens** 512 and watch the opening
+    frames of each canvas, where births and revisions crowd into
+    the same frames: the canvas keeps up, and the flashes still
+    fade rather than stopping short.

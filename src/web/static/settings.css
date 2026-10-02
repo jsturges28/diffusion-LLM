@@ -194,14 +194,25 @@
     ease-out forwards;
 }
 
+.glow-preview-word[data-revised] {
+  animation: token-revision var(--token-birth-duration)
+    ease-out forwards;
+}
+
 /* Reduced motion still gets to see what brightness does, just held
    still: the constraint is on movement, not on the glow itself. The
    sequence does not run at all in this mode (see settings.js), so
-   what is lit here is a fixed handful rather than the whole block. */
+   what is lit here is a fixed handful rather than the whole block,
+   with the revised words held cyan beside it. */
 @media (prefers-reduced-motion: reduce) {
   .glow-preview-word[data-born] {
     animation: none;
     text-shadow: var(--token-birth-shadow);
+  }
+
+  .glow-preview-word[data-revised] {
+    animation: none;
+    text-shadow: var(--token-revision-shadow);
   }
 }
 
