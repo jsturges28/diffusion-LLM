@@ -20,9 +20,10 @@ Two details are what make the reading trustworthy.
 to the GPU and RSS barely moves; SmolLM3 memory-maps its shards, so
 its RAM and VRAM counters climb over the same stretch rather than one
 after the other. A sequential CPU-then-GPU bar would sit at zero
-through half of one of them. Reporting ``max(rss_delta, device_delta)``
-against a single target is correct either way, and the stage label
-follows whichever counter is being reported.
+through half of one of them. Reporting
+``max(rss_delta, device_delta)`` against a single target is correct
+either way, and the stage label follows whichever counter is being
+reported.
 
 **Except for one shape, which needs a reserved tail.** DiffusionGemma
 is a pickled state dict, so ``torch.load`` materializes every byte in
@@ -336,9 +337,13 @@ def progress_sample(
     ``max(rss_delta, device_delta) / target``.
     """
     assert baseline_rss >= 0, "baseline rss must be non-negative"
-    assert baseline_device >= 0, "baseline device must be non-negative"
+    assert baseline_device >= 0, (
+        "baseline device must be non-negative"
+    )
     assert target_bytes >= 0, "target bytes must be non-negative"
-    assert 0.0 <= peak_fraction <= 1.0, "peak fraction must be in [0,1]"
+    assert 0.0 <= peak_fraction <= 1.0, (
+        "peak fraction must be in [0,1]"
+    )
     assert host_stage_ceiling > 0.0, "ceiling must be positive"
     assert host_stage_ceiling <= 1.0, "ceiling must not exceed 1.0"
     resident = rss_bytes() - baseline_rss

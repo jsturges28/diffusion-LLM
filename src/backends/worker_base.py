@@ -640,9 +640,10 @@ class Backend(ABC):
     # like ``model_info``, so a backend that ships none fails when it
     # is first read rather than templating a prompt the wrong way.
     text_adapter: TextAdapter
-    # Set to a progress dict ({fraction, downloaded_bytes, total_bytes})
-    # while weights download during ``load``, then back to None. Read by
-    # ``/health`` to report a "downloading" state to the supervisor.
+    # Set to a progress dict ({fraction, downloaded_bytes,
+    # total_bytes}) while weights download during ``load``, then back
+    # to None. Read by ``/health`` to report a "downloading" state to
+    # the supervisor.
     load_progress: Optional[Dict[str, Any]] = None
     # Where the model actually ended up, set by ``load``. Not the same
     # as the device it was asked for: two of the three backends fall

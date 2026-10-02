@@ -1,13 +1,13 @@
 """Durable, origin-independent UI state for the visualizer frontend.
 
-The desktop app (pywebview/QtWebEngine) keys ``localStorage`` by window
-origin (``scheme://host:port``). Because the launcher's port can vary
-between runs, localStorage-backed UI state (Settings, the analytics
-"new run" cue, prompt history, the generate teaser) appeared to reset
-across restarts. This module persists those values server-side in a
-single JSON file under ``results/``, so they survive regardless of the
-window origin and are shared between the browser and desktop entry
-points.
+The desktop app (pywebview/QtWebEngine) keys ``localStorage`` by
+window origin (``scheme://host:port``). Because the launcher's port
+can vary between runs, localStorage-backed UI state (Settings, the
+analytics "new run" cue, prompt history, the generate teaser) appeared
+to reset across restarts. This module persists those values
+server-side in a single JSON file under ``results/``, so they survive
+regardless of the window origin and are shared between the browser
+and desktop entry points.
 
 Values are stored verbatim as the strings the frontend keeps in
 localStorage: the server is a durable key/value mirror, not a schema,
@@ -57,11 +57,11 @@ try:
 except ImportError:  # pragma: no cover - POSIX only; app is Linux
     fcntl = None  # type: ignore[assignment]
 
-# Allowed keys mapped to the maximum accepted value length (characters).
-# Bounding the size stops a runaway client from growing the file without
-# limit (TigerStyle: put a limit on everything). Prompt history and the
-# new-run cue are the largest, so they get more room than the small
-# settings/flag values.
+# Allowed keys mapped to the maximum accepted value length, in
+# characters. Bounding the size stops a runaway client from growing
+# the file without limit (TigerStyle: put a limit on everything).
+# Prompt history and the new-run cue are the largest, so they get more
+# room than the small settings/flag values.
 UI_STATE_KEYS: Dict[str, int] = {
     "diffusion_settings": 8_192,
     "diffusion_new_runs": 262_144,
@@ -126,7 +126,7 @@ def _exclusive(results_dir: Path) -> Iterator[None]:
 
 
 def load_ui_state(results_dir: Path) -> Dict[str, str]:
-    """Return the stored UI-state mapping, or ``{}`` when absent/corrupt.
+    """The stored UI-state mapping, or ``{}`` when absent or corrupt.
 
     Never raises for a missing or malformed file: UI state is a
     convenience cache, so a bad file degrades to defaults rather than
@@ -155,8 +155,9 @@ def set_ui_state_key(
     """Set one UI-state key and return the full updated mapping.
 
     Raises ``KeyError`` for an unknown key and ``ValueError`` for a
-    non-string or oversized value: these are client-contract violations
-    (operating errors) that the caller surfaces as 4xx responses.
+    non-string or oversized value: these are client-contract
+    violations (operating errors) that the caller surfaces as 4xx
+    responses.
     """
     assert isinstance(results_dir, Path), "results_dir must be a Path"
     _validate_key_value(key, value)

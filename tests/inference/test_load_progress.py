@@ -359,7 +359,8 @@ def test_sample_stage_is_device_as_soon_as_the_copy_starts(
     """Any device bytes at all mean the copy is under way, even while
     RSS still leads. Comparing the two counters instead would keep
     saying 'weights' through nearly all of a copy that follows a full
-    read into RAM, which is what made the label flash by at the end."""
+    read into RAM, which is what made the label flash by at the
+    end."""
     patch_counters(monkeypatch, rss=1900, cuda=100)
     sample = load_progress.progress_sample(
         baseline_rss=1000, target_bytes=1000, peak_fraction=0.0

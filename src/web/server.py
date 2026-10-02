@@ -137,9 +137,9 @@ from src.web.worker_process import (
 # import. Here huggingface_hub is imported lazily (in _is_downloaded /
 # the download task), so setting the flag now, at module load, still
 # precedes it. The flag is cached in hf constants at import time, so
-# setting it any later is a no-op; Xet bypasses our tqdm progress hook,
-# whereas the classic downloader routes through it, so the menu's
-# download bar fills smoothly.
+# setting it any later is a no-op; Xet bypasses our tqdm progress
+# hook, whereas the classic downloader routes through it, so the
+# menu's download bar fills smoothly.
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
 logger = logging.getLogger("diffusion_supervisor")
@@ -253,8 +253,8 @@ ProbeHealth = Callable[
 
 # nvidia-smi is often absent from PATH when the app is launched from a
 # desktop entry (a minimal session PATH), which silently made GPU info
-# unavailable. Resolve it explicitly with common fallbacks, cached, and
-# log the outcome once so a missing binary is diagnosable.
+# unavailable. Resolve it explicitly with common fallbacks, cached,
+# and log the outcome once so a missing binary is diagnosable.
 _NVIDIA_SMI_FALLBACKS = (
     "/usr/bin/nvidia-smi",
     "/usr/local/bin/nvidia-smi",
@@ -265,7 +265,7 @@ _nvidia_smi_path_cached: Optional[str] = None
 
 
 def _nvidia_smi_path() -> Optional[str]:
-    """Resolve the nvidia-smi binary (PATH, then common paths). Cached."""
+    """The nvidia-smi binary, from PATH then common paths. Cached."""
     global _nvidia_smi_resolved, _nvidia_smi_path_cached
     if _nvidia_smi_resolved:
         return _nvidia_smi_path_cached
@@ -360,8 +360,9 @@ def _gpu_status() -> str:
     """Classify GPU availability for a clearer Main Menu message.
 
     Returns one of: "ok", "no_nvidia_smi", "mismatch" (driver/library
-    version mismatch, e.g. after an NVIDIA update pending a reboot), or
-    "error". Only called when the GPU name is unreadable, to explain why.
+    version mismatch, e.g. after an NVIDIA update pending a reboot),
+    or "error". Only called when the GPU name is unreadable, to
+    explain why.
     """
     binary = _nvidia_smi_path()
     if binary is None:
@@ -385,7 +386,7 @@ def _gpu_status() -> str:
 
 
 def _cpu_name() -> Optional[str]:
-    """Best-effort CPU model name (Linux /proc/cpuinfo, then platform).
+    """Best-effort CPU model name, from /proc/cpuinfo then platform.
 
     Returned to the Main Menu so a GPU-less user can see what will run
     the CPU-capable models. Optional, mirroring the GPU probes.
@@ -447,11 +448,12 @@ def _sweep_orphan_workers() -> None:
     """Terminate leftover worker processes orphaned by a prior crash.
 
     A worker whose supervisor died is reparented to init (ppid 1) yet
-    may still hold VRAM (the PDEATHSIG guard covers most cases, but not
-    e.g. a supervisor that predates it). We match our worker command
-    line and terminate only orphans (ppid == 1), never a worker still
-    owned by a live supervisor, so a browser and desktop instance can
-    coexist. Best-effort and Linux-only (/proc); a no-op elsewhere.
+    may still hold VRAM (the PDEATHSIG guard covers most cases, but
+    not e.g. a supervisor that predates it). We match our worker
+    command line and terminate only orphans (ppid == 1), never a
+    worker still owned by a live supervisor, so a browser and desktop
+    instance can coexist. Best-effort and Linux-only (/proc); a no-op
+    elsewhere.
     """
     proc_root = Path("/proc")
     if not proc_root.is_dir():
@@ -795,7 +797,8 @@ class ModelManager:
         self.download_target: Optional[str] = None
         self.download_progress: Optional[Dict[str, Any]] = None
         self.download_error: Optional[str] = None
-        # Held so the fire-and-forget download task is not GC'd mid-run.
+        # Held so the fire-and-forget download task is not collected
+        # mid-run.
         self._download_task: Optional[asyncio.Task] = None
         # The child doing the fetching. A download used to be threads
         # inside this process with nothing able to reach them; this is
@@ -1089,8 +1092,8 @@ class ModelManager:
         Updates ``load_state`` / ``load_progress`` so the client poll
         reflects downloading vs loading, and caches versions on ready.
         The startup deadline only guards reaching the first response;
-        once the worker is answering (loading/downloading), there is no
-        wall-clock cap so long first-time downloads are not cut off
+        once the worker is answering (loading/downloading), there is
+        no wall-clock cap so long first-time downloads are not cut off
         (the user can cancel instead).
         """
         url = f"http://127.0.0.1:{port}/health"
@@ -1403,12 +1406,13 @@ class ModelManager:
             await self._end_process(handle, "download")
 
     def ack_download(self) -> None:
-        """Clear a finished pre-fetch so its completion notice fires once.
+        """Clear a finished pre-fetch, so its notice fires once.
 
-        Resets only a terminal state (done/error) back to idle; a no-op
-        while a download is still running. Called when the user
-        acknowledges the veneer's "Ok" (or dismisses the toast), so the
-        cross-page download toast and re-attach do not keep re-firing.
+        Resets only a terminal state (done/error) back to idle; a
+        no-op while a download is still running. Called when the user
+        acknowledges the veneer's "Ok" (or dismisses the toast), so
+        the cross-page download toast and re-attach do not keep
+        re-firing.
         """
         if self.download_state in ("done", "error"):
             self.download_state = "idle"
@@ -1763,8 +1767,8 @@ def _models_snapshot() -> Dict[str, Any]:
         data["partial"] = _is_partial(info.checkpoint)
         models.append(data)
     gpu = _gpu_name()
-    # Only classify the failure reason when the name is unreadable, so a
-    # healthy system pays no extra nvidia-smi call.
+    # Only classify the failure reason when the name is unreadable, so
+    # a healthy system pays no extra nvidia-smi call.
     gpu_status = "ok" if gpu is not None else _gpu_status()
     return {
         "models": models,
@@ -1905,7 +1909,7 @@ class CancelActivationRequest(BaseModel):
 async def cancel_activation(
     body: Optional[CancelActivationRequest] = None,
 ) -> JSONResponse:
-    """Cancel an in-flight load, stopping the worker and freeing VRAM."""
+    """Cancel an in-flight load: stop the worker and free its VRAM."""
     operation = body.operation if body is not None else None
     try:
         await manager.cancel_activation(operation)
@@ -1991,8 +1995,8 @@ async def cancel_download(
 
 @app.post("/api/models/download/ack")
 async def ack_download() -> JSONResponse:
-    """Clear a finished pre-fetch (done/error -> idle) so the completion
-    toast and menu re-attach fire exactly once."""
+    """Clear a finished pre-fetch (done/error -> idle), so the
+    completion toast and menu re-attach fire exactly once."""
     manager.ack_download()
     return JSONResponse({"ok": True})
 
@@ -2672,9 +2676,10 @@ def _build_metadata(body: SaveRunRequest) -> Dict[str, Any]:
         "model": checkpoint or model_id,
         # Lets the analytics suite gate diffusion-only charts (e.g.
         # convergence) off for autoregressive runs. Absent on runs
-        # saved before this field existed (all of which are diffusion).
+        # saved before this field existed, all of which are diffusion.
         "model_type": model_type,
-        # GPU / CPU / Unknown, plus the device name for the timing header.
+        # GPU / CPU / Unknown, plus the device name for the timing
+        # header.
         "processor": processor,
         "processor_name": processor_name,
         "created_at": datetime.now().isoformat(
@@ -3671,7 +3676,7 @@ COLLECTIONS_KEY = "diffusion_collections"
 
 
 class UiStateValue(BaseModel):
-    """One UI-state value, stored verbatim as its localStorage string."""
+    """A UI-state value, verbatim as its localStorage string."""
 
     value: str
 
@@ -3680,12 +3685,12 @@ def _reconcile_new_runs(state: Dict[str, str]) -> Dict[str, str]:
     """Prune the "new run" cue to run IDs whose folders still exist.
 
     The cue accumulates IDs of saved-but-unviewed runs. A run deleted
-    outside the app (or before per-delete clearing existed) would linger
-    as an orphan and inflate the generator/menu count forever, since it
-    no longer appears in Analytics to open or delete. Reconciling here,
-    on the endpoint every page hydrates from, makes the count self-heal
-    everywhere. A freshly saved run is never pruned: its folder
-    exists before its ID is added to the cue.
+    outside the app (or before per-delete clearing existed) would
+    linger as an orphan and inflate the generator/menu count forever,
+    since it no longer appears in Analytics to open or delete.
+    Reconciling here, on the endpoint every page hydrates from, makes
+    the count self-heal everywhere. A freshly saved run is never
+    pruned: its folder exists before its ID is added to the cue.
 
     Read and write happen under one lock, because this derives a new
     value from the stored one: pruning a snapshot taken before a
@@ -3699,7 +3704,8 @@ def _reconcile_new_runs(state: Dict[str, str]) -> Dict[str, str]:
     def prune(raw: Optional[str]) -> Optional[str]:
         ids = _decode_id_list(raw)
         if ids is None:
-            return None  # Corrupt: leave it for load_ui_state to drop.
+            # Corrupt: leave it for load_ui_state to drop.
+            return None
         kept = [run_id for run_id in ids if run_id in existing]
         if len(kept) == len(ids):
             return None
@@ -4096,9 +4102,9 @@ def _stamp_asset_versions(html: str) -> str:
     """Append ``?v=<mtime>`` to local CSS/JS refs.
 
     The version is each asset file's modification time, so the browser
-    re-fetches a file exactly when it changes -- automatic, per-file
-    cache-busting with no manual version bumping and no reliance on the
-    browser honoring ``no-store``.
+    re-fetches a file exactly when it changes: automatic, per-file
+    cache-busting with no manual version bumping and no reliance on
+    the browser honoring ``no-store``.
     """
 
     def _replace(match: "re.Match[str]") -> str:
@@ -4107,7 +4113,8 @@ def _stamp_asset_versions(html: str) -> str:
         try:
             version = asset.stat().st_mtime_ns
         except OSError:
-            return match.group(0)  # Unknown file: leave the ref as-is.
+            # Unknown file: leave the reference as it is.
+            return match.group(0)
         return f'{match.group("attr")}="{path}?v={version}"'
 
     return _ASSET_REF_RE.sub(_replace, html)

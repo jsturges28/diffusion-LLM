@@ -3,17 +3,17 @@
 Workers call :func:`download_with_progress` before ``from_pretrained``
 so the supervisor can show a download progress bar (via the worker's
 ``/health`` ``downloading`` state) on a model's first activation. The
-menu's "Click to Download" veneer calls it too. When the repo is already
-cached this returns immediately with no progress, so the bar only appears
-for genuine downloads.
+menu's "Click to Download" veneer calls it too. When the repo is
+already cached this returns immediately with no progress, so the bar
+only appears for genuine downloads.
 
-Progress is sampled from the cache directory on disk rather than from a
-tqdm hook: ``snapshot_download`` only routes its ``tqdm_class`` to the
-outer "Fetching N files" bar, not to the per-file byte downloads inside
-``hf_hub_download``/``http_get`` (the library documents this), so a custom
-tqdm cannot observe byte-level progress. Polling the ``blobs`` directory
-size against the repo's total size does, and is independent of whether
-Xet or hf_transfer is in play.
+Progress is sampled from the cache directory on disk rather than from
+a tqdm hook: ``snapshot_download`` only routes its ``tqdm_class`` to
+the outer "Fetching N files" bar, not to the per-file byte downloads
+inside ``hf_hub_download``/``http_get`` (the library documents this),
+so a custom tqdm cannot observe byte-level progress. Polling the
+``blobs`` directory size against the repo's total size does, and is
+independent of whether Xet or hf_transfer is in play.
 
 Kept separate from any specific worker so both the LLaDA and SmolLM3
 workers can share it.
@@ -33,12 +33,15 @@ ProgressSink = Callable[[Dict[str, Any]], None]
 COMPANION_CACHE_NAME = "companions"
 
 # Poll cadence for the disk-size sampler and a generous ceiling on how
-# long we keep sampling. The download completing is the real bound; the
-# ceiling only keeps the poll loop finite (TigerStyle: bound every loop)
-# and never cuts a legitimate download short (we block on join after).
+# long we keep sampling. The download completing is the real bound;
+# the ceiling only keeps the poll loop finite (TigerStyle: bound every
+# loop) and never cuts a legitimate download short (we block on join
+# after).
 _POLL_INTERVAL_SECONDS: float = 0.5
 _POLL_MAX_SECONDS: float = 6 * 60 * 60
-_POLL_MAX_ITERATIONS: int = int(_POLL_MAX_SECONDS / _POLL_INTERVAL_SECONDS)
+_POLL_MAX_ITERATIONS: int = int(
+    _POLL_MAX_SECONDS / _POLL_INTERVAL_SECONDS
+)
 
 
 def repo_total_bytes(
@@ -46,8 +49,8 @@ def repo_total_bytes(
 ) -> int:
     """Total download size for ``repo_id`` from Hub file metadata.
 
-    Sums the size of every sibling file. Returns 0 when the metadata is
-    unavailable (offline / private without token); the caller then
+    Sums the size of every sibling file. Returns 0 when the metadata
+    is unavailable (offline / private without token); the caller then
     reports byte counts with an indeterminate percentage.
 
     ``revision`` sizes the commit that will actually be fetched, which
@@ -101,7 +104,10 @@ def revision_from_snapshot(snapshot: str) -> Optional[str]:
 
 
 def _repo_blobs_dir(repo_id: str) -> Path:
-    """Local cache ``blobs`` directory for ``repo_id`` (may not exist)."""
+    """The local cache's ``blobs`` directory for ``repo_id``.
+
+    It may not exist yet.
+    """
     assert isinstance(repo_id, str) and repo_id, "repo_id required"
     from huggingface_hub.constants import HF_HUB_CACHE
 
@@ -110,7 +116,7 @@ def _repo_blobs_dir(repo_id: str) -> Path:
 
 
 def _has_incomplete(blobs_dir: Path) -> bool:
-    """Whether the blobs dir has any in-progress ``*.incomplete`` part."""
+    """Whether the blobs dir holds an in-progress ``*.incomplete``."""
     if not blobs_dir.is_dir():
         return False
     for entry in blobs_dir.iterdir():
@@ -142,11 +148,11 @@ def is_repo_cached(
 ) -> bool:
     """Whether ``revision`` of ``repo_id`` is fully cached.
 
-    Both the fast path here and the supervisor's ``_is_downloaded`` use
-    this so an interrupted download (leaving ``*.incomplete`` blobs) is
-    treated as not-downloaded rather than complete. Re-downloading then
-    resumes the remaining parts instead of the cache being misread as
-    ready and the model hanging on load.
+    Both the fast path here and the supervisor's ``_is_downloaded``
+    use this so an interrupted download (leaving ``*.incomplete``
+    blobs) is treated as not-downloaded rather than complete.
+    Re-downloading then resumes the remaining parts instead of the
+    cache being misread as ready and the model hanging on load.
 
     The revision has to be part of the question. A cache holding some
     other commit of the same repository would otherwise answer "yes"
@@ -168,7 +174,7 @@ def is_repo_cached(
 
 
 def _downloaded_bytes(blobs_dir: Path) -> int:
-    """Bytes on disk in ``blobs_dir`` (incl. ``*.incomplete`` parts)."""
+    """Bytes on disk in ``blobs_dir``, ``*.incomplete`` parts too."""
     if not blobs_dir.is_dir():
         return 0
     total = 0
@@ -442,8 +448,9 @@ def download_with_progress(
     """Ensure ``revision`` of ``repo_id`` is cached, with progress.
 
     Returns the local snapshot path. On a cache hit this returns
-    immediately without invoking ``sink`` (no download bar) and without
-    touching the network. Otherwise the fetch runs on a helper thread
+    immediately without invoking ``sink`` (no download bar) and
+    without touching the network. Otherwise the fetch runs on a helper
+    thread
     while this function polls the cache directory size and reports
     ``{fraction, downloaded_bytes, total_bytes}`` to ``sink`` roughly
     twice a second.
@@ -460,9 +467,10 @@ def download_with_progress(
     assert isinstance(repo_id, str) and repo_id, "repo_id required"
     from huggingface_hub import snapshot_download
 
-    # Fast path: fully cached (and not partial) already. A partial cache
-    # falls through so the fetch below resumes the ``*.incomplete`` parts
-    # and the poller continues from the on-disk size.
+    # Fast path: fully cached (and not partial) already. A partial
+    # cache falls through so the fetch below resumes the
+    # ``*.incomplete`` parts and the poller continues from the on-disk
+    # size.
     if is_repo_cached(repo_id, revision=revision):
         return snapshot_download(
             repo_id, revision=revision, local_files_only=True
@@ -482,13 +490,14 @@ def download_with_progress(
     def _fetch() -> None:
         try:
             # Xet is disabled process-wide before the first
-            # huggingface_hub import (see server.py / run_worker.py), so
-            # bytes land in ``blobs`` as ``*.incomplete`` parts that the
-            # poller below can measure as they grow.
+            # huggingface_hub import (see server.py and
+            # run_worker.py), so bytes land in ``blobs`` as
+            # ``*.incomplete`` parts that the poller below can measure
+            # as they grow.
             result["path"] = snapshot_download(
                 repo_id, revision=revision
             )
-        except BaseException as exc:  # noqa: BLE001 - reraised on join.
+        except BaseException as exc:  # noqa: BLE001 - reraised later
             failure["error"] = exc
 
     worker = threading.Thread(
@@ -520,8 +529,9 @@ def download_with_progress(
             ) from cause
         raise cause
 
-    # Land on a clean 100% once the snapshot is complete (guards against
-    # a small total/disk mismatch leaving the bar just shy of full).
+    # Land on a clean 100% once the snapshot is complete (guards
+    # against a small total/disk mismatch leaving the bar just shy of
+    # full).
     if total_bytes > 0:
         _emit(sink, total_bytes, total_bytes)
     path = result.get("path")

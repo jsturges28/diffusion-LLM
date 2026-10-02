@@ -1,13 +1,13 @@
 """Tests for durable, origin-independent UI state.
 
-Strategy: ``ui_state`` mirrors the frontend's localStorage values into a
-single JSON file under a results directory so they survive desktop-app
-restarts (which otherwise change the window origin and orphan
-localStorage). These tests use a tmp results dir to prove: a missing
-file reads as empty, a set/get round-trips, unknown keys and oversized
-or non-string values are rejected, and a corrupt file degrades to
-defaults instead of raising. Passing proves the /api/ui-state endpoints
-receive safe, bounded, correctly shaped data.
+Strategy: ``ui_state`` mirrors the frontend's localStorage values into
+a single JSON file under a results directory so they survive
+desktop-app restarts (which otherwise change the window origin and
+orphan localStorage). These tests use a tmp results dir to prove: a
+missing file reads as empty, a set/get round-trips, unknown keys and
+oversized or non-string values are rejected, and a corrupt file
+degrades to defaults instead of raising. Passing proves the
+/api/ui-state endpoints receive safe, bounded, correctly shaped data.
 
 The second half is about not losing writes, which is a different
 property from the atomicity the first half assumes. Both halves of

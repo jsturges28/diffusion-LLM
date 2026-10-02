@@ -1,13 +1,13 @@
 """Tests for the "new run" cue reconciliation in GET /api/ui-state.
 
-Strategy: the cue (``diffusion_new_runs``) accumulates saved-but-unviewed
-run IDs. A run deleted outside the app leaves an orphan ID that would
-inflate the generator/menu count forever. The GET endpoint prunes the
-cue to run folders that still exist. These tests point the server's
-results dir at a tmp path, seed a cue with one real and one orphan ID,
-and assert the endpoint returns (and persists) only the real ID, while
-leaving other keys untouched. Passing proves the count self-heals on
-every page hydrate.
+Strategy: the cue (``diffusion_new_runs``) accumulates
+saved-but-unviewed run IDs. A run deleted outside the app leaves an
+orphan ID that would inflate the generator/menu count forever. The GET
+endpoint prunes the cue to run folders that still exist. These tests
+point the server's results dir at a tmp path, seed a cue with one real
+and one orphan ID, and assert the endpoint returns (and persists) only
+the real ID, while leaving other keys untouched. Passing proves the
+count self-heals on every page hydrate.
 """
 
 from __future__ import annotations

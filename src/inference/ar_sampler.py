@@ -100,7 +100,7 @@ def _seed(seed: int) -> None:
 def _top_p_filter(
     probs: torch.Tensor, top_p: float
 ) -> torch.Tensor:
-    """Zero out the tail beyond nucleus mass ``top_p`` and renormalize.
+    """Zero the tail past nucleus mass ``top_p`` and renormalize.
 
     ``probs`` is a 1-D distribution. The smallest set of highest
     tokens whose cumulative mass reaches ``top_p`` is kept.
@@ -117,7 +117,8 @@ def _top_p_filter(
     filtered.scatter_(0, sorted_idx, sorted_probs)
     total = float(filtered.sum().item())
     if total <= 0.0:
-        return probs  # Degenerate top_p: fall back to full distribution.
+        # Degenerate top_p: fall back to the full distribution.
+        return probs
     return filtered / total
 
 

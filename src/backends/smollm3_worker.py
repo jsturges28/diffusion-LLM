@@ -74,7 +74,8 @@ class Smollm3Backend(AppendOnlyBackend):
         revision = self.model_info.revision
         assert revision, "SmolLM3 must load a pinned commit"
         # Fetch weights first (reporting progress via /health) so the
-        # first activation shows a download bar; a cache hit is a no-op.
+        # first activation shows a download bar; a cache hit is a
+        # no-op.
         logger.info("ensuring weights for %s", name)
         snapshot = download_with_progress(
             name,

@@ -25,9 +25,9 @@ from src.backends.worker_base import create_worker_app
 # main() (which transitively imports transformers -> huggingface_hub).
 # None of the imports above load huggingface_hub, so setting the flag
 # now, at module load, still precedes it. The flag is cached in hf
-# constants at import time; the classic downloader routes weight fetches
-# through our tqdm hook so the download bar fills smoothly, whereas Xet
-# bypasses it.
+# constants at import time; the classic downloader routes weight
+# fetches through our tqdm hook so the download bar fills smoothly,
+# whereas Xet bypasses it.
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
 
