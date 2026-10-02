@@ -3885,3 +3885,15 @@ alone could not tell the two apart. The real-tree test additionally requires a
 non-empty reading whenever the baseline is non-empty. Its first run caught two
 long lines in the tests that came with the fix.
 
+**Zero, on 2026-10-02.** The last 70 came out in one pass. 67 were lines over
+70 columns, nearly all docstring and comment prose. The other three were
+`create_worker_app`'s complexity of 20 and its two nesting hits, which the
+lifecycle work had left standing; the function now splits into a loader, a
+health payload, a per-socket session, one function serving a socket and one
+dispatching a message. `desktop.py` joined `LINT_PATHS` in the same pass, its
+13 findings fixed rather than baselined, so the ceiling is zero across `src`,
+`tests` and the launcher, and `scripts/` stays outside. The mutation check of
+the refactor found two gaps the loop's tests had always had, both now closed:
+nothing showed that a cancel is lowered before the next run, or that a
+disconnect hands its own run to the settle.
+

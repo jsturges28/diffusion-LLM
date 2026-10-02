@@ -268,8 +268,9 @@ kept when these were written:
   streams, and smoothness in the desktop app.
 - **371 to 378**: confirmed on 2026-10-02: the adaptive-stopping
   readout and the Stopping chart.
-- **379**: **not yet validated.** The pass of 377 found the tooltip's
-  glow drawing a line across a commit's gap; this checks the fix.
+- **379**: confirmed on 2026-10-02. The pass of 377 had found the
+  tooltip's glow drawing a line across a commit's gap; this checked
+  the fix.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer

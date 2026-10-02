@@ -35,10 +35,12 @@ from typing import Dict, List, Tuple
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BASELINE_PATH = REPO_ROOT / "lint_baseline.json"
 
-# The same two trees AGENTS.md tells everyone to check. Scripts are
-# deliberately outside it, matching the existing habit; widening the
-# scope is a decision, not a detail, and it would move the ceiling.
-LINT_PATHS = ("src", "tests")
+# The two trees AGENTS.md tells everyone to check, and the desktop
+# launcher, which ships with the app as much as the server it wraps.
+# Scripts stay outside: they are tools run by hand, several of them
+# one-off spikes kept as a record. Widening the scope is a decision,
+# not a detail, because it moves the ceiling.
+LINT_PATHS = ("src", "tests", "desktop.py")
 
 # Ruff's exit codes that carry an answer: 0 when the tree is clean and
 # 1 when findings exist. 2 is Ruff's own failure, and says nothing

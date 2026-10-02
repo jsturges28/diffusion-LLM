@@ -3,12 +3,11 @@
 Wraps the existing FastAPI supervisor in a native window (pywebview)
 instead of a browser tab, and owns the server lifecycle: it starts
 uvicorn on a background thread bound to localhost on a stable port
-(see ``DESKTOP_PORT``), opens the window against it (at ``/``, the Main
-Menu, from which a model is selected before the generator page), and on
-window close
-signals a graceful shutdown so the model-worker subprocesses (and
-their VRAM) are released through the supervisor's existing shutdown
-hook.
+(see ``DESKTOP_PORT``), opens the window against it (at ``/``, the
+Main Menu, from which a model is selected before the generator page),
+and on window close signals a graceful shutdown so the model-worker
+subprocesses (and their VRAM) are released through the supervisor's
+existing shutdown hook.
 
 Run ``.venv/bin/python desktop.py``. The browser path
 (``python main.py``) is unchanged and wraps the same server, so there
@@ -17,6 +16,7 @@ is a single source of truth for the backend and frontend.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import inspect
 import json
@@ -61,15 +61,18 @@ SHUTDOWN_TIMEOUT_SECONDS = 35.0
 # the icon with: .venv/bin/python scripts/render_icon.py
 ICON_SVG_PATH = REPO_ROOT / "assets" / "icon.svg"
 ICON_PNG_PATH = REPO_ROOT / "assets" / "icon.png"
-ICON_PATH = ICON_PNG_PATH if ICON_PNG_PATH.is_file() else ICON_SVG_PATH
+ICON_PATH = (
+    ICON_PNG_PATH if ICON_PNG_PATH.is_file() else ICON_SVG_PATH
+)
 
 # A fixed localhost port keeps the desktop window's origin
-# (scheme://host:port) stable across launches. Web storage (localStorage:
-# Settings, prompt history, the analytics "new run" cue) is partitioned
-# per origin, so an ephemeral port would hand each launch a fresh, empty
-# partition and silently defeat persistence even with a persistent
-# profile. Distinct from main.py's default 8000 so the browser and the
-# desktop app can run side by side without colliding.
+# (scheme://host:port) stable across launches. Web storage
+# (localStorage: Settings, prompt history, the analytics "new run"
+# cue) is partitioned per origin, so an ephemeral port would hand each
+# launch a fresh, empty partition and silently defeat persistence even
+# with a persistent profile. Distinct from main.py's default 8000 so
+# the browser and the desktop app can run side by side without
+# colliding.
 DESKTOP_PORT = 8760
 
 
@@ -182,9 +185,9 @@ def _resolve_port() -> int:
 
     A stable origin is what lets localStorage survive restarts (see
     ``DESKTOP_PORT``). If the fixed port is already taken (a second
-    instance, or an unrelated process), degrade to an ephemeral port so
-    the app still launches. Web storage will not carry over for that one
-    launch, which is a better failure than refusing to start.
+    instance, or an unrelated process), degrade to an ephemeral port
+    so the app still launches. Web storage will not carry over for
+    that one launch, which is a better failure than refusing to start.
     """
     if _port_available(DESKTOP_PORT):
         return DESKTOP_PORT
@@ -217,13 +220,15 @@ def _wait_until_started(
 
 
 def _set_app_identity(gui: Optional[str]) -> None:
-    """Tell the window manager which .desktop this window belongs to, so
-    the dock shows the running indicator and re-activates the existing
-    window instead of launching a second instance.
+    """Name the .desktop entry this window belongs to.
 
-    GTK derives its Wayland app_id / WM_CLASS from the program name; Qt
-    from ``QGuiApplication.desktopFileName``. Both are best-effort and
-    no-op when that binding is absent.
+    The window manager uses it so the dock shows the running
+    indicator and re-activates the existing window instead of
+    launching a second instance.
+
+    GTK derives its Wayland app_id / WM_CLASS from the program name;
+    Qt from ``QGuiApplication.desktopFileName``. Both are best-effort
+    and no-op when that binding is absent.
     """
     try:
         from gi.repository import GLib
@@ -245,10 +250,9 @@ def _set_qt_desktop_name() -> None:
             qtgui = importlib.import_module(binding + ".QtGui")
         except ImportError:
             continue
-        try:
+        # Best-effort: an identity hint is not worth failing over.
+        with contextlib.suppress(Exception):
             qtgui.QGuiApplication.setDesktopFileName(APP_ID)
-        except Exception:  # noqa: BLE001 - best-effort identity hint
-            pass
         return
 
 
@@ -282,16 +286,17 @@ def _persistent_storage_path() -> Path:
 
 
 def _window_start_kwargs() -> dict:
-    """Optional ``webview.start`` kwargs, each gated on this pywebview
-    build's support (the arguments are backend- and version-dependent).
+    """Optional ``webview.start`` kwargs, each gated on whether this
+    pywebview build supports it; the arguments depend on the backend
+    and the version.
 
     - ``icon``: app window icon. The app-menu launcher icon comes from
       the .desktop entry regardless (see install_desktop_entry.sh).
     - ``private_mode=False`` + ``storage_path``: persist web storage
       (localStorage: Settings, prompt history, the analytics "new run"
       cue) across app restarts. pywebview otherwise defaults to a
-      private, off-the-record profile that is cleared on close, so those
-      would reset every launch.
+      private, off-the-record profile that is cleared on close, so
+      those would reset every launch.
     """
     params = inspect.signature(webview.start).parameters
     kwargs: dict = {}

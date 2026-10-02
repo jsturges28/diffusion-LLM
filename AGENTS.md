@@ -118,6 +118,8 @@ tokens to remask" over an em-dash separator). If you happen to find or come acro
  recorded per file and per rule in `lint_baseline.json` and may only go
  down; the gate fails on any increase. When you reduce a count, rerun with
  `--update` to lock it in. Do not raise the ceiling to make a change fit.
+ The baseline is empty, so any finding in `src`, `tests` or `desktop.py`
+ fails the gate.
 - JS: `node --check` on each changed `.js` file, and
  `node --test tests/web/static/*.test.js` for the browser modules that have
  tests. Those load the shipped file into a `vm` context, so a testable helper
