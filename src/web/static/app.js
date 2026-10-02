@@ -220,6 +220,11 @@ var diffData = null;
 var runRevisions = null;
 var originalRevisions = null;
 var revisionCounts = { original: null, branch: null };
+// What each layer's frame on screen borrows its entropy from, one
+// slot per layer as {frame, borrow}, invalidated like the commit
+// steps. A commit carries no entropy, and every token of a render
+// asks for the draft it reads instead.
+var entropyBorrowSlots = { edited: null, original: null };
 // Diff-overlay layer opacities (0-100) and the "difference" blend
 // toggle, controlled by the sliders shown in the overlay drawer.
 var diffOriginalOpacity = 50;
@@ -2922,6 +2927,7 @@ function invalidateRunMemos() {
   originalRevisions = null;
   revisionCounts = { original: null, branch: null };
   liveRevisionFold = null;
+  entropyBorrowSlots = { edited: null, original: null };
 }
 
 // commitColor now lives in overlays.js (shared with Analytics).
@@ -3126,10 +3132,11 @@ function tokenColorAt(index, tok, isOriginal) {
     return heatColor(tok.c);
   }
   if (mode === "entropy") {
-    if (typeof tok.e !== "number") {
+    var entropy = tokenEntropyReading(index, tok, isOriginal).value;
+    if (entropy === null) {
       return null;
     }
-    return entropyColor(tok.e);
+    return entropyColor(entropy);
   }
   if (mode === "forgetting") {
     if (typeof tok.f !== "number") {
@@ -3362,7 +3369,93 @@ function entropyAvailable() {
       return false;
     }
   }
-  return runCarriesTokenValue("e");
+  // Anywhere in the run rather than on its latest frame alone: a
+  // DiffusionGemma canvas ends on a commit, which carries none.
+  var last = runFramesLength(runFrames) - 1;
+  return runEntropyFrame(last, singleCanvas) >= 0;
+}
+
+// The frame whose entropy describes frame `index` of the run on
+// screen, or -1 (see overlaysEntropyFrame).
+function runEntropyFrame(index, canvasOf) {
+  return overlaysEntropyFrame(
+    function (frame) {
+      return runFramesTokensAt(runFrames, frame);
+    },
+    canvasOf,
+    index,
+    runFramesIsAppend(runFrames)
+  );
+}
+
+// The same for the retained pre-edit run, which is single-canvas,
+// since only those can be edited.
+function originalEntropyFrame(index) {
+  return overlaysEntropyFrame(
+    function (frame) {
+      return originalRunTokensAt(originalRun, frame);
+    },
+    singleCanvas,
+    index,
+    originalRunIsAppend(originalRun)
+  );
+}
+
+// The frame a layer is drawing: the scrubbed one while the scrubber
+// owns the view, else the newest, with the pre-edit run clamped to
+// its own last frame.
+function drawnEntropyFrame(isOriginal) {
+  var frame = scrubberActive
+    ? currentScrubFrame
+    : runFramesLength(runFrames) - 1;
+  if (!isOriginal) {
+    return frame;
+  }
+  return Math.min(frame, originalRunTokenFrames(originalRun) - 1);
+}
+
+// What a layer's frame on screen borrows its entropy from, as
+// {step, tokens}, or null when it carries its own or there is none
+// to borrow. Held in one slot per layer, so the tokens of a render
+// share a lookup; cleared with the other run memos.
+function layerEntropyBorrow(isOriginal) {
+  var key = isOriginal ? "original" : "edited";
+  var frame = drawnEntropyFrame(isOriginal);
+  var slot = entropyBorrowSlots[key];
+  if (slot !== null && slot.frame === frame) {
+    return slot.borrow;
+  }
+  var borrow = entropyBorrowAt(isOriginal, frame);
+  entropyBorrowSlots[key] = { frame: frame, borrow: borrow };
+  return borrow;
+}
+
+function entropyBorrowAt(isOriginal, frame) {
+  var source = isOriginal
+    ? originalEntropyFrame(frame)
+    : runEntropyFrame(frame, runFrameCanvas);
+  if (source < 0 || source === frame) {
+    return null;
+  }
+  var tokens = isOriginal
+    ? originalRunTokensAt(originalRun, source)
+    : runFramesTokensAt(runFrames, source);
+  return { step: source, tokens: tokens };
+}
+
+// A drawn token's entropy, as {value, asOfStep}: its own, or on a
+// commit the value its canvas's last draft held at that position,
+// with the draft's step.
+function tokenEntropyReading(index, tok, isOriginal) {
+  if (tok && typeof tok.e === "number") {
+    return { value: tok.e, asOfStep: null };
+  }
+  var borrow = layerEntropyBorrow(isOriginal);
+  var other = borrow && borrow.tokens ? borrow.tokens[index] : null;
+  if (other && typeof other.e === "number") {
+    return { value: other.e, asOfStep: borrow.step };
+  }
+  return { value: null, asOfStep: null };
 }
 
 // Whether the run carries per-token forgetting to colour by. Unlike
@@ -4324,8 +4417,71 @@ function entropyValuesFrom(tokens) {
   return values;
 }
 
-// Entropy per position, read off the final frame's token records
-// (each position is sampled once, so its entropy never changes).
+// What the entropy profile draws, as {values, original, current,
+// filled, asOfStep, originalAsOfStep}.
+//
+// A position decided once, the way an autoregressive run decides
+// them, reads its value off the final frame, and the scrubbed frame
+// marks its own column and fades the ones it has not reached: frame k
+// is the frame that introduced position k. A diffusion position is
+// re-decided at every step, so there the profile reads the frame
+// under the scrubber, a commit through its canvas's last draft, and
+// because every position exists at every frame, nothing fades and no
+// column is the scrubber's own.
+function entropyProfileLayers() {
+  if (!entropyProfileFollowsFrame()) {
+    return {
+      values: entropyProfileValues(),
+      original: originalEntropyProfileValues(),
+      current: currentScrubFrame,
+      filled: currentScrubFrame,
+      asOfStep: null,
+      originalAsOfStep: null,
+    };
+  }
+  var edited = entropyProfileFrameValues(false);
+  var original = runBlendActive()
+    ? entropyProfileFrameValues(true)
+    : { values: [], asOfStep: null };
+  return {
+    values: edited.values,
+    original: original.values,
+    current: -1,
+    filled: -1,
+    asOfStep: edited.asOfStep,
+    originalAsOfStep: original.asOfStep,
+  };
+}
+
+// Whether the profile reads the frame under the scrubber, which the
+// model's declared axes decide. A run with no declaration is read by
+// its stream, as Analytics reads a run saved before manifests.
+function entropyProfileFollowsFrame() {
+  var channel = declaredChannel("entropy");
+  if (channel) {
+    return (channel.axes || []).join("|") === "frame|position";
+  }
+  return !runFramesIsAppend(runFrames);
+}
+
+// One layer's values at the frame it is drawing, read through the
+// frame whose entropy describes it. A frame with none and nothing to
+// borrow keeps its own positions, at zero, so the strip holds still.
+function entropyProfileFrameValues(isOriginal) {
+  var borrow = layerEntropyBorrow(isOriginal);
+  var source = borrow ? borrow.step : drawnEntropyFrame(isOriginal);
+  var tokens = isOriginal
+    ? originalRunTokensAt(originalRun, source)
+    : runFramesTokensAt(runFrames, source);
+  return {
+    values: entropyValuesFrom(tokens),
+    asOfStep: borrow ? borrow.step : null,
+  };
+}
+
+// The autoregressive reading: entropy per position, off the final
+// frame's token records, since each position is sampled once and its
+// entropy never changes afterwards.
 function entropyProfileValues() {
   return entropyValuesFrom(
     runFramesTokensLast(runFrames)
@@ -4348,10 +4504,11 @@ function originalEntropyProfileValues() {
 // the drawing and the pointer-to-position inverse agree on the step
 // even when a branch outran the original.
 function entropyProfileColumns() {
-  return Math.max(
-    entropyProfileValues().length,
-    originalEntropyProfileValues().length
-  );
+  return entropyProfileColumnsOf(entropyProfileLayers());
+}
+
+function entropyProfileColumnsOf(layers) {
+  return Math.max(layers.values.length, layers.original.length);
 }
 
 // Every position an edit touched, mapped to the frame the edit was
@@ -4419,16 +4576,17 @@ function editedProfilePositions() {
 }
 
 // Draw the profile: one column per position, height proportional to
-// normalized entropy, colored by the same ramp as the overlay. The
-// column for the frame under the scrubber is highlighted so the
-// profile and the canvas stay tied together. On an edited run the
-// pre-edit profile is drawn underneath and the two are mixed by the
-// run crossfade, exactly as the token layers above them are.
+// normalized entropy, colored by the same ramp as the overlay. What
+// it reads, and how the scrubbed frame shows, is for
+// entropyProfileLayers to say. On an edited run the pre-edit profile
+// is drawn underneath and the two are mixed by the run crossfade,
+// exactly as the token layers above them are.
 function drawEntropyProfile() {
   if (!entropyProfileCanvas || !entropyProfileRow) {
     return;
   }
-  var values = entropyProfileValues();
+  var layers = entropyProfileLayers();
+  var values = layers.values;
   if (values.length === 0) {
     setEntropyProfileVisible(false);
     return;
@@ -4451,13 +4609,12 @@ function drawEntropyProfile() {
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
   ctx.clearRect(0, 0, cssWidth, cssHeight);
 
-  // Frame index maps straight onto position: the autoregressive
-  // worker emits no leading empty canvas (ar_sampler._build_frame
-  // runs after the pick is appended), so runFrames.history[k] holds k+1
-  // tokens and the frame at k is the one that introduced position k.
-  // The profile only renders for runs carrying per-token entropy,
-  // which is autoregressive-only, so the diffusion all-mask frame 0
-  // does not apply here.
+  // On an autoregressive run frame index maps straight onto
+  // position: the worker emits no leading empty canvas
+  // (ar_sampler._build_frame runs after the pick is appended), so
+  // runFrames.history[k] holds k+1 tokens and the frame at k is the
+  // one that introduced position k. A diffusion run has no such
+  // mapping, and entropyProfileLayers gives it no current column.
   //
   // The scrubber's position is carried by the bar's own opacity
   // rather than a drawn marker. A standing neutral guide reads as an
@@ -4466,12 +4623,12 @@ function drawEntropyProfile() {
   // edit marker below is a different statement: it names a position
   // the run was intervened at, which is true whether or not the
   // pointer is anywhere near it.
-  var current = currentScrubFrame;
-  var original = originalEntropyProfileValues();
+  var current = layers.current;
+  var original = layers.original;
   // Stepped off the longer run so the two profiles stay
   // position-aligned when a branch outran or fell short of the
   // original.
-  var step = cssWidth / entropyProfileColumns();
+  var step = cssWidth / entropyProfileColumnsOf(layers);
   var layout = {
     step: step,
     barWidth: Math.max(1, step - 0.5),
@@ -4497,25 +4654,26 @@ function drawEntropyProfile() {
       // dimmed in one run and lit in the other would read as a
       // difference between them rather than as a scrub.
       current: -1,
-      filled: current,
+      filled: layers.filled,
     });
   }
   drawEntropyProfileSeries(ctx, layout, {
     values: values,
     alpha: paired ? runBlend : 1,
     current: current,
-    filled: current,
+    filled: layers.filled,
   });
   drawEntropyProfileEditLines(ctx, layout, edits, editColors);
 
   // The glow and the readout speak for one run, so they follow
   // whichever the crossfade is favoring.
-  layout.values = (paired && runBlendFavorsOriginal())
-    ? original : values;
+  var readsOriginal = paired && runBlendFavorsOriginal();
+  layout.values = readsOriginal ? original : values;
   drawEntropyProfileGlow(ctx, layout);
   updateEntropyReadout(
     layout.values,
-    entropyHoverPos === null ? current : entropyHoverPos
+    entropyHoverPos === null ? current : entropyHoverPos,
+    readsOriginal ? layers.originalAsOfStep : layers.asOfStep
   );
 }
 
@@ -4663,7 +4821,9 @@ function drawEntropyProfileGlow(ctx, layout) {
   ctx.shadowColor = "transparent";
 }
 
-function updateEntropyReadout(values, index) {
+// The value beside the profile. `asOfStep` names the earlier draft a
+// commit's values were borrowed from, or is null.
+function updateEntropyReadout(values, index, asOfStep) {
   if (!entropyProfileReadout) {
     return;
   }
@@ -4671,8 +4831,11 @@ function updateEntropyReadout(values, index) {
     entropyProfileReadout.textContent = "";
     return;
   }
-  entropyProfileReadout.textContent =
-    String(+values[index].toFixed(2)) + " nats";
+  var text = String(+values[index].toFixed(2)) + " nats";
+  if (typeof asOfStep === "number") {
+    text += ", " + overlaysEntropyAsOf(asOfStep);
+  }
+  entropyProfileReadout.textContent = text;
 }
 
 // Track the hovered token and repaint the profile when it changes.
@@ -4893,6 +5056,7 @@ function buildTokenMetricsReading() {
   var tok = tokens[index];
   var remasked = remaskedPositions[index] === true;
   var masked = !tok || !!tok.m || remasked;
+  var entropy = tokenEntropyReading(index, tok, metricsHoverOriginal);
   return {
     position: index,
     total: tokens.length,
@@ -4900,9 +5064,10 @@ function buildTokenMetricsReading() {
     masked: masked,
     maskChar: MASK_CHAR,
     confidence: metricsConfidence(tok, masked, remasked),
-    entropy:
-      tok && typeof tok.e === "number" ? tok.e : null,
-    extra: metricsExtra(index, tok),
+    entropy: entropy.value,
+    extra: overlaysEntropyNote(
+      metricsExtra(index, tok), entropy.asOfStep
+    ),
     candidate: metricsCandidate,
     runLabel: metricsRunLabel(),
   };
