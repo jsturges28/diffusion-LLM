@@ -4100,7 +4100,7 @@ function setOverlayFrame(index) {
     overlayScrubSlider.value = String(clamped);
   }
   updateOverlayScrubLabel();
-  refreshEntropyFills();
+  refreshEntropyChart();
   // The spans are about to be replaced, so an open popover would be
   // anchored to a detached element.
   hideAltsPopover();
@@ -4108,20 +4108,49 @@ function setOverlayFrame(index) {
   refreshStopReadout();
 }
 
-// Recolor the entropy bars for the frame the scrubber now sits on.
-// Only the fills change, so the datasets are edited in place and the
-// chart is updated with animation off: the slider fires continuously
-// while dragged, and an animated color transition per tick would lag
-// behind the pointer.
-function refreshEntropyFills() {
-  if (!chartEntropy) {
+// Bring the entropy bars to the frame the scrubber now sits on. A
+// channel the run declares to vary by frame is read again there; one
+// decided once per position, or a run saved without a manifest,
+// keeps the values it opened with. Either way the fills follow the
+// frame. The datasets are edited in place and the chart is updated
+// with animation off: the slider fires continuously while dragged,
+// and an animated transition per tick would lag behind the pointer.
+function refreshEntropyChart() {
+  if (!chartEntropy || !overlayData) {
     return;
   }
   var sets = chartEntropy.data.datasets;
+  var channel = signalChannel(overlayData, "entropy");
+  if (channelShape(channel) === "frame|position") {
+    refreshEntropyLayers(sets, channel);
+  }
   for (var i = 0; i < sets.length; i++) {
     sets[i].backgroundColor = entropyFillColors(sets[i].data);
   }
   chartEntropy.update("none");
+}
+
+// Each layer's bars, the tokens they name and their hover glow, read
+// again at the scrubbed frame. Each layer is clamped to its own run,
+// which a branch can outlive, and the labels span the longer one.
+function refreshEntropyLayers(sets, channel) {
+  var count = 0;
+  for (var i = 0; i < sets.length; i++) {
+    var source = overlayData[sets[i].seriesKey];
+    if (!source) {
+      throw new Error(
+        "entropy layer reads no series: " + sets[i].seriesKey
+      );
+    }
+    var layer = entropySeriesFrom(
+      source, channelFrameIndex(channel, source)
+    );
+    sets[i].data = layer.values;
+    sets[i].texts = layer.texts;
+    sets[i].hoverBackgroundColor = entropyGlowColors(layer.values);
+    count = Math.max(count, layer.values.length);
+  }
+  chartEntropy.data.labels = entropyLabels(count);
 }
 
 function updateOverlayScrubLabel() {
@@ -6328,21 +6357,41 @@ function divergencePosition(data) {
 // One entropy layer. grouped:false is load-bearing: left grouped,
 // Chart.js sits the two runs side by side and halves every bar,
 // where the whole point is to superimpose them and crossfade.
-function entropyDataset(label, series) {
-  var glowColors = [];
-  for (var i = 0; i < series.values.length; i++) {
-    glowColors.push(entropyGlowColor(series.values[i]));
-  }
+//
+// `texts` are the tokens the bars stand for, and `seriesKey` names
+// the overlayData series the layer was read from, "series" or
+// "baseline", so a scrub can read both again in place.
+function entropyDataset(label, series, seriesKey) {
   return {
     label: label,
     data: series.values,
+    texts: series.texts,
+    seriesKey: seriesKey,
     backgroundColor: entropyFillColors(series.values),
-    hoverBackgroundColor: glowColors,
+    hoverBackgroundColor: entropyGlowColors(series.values),
     borderWidth: 0,
     barPercentage: 1,
     categoryPercentage: 1,
     grouped: false,
   };
+}
+
+// Each bar's hover color, on the overlay's glow ramp.
+function entropyGlowColors(values) {
+  var colors = [];
+  for (var i = 0; i < values.length; i++) {
+    colors.push(entropyGlowColor(values[i]));
+  }
+  return colors;
+}
+
+// The chart's x labels: one per position, from 0.
+function entropyLabels(count) {
+  var labels = [];
+  for (var i = 0; i < count; i++) {
+    labels.push(i);
+  }
+  return labels;
 }
 
 // Per-bar fills, faded past the position the scrubbed frame reached,
@@ -6439,21 +6488,14 @@ function renderEntropyChart(data) {
   if (original && original.values.length > count) {
     count = original.values.length;
   }
-  var labels = [];
-  for (var i = 0; i < count; i++) {
-    labels.push(i);
-  }
 
   // Original first, so it draws beneath the branch it produced and
   // so dataset index 0 is the one the crossfade fades out.
   var datasets = [];
-  var texts = [];
   if (original) {
-    datasets.push(entropyDataset("Original", original));
-    texts.push(original.texts);
+    datasets.push(entropyDataset("Original", original, "baseline"));
   }
-  datasets.push(entropyDataset("Edited", edited));
-  texts.push(edited.texts);
+  datasets.push(entropyDataset("Edited", edited, "series"));
 
   var markerPositions = editedPositions(data);
 
@@ -6463,12 +6505,10 @@ function renderEntropyChart(data) {
     {
       type: "bar",
       data: {
-        labels: labels,
+        labels: entropyLabels(count),
         datasets: datasets,
       },
-      options: entropyChartOptions(
-        texts, original ? divergence : null
-      ),
+      options: entropyChartOptions(original ? divergence : null),
       // Deliberately without burnThroughPlugin: it redraws a
       // dataset's *line* through the tooltip box, which a bar chart
       // has none of, and would stroke a stray polyline across the bar
@@ -6554,7 +6594,7 @@ function applyTokenLayerBlend() {
 // can name the token each layer chose. ``divergence`` is null on a
 // run with nothing to compare against, which collapses the tooltip
 // back to the single unlabeled row.
-function entropyChartOptions(texts, divergence) {
+function entropyChartOptions(divergence) {
   return {
     responsive: true,
     maintainAspectRatio: false,
@@ -6578,7 +6618,7 @@ function entropyChartOptions(texts, divergence) {
         callbacks: {
           title: positionTooltipTitle,
           label: function (ctx) {
-            return entropyTooltipLabel(ctx, texts, divergence);
+            return entropyTooltipLabel(ctx, divergence);
           },
         },
       },
@@ -6644,9 +6684,9 @@ function entropyTooltipFilter(item, divergence) {
 // entropy describes the distribution the prefix produced, and
 // forcing a token changes which one was drawn, not the distribution
 // it was drawn from.
-function entropyTooltipLabel(ctx, texts, divergence) {
+function entropyTooltipLabel(ctx, divergence) {
   var value = ctx.formattedValue + " nats";
-  var series = texts[ctx.datasetIndex] || [];
+  var series = ctx.dataset.texts || [];
   var text = series[ctx.dataIndex];
   var row = text ? value + "  \u2022  " + text : value;
   if (divergence === null || ctx.dataIndex < divergence) {

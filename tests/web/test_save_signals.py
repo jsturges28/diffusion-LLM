@@ -17,7 +17,8 @@ you find when you open the run months later.
 
 Passing proves a saved run carries everything the durable Entropy
 overlay, the candidate popover, the original-versus-edited comparison,
-and the context rows need to replay it post-hoc.
+and the context rows need to replay it post-hoc, the manifest saying
+what each signal varies over included.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from starlette.testclient import TestClient
 
 from src.analytics.metrics import load_run_frames
 from src.backends.protocol import CANDIDATE_BUDGET_RECORDS
+from src.backends.registry import LLADA
 from src.web import server
 from src.web.server import (
     RemaskEdit,
@@ -569,6 +571,47 @@ def test_a_run_saved_without_candidates_reports_none(
 
     assert response.json()["candidates"] is None
     assert response.json()["original_candidates"] is None
+
+
+def _llada_manifest() -> List[Dict[str, Any]]:
+    """LLaDA's signal manifest in the JSON form its worker attests,
+    which is how it reaches the save inside the run's provenance."""
+    return [
+        channel.model_dump(mode="json")
+        for channel in LLADA.capabilities.signals
+    ]
+
+
+def test_the_signal_manifest_reaches_the_analytics_frames(
+    client: TestClient,
+) -> None:
+    """The run's own account of its signals, saved from its
+    provenance and handed back beside the frames the overlay viewer
+    reads. Without it the page cannot tell an entropy that varies by
+    denoising step from one decided once per position."""
+    manifest = _llada_manifest()
+    run_id = _save_diffusion(
+        client,
+        provenance={"model_id": "llada", "signals": manifest},
+    )
+
+    response = client.get(f"/api/analytics/runs/{run_id}/frames")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["signals"] == manifest
+
+
+def test_a_run_saved_without_a_manifest_reports_none(
+    client: TestClient,
+) -> None:
+    """None rather than an empty list, so the page reads the run the
+    way every run saved before manifests is read."""
+    run_id = _save_diffusion(client)
+
+    response = client.get(f"/api/analytics/runs/{run_id}/frames")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["signals"] is None
 
 
 # -- The context block --

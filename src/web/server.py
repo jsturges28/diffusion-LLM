@@ -3392,6 +3392,10 @@ def _compute_run_frames(run_id: str) -> Dict[str, Any]:
         "remask_edits": meta.get("remask_edits", []),
         "canvas_index": meta.get("canvas_index"),
         "stop_rule": _stop_rule(meta),
+        # What each signal varies over, as the run declared it, so
+        # the page reads a channel by its axes. None for a run saved
+        # before manifests, which the page reads as it always has.
+        "signals": meta.get(run_store.SIGNALS_KEY),
     }
 
 

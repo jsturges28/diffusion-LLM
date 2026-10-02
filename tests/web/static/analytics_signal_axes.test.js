@@ -16,7 +16,9 @@
 // frame-by-position channel follows the scrub, a run with no manifest
 // behaves exactly as it did before, and a channel whose shape this
 // build cannot draw says so instead of leaving an empty space that
-// looks identical to a dropped signal.
+// looks identical to a dropped signal. The last section proves the
+// same of the chart itself, opened the way Analytics opens a saved
+// run and then scrubbed.
 
 "use strict";
 
@@ -230,4 +232,174 @@ test("axes join in declaration order", () => {
   );
   assert.equal(context.channelShape(channel(["position"])), "position");
   assert.equal(context.channelShape(null), "");
+});
+
+// -- the chart, as a saved run opens and is scrubbed --
+//
+// The tests above hand the readers a run with its manifest already
+// attached. These open one the way Analytics does, through
+// renderRunOverlays and the scrubber, from a payload carrying exactly
+// the keys the frames endpoint returns. A manifest the endpoint drops
+// or a chart that never re-reads its bars shows up here, where the
+// readers alone would still pass.
+
+// The frames endpoint's response for one run, as _compute_run_frames
+// in src/web/server.py builds it, with `overrides` replacing keys.
+function framesPayload(overrides) {
+  return Object.assign({
+    run_id: "r1",
+    frames: null,
+    positions: null,
+    original_frames: null,
+    original_positions: null,
+    records_available: true,
+    alternatives: null,
+    alternatives_available: false,
+    original_alternatives: null,
+    candidates: null,
+    original_candidates: null,
+    remask_edits: [],
+    canvas_index: null,
+    stop_rule: null,
+    signals: null,
+  }, overrides || {});
+}
+
+// A diffusion run's frames over four positions. Entropy at frame N
+// is N plus a tenth of the position, and each token names its frame,
+// so a bar read from the wrong frame or position cannot agree by
+// luck. `base` offsets both, so a pre-edit run reads differently.
+function canvasFrames(count, base) {
+  const offset = base || 0;
+  const frames = [];
+  for (let frame = 0; frame < count; frame++) {
+    frames.push(["a", "b", "c", "d"].map((letter, position) => ({
+      t: letter + (offset + frame),
+      m: false,
+      id: 100 + position,
+      c: 0.5,
+      e: offset + frame + position / 10,
+    })));
+  }
+  return frames;
+}
+
+// An autoregressive run as the endpoint sends it: one record per
+// position, frame N being the first N + 1 of them.
+function appendPositions(count) {
+  const positions = [];
+  for (let position = 0; position < count; position++) {
+    positions.push({
+      t: "w" + position,
+      m: false,
+      id: 200 + position,
+      c: 0.5,
+      e: position / 10,
+    });
+  }
+  return positions;
+}
+
+// The page with `payload` opened, Chart replaced by a recorder that
+// keeps the configuration it was given, so the scrub's edits to the
+// entropy chart can be read back.
+function openedRun(payload) {
+  const opened = page();
+  const { context } = opened;
+  context.Chart = function (ctx, config) {
+    return {
+      data: config.data,
+      options: config.options,
+      setActiveElements() {},
+      update() {},
+      destroy() {},
+      resize() {},
+    };
+  };
+  context.renderRunOverlays(payload);
+  assert.ok(context.chartEntropy, "the entropy chart was not built");
+  return context;
+}
+
+// One layer of the open entropy chart, by its label.
+function layer(context, label) {
+  const sets = context.chartEntropy.data.datasets;
+  const found = sets.find((set) => set.label === label);
+  assert.ok(found, "the chart has no " + label + " layer");
+  return found;
+}
+
+const FRAME_BY_POSITION = channel(["frame", "position"]);
+
+test("a saved diffusion run's bars follow the scrub", () => {
+  const context = openedRun(framesPayload({
+    frames: canvasFrames(3),
+    canvas_index: [0, 0, 0],
+    signals: [FRAME_BY_POSITION],
+  }));
+
+  context.setOverlayFrame(0);
+  const early = layer(context, "Edited");
+  assert.deepEqual(host(early.data), [0, 0.1, 0.2, 0.3]);
+  assert.deepEqual(host(early.texts), ["a0", "b0", "c0", "d0"]);
+
+  context.setOverlayFrame(2);
+  const late = layer(context, "Edited");
+  assert.deepEqual(host(late.data), [2, 2.1, 2.2, 2.3]);
+  assert.deepEqual(host(late.texts), ["a2", "b2", "c2", "d2"]);
+});
+
+test("an edited run's original layer follows to its own end", () => {
+  // The pre-edit run is one frame shorter than the branch, so the
+  // last scrub reaches past it and has to stop at its final frame
+  // rather than read a frame it does not have.
+  const context = openedRun(framesPayload({
+    frames: canvasFrames(3),
+    original_frames: canvasFrames(2, 10),
+    remask_edits: [{ frame_index: 1, token_positions: [2] }],
+    canvas_index: [0, 0, 0],
+    signals: [FRAME_BY_POSITION],
+  }));
+
+  context.setOverlayFrame(0);
+  assert.deepEqual(
+    host(layer(context, "Original").data), [10, 10.1, 10.2, 10.3]
+  );
+
+  context.setOverlayFrame(2);
+  assert.deepEqual(
+    host(layer(context, "Original").data), [11, 11.1, 11.2, 11.3]
+  );
+  assert.deepEqual(
+    host(layer(context, "Edited").data), [2, 2.1, 2.2, 2.3]
+  );
+});
+
+test("a run saved before manifests reads its final frame", () => {
+  // Negative space for the first test: with no manifest the run is
+  // read the way it always was, whatever the scrubber does.
+  const context = openedRun(framesPayload({
+    frames: canvasFrames(3),
+    canvas_index: [0, 0, 0],
+  }));
+
+  context.setOverlayFrame(0);
+
+  assert.deepEqual(
+    host(layer(context, "Edited").data), [2, 2.1, 2.2, 2.3]
+  );
+});
+
+test("an autoregressive run's bars stay put", () => {
+  // Each position is decided once, so there is nothing to follow.
+  const context = openedRun(framesPayload({
+    positions: appendPositions(4),
+    signals: [channel(["position"])],
+  }));
+  const opened = host(layer(context, "Edited").data);
+
+  context.setOverlayFrame(1);
+
+  assert.deepEqual(opened, [0, 0.1, 0.2, 0.3]);
+  assert.deepEqual(host(layer(context, "Edited").data), opened);
 });
