@@ -306,9 +306,9 @@ kept when these were written:
 - **406**: confirmed on 2026-10-03: each worker loading and every way out
   freeing the card, after the 2026-10 audit's `A2-DEPS-01` moved both apps
   to lifespan contexts. It was also that audit's measurement 9.
-- **407**: **outstanding**: the run snapshot through its codec, after the
-  2026-10 audit's `A2-ORG-03` moved its tiers and its reading of older
-  snapshots into `run_snapshot.js`.
+- **407**: confirmed on 2026-10-03: the run snapshot through its codec,
+  after the 2026-10 audit's `A2-ORG-03` moved its tiers and its reading of
+  older snapshots into `run_snapshot.js`.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
