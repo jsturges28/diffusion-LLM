@@ -729,7 +729,7 @@
         </ul>
         <p>It is disabled during generation and after a successful save (to prevent duplicates); while saving it shows a spinner, then a brief checkmark. Starting a new generation resets it.</p>
         <p>Nothing is written unless you ask for it. Opening <strong>Edit Frames</strong> or <strong>What If?</strong> saves nothing, because choosing a frame and marking tokens are reversible and happen entirely in the page; leaving an edit session puts the run back exactly as it was, still unsaved. <strong>Confirm</strong> is itself a save, and the run it writes carries both the original and the branch, so a confirmed edit is one row in Analytics rather than two.</p>
-        <p>Saving twice cannot duplicate a run. Each save is filed under the generation that produced it, so if a save is interrupted, by navigating away while it is still in flight, for instance, asking again updates the run that was already written instead of making a second copy of it.</p>
+        <p>Saving twice cannot duplicate a run. Each save is filed under the generation that produced it, so if a save is interrupted, by navigating away while it is still in flight, for instance, asking again updates the run that was already written instead of making a second copy of it. The same holds between the browser and the desktop app, which take turns writing the runs they share.</p>
         <p>A save is held to what one run can be, with the tops of the model's sliders as the limit. One claiming more than its model could have made, or larger than 256 MiB, is refused before anything is written, and the status line names what was over and the limit it passed.</p>
         </section>
         <section class="help-panel" role="tabpanel"

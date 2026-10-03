@@ -14,9 +14,9 @@ it. Here a finding gets one row and a decision one line, with any longer
 reasoning in `docs/ROADMAP.md`, and git history keeps the rest.
 
 **As of 2026-10-02**, Stage 1 is done. Stage 2, cross-supervisor ownership,
-is under way: `A2-LIFE-01` and `A2-TRUST-01` are done, and the report
-validates the stage as a whole with a two-supervisor run once the rest has
-landed. The report's Sequencing section orders the rest, and its
+is under way: `A2-LIFE-01`, `A2-TRUST-01` and `A2-DATA-01` are done, and the
+report validates the stage as a whole with a two-supervisor run once the
+rest has landed. The report's Sequencing section orders the rest, and its
 Combinations to avoid bind every pass.
 
 ## How to work a finding
@@ -53,10 +53,10 @@ Decisions saying why.
 | A2-TRUST-02 | 1 | done | `8be0e91`, `c0cbbde`, `7f6198d` | 397 to 399 | |
 | A2-LIFE-01 | 2 | done | `2363eca` | 395 | |
 | A2-TRUST-01 | 2 | done | `fc8374f` | 396 | |
-| A2-DATA-01 | 2 | ready | | | |
+| A2-DATA-01 | 2 | done | `4027c22`, `1b63867`, `a1eac0d` | | |
 | A2-QUALITY-02 | 2 | ready | | | |
 | A2-LIFE-03 | 2 | blocked | | | `A2-QUALITY-02` |
-| A2-ORG-01 | 3 | blocked | | | `A2-LIFE-01`, `A2-TRUST-01`, `A2-DATA-01` |
+| A2-ORG-01 | 3 | ready | | | |
 | A2-ORG-02 | 3 | blocked | | | stage 3 order, in one plan with `A2-DEPS-01` |
 | A2-DEPS-01 | 3 | blocked | | | stage 3 order, in one plan with `A2-ORG-02` |
 | A2-ORG-03 | 3 | blocked | | | `A2-LIFE-03` |
@@ -93,6 +93,10 @@ Each settled with the maintainer during remediation.
   slider tops are the limit for one run, under a 256 MiB ceiling on the
   save body. One 1,000,000-character prompt cap holds saves and Generate
   alike, and is the only one Mamba-3, with no window, has.
+- Deleting a run takes the publication lock too, and a save whose run has
+  vanished becomes a new run, decided inside that lock (`A2-DATA-01`). Its
+  verification is the suite's forked-process races; the Stage 2
+  two-supervisor run covers it on hardware.
 
 ## Open decisions
 
@@ -112,9 +116,10 @@ Not findings, and each its own slice when taken.
 | An interrupted save carries no run token, so a retried save can duplicate | accepted | | |
 | The Help "signals" panel is at its 2,200-word budget | open | | |
 | A long run's save waits seconds on drawing its GIF preview | open | | |
+| The GIF preview is drawn outside the publication lock, so two near-simultaneous replacements can leave the earlier one's | open | | |
 
 ## Baselines
 
 At the audit on 2026-10-01: 2,456 Python tests, 816 browser tests, and no
-Ruff findings. On 2026-10-02, after the save limits slice: 2,561 Python
+Ruff findings. On 2026-10-02, after the run publication lock: 2,573 Python
 tests passing and 6 skipped, 876 browser tests, and still no Ruff findings.

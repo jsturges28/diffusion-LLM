@@ -2826,8 +2826,10 @@ page appears that this map does not mention.
   owns the worker; the modules beside it each took one responsibility out of it,
   which is why they exist rather than being sections of `server.py`:
   `worker_process.py` (the operating-system process), `run_store.py` (the saved
-  runs), `collections.py`, `ui_state.py`, `data_root.py` and `model_lease.py`
-  (which of this machine's launchers may hold a model).
+  runs), `collections.py`, `ui_state.py`, `data_root.py`, `data_root_lock.py`
+  (one writer at a time over the data root, whichever launcher it is),
+  `save_limits.py` (how large a save may be) and `model_lease.py` (which of
+  this machine's launchers may hold a model).
 - `src/analytics/` computes the intrinsic metrics in `metrics.py`.
 
 **The frontend** is `src/web/static/`: five pages (`menu.html`, `index.html`,
