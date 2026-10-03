@@ -206,10 +206,10 @@ briefly, and is the right thing to reach for while using the app.
 
 ## Roadmap
 
-Next up: a state-space model (Mamba-3) as a new model class, top-k
-alternatives for the diffusion models, and multimodal image input.
-[docs/ROADMAP.md](docs/ROADMAP.md) carries the reasoning and the
-backlog.
+What comes next is chosen from the backlog in
+[docs/ROADMAP.md](docs/ROADMAP.md), which also records why each
+direction was taken or deliberately left alone. Where the project
+stands today is in [docs/HANDOFF.md](docs/HANDOFF.md).
 
 ## References
 
