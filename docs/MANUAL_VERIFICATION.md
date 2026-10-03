@@ -299,10 +299,10 @@ kept when these were written:
   connection. Each locks its edit tools in place with its reason, an
   open edit session closes unless it awaits Confirm, and a trip to
   Analytics with nothing reloaded leaves a run editable.
-- **405**: **outstanding.** Two launchers sharing saved runs, from the
-  2026-10 audit's `A2-DATA-01`, and the last of its Stage 2 validation:
-  an edit confirmed after the other launcher deleted its run saves as a
-  run of its own.
+- **405**: confirmed on 2026-10-03: two launchers sharing saved runs,
+  from the 2026-10 audit's `A2-DATA-01`, and with it that audit's Stage 2
+  validation. An edit confirmed after the other launcher deleted its run
+  saved as a run of its own.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer

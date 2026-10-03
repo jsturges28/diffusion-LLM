@@ -104,8 +104,8 @@ in an analytics suite.
 
 **A second audit is being worked through.** Its 21 findings are in
 `docs/audit/AUDIT_REPORT_2026-10.md` and their state is in
-`docs/audit/IMPLEMENTATION_LEDGER_2026-10.md`: Stage 1 is done, and Stage 2,
-cross-supervisor ownership, is under way. Read the ledger first, then only
+`docs/audit/IMPLEMENTATION_LEDGER_2026-10.md`: Stages 1 and 2 are done, and
+Stage 3, extracting owners, is under way. Read the ledger first, then only
 the findings you touch. **The first campaign is
 complete except for a short remainder**, listed at the top of
 `docs/audit/IMPLEMENTATION_LEDGER.md`: three findings waiting on hardware,

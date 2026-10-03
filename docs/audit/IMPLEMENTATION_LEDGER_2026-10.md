@@ -13,12 +13,11 @@ first ledger reached 3,899 lines because every session appended its story to
 it. Here a finding gets one row and a decision one line, with any longer
 reasoning in `docs/ROADMAP.md`, and git history keeps the rest.
 
-**As of 2026-10-03**, Stage 1 is done, and so is every finding in Stage 2,
-cross-supervisor ownership. The report validates that stage as a whole with
-a two-supervisor run: the passes confirmed for items 310 to 314, 389 to 396
-and 400 to 404, plus item 405 for the shared run lock, which is
-outstanding. Stage 3 has begun with `A2-ORG-01`. The report's Sequencing
-section orders the rest, and its Combinations to avoid bind every pass.
+**As of 2026-10-03**, Stages 1 and 2 are done. Stage 2, cross-supervisor
+ownership, was validated as a whole by the two-supervisor passes confirmed
+for items 310 to 314, 389 to 396, 400 to 404 and 405. Stage 3, extracting
+owners, has begun with `A2-ORG-01`. The report's Sequencing section orders
+the rest, and its Combinations to avoid bind every pass.
 
 ## How to work a finding
 
