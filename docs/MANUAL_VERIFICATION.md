@@ -294,11 +294,11 @@ kept when these were written:
   2026-10 audit's `A2-TRUST-02`. The longest run of each model still
   saves, an oversized save is refused at once, and Mamba-3 refuses a
   prompt past the cap.
-- **400 to 404**: **outstanding.** A run whose worker is gone, from the
-  2026-10 audit's `A2-LIFE-03`, and a run that lost its connection: each
-  locks its edit tools in place with its reason, an open edit session
-  closes unless it awaits Confirm, and a trip to Analytics with nothing
-  reloaded leaves a run editable.
+- **400 to 404**: confirmed on 2026-10-03: a run whose worker is gone,
+  from the 2026-10 audit's `A2-LIFE-03`, and a run that lost its
+  connection. Each locks its edit tools in place with its reason, an
+  open edit session closes unless it awaits Confirm, and a trip to
+  Analytics with nothing reloaded leaves a run editable.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
