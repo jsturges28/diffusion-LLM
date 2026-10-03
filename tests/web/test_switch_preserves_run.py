@@ -88,7 +88,7 @@ def test_the_generator_keeps_the_run_when_a_switch_fails() -> None:
 def test_the_menu_does_not_discard_before_asking() -> None:
     region = _region(MENU_JS, "function selectModel(model, li)", 900)
 
-    assert "overlaysClearLastRun()" not in region
+    assert "persistClearLastRun()" not in region
 
 
 def test_the_menu_discards_once_the_worker_is_ready() -> None:
@@ -98,7 +98,7 @@ def test_the_menu_discards_once_the_worker_is_ready() -> None:
     path, ahead of the navigation."""
     region = _region(MENU_JS, "function activationCallbacks()", 1400)
 
-    discard = region.find("overlaysClearLastRun()")
+    discard = region.find("persistClearLastRun()")
     navigate = region.find("window.location.assign(GENERATE_URL)")
 
     assert discard != -1

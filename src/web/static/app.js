@@ -8332,7 +8332,7 @@ function refreshAnalyticsCue() {
   if (!analyticsNewDot) {
     return;
   }
-  var count = overlaysNewRunCount();
+  var count = persistNewRunCount();
   // Emptied rather than removed: the badge keeps its width so the
   // header links beside it do not slide when the count arrives,
   // which it does after a fetch on every page load.
@@ -8366,7 +8366,7 @@ function flashAnalyticsPlusOne() {
 // update of a run already counted), so editing-and-resaving a run does
 // not double-count it.
 function showAnalyticsCue(runId) {
-  var added = overlaysAddNewRun(runId);
+  var added = persistAddNewRun(runId);
   refreshAnalyticsCue();
   if (added) {
     flashAnalyticsPlusOne();
@@ -9548,8 +9548,8 @@ allModals.forEach(function (modal) {
 // ---- Session persistence (survives Analytics navigation) ----
 
 // Shared with the menu, which clears the same snapshot when it
-// activates a model (see overlaysClearLastRun for why both pages do).
-var SESSION_KEY = OVERLAYS_LAST_RUN_KEY;
+// activates a model (see persistClearLastRun for why both pages do).
+var SESSION_KEY = PERSIST_LAST_RUN_KEY;
 
 // The page's run, read into the one record run_snapshot.js turns into
 // what storage is offered. Whether the run is worth keeping, and which
@@ -9625,7 +9625,7 @@ function sessionStoreFirstFitting(payloads) {
 }
 
 function clearSessionState() {
-  overlaysClearLastRun();
+  persistClearLastRun();
 }
 
 function restoreSessionState() {

@@ -67,7 +67,7 @@ def test_the_page_never_persists_the_key() -> None:
 def test_the_key_is_off_the_persist_lists() -> None:
     """`persistSet` writes localStorage first and PUTs second, so a
     key still listed there is a key a page can still replace."""
-    source = _source("overlays.js")
+    source = _source("persist.js")
     listed = re.findall(rf'"{KEY}"\s*,', source)
 
     assert listed == [], listed

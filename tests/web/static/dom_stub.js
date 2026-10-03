@@ -41,6 +41,7 @@ const STATIC_DIR = path.join(
 // file's globals are undefined when an earlier one runs.
 const GENERATOR_SCRIPTS = [
   "custom_select.js",
+  "persist.js",
   "overlays.js",
   "activation_client.js",
   "wire_errors.js",
@@ -62,6 +63,7 @@ const GENERATOR_SCRIPTS = [
 // tests/web/test_page_script_lists.py holds each list to its page.
 const ANALYTICS_SCRIPTS = [
   "custom_select.js",
+  "persist.js",
   "overlays.js",
   "overlay_series.js",
   "run_candidates.js",
@@ -74,6 +76,7 @@ const ANALYTICS_SCRIPTS = [
 ];
 
 const MENU_SCRIPTS = [
+  "persist.js",
   "overlays.js",
   "model_client.js",
   "activation_client.js",
@@ -84,6 +87,7 @@ const MENU_SCRIPTS = [
 
 const SETTINGS_SCRIPTS = [
   "custom_select.js",
+  "persist.js",
   "overlays.js",
   "download_client.js",
   "download_toast.js",

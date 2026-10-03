@@ -37,6 +37,7 @@ PAGE_SCRIPTS = (
     "analytics.js",
     "settings.js",
     "overlays.js",
+    "persist.js",
 )
 
 

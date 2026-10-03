@@ -1641,7 +1641,7 @@
         // never have loaded, threw away a run that was never
         // replaced.
         if (!(activeSelection && activeSelection.resident)) {
-          overlaysClearLastRun();
+          persistClearLastRun();
         }
         finishActivationProgress(function () {
           window.location.assign(GENERATE_URL);
@@ -1752,13 +1752,13 @@
 
   // Mirror the generator's count on the menu: "N New" beside Analytics
   // when saved runs remain unopened (the shared set lives in
-  // overlays.js and persists across app restarts).
+  // persist.js and survives app restarts).
   function refreshAnalyticsNewBadge() {
     var badge = document.getElementById("menu-analytics-new");
-    if (!badge || typeof overlaysNewRunCount !== "function") {
+    if (!badge || typeof persistNewRunCount !== "function") {
       return;
     }
-    var count = overlaysNewRunCount();
+    var count = persistNewRunCount();
     // Emptied rather than removed; see the generator's copy of this
     // and the `is-empty` rule for why the width has to stay.
     badge.textContent = count > 0 ? String(count) : "";

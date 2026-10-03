@@ -1,10 +1,11 @@
-// Tests for the durable UI-state write-through in overlays.js.
+// Tests for the durable UI-state write-through in persist.js.
 //
 // Strategy: load the shipped file into a fresh vm context, the same
 // way detail_requests.test.js does, and supply the handful of globals
-// its persistence half touches: localStorage, fetch, the timer pair,
-// and the two event targets. overlays.js does no DOM work at the top
-// level, so evaluating it costs nothing but the definitions. The
+// it touches: localStorage, fetch, the timer pair, and the two event
+// targets. persist.js does no DOM work at the top level and loads
+// without the visual code, so evaluating it costs nothing but the
+// definitions, and none of overlays.js is in the context. The
 // timers are fakes, which is what makes the debounce observable
 // rather than something to wait out.
 //
@@ -42,7 +43,7 @@ const SOURCE = path.join(
   "src",
   "web",
   "static",
-  "overlays.js"
+  "persist.js"
 );
 
 const SETTINGS = "diffusion_settings";
@@ -99,7 +100,7 @@ function load(options) {
     },
   };
   vm.runInNewContext(fs.readFileSync(SOURCE, "utf8"), sandbox, {
-    filename: "overlays.js",
+    filename: "persist.js",
   });
   return { sandbox, puts, timers, listeners, stored };
 }
@@ -260,7 +261,7 @@ test("an ordinary debounced write is not keepalive", () => {
 
 test("boot arms the flush", () => {
   // Registered from persistHydrate because that is the one call every
-  // page already makes, and overlays.js does nothing at the top level.
+  // page already makes, and persist.js does nothing at the top level.
   const { sandbox, listeners } = load();
 
   sandbox.persistHydrate(() => {});

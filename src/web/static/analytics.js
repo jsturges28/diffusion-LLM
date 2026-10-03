@@ -2102,7 +2102,7 @@ function renderTable() {
         if (k === 0) {
           var slot = document.createElement("span");
           slot.className = "run-new-slot";
-          if (overlaysIsNewRun(run.run_id)) {
+          if (persistIsNewRun(run.run_id)) {
             var newDot = document.createElement("span");
             newDot.className = "run-new-dot";
             newDot.setAttribute("aria-hidden", "true");
@@ -2282,8 +2282,8 @@ function showDetail(runId) {
 
   // Opening a run clears its "new" dot (and decrements the generator's
   // count on the next visit). Remove just this row's dot in place.
-  if (overlaysIsNewRun(runId)) {
-    overlaysClearNewRun(runId);
+  if (persistIsNewRun(runId)) {
+    persistClearNewRun(runId);
     var openedRow = runsTbody.querySelector(
       'tr[data-run-id="' + runId + '"] .run-new-slot'
     );
@@ -7108,7 +7108,7 @@ function applyDeletions(deletedIds) {
     delete checkedIds[deletedIds[i]];
     // Clear any "new run" cue for the deleted run so the generator's
     // and menu's counts decrement (write-through to the server).
-    overlaysClearNewRun(deletedIds[i]);
+    persistClearNewRun(deletedIds[i]);
     if (activeRunId === deletedIds[i]) {
       hideDetail();
     }
