@@ -328,3 +328,32 @@ test("a phase outside the table is refused", () => {
 
   assert.equal(api.runPhasesAllows(phase, "teleport"), false);
 });
+
+// -- whether a run can be edited at all --
+
+test("a run that lost its connection cannot be edited", () => {
+  // No terminal frame named the run the worker holds, so the worker
+  // would refuse every edit of it.
+  const api = load();
+
+  const reason = api.runPhasesEditBlock({ lostConnection: true });
+
+  assert.equal(reason, api.RUN_EDIT_BLOCKED_LOST_CONNECTION);
+  assert.match(reason, /saved but not edited/);
+});
+
+test("a run that kept its connection can be edited", () => {
+  // Stopped with Stop included: a cancelled run still ends in a
+  // terminal frame, and the worker still holds it.
+  const api = load();
+
+  assert.equal(api.runPhasesEditBlock({ lostConnection: false }), "");
+});
+
+test("a missing answer is a mistake, not a yes", () => {
+  // Read as false it would quietly unlock a run that cannot be
+  // edited, which is the failure this exists to prevent.
+  const api = load();
+
+  assert.throws(() => api.runPhasesEditBlock({}), /boolean/);
+});

@@ -428,10 +428,15 @@ var runPhase = runPhasesCreate();
 var editedRunSaved = false;
 // True when the run on screen was stopped rather than finished:
 // Stop was pressed, or the socket dropped mid-run. It stays
-// scrubbable, editable and savable, and the flag travels with the
-// save so the stored record says so too. Without it a truncated run
-// reads exactly like a complete one, on screen and in Analytics.
+// scrubbable and savable, and the flag travels with the save so the
+// stored record says so too. Without it a truncated run reads
+// exactly like a complete one, on screen and in Analytics.
 var runInterrupted = false;
+// True when that stop was the socket dropping rather than Stop. No
+// terminal frame named the run the worker holds, so the run cannot be
+// edited, and its edit tools say so instead of being refused as if
+// another run had replaced it.
+var runLostConnection = false;
 // True once the current run has been saved at least once. Read by
 // Confirm to decide whether it is replacing a run the user already
 // filed or writing this generation for the first time.
@@ -2486,6 +2491,8 @@ function enterInterruptedState() {
   isResuming = false;
   endRunStatus();
   runInterrupted = true;
+  runLostConnection = true;
+  updateEditFramesLock();
   statusRowReflow(function () {
     statusMessage.textContent =
       "Stopped: lost the connection mid-run.";
@@ -4292,6 +4299,9 @@ function requestTypedProbe() {
     return;
   }
   if (!ws || ws.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  if (editRequestRefused()) {
     return;
   }
   typedProbeRequest += 1;
@@ -6339,6 +6349,16 @@ function runIsMultiCanvas() {
 // lock. Either way the button carries a tooltip, explaining the lock
 // when locked and what the mode does when not, matching What If.
 function updateEditFramesLock() {
+  // A run the worker cannot answer for is locked whatever else holds,
+  // and with its own reason, since that is the one that applies.
+  var blocked = runEditBlock();
+  if (blocked) {
+    setButtonLocked(btnEditFrames, blocked);
+    if (btnWhatIf) {
+      setButtonLocked(btnWhatIf, blocked);
+    }
+    return;
+  }
   // An edited save in flight locks too, not just a completed one:
   // confirmGuidedEdit fires the save and re-shows the buttons before
   // its async handler can set editedRunSaved, which would otherwise
@@ -6376,6 +6396,26 @@ function updateEditFramesLock() {
       + " chose, then regenerate"
     );
   }
+}
+
+// Why the run on screen cannot be edited at all, or "" when it can.
+function runEditBlock() {
+  return runPhasesEditBlock({ lostConnection: runLostConnection });
+}
+
+// Whether a request about the run on screen must not be sent, saying
+// why when it must not. The edit buttons lock as well; this is for a
+// session already open when the run stopped being editable, and is
+// asked before anything is cut from the run for a branch.
+function editRequestRefused() {
+  var blocked = runEditBlock();
+  if (!blocked) {
+    return false;
+  }
+  statusRowReflow(function () {
+    statusMessage.textContent = blocked;
+  });
+  return true;
 }
 
 // The lock is both visual and behavioural: pointer-events is off in
@@ -6849,6 +6889,10 @@ function rewindWorkerRun() {
   if (!activeRunToken) {
     return;
   }
+  // Silently: a rewind is housekeeping nobody asked for by name.
+  if (runEditBlock()) {
+    return;
+  }
   ws.send(JSON.stringify({
     type: "rewind",
     run_token: activeRunToken,
@@ -7017,6 +7061,9 @@ function doSubstitute(position, tokenId, typedText) {
     return;
   }
   if (position < 0 || position >= runFramesLength(runFrames)) {
+    return;
+  }
+  if (editRequestRefused()) {
     return;
   }
   hideAltsPopover();
@@ -7304,6 +7351,9 @@ function doGuidedResume(action) {
   // Guard against a stale click with no locked edits (should be
   // unreachable now that the buttons hide correctly).
   if (runPhase.lockedEdits.length === 0) {
+    return;
+  }
+  if (editRequestRefused()) {
     return;
   }
   runPhase.guidedAction = action;
@@ -7946,6 +7996,7 @@ function resetRunState() {
   remaskEdits = [];
   editedRunSaved = false;
   runInterrupted = false;
+  runLostConnection = false;
   runSaved = false;
   lastSavedRunId = null;
   lastSavedRevision = null;
@@ -9486,6 +9537,7 @@ function saveSessionState() {
     remaskEdits: remaskEdits,
     editedRunSaved: editedRunSaved,
     runInterrupted: runInterrupted,
+    runLostConnection: runLostConnection,
     runSaved: runSaved,
     lastSavedRunId: lastSavedRunId,
     lastSavedRevision: lastSavedRevision,
@@ -9654,6 +9706,9 @@ function restoreSessionState() {
   // Restored with the rest, or a stopped run would come back from
   // Analytics looking complete and save itself that way.
   runInterrupted = !!s.runInterrupted;
+  // Absent in snapshots written before it existed, which reads as
+  // "kept its connection", as every run was treated then.
+  runLostConnection = !!s.runLostConnection;
   runSaved = !!s.runSaved;
   lastSavedRunId = s.lastSavedRunId || null;
   lastSavedRevision =

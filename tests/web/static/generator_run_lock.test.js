@@ -1,0 +1,304 @@
+// A run the worker can no longer answer for is locked, and says why.
+//
+// Strategy: load the generator page into the DOM stub with the socket
+// the page opens for itself, run a real generation through
+// startGeneration with frames shaped the way each model streams them,
+// then end it the way a run ends: a terminal frame, Stop, or a socket
+// that closes before either. The page's own handlers run, so this
+// exercises the wiring rather than one function, and every request
+// the page tries to send is caught on the socket.
+//
+// The bug being pinned: a run whose connection dropped mid-run kept
+// Edit Frames and What If? on offer. No terminal frame ever named the
+// run the worker holds, so every edit of it was refused, and refused
+// as though another run had replaced it, which is not what happened.
+// Passing proves such a run is locked up front with the real reason;
+// that a run stopped with Stop, which the worker still holds, stays
+// editable; that the lock survives a trip to Analytics; and that no
+// stateful request reaches the worker for a locked run, even from a
+// session already open, and before anything is cut from the run.
+//
+// Run with: node --test tests/web/static/
+
+"use strict";
+
+const assert = require("node:assert/strict");
+const test = require("node:test");
+
+const { loadPage, FakeSocket } = require("./dom_stub.js");
+
+// The real WebSocket carries its states as statics and the page
+// compares against them; the shared stub leaves them off.
+class OpenSocket extends FakeSocket {}
+OpenSocket.OPEN = 1;
+
+const MASK = "\u2591";
+
+const LOST = /lost its connection mid-run/;
+
+// What a page sends that only the worker holding its run can answer.
+const STATEFUL = ["resume", "substitute", "probe", "rewind"];
+
+function diffusionModel(id) {
+  return {
+    id: id,
+    display_name: id,
+    min_vram_gib: 18,
+    capabilities: {
+      family: "diffusion",
+      generation_shape: "iterative_canvas",
+      input_mode: "chat",
+      supports_resume: true,
+      unresolved_char: MASK,
+      supported_devices: ["cuda"],
+    },
+    param_specs: [],
+    status: "active",
+  };
+}
+
+const LLADA = diffusionModel("llada");
+
+const SMOL = {
+  id: "smollm3",
+  display_name: "SmolLM3-3B",
+  min_vram_gib: 6,
+  capabilities: {
+    family: "autoregressive",
+    generation_shape: "append_only",
+    input_mode: "chat",
+    supports_resume: false,
+    supports_substitution: true,
+    supported_devices: ["cuda", "cpu"],
+  },
+  param_specs: [],
+  status: "active",
+};
+
+function opening(model) {
+  return { model_id: model.id, device: "cuda" };
+}
+
+function modelsFor(model) {
+  return {
+    models: [model],
+    active: model.id,
+    active_device: "cuda",
+    active_tokenizer: { name: model.id },
+    active_context_length: 4096,
+    default: model.id,
+    gpu_name: "NVIDIA GeForce RTX 4090",
+  };
+}
+
+// Answers the model listing and nothing else of interest.
+function quietFetch(models) {
+  return function (url) {
+    const path = String(url).split("?")[0];
+    const body = path.startsWith("/api/models") ? models : {};
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve(body),
+      text: () => Promise.resolve(JSON.stringify(body)),
+    });
+  };
+}
+
+function tick() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+// A page running `model` with a generation under way, and the socket
+// it opened for itself. Two ticks, as in the interrupted-save tests:
+// the first drains connects still pending from pages built earlier.
+async function runOn(model) {
+  await tick();
+  const mark = FakeSocket.opened.length;
+  const models = modelsFor(model);
+  const page = loadPage({
+    WebSocket: OpenSocket,
+    fetchImpl: quietFetch(models),
+    bootState: { ui_state: {}, models: models },
+  });
+  await tick();
+  assert.equal(FakeSocket.opened.length, mark + 1);
+  const { context, registry } = page;
+  registry.get("prompt-input").value = "explain yeast";
+  context.startGeneration();
+  assert.equal(context.isGenerating, true, "the run did not start");
+  return { context, registry, socket: FakeSocket.opened[mark] };
+}
+
+function snapshotFrame(index, text, provenance) {
+  const frame = {
+    type: "frame",
+    index: index,
+    total_steps: null,
+    canvas_index: 0,
+    mean_conf: 0.5,
+    text: text,
+    tokens: Array.from(text).map((character, position) => ({
+      t: character,
+      m: character === MASK,
+      id: 100 + position,
+      c: 0.5,
+    })),
+    revealed: [],
+    elapsed: +(index * 0.1).toFixed(2),
+  };
+  if (provenance) {
+    frame.provenance = provenance;
+  }
+  return frame;
+}
+
+function appendFrame(index, word, provenance) {
+  const position = index - 1;
+  const frame = {
+    type: "frame",
+    shape: "append",
+    index: index,
+    total_steps: 4,
+    canvas_index: 0,
+    mean_conf: 0.5,
+    token: { t: word, m: false, id: 200 + position, c: 0.5 },
+    revealed: [position],
+    elapsed: +(index * 0.1).toFixed(2),
+  };
+  if (provenance) {
+    frame.provenance = provenance;
+  }
+  return frame;
+}
+
+// A LLaDA run whose connection dropped mid-denoise.
+async function cutOffLlada() {
+  const run = await runOn(LLADA);
+  run.context.handleFrame(
+    snapshotFrame(0, MASK + MASK, opening(LLADA))
+  );
+  run.context.handleFrame(snapshotFrame(1, "a" + MASK));
+  run.socket.close();
+  return run;
+}
+
+// A SmolLM3 run whose connection dropped two tokens in.
+async function cutOffSmol() {
+  const run = await runOn(SMOL);
+  run.context.handleFrame(appendFrame(1, " Yeast", opening(SMOL)));
+  run.context.handleFrame(appendFrame(2, " eats"));
+  run.socket.close();
+  return run;
+}
+
+function stateful(socket) {
+  return socket.sent
+    .map((raw) => JSON.parse(raw).type)
+    .filter((type) => STATEFUL.includes(type));
+}
+
+function isLocked(button) {
+  return button.classList.contains("is-locked");
+}
+
+test("a run cut off by a dropped connection is locked, saying why", async () => {
+  const { registry } = await cutOffLlada();
+  const button = registry.get("btn-edit-frames");
+
+  assert.equal(isLocked(button), true);
+  assert.match(button.title, LOST);
+});
+
+test("Edit Frames then opens nothing", async () => {
+  const { context, socket } = await cutOffLlada();
+
+  context.enterRemaskMode();
+
+  assert.equal(context.runPhase.mode, null);
+  assert.deepEqual(stateful(socket), []);
+});
+
+test("What If? is locked the same way", async () => {
+  const { registry } = await cutOffSmol();
+  const button = registry.get("btn-what-if");
+
+  assert.equal(isLocked(button), true);
+  assert.match(button.title, LOST);
+});
+
+test("a run stopped with Stop stays editable", async () => {
+  // A cancelled run still ends in a terminal frame naming the run,
+  // and the worker still holds it.
+  const { context, registry } = await runOn(LLADA);
+  context.handleFrame(snapshotFrame(0, MASK + MASK, opening(LLADA)));
+  context.handleFrame(snapshotFrame(1, "a" + MASK));
+  context.handleDone({
+    type: "done",
+    final_text: "a" + MASK,
+    cancelled: true,
+    run_token: "a3f9c1:1",
+  });
+
+  assert.equal(isLocked(registry.get("btn-edit-frames")), false);
+});
+
+test("the lock comes back from a trip to Analytics", async () => {
+  const { context, registry } = await cutOffLlada();
+  const button = registry.get("btn-edit-frames");
+  context.runLostConnection = false;
+  context.setButtonUnlocked(button, "");
+
+  assert.equal(context.restoreSessionState(), true);
+
+  assert.equal(isLocked(button), true);
+  assert.match(button.title, LOST);
+});
+
+test("a resume already composed is refused before the run is cut", async () => {
+  // A session open as the run stopped being editable keeps its own
+  // buttons. The request must not go, and the frames must not be cut
+  // back for a branch that will never arrive.
+  const { context, registry, socket } = await cutOffLlada();
+  const frames = context.runFramesLength(context.runFrames);
+  context.runPhase.mode = "choice";
+  context.runPhase.lockedEdits.push({
+    frame_index: 0,
+    token_positions: [0],
+  });
+
+  context.doGuidedResume("end");
+
+  assert.equal(context.runFramesLength(context.runFrames), frames);
+  assert.deepEqual(stateful(socket), []);
+  assert.match(registry.get("status-message").textContent, LOST);
+});
+
+test("a substitution already chosen is refused before the run is cut", async () => {
+  const { context, socket } = await cutOffSmol();
+  const frames = context.runFramesLength(context.runFrames);
+  context.runPhase.mode = "substitute";
+  context.runPhase.substituting = true;
+
+  context.doSubstitute(0, 7, null);
+
+  assert.equal(context.runFramesLength(context.runFrames), frames);
+  assert.deepEqual(stateful(socket), []);
+});
+
+test("nor is a probe or a rewind sent once the page reconnects", async () => {
+  // The two that check the socket first: after a reconnect the socket
+  // is open again, and only the lock stands between them and a worker
+  // that would refuse them.
+  const { context } = await cutOffSmol();
+  const reconnected = new OpenSocket("ws://test/ws");
+  context.ws = reconnected;
+  context.activeRunToken = "a3f9c1:1";
+  context.typedEntryToken = { id: 7, t: " ale" };
+  context.typedEntryPos = 0;
+
+  context.requestTypedProbe();
+  context.rewindWorkerRun();
+
+  assert.deepEqual(stateful(reconnected), []);
+});

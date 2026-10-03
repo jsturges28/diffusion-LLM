@@ -145,3 +145,25 @@ function runPhasesReset(phase) {
 function runPhasesEditing(phase) {
   return phase.mode !== RUN_PHASE_IDLE;
 }
+
+// Why the run on screen cannot be edited at all, or "" when it can.
+//
+// Asked before a session opens, and before anything is sent from one
+// already open. A run whose connection dropped mid-run never received
+// the terminal frame that names the run the worker holds, so every
+// edit of it would be refused, and refused as though another run had
+// replaced it, which is not what happened. The real reason belongs on
+// the buttons, before anyone presses one.
+var RUN_EDIT_BLOCKED_LOST_CONNECTION =
+  "This run lost its connection mid-run, so it can be saved but"
+  + " not edited. Generate again to edit.";
+
+function runPhasesEditBlock(run) {
+  if (typeof run.lostConnection !== "boolean") {
+    throw new Error("lostConnection must be a boolean");
+  }
+  if (run.lostConnection) {
+    return RUN_EDIT_BLOCKED_LOST_CONNECTION;
+  }
+  return "";
+}
