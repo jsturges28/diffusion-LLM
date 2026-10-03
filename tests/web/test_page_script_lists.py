@@ -35,6 +35,7 @@ PAGES: Dict[str, str] = {
     "ANALYTICS_SCRIPTS": "analytics.html",
     "MENU_SCRIPTS": "menu.html",
     "SETTINGS_SCRIPTS": "settings.html",
+    "VISION_SCRIPTS": "vision.html",
 }
 
 # A script list's declaration, wherever it appears.

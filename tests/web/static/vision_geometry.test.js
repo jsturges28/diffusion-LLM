@@ -21,7 +21,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { loadPage } = require("./dom_stub.js");
+const { loadPage, VISION_SCRIPTS } = require("./dom_stub.js");
 
 // The two shipping geometries, as the endpoint reports them.
 const SMALL = {
@@ -37,7 +37,7 @@ const LARGE = {
 
 function page() {
   const { context } = loadPage({
-    scripts: ["overlays.js", "vision.js"],
+    scripts: VISION_SCRIPTS,
   });
   return context;
 }
@@ -403,7 +403,7 @@ const LARGE_ANSWER = {
 // microtask, because the stub parses no markup.
 async function wiredPage() {
   const loaded = loadPage({
-    scripts: ["overlays.js", "vision.js"],
+    scripts: VISION_SCRIPTS,
     bootState: {
       encoders: [{
         id: "smolvlm-2b", display_name: "SmolVLM-Instruct",

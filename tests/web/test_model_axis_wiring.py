@@ -38,6 +38,8 @@ PAGE_SCRIPTS = (
     "settings.js",
     "overlays.js",
     "persist.js",
+    "activation_progress.js",
+    "reduced_motion.js",
 )
 
 

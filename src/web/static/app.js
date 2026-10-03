@@ -605,7 +605,7 @@ function setLoadingProgress(state, progress) {
   if (!container || !fill || !detail) {
     return;
   }
-  var view = overlaysActivationProgress(state, progress);
+  var view = activationProgressView(state, progress);
   var sweeping = view.mode === "sweep";
   container.hidden = view.mode === "hidden";
   fill.classList.toggle("is-sweep", sweeping);
@@ -647,7 +647,7 @@ function finishLoadingProgress(done) {
     return;
   }
   setLoadingProgress("ready", null);
-  setTimeout(done, OVERLAYS_LOAD_COMPLETE_HOLD_MS);
+  setTimeout(done, ACTIVATION_PROGRESS_HOLD_MS);
 }
 
 // The boot path raises the same overlay without going through
@@ -7587,8 +7587,8 @@ function setGenerating(active) {
 var DENOISE_GLYPHS = "\u2591\u2592\u2593";
 
 // True when the diffusion-text effect should actually animate.
-// prefersReducedMotion comes from overlays.js, which every page
-// loads ahead of its own script.
+// prefersReducedMotion comes from reduced_motion.js, which every page
+// that animates loads ahead of its own script.
 function diffusionEffectActive() {
   return !!appSettings.diffusionText && !prefersReducedMotion();
 }

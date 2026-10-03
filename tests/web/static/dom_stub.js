@@ -41,8 +41,10 @@ const STATIC_DIR = path.join(
 // file's globals are undefined when an earlier one runs.
 const GENERATOR_SCRIPTS = [
   "custom_select.js",
+  "reduced_motion.js",
   "persist.js",
   "overlays.js",
+  "activation_progress.js",
   "activation_client.js",
   "wire_errors.js",
   "model_client.js",
@@ -63,6 +65,7 @@ const GENERATOR_SCRIPTS = [
 // tests/web/test_page_script_lists.py holds each list to its page.
 const ANALYTICS_SCRIPTS = [
   "custom_select.js",
+  "reduced_motion.js",
   "persist.js",
   "overlays.js",
   "overlay_series.js",
@@ -76,8 +79,9 @@ const ANALYTICS_SCRIPTS = [
 ];
 
 const MENU_SCRIPTS = [
+  "reduced_motion.js",
   "persist.js",
-  "overlays.js",
+  "activation_progress.js",
   "model_client.js",
   "activation_client.js",
   "download_client.js",
@@ -87,11 +91,16 @@ const MENU_SCRIPTS = [
 
 const SETTINGS_SCRIPTS = [
   "custom_select.js",
+  "reduced_motion.js",
   "persist.js",
   "overlays.js",
   "download_client.js",
   "download_toast.js",
   "settings.js",
+];
+
+const VISION_SCRIPTS = [
+  "vision.js",
 ];
 
 // Chart's config assignment walks arbitrary nested paths and none of
@@ -762,4 +771,5 @@ module.exports = {
   ANALYTICS_SCRIPTS,
   MENU_SCRIPTS,
   SETTINGS_SCRIPTS,
+  VISION_SCRIPTS,
 };

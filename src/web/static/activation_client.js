@@ -5,13 +5,14 @@
 // testable away from a browser.
 //
 // The problem it solves: activation display was already shared, via
-// overlaysActivationProgress, but the transport was not. The
-// generator and the menu each owned a POST, a poll loop, a retry
-// schedule and a terminal decision, in four readers of one endpoint
-// with two copies of the interval between them. A recorded load-bar
-// correction needed coordinated edits in both, and the pass that
-// added the LIFE-06 changes did the same thing again: the discard
-// went into both files and the failure surfacing into only one.
+// activationProgressView in activation_progress.js, but the transport
+// was not. The generator and the menu each owned a POST, a poll loop,
+// a retry schedule and a terminal decision, in four readers of one
+// endpoint with two copies of the interval between them. A recorded
+// load-bar correction needed coordinated edits in both, and the pass
+// that added the LIFE-06 changes did the same thing again: the
+// discard went into both files and the failure surfacing into only
+// one.
 //
 // The split is transport here, presentation and navigation in the
 // page. This file decides what the server was asked and what it

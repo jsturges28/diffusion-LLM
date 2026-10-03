@@ -1584,7 +1584,7 @@
     if (!activationProgress) {
       return;
     }
-    var view = overlaysActivationProgress(state, progress);
+    var view = activationProgressView(state, progress);
     var sweeping = view.mode === "sweep";
     activationProgress.hidden = view.mode === "hidden";
     if (activationFill) {
@@ -1617,7 +1617,7 @@
       return;
     }
     updateActivationProgress("ready", null);
-    setTimeout(done, OVERLAYS_LOAD_COMPLETE_HOLD_MS);
+    setTimeout(done, ACTIVATION_PROGRESS_HOLD_MS);
   }
 
   // The shared client's callbacks for a selection made here. Built
