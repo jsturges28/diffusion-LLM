@@ -14,10 +14,10 @@ it. Here a finding gets one row and a decision one line, with any longer
 reasoning in `docs/ROADMAP.md`, and git history keeps the rest.
 
 **As of 2026-10-02**, Stage 1 is done. Stage 2, cross-supervisor ownership,
-is under way: `A2-LIFE-01`, `A2-TRUST-01` and `A2-DATA-01` are done, and the
-report validates the stage as a whole with a two-supervisor run once the
-rest has landed. The report's Sequencing section orders the rest, and its
-Combinations to avoid bind every pass.
+is under way: every finding in it has landed, `A2-LIFE-03` waits on its
+hardware check, and the report then validates the stage as a whole with a
+two-supervisor run. The report's Sequencing section orders the rest, and
+its Combinations to avoid bind every pass.
 
 ## How to work a finding
 
@@ -54,8 +54,8 @@ Decisions saying why.
 | A2-LIFE-01 | 2 | done | `2363eca` | 395 | |
 | A2-TRUST-01 | 2 | done | `fc8374f` | 396 | |
 | A2-DATA-01 | 2 | done | `4027c22`, `1b63867`, `a1eac0d` | | |
-| A2-QUALITY-02 | 2 | ready | | | |
-| A2-LIFE-03 | 2 | blocked | | | `A2-QUALITY-02` |
+| A2-QUALITY-02 | 2 | done | `1a4fb18` | | |
+| A2-LIFE-03 | 2 | needs hardware | `5f42ac3`, `749ecc6` | 400 to 404 | |
 | A2-ORG-01 | 3 | ready | | | |
 | A2-ORG-02 | 3 | blocked | | | stage 3 order, in one plan with `A2-DEPS-01` |
 | A2-DEPS-01 | 3 | blocked | | | stage 3 order, in one plan with `A2-ORG-02` |
@@ -97,6 +97,13 @@ Each settled with the maintainer during remediation.
   vanished becomes a new run, decided inside that lock (`A2-DATA-01`). Its
   verification is the suite's forked-process races; the Stage 2
   two-supervisor run covers it on hardware.
+- The resident worker is named by a value drawn when the supervisor starts
+  plus its activation number, which alone starts again after a restart
+  (`A2-LIFE-03`).
+- A run whose worker is gone locks its edit tools in place, still savable,
+  rather than reloading the page, and so does a run that lost its
+  connection, with its own reason. An open edit session closes as Exit does
+  unless it holds a branch the page can still save.
 
 ## Open decisions
 
@@ -111,7 +118,7 @@ Not findings, and each its own slice when taken.
 | DiffusionGemma's entropy at commit frames, on both pages | done | `d0ecae0`, `067038d` | 387, 388 |
 | The entropy row held for every model that records entropy | done | `11affa1` | 394 |
 | DiffusionGemma's stopped text holds only its last canvas and can run ahead of the page | open | | |
-| Edit Frames and What If? on an interrupted run are refused as if it had been replaced | open | | |
+| Edit Frames and What If? on an interrupted run are refused as if it had been replaced | done | `cc47981` | 402 |
 | A resume stopped before its first frame could restore the frames the page cut | open | | |
 | An interrupted save carries no run token, so a retried save can duplicate | accepted | | |
 | The Help "signals" panel is at its 2,200-word budget | open | | |
@@ -121,5 +128,6 @@ Not findings, and each its own slice when taken.
 ## Baselines
 
 At the audit on 2026-10-01: 2,456 Python tests, 816 browser tests, and no
-Ruff findings. On 2026-10-02, after the run publication lock: 2,573 Python
-tests passing and 6 skipped, 876 browser tests, and still no Ruff findings.
+Ruff findings. On 2026-10-02, after the relay test and the worker lock:
+2,582 Python tests passing and 6 skipped, 902 browser tests, and still no
+Ruff findings.

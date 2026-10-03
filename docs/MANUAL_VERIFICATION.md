@@ -294,6 +294,11 @@ kept when these were written:
   2026-10 audit's `A2-TRUST-02`. The longest run of each model still
   saves, an oversized save is refused at once, and Mamba-3 refuses a
   prompt past the cap.
+- **400 to 404**: **outstanding.** A run whose worker is gone, from the
+  2026-10 audit's `A2-LIFE-03`, and a run that lost its connection: each
+  locks its edit tools in place with its reason, an open edit session
+  closes unless it awaits Confirm, and a trip to Analytics with nothing
+  reloaded leaves a run editable.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -4580,3 +4585,53 @@ at the limits.
     Click **Generate**. It is refused, the status line reading *Error:
     Prompt is 1,000,001 characters; the limit is 1,000,000. Shorten
     it.*, and nothing is generated.
+
+## A run whose worker is gone
+
+From 2026-10-02 the supervisor names the worker each socket reaches,
+and the generator locks a run's edit tools in place, saying why, once
+no live worker holds the run: the model was reloaded under it, by
+another window or a restart, or its connection dropped mid-run. The
+run stays on screen and can still be saved. The halves that need no
+hardware are in `tests/web/static/generator_run_lock.test.js`,
+`tests/web/static/run_phases.test.js`,
+`tests/web/test_activation_identity.py` and `tests/web/test_ws_pipe.py`.
+
+400. **A restart under a finished run.** In window A, generate a LLaDA
+    run to the end and leave it on screen. Stop the supervisor in its
+    terminal with Ctrl+C and start it again; window A shows the
+    connection lost and keeps retrying. Load LLaDA from the Main Menu
+    in window B. When window A reconnects:
+    - its status line reads *The model has been reloaded since this run
+      was made, so it can be saved but not edited. Generate again to
+      edit.*
+    - **Edit Frames** is locked, and its tooltip says the same.
+    - **Save** saves the run, and **Generate** works.
+
+401. **A worker that ended and was loaded again.** As in 400, but
+    rather than restarting the supervisor, end the worker:
+
+        pkill -f "src.backends.run_worker --model llada"
+
+    and load LLaDA again from the menu in window B. Window A behaves as
+    in 400. Repeat on SmolLM3 with `--model smollm3`: **What If?**
+    locks the same way.
+
+402. **A dropped connection locks the edit tools.** Drop the connection
+    mid-run as in 389. The status line reads *Stopped: lost the
+    connection mid-run.*, and **Edit Frames** (**What If?** on SmolLM3)
+    is locked with *This run lost its connection mid-run, so it can be
+    saved but not edited.* It is still locked after a trip to Analytics
+    and back. Then generate again and press **Stop** mid-run: Edit
+    Frames is available, and a resume from it runs.
+
+403. **An open edit session when the worker goes.** Finish a LLaDA run,
+    open **Edit Frames** and select a frame, then restart and reload as
+    in 400. The editor closes, the run is back as it was, and it is
+    locked. Then, on a fresh run, take an edit through **Resume to
+    end** so **Confirm** is on offer, and do the same: the branch stays,
+    **Confirm** saves it, and **Retry** is locked.
+
+404. **A trip to Analytics with nothing reloaded.** Finish a run, go to
+    Analytics and back with no other window touching the model.
+    **Edit Frames** works, and a resume from it runs.
