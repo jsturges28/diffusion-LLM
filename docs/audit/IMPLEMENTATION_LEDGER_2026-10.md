@@ -87,9 +87,8 @@ Each settled with the maintainer during remediation.
   after the old worker had exited, with nothing awaited before the re-claim,
   so the gap was an instant rather than the wait. Its test pauses a switch
   inside that instant, since one process cannot meet it by chance.
-- When the lease's lock file cannot be created, activation is refused with
-  the path and the fix rather than going ahead without a lease
-  (`A2-TRUST-01`).
+- A lease lock file that cannot be created refuses activation, naming the
+  path and the fix, rather than going ahead without a lease (`A2-TRUST-01`).
 - `A2-TRUST-02`'s limits are per run, which is per turn once chat exists,
   and a conversation stays a set of linked runs. Today's experimental
   slider tops are the limit for one run, under a 256 MiB ceiling on the
@@ -139,12 +138,13 @@ Not findings, and each its own slice when taken.
 | The GIF preview is drawn outside the publication lock, so two near-simultaneous replacements can leave the earlier one's | open | | |
 | The process-race tests fork a multi-threaded process, which Python warns about 31 times a run (16 from `DATA-02`'s tests, 15 from `A2-DATA-01`'s) | open | | |
 | The supervisor's own INFO logs reach no handler, so its results-directory line at startup has never been shown | open | | |
+| A cleared line chart stayed reachable by name, so zoom or an eye clicked during a load reached a destroyed chart | done | `0507c6d` | |
 
 ## Baselines
 
 At the audit on 2026-10-01: 2,456 Python tests, 816 browser tests, and no
 Ruff findings. On 2026-10-03, after `A2-ORG-04`'s line charts: 2,655 Python
-tests passing and 6 skipped, 969 browser tests, no Ruff findings, and 34
+tests passing and 6 skipped, 970 browser tests, no Ruff findings, and 34
 warnings, down from 92 before the lifespan move. One of the 34 is torch
 failing to start CUDA in the agent sandbox, which a machine with a working
 GPU does not raise.
