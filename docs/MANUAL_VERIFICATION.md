@@ -290,6 +290,10 @@ kept when these were written:
 - **395 and 396**: confirmed on 2026-10-02: the residency lease held
   through a switch with a second launcher open, and a refusal when its
   lock file cannot be created.
+- **397 to 399**: **outstanding.** The save limits from the 2026-10
+  audit's `A2-TRUST-02`: the longest run of each model still saves, an
+  oversized save is refused at once, and Mamba-3 refuses a prompt past
+  the cap.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -4526,3 +4530,53 @@ without it. The halves that need no hardware are in
       that is.
     - `nvidia-smi` shows no worker started.
     - Stop it, start it normally, and loading works.
+
+## How large a save can be
+
+From 2026-10-02 a save is held to what one run of its model can be: a
+256 MiB ceiling checked before the body is read, then every field
+against bounds read off the tops of the model's sliders. **Generate**
+refuses a prompt over 1,000,000 characters on every model. The halves
+that need no hardware are in `tests/web/test_save_limits.py`,
+`tests/backends/test_run_bounds.py` and
+`tests/backends/test_context_window.py`. Every run already in
+`results/` fit the new bounds when they landed; these check runs made
+at the limits.
+
+397. **The longest runs still save.** With **Experimental** and
+    **Alternatives** on, run each model at the top of its ranges, save,
+    and open the run in Analytics. A refusal reads *Save failed:*
+    followed by what was over and the limit, and would mean a bound is
+    tighter than a run the app can make.
+    - LLaDA at **Steps** 1024 and **Gen Length** 1024. Then open
+      **Edit Frames** at a middle frame, remask a few tokens, resume to
+      the end and **Confirm**. The Original/Edited crossfade and the
+      candidate popover work on both runs.
+    - DiffusionGemma at **Max Tokens** 2048 and **Denoising Steps** 256,
+      with **Stop Entropy** at its lowest and **Steady Steps** at its
+      highest, so no canvas stops early.
+    - SmolLM3 and Mamba-3 at **Max Tokens** 2048.
+
+398. **An oversized save is refused at once.** With the browser
+    launcher running (port 8000, or 8760 for the desktop app):
+
+        head -c 300000000 /dev/zero | curl -s -o /dev/null \
+          -w '%{http_code}\n' -X POST \
+          -H 'Content-Type: application/json' --data-binary @- \
+          http://127.0.0.1:8000/api/save
+
+    - It prints `413` straight away.
+    - The supervisor's memory, in `top` or the system monitor, stays
+      flat.
+    - `results/` gains no run, and nothing new appears in
+      `results/.staging`.
+
+399. **A prompt past the cap, on Mamba-3.** Load Mamba-3 and set the
+    prompt from the browser console:
+
+        document.getElementById("prompt-input").value =
+          "a".repeat(1000001)
+
+    Click **Generate**. It is refused, the status line reading *Error:
+    Prompt is 1,000,001 characters; the limit is 1,000,000. Shorten
+    it.*, and nothing is generated.
