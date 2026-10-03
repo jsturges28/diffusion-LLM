@@ -287,6 +287,9 @@ kept when these were written:
   DiffusionGemma's canvases and through a trip to Analytics; the
   menu's own stylesheet; and the entropy row held for the diffusion
   models.
+- **395 and 396**: **outstanding**: the residency lease held through a
+  switch with a second launcher open, and a refusal when its lock
+  file cannot be created. Run 395 in the same pass as 310 to 314.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -4489,3 +4492,37 @@ halves are automated in
     row's space is there from page load, so when a run finishes and
     its profile fills in, the canvas above does not jump. SmolLM3 and
     Mamba-3 behave as before.
+
+## The residency lease across launchers
+
+From 2026-10-02 a switch keeps the machine-wide model lease while it
+unloads one model and loads the next, so another launcher cannot take
+the machine in between, and a supervisor that cannot create the
+lease's lock file refuses to load a model rather than running
+without it. The halves that need no hardware are in
+`tests/web/test_residency_lease.py` and `tests/web/test_model_lease.py`.
+
+395. **Two launchers through a switch.** Run it in the same pass as
+    310 to 314. Start the browser launcher (`.venv/bin/python
+    main.py`, port 8000) and the desktop app (`.venv/bin/python
+    desktop.py`, port 8760), and load a model in the browser one.
+    - In the browser one, switch to a different model. While it
+      unloads and loads, try to load a model in the desktop app: each
+      try is refused, naming the browser launcher.
+    - The switch completes, and the desktop app is still refused.
+    - Unload in the browser one, or close it. The desktop app can now
+      load.
+
+396. **No lock file, no load.** As your own user rather than root,
+    make a directory you cannot write to and start the browser
+    launcher with the lease pointed there:
+
+        mkdir -p /tmp/lease-ro && chmod 500 /tmp/lease-ro
+        XDG_RUNTIME_DIR=/tmp/lease-ro .venv/bin/python main.py
+
+    - Load any model. The Main Menu refuses it, naming
+      `/tmp/lease-ro/diffusion-llm-primary-model.lock` and saying to
+      make that directory writable or set `XDG_RUNTIME_DIR` to one
+      that is.
+    - `nvidia-smi` shows no worker started.
+    - Stop it, start it normally, and loading works.

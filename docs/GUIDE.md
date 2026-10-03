@@ -106,7 +106,7 @@ After a run completes, a **Save** button appears and a **frame scrubber** slides
 .venv/bin/python desktop.py
 ```
 
-This owns the server lifecycle: it starts the supervisor on a private localhost port, opens the window, and gracefully stops the active model worker (freeing its VRAM) when you close it. The browser path (`main.py`) still works and serves the same app.
+This owns the server lifecycle: it starts the supervisor on a private localhost port, opens the window, and gracefully stops the active model worker (freeing its VRAM) when you close it. The browser path (`main.py`) still works and serves the same app. Both can run at once, but only one can have a model loaded: loading in the other is refused with a message naming which one holds it, and a switch inside the holder keeps its hold the whole way through. The hold is a lock file in `$XDG_RUNTIME_DIR`. If it cannot be created there, every load is refused with the file's path and how to fix it, rather than going ahead unguarded.
 
 **Freeing stuck GPU memory.** A worker is normally stopped when you switch models or close the app, and the supervisor sweeps stray workers on startup (plus a `PR_SET_PDEATHSIG` guard). If a hard crash ever leaves one behind holding VRAM, list GPU processes with `nvidia-smi` and clear them with `pkill -f "src.backends.run_worker"`, then relaunch.
 

@@ -3,7 +3,8 @@
 State for the 21 findings in `docs/audit/AUDIT_REPORT_2026-10.md`, raised by
 the read-only audit that `docs/audit/AUDIT_BRIEF_2026-10.md` governed on
 2026-10-01. The report is the immutable analysis and this file is the moving
-part: update it in the same commit as the change it describes. The first
+part: each slice's closing docs commit moves its rows and names the commits
+that landed them, since a commit cannot name its own hash. The first
 campaign's `docs/audit/AUDIT_REPORT.md` and `docs/audit/IMPLEMENTATION_LEDGER.md`
 are records of 2026-08 and are not edited for these findings.
 
@@ -13,10 +14,11 @@ it. Here a finding gets one row and a decision one line, with any longer
 reasoning in `docs/ROADMAP.md`, and git history keeps the rest.
 
 **As of 2026-10-02**, Stage 1 is done but for `A2-TRUST-02`, which waits on
-the maintainer's limits for one run, and every other Stage 1 fix has cleared
-hardware. Stage 2, cross-supervisor ownership, is next; the report validates
-it as a whole with a two-supervisor hardware run. The report's Sequencing
-section orders the rest, and its Combinations to avoid bind every pass.
+the maintainer's limits for one run. Stage 2, cross-supervisor ownership, is
+under way: `A2-LIFE-01` and `A2-TRUST-01` have landed and wait on hardware,
+and the report validates the stage as a whole with a two-supervisor run. The
+report's Sequencing section orders the rest, and its Combinations to avoid
+bind every pass.
 
 ## How to work a finding
 
@@ -50,8 +52,8 @@ Decisions saying why.
 | A2-META-01 | 1 | done | `4a09032`, `4cc3b7d` | | |
 | A2-ORG-06 | 1 | done | `e5bbc86` | 393 | |
 | A2-TRUST-02 | 1 | blocked | | | the maintainer's limits for one run |
-| A2-LIFE-01 | 2 | ready | | | |
-| A2-TRUST-01 | 2 | blocked | | | the maintainer's policy without a lease |
+| A2-LIFE-01 | 2 | needs hardware | `2363eca` | 395 | |
+| A2-TRUST-01 | 2 | needs hardware | `fc8374f` | 396 | |
 | A2-DATA-01 | 2 | ready | | | |
 | A2-QUALITY-02 | 2 | ready | | | |
 | A2-LIFE-03 | 2 | blocked | | | `A2-QUALITY-02` |
@@ -80,6 +82,13 @@ Each settled with the maintainer during remediation.
   terminal frame; the reasoning is in `docs/ROADMAP.md`'s settled decisions.
 - An interrupted diffusion run's saved text keeps its mask glyphs.
 - `A2-ORG-06` also dropped four menu rules that matched nothing.
+- `A2-LIFE-01`'s window is narrower than the report says: the release came
+  after the old worker had exited, with nothing awaited before the re-claim,
+  so the gap was an instant rather than the wait. Its test pauses a switch
+  inside that instant, since one process cannot meet it by chance.
+- When the lease's lock file cannot be created, activation is refused with
+  the path and the fix rather than going ahead without a lease
+  (`A2-TRUST-01`).
 
 ## Open decisions
 
@@ -88,8 +97,6 @@ Each settled with the maintainer during remediation.
   prompt's limit comes from the context window, with an explicit number for
   Mamba-3, which has none; and a conversation stays a set of linked runs
   rather than one growing run.
-- `A2-TRUST-01`: refuse to run, or run visibly degraded, when the residency
-  lease cannot be taken.
 
 ## Raised during remediation
 
@@ -108,5 +115,5 @@ Not findings, and each its own slice when taken.
 ## Baselines
 
 At the audit on 2026-10-01: 2,456 Python tests, 816 browser tests, and no
-Ruff findings. On 2026-10-02, with this ledger: 2,520 Python tests passing
-and 6 skipped, 876 browser tests, and still no Ruff findings.
+Ruff findings. On 2026-10-02, after the residency lease slice: 2,523 Python
+tests passing and 6 skipped, 876 browser tests, and still no Ruff findings.
