@@ -15,8 +15,8 @@ reasoning in `docs/ROADMAP.md`, and git history keeps the rest.
 
 **As of 2026-10-02**, Stage 1 is done but for `A2-TRUST-02`, which waits on
 the maintainer's limits for one run. Stage 2, cross-supervisor ownership, is
-under way: `A2-LIFE-01` and `A2-TRUST-01` have landed and wait on hardware,
-and the report validates the stage as a whole with a two-supervisor run. The
+under way: `A2-LIFE-01` and `A2-TRUST-01` are done, and the report validates
+the stage as a whole with a two-supervisor run once the rest has landed. The
 report's Sequencing section orders the rest, and its Combinations to avoid
 bind every pass.
 
@@ -52,8 +52,8 @@ Decisions saying why.
 | A2-META-01 | 1 | done | `4a09032`, `4cc3b7d` | | |
 | A2-ORG-06 | 1 | done | `e5bbc86` | 393 | |
 | A2-TRUST-02 | 1 | blocked | | | the maintainer's limits for one run |
-| A2-LIFE-01 | 2 | needs hardware | `2363eca` | 395 | |
-| A2-TRUST-01 | 2 | needs hardware | `fc8374f` | 396 | |
+| A2-LIFE-01 | 2 | done | `2363eca` | 395 | |
+| A2-TRUST-01 | 2 | done | `fc8374f` | 396 | |
 | A2-DATA-01 | 2 | ready | | | |
 | A2-QUALITY-02 | 2 | ready | | | |
 | A2-LIFE-03 | 2 | blocked | | | `A2-QUALITY-02` |

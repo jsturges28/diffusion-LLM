@@ -105,10 +105,10 @@ in an analytics suite.
 **A second audit is being worked through.** Its 21 findings are in
 `docs/audit/AUDIT_REPORT_2026-10.md` and their state is in
 `docs/audit/IMPLEMENTATION_LEDGER_2026-10.md`: Stage 1 is done but for
-`A2-TRUST-02`, and Stage 2, cross-supervisor ownership, is next. Read the
+`A2-TRUST-02`, and Stage 2, cross-supervisor ownership, is under way. Read the
 ledger first, then only the findings you touch. **The first campaign is
 complete except for a short remainder**, listed at the top of
-`docs/audit/IMPLEMENTATION_LEDGER.md`: four findings waiting on hardware,
+`docs/audit/IMPLEMENTATION_LEDGER.md`: three findings waiting on hardware,
 `ORG-02`'s module conversion deferred with its reason, and `ROADMAP-04`
 untaken because nothing needs it yet. `docs/audit/IMPLEMENTATION_BRIEF.md`
 no longer governs every session, but the rules it quotes from the first

@@ -181,8 +181,8 @@ kept when these were written:
   shown as live. It was re-checked and confirmed after that.
 - **309**: **not runnable on this hardware.** It wants a machine whose
   models do not fit the card, and none here qualifies.
-- **310 to 314**: **outstanding**, `LIFE-05`'s two-supervisor queue.
-  Needs two launchers at once.
+- **310 to 314**: confirmed on 2026-10-02, `LIFE-05`'s two-supervisor
+  queue, run with two launchers in the same pass as item 395.
 - **315 to 318**: confirmed on 2026-09-27, the Help tab reorganisation.
 - **319 to 322**: **done by an agent** on 2026-09-27, not by the
   maintainer, and each records the method because none could be re-run
@@ -287,9 +287,9 @@ kept when these were written:
   DiffusionGemma's canvases and through a trip to Analytics; the
   menu's own stylesheet; and the entropy row held for the diffusion
   models.
-- **395 and 396**: **outstanding**: the residency lease held through a
-  switch with a second launcher open, and a refusal when its lock
-  file cannot be created. Run 395 in the same pass as 310 to 314.
+- **395 and 396**: confirmed on 2026-10-02: the residency lease held
+  through a switch with a second launcher open, and a refusal when its
+  lock file cannot be created.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer

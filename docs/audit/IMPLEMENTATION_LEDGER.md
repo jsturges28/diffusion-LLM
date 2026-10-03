@@ -5,11 +5,11 @@ immutable analysis; this file is the moving part. Read
 `docs/audit/IMPLEMENTATION_BRIEF.md` for how to work a finding, and update
 this file in the same commit as the change it describes.
 
-**As of 2026-09-28 the campaign is complete except for what follows**, and
-none of it blocks feature work. Four findings wait on hardware: `LIFE-02`'s
-staged failures, items 143 and 144; `LIFE-05`'s two-supervisor queue, 310 to
-314; `ROADMAP-03`'s memory reading, 296; and `META-03`'s README walkthrough,
-326. `ORG-02`'s native module conversion is deferred rather than pending, for
+**As of 2026-10-02 the campaign is complete except for what follows**, and
+none of it blocks feature work. Three findings wait on hardware: `LIFE-02`'s
+staged failures, items 143 and 144; `ROADMAP-03`'s memory reading, 296; and
+`META-03`'s README walkthrough, 326. `LIFE-05`'s two-supervisor queue, 310
+to 314, cleared on 2026-10-02. `ORG-02`'s native module conversion is deferred rather than pending, for
 the reasons in its entry. `ROADMAP-04` is the one finding nobody has taken,
 and nothing needs it yet; see Ready now. `QUALITY-01` stays an obligation
 attached to each new seam. The rules the brief quotes from the report's
@@ -39,15 +39,15 @@ envelope without the validation token that `LIFE-03` now owns. The three
 analytics findings it unlocked belonged to no stage of their own, and are
 done; see their entry below.
 
-**Stage 4 is complete, with two findings waiting on hardware.** Pass three
+**Stage 4 is complete, with one finding waiting on hardware.** Pass three
 took `LIFE-01` and `PROTOCOL-01` together, in three commits, because the
 envelope one defines is what carries the token the other issues. It also
 pulled forward the half of `DATA-02` that needs no fork settled, and closed
 the `QUALITY-01` gap those two findings sat on: the worker's message loop had
 no tests at all. `XAI-01`, `LIFE-04` and `TRUST-04` followed, and `LIFE-05`
 added its host-wide lease on 2026-09-24. `LIFE-02`'s staged failures, items
-143 and 144, and the lease's two-supervisor queue, 310 to 314, are the
-hardware still open.
+143 and 144, are the hardware still open; the lease's two-supervisor queue,
+310 to 314, cleared on 2026-10-02.
 
 **Stage 5 is complete, with its module conversion deferred.** Clearing the
 hardware queue on 2026-08-17 released `ORG-02`, whose state core landed in
@@ -247,11 +247,11 @@ were cleared on 2026-08-11 in the same sitting: the maintainer confirmed items
 could say least about, the amber invalid row's alignment against its
 neighbours and the two-window model switch.
 
-**As of 2026-09-28 four entries remain**, and none blocks feature work:
+**As of 2026-10-02 three entries remain**, and none blocks feature work:
 `LIFE-02`'s two staged-failure items, 143 and 144, which are awkward to
-arrange rather than pending; `LIFE-05`'s two-supervisor queue, items 310
-to 314; `ROADMAP-03`'s memory reading, item 296; and `META-03`'s README
-walkthrough, item 326. The stage 4 findings cleared on 2026-08-17, which
+arrange rather than pending; `ROADMAP-03`'s memory reading, item 296; and
+`META-03`'s README walkthrough, item 326. `LIFE-05`'s two-supervisor queue,
+items 310 to 314, cleared on 2026-10-02. The stage 4 findings cleared on 2026-08-17, which
 released `XAI-01`, `LIFE-04` and `ORG-02`; `ORG-02`'s own state core and
 the save work that came out of testing it cleared on 2026-08-18, items
 162 to 166, and `XAI-01` cleared on 2026-08-28, items 180 to 184.
@@ -341,8 +341,9 @@ on real hardware.
   confirmed on 2026-08-15: a second launch from the icon opens no second
   window. Item 154, the fallback when an unrelated process holds 8760, was
   confirmed on 2026-08-17. The slice is cleared. The host-level lease it
-  deliberately left out landed on 2026-09-24 and waits on items 310 to 314,
-  two launchers holding and refusing a model; see the `LIFE-05` entry.
+  deliberately left out landed on 2026-09-24 and cleared items 310 to 314,
+  two launchers holding and refusing a model, on 2026-10-02; see the
+  `LIFE-05` entry.
 - **LIFE-01, PROTOCOL-01 and the DATA-02 slice**: cleared on 2026-08-17,
   items 157 to 161. The ordinary single-window path is undisturbed, a run
   survives a reload and stays editable, a second window's generation refuses
@@ -392,7 +393,7 @@ on real hardware.
 | PROTOCOL-01 | medium | M | done | none | Two commits: scoped error envelopes, then the client routing |
 | XAI-01 | high | M | done | LIFE-01 (done) | Bounded checkpoints for both diffusion backends; carried the capture change |
 | LIFE-04 | high | L | done | LIFE-03 (done) | Carried RUNTIME-01's queue bound, as its own Direction asks |
-| LIFE-05 | high | M | needs hardware | none | Single-instance launcher, then a host-wide flock lease on residency; a second supervisor is refused and names the owner. The lease waits on items 310 to 314 |
+| LIFE-05 | high | M | done | none | Single-instance launcher, then a host-wide flock lease on residency; a second supervisor is refused and names the owner. The lease cleared items 310 to 314 on 2026-10-02 |
 | TRUST-04 | medium | L | done | LIFE-04 (done) | Download is a child process now; absorbed ORG-02's download client |
 | DATA-02 | high | L | done | none | Lost-update slice, then the semantics: collections are server-owned operations |
 | RUNTIME-01 | medium | L | done | none | Queue bound, then append frames on the wire, in the browser and on disk; 130 MiB to 1 MiB on a 2,048-token run |
@@ -443,8 +444,8 @@ allow. `ANALYTICS-02`, `ANALYTICS-03` and `ANALYTICS-04` followed and are
 done. `ROADMAP-04`, the last thing this stage unlocks, is untaken; see Ready
 now.
 
-**Stage 4, explicit process and socket ownership. Done, with `LIFE-02` and
-`LIFE-05` waiting on hardware.**
+**Stage 4, explicit process and socket ownership. Done, with `LIFE-02`
+waiting on hardware.**
 Pass one extracted and tested the manager process adapter, made termination a
 verified transition and put validation before eviction (`LIFE-02`, `LIFE-06`),
 in three commits. Pass two shared activation orchestration behind one client
@@ -1881,10 +1882,11 @@ and generally refused under Wayland, so `focus_running_window` tries
 `wmctrl` then `xdotool` and shrugs. The guarantee is that no second
 supervisor starts; the printed message is the part that always works.
 
-**The lease waits on hardware**, items 310 to 314 of
-`docs/MANUAL_VERIFICATION.md`, which need two launchers at once. The row
-said `done` from the commit that queued them until 2026-09-28, which is the
-distinction this file's statuses exist to draw.
+**The lease cleared hardware on 2026-10-02**, items 310 to 314 of
+`docs/MANUAL_VERIFICATION.md`, run with two launchers at once in the same
+pass as the second audit's item 395. The row said `done` from the commit
+that queued them until 2026-09-28, which is the distinction this file's
+statuses exist to draw.
 
 ### DATA-02
 
