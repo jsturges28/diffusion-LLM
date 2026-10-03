@@ -183,7 +183,7 @@ def test_the_command_is_what_the_orphan_sweep_looks_for() -> None:
     """The sweep matches a marker against /proc cmdline to decide
     what is one of ours. If the two drift, a crashed supervisor's
     worker keeps its VRAM and nothing reclaims it."""
-    from src.web.server import _WORKER_CMD_MARKER
+    from src.web.model_manager import _WORKER_CMD_MARKER
 
     command = worker_command(
         python=Path("/venv/bin/python"),

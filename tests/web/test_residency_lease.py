@@ -36,9 +36,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
-from src.web import server
+from src.web import model_manager
 from src.web.model_lease import LEASE_FILE_NAME, PrimaryModelLease
-from src.web.server import ActivationRefused, ModelManager
+from src.web.model_manager import ActivationRefused, ModelManager
 from tests.web.test_worker_lifecycle import READY, FakeProcess
 
 GPU_MODEL = "llada"
@@ -103,8 +103,10 @@ def lease_file(tmp_path: Path) -> Path:
 
 @pytest.fixture(autouse=True)
 def _plenty_of_vram(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(server, "_gpu_name", lambda: "Fake GPU")
-    monkeypatch.setattr(server, "_free_vram_gib", lambda: 99.0)
+    monkeypatch.setattr(
+        model_manager, "_gpu_name", lambda: "Fake GPU"
+    )
+    monkeypatch.setattr(model_manager, "_free_vram_gib", lambda: 99.0)
 
 
 @pytest.fixture(autouse=True)

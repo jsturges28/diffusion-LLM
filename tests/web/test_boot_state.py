@@ -27,7 +27,7 @@ from typing import Any, Dict, Iterator, List, Optional
 import pytest
 from fastapi.testclient import TestClient
 
-from src.web import server
+from src.web import model_manager, server
 
 STATIC = (
     Path(__file__).resolve().parents[2] / "src" / "web" / "static"
@@ -249,13 +249,13 @@ def test_the_generator_payload_costs_no_vram_probe(
     trade a visible reflow for a wait with the old page still up."""
     monkeypatch.setattr(server, "RESULTS_DIR", tmp_path)
     calls: List[str] = []
-    monkeypatch.setattr(server, "_gpu_name_cached", None)
+    monkeypatch.setattr(model_manager, "_gpu_name_cached", None)
 
     def _record(field: str) -> Optional[str]:
         calls.append(field)
         return "NVIDIA GeForce RTX 4090"
 
-    monkeypatch.setattr(server, "_nvidia_smi_query", _record)
+    monkeypatch.setattr(model_manager, "_nvidia_smi_query", _record)
 
     with TestClient(server.app) as client:
         client.get("/generate", follow_redirects=False)
@@ -334,13 +334,13 @@ def test_analytics_does_not_probe_the_gpu_to_open(
     to spawn three probes: two for the nav link, one for this."""
     monkeypatch.setattr(server, "RESULTS_DIR", tmp_path)
     calls: List[str] = []
-    monkeypatch.setattr(server, "_gpu_name_cached", None)
+    monkeypatch.setattr(model_manager, "_gpu_name_cached", None)
 
     def _record(field: str) -> Optional[str]:
         calls.append(field)
         return "NVIDIA GeForce RTX 4090"
 
-    monkeypatch.setattr(server, "_nvidia_smi_query", _record)
+    monkeypatch.setattr(model_manager, "_nvidia_smi_query", _record)
 
     with TestClient(server.app) as client:
         client.get("/analytics.html")
@@ -387,22 +387,22 @@ def probes(monkeypatch: pytest.MonkeyPatch) -> Iterator[List[str]]:
     """Record every nvidia-smi field query, with the cache cleared so
     one test's reading cannot answer another's."""
     calls: List[str] = []
-    monkeypatch.setattr(server, "_gpu_name_cached", None)
+    monkeypatch.setattr(model_manager, "_gpu_name_cached", None)
 
     def _record(field: str) -> Optional[str]:
         calls.append(field)
         return "NVIDIA GeForce RTX 4090"
 
-    monkeypatch.setattr(server, "_nvidia_smi_query", _record)
+    monkeypatch.setattr(model_manager, "_nvidia_smi_query", _record)
     yield calls
 
 
 def test_the_gpu_name_is_read_once(probes: List[str]) -> None:
     """It cannot change under a running process, and it was being
     read on every page load of three pages."""
-    first = server._gpu_name()
+    first = model_manager._gpu_name()
     for _ in range(10):
-        server._gpu_name()
+        model_manager._gpu_name()
 
     assert first == "NVIDIA GeForce RTX 4090"
     assert probes == ["name"]
@@ -415,17 +415,17 @@ def test_a_failed_read_is_not_remembered(
     lose a race, and remembering that would turn one bad answer into
     a permanent claim of no GPU."""
     calls: List[str] = []
-    monkeypatch.setattr(server, "_gpu_name_cached", None)
+    monkeypatch.setattr(model_manager, "_gpu_name_cached", None)
     answers = [None, "NVIDIA GeForce RTX 4090"]
 
     def _flaky(field: str) -> Optional[str]:
         calls.append(field)
         return answers[len(calls) - 1]
 
-    monkeypatch.setattr(server, "_nvidia_smi_query", _flaky)
+    monkeypatch.setattr(model_manager, "_nvidia_smi_query", _flaky)
 
-    assert server._gpu_name() is None
-    assert server._gpu_name() == "NVIDIA GeForce RTX 4090"
+    assert model_manager._gpu_name() is None
+    assert model_manager._gpu_name() == "NVIDIA GeForce RTX 4090"
     assert len(calls) == 2
 
 
@@ -441,10 +441,10 @@ def test_free_vram_is_never_cached(
         calls.append(field)
         return "16384"
 
-    monkeypatch.setattr(server, "_nvidia_smi_query", _record)
+    monkeypatch.setattr(model_manager, "_nvidia_smi_query", _record)
 
-    server._free_vram_gib()
-    server._free_vram_gib()
+    model_manager._free_vram_gib()
+    model_manager._free_vram_gib()
 
     assert calls == ["memory.free", "memory.free"]
 

@@ -38,8 +38,8 @@ from src.inference.download_main import (
     DOWNLOAD_EXIT_UNREACHABLE,
 )
 from src.backends.protocol import HubFiles
-from src.web import server as server_module
-from src.web.server import ActivationRefused, ModelManager
+from src.web import model_manager
+from src.web.model_manager import ActivationRefused, ModelManager
 
 # A registry id whose checkpoint is a Hub repo, so it is downloadable.
 DOWNLOADABLE = "llada"
@@ -168,7 +168,7 @@ def test_a_download_runs_out_of_process() -> None:
 
 def test_the_child_is_told_which_repo_to_fetch() -> None:
     harness = _Harness()
-    checkpoint = server_module.REGISTRY[DOWNLOADABLE].checkpoint
+    checkpoint = model_manager.REGISTRY[DOWNLOADABLE].checkpoint
 
     asyncio.run(_start(harness))
 
@@ -185,11 +185,11 @@ _DONOR = HubFiles(
 def test_a_borrowing_model_hands_its_companion_to_the_child() -> None:
     """The same child fetches the borrowed file, so a cancel ends the
     whole download and not just its larger part."""
-    info = server_module.REGISTRY[DOWNLOADABLE].model_copy(
+    info = model_manager.REGISTRY[DOWNLOADABLE].model_copy(
         update={"companion": _DONOR}
     )
 
-    command = server_module._download_argv(info)
+    command = model_manager._download_argv(info)
 
     repo_at = command.index("--companion-repo") + 1
     assert command[repo_at] == _DONOR.repo
@@ -213,7 +213,7 @@ def test_a_model_is_downloaded_only_with_its_companion(
         lambda repo, files, **kw: borrowed["present"],
     )
     checkpoint, revision = "org/model", "a" * 40
-    is_downloaded = server_module._is_downloaded
+    is_downloaded = model_manager._is_downloaded
 
     missing = is_downloaded(checkpoint, revision, _DONOR)
     borrowed["present"] = True

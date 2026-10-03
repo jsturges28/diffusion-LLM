@@ -36,7 +36,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.web import server as server_module
-from src.web.server import _is_partial, app
+from src.web.model_manager import _is_partial
+from src.web.server import app
 
 MENU_JS = (
     Path(__file__).resolve().parents[2]

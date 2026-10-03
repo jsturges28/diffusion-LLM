@@ -32,8 +32,8 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
-from src.web import server
-from src.web.server import ModelManager
+from src.web import model_manager
+from src.web.model_manager import ModelManager
 
 # Any real id, so REGISTRY lookups inside activate resolve. Which
 # model it is does not matter here; the lifecycle is identical.
@@ -181,10 +181,10 @@ def _no_vram_preflight(
     it live would make every case here depend on nvidia-smi.
     """
     monkeypatch.setattr(
-        server, "_gpu_name", lambda: "Fake GPU"
+        model_manager, "_gpu_name", lambda: "Fake GPU"
     )
     monkeypatch.setattr(
-        server, "_free_vram_gib", lambda: 99.0
+        model_manager, "_free_vram_gib", lambda: 99.0
     )
 
 

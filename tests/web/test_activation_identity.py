@@ -35,8 +35,8 @@ from typing import Any, Dict, List, Optional
 import pytest
 from fastapi.testclient import TestClient
 
-from src.web import server
-from src.web.server import ModelManager
+from src.web import model_manager, server
+from src.web.model_manager import ModelManager
 from tests.web.test_worker_lifecycle import (
     LOADING,
     READY,
@@ -108,10 +108,10 @@ def _plausible_host(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        server, "_gpu_name", lambda: "Fake GPU"
+        model_manager, "_gpu_name", lambda: "Fake GPU"
     )
     monkeypatch.setattr(
-        server, "_free_vram_gib", lambda: 99.0
+        model_manager, "_free_vram_gib", lambda: 99.0
     )
     monkeypatch.setattr(Path, "exists", lambda self: True)
     monkeypatch.setattr(Path, "is_dir", lambda self: True)
