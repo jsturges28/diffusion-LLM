@@ -303,9 +303,9 @@ kept when these were written:
   from the 2026-10 audit's `A2-DATA-01`, and with it that audit's Stage 2
   validation. An edit confirmed after the other launcher deleted its run
   saved as a run of its own.
-- **406**: **outstanding**: each worker loading and every way out freeing
-  the card, after the 2026-10 audit's `A2-DEPS-01` moved both apps to
-  lifespan contexts. It is also that audit's measurement 9.
+- **406**: confirmed on 2026-10-03: each worker loading and every way out
+  freeing the card, after the 2026-10 audit's `A2-DEPS-01` moved both apps
+  to lifespan contexts. It was also that audit's measurement 9.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer

@@ -16,9 +16,9 @@ reasoning in `docs/ROADMAP.md`, and git history keeps the rest.
 **As of 2026-10-03**, Stages 1 and 2 are done. Stage 2, cross-supervisor
 ownership, was validated as a whole by the two-supervisor passes confirmed
 for items 310 to 314, 389 to 396, 400 to 404 and 405. Stage 3, extracting
-owners, is under way: `A2-ORG-01` and `A2-ORG-02` are done, and
-`A2-DEPS-01` waits on item 406. The report's Sequencing section orders the
-rest, and its Combinations to avoid bind every pass.
+owners, is under way: `A2-ORG-01`, `A2-ORG-02` and `A2-DEPS-01` are done,
+the last confirmed on hardware with item 406. The report's Sequencing
+section orders the rest, and its Combinations to avoid bind every pass.
 
 ## How to work a finding
 
@@ -59,7 +59,7 @@ Decisions saying why.
 | A2-LIFE-03 | 2 | done | `5f42ac3`, `749ecc6` | 400 to 404 | |
 | A2-ORG-01 | 3 | done | `ac7f0b7`, `0355477` | | |
 | A2-ORG-02 | 3 | done | `c3c007f` | | |
-| A2-DEPS-01 | 3 | needs hardware | `2a6e87d` | 406 | |
+| A2-DEPS-01 | 3 | done | `2a6e87d` | 406 | |
 | A2-ORG-03 | 3 | ready | | | |
 | A2-ORG-04 | 3 | blocked | | | stage 3 order |
 | A2-ORG-05 | 3 | blocked | | | `A2-ORG-04` |
