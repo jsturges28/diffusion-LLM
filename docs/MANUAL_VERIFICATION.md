@@ -314,6 +314,8 @@ kept when these were written:
   `overlay_series.js`.
 - **409**: confirmed on 2026-10-03: every page's state and motion after the
   2026-10 audit's `A2-ORG-05` split the services out of `overlays.js`.
+- **410**: **outstanding**: Analytics' line charts after the 2026-10 audit's
+  `A2-ORG-04` moved them into a controller of their own, `line_charts.js`.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -4781,3 +4783,36 @@ restarts.
       the download toast's corner if one shows. After a restart, each is
       where it was left.
     - Open Vision and choose an image. It draws as it did.
+
+## Analytics' line charts through their controller
+
+From 2026-10-03 the Analytics detail panel's line charts, convergence,
+timing, tokens per second, confidence and stopping, are drawn by
+`line_charts.js`, which the page creates once (`A2-ORG-04`). Their two-page
+slots, the run pins and the crossfade's borrowing of the charts during a drag
+moved with them, and the helpers they share with the entropy chart and the
+compare panel are `chart_support.js`. What the charts draw is tested against
+the controller alone in `tests/web/static/line_charts.test.js`; this is the
+same in a real engine, with Chart.js drawing.
+
+410. **The line charts behave as they did.** In the desktop app, and then
+    in the browser launcher, open Analytics:
+    - Open a saved LLaDA run. Convergence, Timing and Confidence draw.
+      Page Timing to Tokens per second and back. Zoom in, out and reset
+      on a line chart. Each chart's eye, the entropy chart's included,
+      hides its tooltip box and brings it back.
+    - Open an edited LLaDA run. Each line chart shows both runs and its
+      pins. Turn one pin off, and the run it names leaves that chart;
+      the other pin then refuses to turn off. Drag the crossfade: the
+      line charts follow it with the pins dimmed, and settle back on
+      the pins when you let go. Move the slider with the arrow keys
+      instead, and the line charts stay as they are.
+    - Open a DiffusionGemma run and page Confidence to Stopping. It
+      plots each draft's mean entropy on a log axis, with the threshold
+      and the stop marks.
+    - Open a SmolLM3 run. There is no Convergence chart, and Tokens per
+      second draws.
+    - Open one run and then another before the first has finished
+      loading. None of the first run's charts are left under the
+      second's title, and every eye is open again.
+    - Compare two runs. The compare panel draws both.

@@ -1630,7 +1630,10 @@ sweeping a chart would redraw the canvas continuously and the pointer would be
 steering something on the other side of the page; a click-to-scrub, or a hover
 that only moves a frame marker until clicked, may be the better shape. And the
 crossfade already owns the scrubber on an edited run, so the interaction has to
-say which run it is scrubbing.
+say which run it is scrubbing. Since `A2-ORG-04` the line charts are a
+controller of their own (`line_charts.js`) that the page creates and mediates,
+so the hover would arrive as a callback the page routes to the scrubber, the way
+it already routes the crossfade's slider to the charts.
 
 **A small live GPU and CPU meter on the Generation screen.** Raised on
 2026-09-24, and worth recording with its motivation rather than as a wish. The
