@@ -282,6 +282,10 @@ kept when these were written:
 - **387 and 388**: confirmed on 2026-10-02: DiffusionGemma's entropy
   at a commit frame on both pages, and the generator's profile on a
   diffusion run.
+- **389 to 394**: **outstanding**: runs whose connection dropped,
+  saved on each model, after a model switch, across DiffusionGemma's
+  canvases and through a trip to Analytics; the menu's own
+  stylesheet; and the entropy row held for the diffusion models.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -4427,3 +4431,60 @@ automated in `tests/web/static/analytics_signal_axes.test.js`,
     - Generate with SmolLM3 or Mamba-3: the profile holds still as
       you scrub, the scrubbed frame's column stands out, and the
       columns past it fade, exactly as before.
+
+## Interrupted runs, the compare fence and the menu stylesheet
+
+From 2026-10-02 a run whose connection drops mid-run can be saved. It
+keeps the text its frames had reached, is recorded as stopped, and
+names the worker that drew it, because every run's first frame now
+carries the worker's envelope. The entropy row is held for every
+model that records entropy, a comparison no longer paints behind a
+run's detail, and the Main Menu's styles moved to `menu.css`. The page
+halves are automated in
+`tests/web/static/generator_interrupted_save.test.js`,
+`tests/web/static/generator_run_provenance.test.js`,
+`tests/web/static/analytics_compare_fence.test.js`,
+`tests/web/static/generator_entropy_profile.test.js` and
+`tests/web/test_menu_stylesheet.py`.
+
+389. **A dropped connection, on each model.** For LLaDA,
+    DiffusionGemma, SmolLM3 and Mamba-3: start a run, and once frames
+    are showing, stop the supervisor in its terminal with Ctrl+C and
+    start it again.
+    - The status line reads *Stopped: lost the connection mid-run.*
+      and the frames stay on the scrubber.
+    - `nvidia-smi` shows the worker gone and its VRAM back, so
+      nothing is still computing.
+    - Click **Save**: it saves. In Analytics the run's duration reads
+      *(stopped)*, its text matches the last frame the page showed,
+      with ░ where a diffusion position was unresolved, and its model
+      and processor name the ones that ran it.
+
+390. **A model switch from another window.** In window A, start a
+    LLaDA run. While it streams, switch to SmolLM3 from window B:
+    - Window A says the model changed, saves the LLaDA run, and
+      reloads.
+    - In Analytics that run is stopped, named LLaDA on LLaDA's device
+      rather than SmolLM3's, and its entropy bars follow the
+      scrubber, which shows its signal manifest came with it.
+
+391. **DiffusionGemma across canvases.** Generate with **Max Tokens**
+    512 and drop the connection, as in 389, during the second canvas.
+    The saved text is the first canvas's text followed by the second
+    canvas's draft so far.
+
+392. **A trip to Analytics before saving.** Drop the connection
+    mid-run, then go to Analytics and back without saving. The run
+    comes back stopped, with its frames, and **Save** records it.
+
+393. **The Main Menu's styles.** Open the Main Menu at a desktop width
+    and at a narrow one. It looks as it did: the video backdrop, the
+    model list and its pager, the device tags with their VRAM headroom
+    pills, the status line, and the download progress bar. The
+    generator's model dropdown, Analytics, Settings and Vision look
+    unchanged.
+
+394. **The entropy row.** On LLaDA and on DiffusionGemma the entropy
+    row's space is there from page load, so when a run finishes and
+    its profile fills in, the canvas above does not jump. SmolLM3 and
+    Mamba-3 behave as before.

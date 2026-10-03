@@ -1092,6 +1092,25 @@ user preferences. The cheaper middle ground is to name the sub-phase rather
 than measure it, since the worker already knows when it has finished importing
 and when uvicorn is answering.
 
+**An interrupted run names its worker, and only a finished one gets its
+token.** Recorded 2026-10-02, when a run whose connection dropped became
+savable.
+
+The worker used to attest a run only on its terminal frame, and a dropped
+connection sends none, so a save made from such a run described whichever
+model was resident when it landed and carried no signal manifest. Each run's
+first frame now carries the envelope less what the run cost: the cost is a
+measurement over the whole run, and a peak read at the first frame would
+measure nothing yet.
+
+The run token stays on the terminal frame on purpose. It is what lets a page
+edit, resume or probe a run, and a run that never finished may hold state its
+page never received. So an interrupted run stays uneditable after a reconnect,
+and its save carries no token, which costs it the protection against a second
+copy when the save is itself cut off and retried. Revisit the two together if
+interrupted runs ever need editing; that first wants the worker's retained
+state cut back to exactly what the page received.
+
 ## Experimental / XAI feature backlog (to deliberate)
 
 The suite is shaping up as an explainability playground, so these are candidate
