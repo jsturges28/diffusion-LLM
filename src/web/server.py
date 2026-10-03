@@ -3088,36 +3088,20 @@ def _save_run_blocking(body: SaveRunRequest) -> Dict[str, Any]:
     doing that safely means quoting the revision it is replacing.
 
     Which run is written is the store's decision, not this one: it
-    resolves the run token first and falls back to the id below. All
-    that happens here is the older fallback's own check.
+    resolves the run token first, then the client's run id while that
+    still names a run, and makes a new run when neither does.
 
     Expanded first, on this thread, because rebuilding a long run's
     frames is real work and the event loop is not where it belongs.
     """
     body = body.normalized()
-    replacing: Optional[str] = None
-    if body.run_id:
-        # Replace the pre-edit run; if it is gone (deleted from
-        # another window, say), fall back to a fresh run rather than
-        # failing a save the user has already paid for.
-        try:
-            run_store.resolve_run_dir(RESULTS_DIR, body.run_id)
-            replacing = body.run_id
-        except (
-            run_store.InvalidRunIdError,
-            run_store.RunNotFoundError,
-        ):
-            replacing = None
-
     bundle = _build_bundle(body)
     run_id, revision = run_store.save(
         RESULTS_DIR,
         bundle,
         model_id=body.model or DEFAULT_MODEL,
-        run_id=replacing,
-        expected_revision=(
-            body.expected_revision if replacing else None
-        ),
+        run_id=body.run_id or None,
+        expected_revision=body.expected_revision,
         run_token=body.run_token,
     )
     run_dir = RESULTS_DIR / run_id

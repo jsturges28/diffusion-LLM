@@ -1048,6 +1048,45 @@ def test_a_run_id_still_works_without_a_token(
     assert revision == 2
 
 
+def test_a_replacement_of_a_deleted_run_saves_as_a_new_run(
+    tmp_path: Path,
+) -> None:
+    """Deleted from another window while this one was editing it. The
+    user has already paid for this save, so it lands as a run of its
+    own, with nothing to conflict with, rather than failing.
+
+    Revision 1 is what says it is new. The id may repeat the deleted
+    one's, since a run is named for the second it was saved in."""
+    run_id, base = _save(tmp_path)
+    run_store.delete(tmp_path, run_id)
+
+    landed, revision = _save(
+        tmp_path,
+        bundle=_bundle(final_text="edited"),
+        run_id=run_id,
+        expected_revision=base + 4,
+    )
+
+    saved = tmp_path / landed / run_store.FINAL_TEXT_NAME
+    assert revision == 1
+    assert run_store.list_run_ids(tmp_path) == [landed]
+    assert saved.read_text(encoding="utf-8") == "edited"
+
+
+def test_a_replacement_naming_a_malformed_id_saves_as_a_new_run(
+    tmp_path: Path,
+) -> None:
+    """An id that cannot name a run is no destination, and nothing is
+    read or written outside the data root on its account."""
+    root = tmp_path / "results"
+
+    landed, revision = _save(root, run_id="../escape")
+
+    assert revision == 1
+    assert run_store.list_run_ids(root) == [landed]
+    assert not (tmp_path / "escape").exists()
+
+
 def test_racing_saves_of_one_generation_make_one_run(
     tmp_path: Path,
 ) -> None:

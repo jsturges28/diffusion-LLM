@@ -172,3 +172,26 @@ def test_an_edit_quoting_a_stale_revision_is_still_refused(
 
     assert response.status_code == 409
     assert response.json()["success"] is False
+
+
+def test_an_edit_of_a_run_deleted_elsewhere_saves_as_a_new_run(
+    tmp_path: Path, client: TestClient
+) -> None:
+    """Another window deleted the run this one was editing. The edit
+    is kept as a run of its own rather than failing a save the user
+    has already paid for, quoting a revision that no longer exists
+    included. The endpoint decided this itself before the store took
+    the decision under its lock, and must go on behaving the same."""
+    first = _save(client)
+    deleted = client.delete(f"/api/analytics/runs/{first['run_id']}")
+    assert deleted.status_code == 200
+
+    second = _save(
+        client,
+        run_id=first["run_id"],
+        expected_revision=first["revision"],
+        final_text="edited",
+    )
+
+    assert second["revision"] == 1
+    assert _run_ids(tmp_path) == [second["run_id"]]

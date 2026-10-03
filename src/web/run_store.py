@@ -401,9 +401,15 @@ def save(
 
     ``run_id`` is the older way of saying the same thing, kept for a
     caller that has no token: every run saved before `LIFE-01`, and
-    any worker too old to issue one.
+    any worker too old to issue one. It counts only while it still
+    names a run.
 
-    Neither means a new run.
+    Neither means a new run, and so does a run id that names nothing.
+    The usual case is a run deleted from another window while this
+    one edited it: the save is kept as a run of its own rather than
+    failing one the user has already paid for, and its
+    ``expected_revision`` is moot, since a new run has nothing to
+    conflict with.
 
     ``expected_revision`` still guards a replacement against a
     concurrent writer; the check and the publication happen here so a
@@ -421,10 +427,9 @@ def save(
     # too as a result, which costs nothing: a save is a person
     # pressing a button.
     with _PUBLISH_LOCK.held(root):
-        target = run_id
-        published = find_run_by_token(root, run_token or "")
-        if published is not None:
-            target = published
+        target = _destination(
+            root, run_id=run_id, run_token=run_token
+        )
         if target is None:
             return _publish_new(root, bundle, model_id, run_token)
         # A replacement from a client with no token must not erase the
@@ -434,6 +439,26 @@ def save(
         return _publish_replacement(
             root, bundle, target, expected_revision, token
         )
+
+
+def _destination(
+    root: Path, *, run_id: Optional[str], run_token: Optional[str]
+) -> Optional[str]:
+    """The run a save replaces, or None for a new one.
+
+    Asked under the publication lock, which a delete also takes, so
+    the run named here cannot vanish before the write it governs.
+    """
+    published = find_run_by_token(root, run_token or "")
+    if published is not None:
+        return published
+    if not run_id:
+        return None
+    try:
+        resolve_run_dir(root, run_id)
+    except (InvalidRunIdError, RunNotFoundError):
+        return None
+    return run_id
 
 
 # Guards resolve-identity-then-publish, within that
