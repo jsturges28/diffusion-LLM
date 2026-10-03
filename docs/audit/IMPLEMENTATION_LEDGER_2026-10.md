@@ -17,9 +17,9 @@ reasoning in `docs/ROADMAP.md`, and git history keeps the rest.
 ownership, was validated as a whole by the two-supervisor passes confirmed
 for items 310 to 314, 389 to 396, 400 to 404 and 405. Stage 3, extracting
 owners, is under way: `A2-ORG-01`, `A2-ORG-02`, `A2-DEPS-01` and
-`A2-ORG-03` are done, and `A2-ORG-04`'s first slice has landed. The report's
-Sequencing section orders the rest, and its Combinations to avoid bind every
-pass.
+`A2-ORG-03` are done, and `A2-ORG-04`'s first slice is confirmed on
+hardware with item 408. The report's Sequencing section orders the rest,
+and its Combinations to avoid bind every pass.
 
 ## How to work a finding
 

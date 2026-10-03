@@ -309,8 +309,8 @@ kept when these were written:
 - **407**: confirmed on 2026-10-03: the run snapshot through its codec,
   after the 2026-10 audit's `A2-ORG-03` moved its tiers and its reading of
   older snapshots into `run_snapshot.js`.
-- **408**: **outstanding**: Analytics through its frame and signal adapter,
-  after the 2026-10 audit's `A2-ORG-04` moved those reads into
+- **408**: confirmed on 2026-10-03: Analytics through its frame and signal
+  adapter, after the 2026-10 audit's `A2-ORG-04` moved those reads into
   `overlay_series.js`.
 
 Update these ranges when you work through them. If an item turns out to
