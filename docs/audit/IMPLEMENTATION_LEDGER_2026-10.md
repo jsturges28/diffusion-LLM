@@ -13,11 +13,11 @@ first ledger reached 3,899 lines because every session appended its story to
 it. Here a finding gets one row and a decision one line, with any longer
 reasoning in `docs/ROADMAP.md`, and git history keeps the rest.
 
-**As of 2026-10-02**, Stage 1 is done but for `A2-TRUST-02`'s hardware
-check. Stage 2, cross-supervisor ownership, is under way: `A2-LIFE-01` and
-`A2-TRUST-01` are done, and the report validates the stage as a whole with a
-two-supervisor run once the rest has landed. The report's Sequencing section
-orders the rest, and its Combinations to avoid bind every pass.
+**As of 2026-10-02**, Stage 1 is done. Stage 2, cross-supervisor ownership,
+is under way: `A2-LIFE-01` and `A2-TRUST-01` are done, and the report
+validates the stage as a whole with a two-supervisor run once the rest has
+landed. The report's Sequencing section orders the rest, and its
+Combinations to avoid bind every pass.
 
 ## How to work a finding
 
@@ -50,7 +50,7 @@ Decisions saying why.
 | A2-LIFE-04 | 1 | done | `bf9b7de` | | |
 | A2-META-01 | 1 | done | `4a09032`, `4cc3b7d` | | |
 | A2-ORG-06 | 1 | done | `e5bbc86` | 393 | |
-| A2-TRUST-02 | 1 | needs hardware | `8be0e91`, `c0cbbde`, `7f6198d` | 397 to 399 | |
+| A2-TRUST-02 | 1 | done | `8be0e91`, `c0cbbde`, `7f6198d` | 397 to 399 | |
 | A2-LIFE-01 | 2 | done | `2363eca` | 395 | |
 | A2-TRUST-01 | 2 | done | `fc8374f` | 396 | |
 | A2-DATA-01 | 2 | ready | | | |

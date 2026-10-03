@@ -290,10 +290,10 @@ kept when these were written:
 - **395 and 396**: confirmed on 2026-10-02: the residency lease held
   through a switch with a second launcher open, and a refusal when its
   lock file cannot be created.
-- **397 to 399**: **outstanding.** The save limits from the 2026-10
-  audit's `A2-TRUST-02`: the longest run of each model still saves, an
-  oversized save is refused at once, and Mamba-3 refuses a prompt past
-  the cap.
+- **397 to 399**: confirmed on 2026-10-02: the save limits from the
+  2026-10 audit's `A2-TRUST-02`. The longest run of each model still
+  saves, an oversized save is refused at once, and Mamba-3 refuses a
+  prompt past the cap.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
