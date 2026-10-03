@@ -4561,31 +4561,10 @@ function stopReadoutReading() {
   if (index === null) {
     return null;
   }
-  return overlaysStopReadingAt(
-    overlaysStopTrack(stopSourceOf(series, original)), index, rule
+  var track = overlaysStopTrack(
+    overlaySeriesStopSource(overlayData, series, original)
   );
-}
-
-// A series as the stopping track reads it. The branch carries the
-// payload's canvas indices and starts a resumed segment at each
-// edit's frame_index. The run it forked from is one canvas with no
-// resumes, because DiffusionGemma resumes nothing longer.
-function stopSourceOf(series, original) {
-  var canvases = original ? null : overlayData.canvas_index;
-  var edits = original ? [] : overlayData.remask_edits || [];
-  return {
-    count: overlaySeriesLength(series),
-    readFrame: function (f) {
-      return overlaySeriesAt(series, f);
-    },
-    canvasAt: function (f) {
-      var canvas = canvases ? canvases[f] : 0;
-      return typeof canvas === "number" ? canvas : 0;
-    },
-    segmentStarts: edits.map(function (edit) {
-      return edit.frame_index;
-    }),
-  };
+  return overlaysStopReadingAt(track, index, rule);
 }
 
 // Chart hover has no span, so it falls back to whichever layer takes
@@ -5670,16 +5649,18 @@ function clearStoppingChart() {
   updateComparePins("stopping", false);
 }
 
+// ``data.series`` and ``data.baseline`` are the series that
+// renderRunOverlays reads off the payload before it calls this.
 function renderStoppingChart(data) {
   var rule = overlaysStopRuleFrom(data.stop_rule, null);
   var edited = rule
-    ? stoppingSeries(overlayPrimary(), false, rule)
+    ? stoppingSeries(data, data.series, false, rule)
     : null;
   if (!edited) {
     applySlotPage("confidence");
     return;
   }
-  var original = stoppingSeries(overlayBaseline(), true, rule);
+  var original = stoppingSeries(data, data.baseline, true, rule);
   var section = document.getElementById("stopping-section");
   // See renderTimingChart on why this is shown before building.
   if (section) {
@@ -5717,12 +5698,14 @@ function renderStoppingChart(data) {
 // is a commit or was never measured, with the track behind it and the
 // frames where a canvas stopped. Null when no frame carries entropy,
 // which is every run saved before entropy was recorded everywhere.
-function stoppingSeries(series, original, rule) {
+function stoppingSeries(data, series, original, rule) {
   var count = overlaySeriesLength(series);
   if (count === 0) {
     return null;
   }
-  var track = overlaysStopTrack(stopSourceOf(series, original));
+  var track = overlaysStopTrack(
+    overlaySeriesStopSource(data, series, original)
+  );
   var values = [];
   var drafts = 0;
   for (var f = 0; f < count; f++) {

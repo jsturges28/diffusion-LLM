@@ -12,8 +12,9 @@
 //
 // Passing proves the adapter answers the viewer's questions the same
 // way of either shape: how long a series is, what a frame holds,
-// where it ends, when each position settled, which frame a channel
-// is read at, and whether entropy can be drawn at all. The same
+// where it ends, when each position settled, what the stopping
+// track reads, which frame a channel is read at, and whether entropy
+// can be drawn at all. The same
 // questions asked through the whole page stay in
 // analytics_frames.test.js and analytics_signal_axes.test.js.
 //
@@ -178,6 +179,67 @@ test("a growing run settles every position as it appears", () => {
 
   same(api.overlaySeriesCommitSteps(series), [0, 0, 0]);
   same(api.overlaySeriesRevisions(series, oneCanvas, []), []);
+});
+
+// -- what the stopping track reads --
+
+// The edited run as DiffusionGemma would send it: two canvases.
+function twoCanvases(payload) {
+  payload.canvas_index = [0, 0, 1, 1];
+}
+
+test("a branch's stop source carries its canvases and edits", () => {
+  const api = load();
+  const data = varied(EDITED, twoCanvases);
+  const series = api.overlaySeriesOf(data, false);
+
+  const source = api.overlaySeriesStopSource(data, series, false);
+
+  assert.equal(source.count, 4);
+  same([0, 1, 2, 3].map(source.canvasAt), [0, 0, 1, 1]);
+  same(source.segmentStarts, [2]);
+  assert.equal(
+    words(source.readFrame(3)), words(api.overlaySeriesAt(series, 3))
+  );
+});
+
+test("the run it forked from is one canvas, never resumed", () => {
+  const api = load();
+  const data = varied(EDITED, twoCanvases);
+  const baseline = api.overlaySeriesOf(data, true);
+
+  const source = api.overlaySeriesStopSource(data, baseline, true);
+
+  assert.equal(source.count, 4);
+  same([0, 1, 2, 3].map(source.canvasAt), [0, 0, 0, 0]);
+  same(source.segmentStarts, []);
+  assert.equal(
+    words(source.readFrame(0)),
+    words(api.overlaySeriesAt(baseline, 0))
+  );
+});
+
+test("a payload without canvas indices reads as one canvas", () => {
+  const api = load();
+  const data = fixture(EDITED);
+
+  const source = api.overlaySeriesStopSource(
+    data, api.overlaySeriesOf(data, false), false
+  );
+
+  same([0, 1, 2, 3].map(source.canvasAt), [0, 0, 0, 0]);
+});
+
+test("a growing run's stop source reads its positions", () => {
+  const api = load();
+  const data = fixture(APPEND);
+  const series = api.overlaySeriesOf(data, false);
+
+  const source = api.overlaySeriesStopSource(data, series, false);
+
+  assert.equal(source.count, 3);
+  assert.equal(source.readFrame(1).length, 2);
+  same(source.segmentStarts, []);
 });
 
 // -- the signal manifest --

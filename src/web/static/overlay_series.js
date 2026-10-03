@@ -6,10 +6,11 @@
 // other extracted modules it reaches for no page and no storage.
 // Everything here answers a question about a series or a payload it
 // is handed: how long a run is, what a frame holds, where it ends,
-// when each position settled, which frame a channel is read at, and
-// whether entropy can be drawn. The viewer state those questions are
-// asked from, the open run, the scrubbed frame and the memoized
-// revisions, stays in analytics.js, which passes in what is needed.
+// when each position settled, what the stopping track reads, which
+// frame a channel is read at, and whether entropy can be drawn. The
+// viewer state those questions are asked from, the open run, the
+// scrubbed frame and the memoized revisions, stays in analytics.js,
+// which passes in what is needed.
 //
 // Its tests read payloads the frames endpoint really produced, kept
 // in tests/web/static/fixtures/, so a field the server stops sending
@@ -145,6 +146,29 @@ function overlaySeriesRevisions(series, canvasOf, edits) {
     canvasOf,
     edits
   );
+}
+
+// A series as the stopping track reads it, from the payload it was
+// read off. The branch carries the payload's canvas indices and
+// starts a resumed segment at each edit's frame_index. The run it
+// forked from is one canvas with no resumes, because DiffusionGemma
+// resumes nothing longer.
+function overlaySeriesStopSource(data, series, original) {
+  var canvases = original ? null : data.canvas_index;
+  var edits = original ? [] : data.remask_edits || [];
+  return {
+    count: overlaySeriesLength(series),
+    readFrame: function (f) {
+      return overlaySeriesAt(series, f);
+    },
+    canvasAt: function (f) {
+      var canvas = canvases ? canvases[f] : 0;
+      return typeof canvas === "number" ? canvas : 0;
+    },
+    segmentStarts: edits.map(function (edit) {
+      return edit.frame_index;
+    }),
+  };
 }
 
 // ---- The signal manifest ----
