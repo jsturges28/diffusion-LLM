@@ -13,7 +13,8 @@ Values are stored verbatim as the strings the frontend keeps in
 localStorage: the server is a durable key/value mirror, not a schema,
 so the client's existing (synchronous) localStorage reads keep working
 unchanged after a one-time hydrate on boot. Writes are atomic (temp
-file + ``os.replace``) and serialized with a process-wide lock.
+file + ``os.replace``) and serialized by a lock every supervisor
+shares.
 
 Most of these keys are caches, where losing one costs a preference.
 ``diffusion_collections`` is not: it holds which runs the user filed
@@ -29,7 +30,8 @@ to provide only the first. Two things were missing, both from
 - The lock was a ``threading.Lock``, which is process-local. The
   browser supervisor and the desktop supervisor are separate
   processes writing one file, so each could read, modify, and write
-  over the other. An ``flock`` on a sidecar file now covers that.
+  over the other. An ``flock`` on a sidecar file now covers that,
+  through ``data_root_lock``.
 - A caller that read the file, computed a new value, and then called
   ``set_ui_state_key`` was doing a read-modify-write with the lock
   held for only the write half, so a value computed from an older
@@ -48,14 +50,10 @@ import contextlib
 import json
 import os
 import tempfile
-import threading
 from pathlib import Path
-from typing import Callable, Dict, Iterator, Optional
+from typing import Callable, Dict, Optional
 
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - POSIX only; app is Linux
-    fcntl = None  # type: ignore[assignment]
+from src.web.data_root_lock import DataRootLock
 
 # Allowed keys mapped to the maximum accepted value length, in
 # characters. Bounding the size stops a runaway client from growing
@@ -80,49 +78,14 @@ UI_STATE_KEYS: Dict[str, int] = {
     "diffusion_collections": 262_144,
 }
 
-# Serialize read-modify-write within this process. Kept alongside the
-# file lock below rather than replaced by it, because it is the cheap
-# path and because it is the only protection left on a host where
-# flock is unavailable.
-_LOCK = threading.Lock()
+# Holds every read-modify-write of the state file, in any process.
+# The sidecar keeps the name it has always had, so a supervisor still
+# running older code contends on the same file as this one.
+_STATE_LOCK = DataRootLock("ui_state.lock")
 
 
 def _state_path(results_dir: Path) -> Path:
     return results_dir / "ui_state.json"
-
-
-def _lock_path(results_dir: Path) -> Path:
-    """The sidecar the file lock is taken on.
-
-    Deliberately not ``ui_state.json`` itself. Writes go through
-    ``os.replace``, which swaps a new inode into place, so a lock held
-    on the file being replaced stops excluding anyone the moment the
-    first writer finishes. This file is only ever opened, never
-    replaced, so every process contends on the same inode.
-    """
-    return results_dir / "ui_state.lock"
-
-
-@contextlib.contextmanager
-def _exclusive(results_dir: Path) -> Iterator[None]:
-    """Hold the state file against every other writer, in any process.
-
-    Both locks, in that order: the thread lock first so siblings in
-    this process queue cheaply, then ``flock`` for the supervisor in
-    the other process. Closing the handle would release the lock on
-    its own; unlocking explicitly says so.
-    """
-    results_dir.mkdir(parents=True, exist_ok=True)
-    with _LOCK:
-        if fcntl is None:
-            yield
-            return
-        with _lock_path(results_dir).open("a+") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def load_ui_state(results_dir: Path) -> Dict[str, str]:
@@ -161,7 +124,7 @@ def set_ui_state_key(
     """
     assert isinstance(results_dir, Path), "results_dir must be a Path"
     _validate_key_value(key, value)
-    with _exclusive(results_dir):
+    with _STATE_LOCK.held(results_dir):
         state = load_ui_state(results_dir)
         state[key] = value
         _write_atomic(results_dir, state)
@@ -191,7 +154,7 @@ def mutate_ui_state_key(
     assert isinstance(results_dir, Path), "results_dir must be a Path"
     if key not in UI_STATE_KEYS:
         raise KeyError(f"unknown ui-state key: {key}")
-    with _exclusive(results_dir):
+    with _STATE_LOCK.held(results_dir):
         state = load_ui_state(results_dir)
         value = mutate(state.get(key))
         if value is None:
