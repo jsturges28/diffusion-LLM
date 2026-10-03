@@ -80,9 +80,9 @@ in an analytics suite.
 - **Frontend** (shared, schema-driven, no framework or bundler):
   `src/web/static/` holds `menu`, `index`/`app`, `analytics`, `settings` and
   `vision`, plus `overlays.js` for the shared color ramps, the layered-diff
-  builder, the "new run" registry and the durable-UI-state layer.
-  `detail_requests.js` fences the Analytics detail panel's fetches and, through
-  a second instance, the compare panel's. Third-party chart libraries and the
+  builder, the "new run" registry and the durable-UI-state layer. Analytics
+  reads a run's frames and signals through `overlay_series.js`; its detail and
+  compare fetches are fenced by `detail_requests.js`. Chart libraries and the
   webfont are vendored under `static/vendor/`, so every page works offline.
 - **Analytics reads** are split by cost: `/api/analytics/runs` carries only
   what the table draws (about 326 bytes a run), and the prompt, parameters

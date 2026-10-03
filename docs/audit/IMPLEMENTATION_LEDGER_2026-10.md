@@ -17,8 +17,9 @@ reasoning in `docs/ROADMAP.md`, and git history keeps the rest.
 ownership, was validated as a whole by the two-supervisor passes confirmed
 for items 310 to 314, 389 to 396, 400 to 404 and 405. Stage 3, extracting
 owners, is under way: `A2-ORG-01`, `A2-ORG-02`, `A2-DEPS-01` and
-`A2-ORG-03` are done. The report's Sequencing section orders the rest, and
-its Combinations to avoid bind every pass.
+`A2-ORG-03` are done, and `A2-ORG-04`'s first slice has landed. The report's
+Sequencing section orders the rest, and its Combinations to avoid bind every
+pass.
 
 ## How to work a finding
 
@@ -61,8 +62,8 @@ Decisions saying why.
 | A2-ORG-02 | 3 | done | `c3c007f` | | |
 | A2-DEPS-01 | 3 | done | `2a6e87d` | 406 | |
 | A2-ORG-03 | 3 | done | `a4ff5e5` | 407 | |
-| A2-ORG-04 | 3 | blocked | | | stage 3 order |
-| A2-ORG-05 | 3 | blocked | | | `A2-ORG-04` |
+| A2-ORG-04 | 3 | ready | `64281e2`, `548f022` | 408 | |
+| A2-ORG-05 | 3 | ready | | | |
 
 ## Decisions
 
@@ -105,17 +106,16 @@ Each settled with the maintainer during remediation.
   rather than reloading the page, and so does a run that lost its
   connection, with its own reason. An open edit session closes as Exit does
   unless it holds a branch the page can still save.
-- `A2-ORG-01` moved the manager verbatim with the probes, lease text and
-  download checks it uses. The routes reach the shared helpers through the
-  module, so one patch reaches both callers, and those took public names
-  in a second commit.
-- `A2-ORG-02` moved the worker's socket shell verbatim into `worker_app.py`
-  with no re-export, so the launcher and the tests import it from there.
-  The resource pump stays in `worker_base.py` with the measurement it
-  reads, which is where the tests' patches reach it.
-- `A2-ORG-03`'s codec is `run_snapshot.js`. Its first cut leaves the storage
-  calls and every write to page globals and the DOM in `app.js`, and keeps
-  the stored keys and their order, so an older snapshot still restores.
+- `A2-ORG-01` moved the manager verbatim. The routes reach its shared
+  helpers through the module, so one patch reaches both callers.
+- `A2-ORG-02` moved the worker's socket shell into `worker_app.py` with no
+  re-export. The resource pump stays in `worker_base.py`, where the tests'
+  patches reach it.
+- `A2-ORG-03`'s codec is `run_snapshot.js`. Storage and every write to page
+  state stay in `app.js`, and the stored keys are unchanged.
+- `A2-ORG-04` is taken in slices. The first gave every page one script list
+  in the DOM stub, and moved Analytics' frame and signal reads into
+  `overlay_series.js`; the chart and token-viewer controllers remain.
 
 ## Open decisions
 
@@ -142,8 +142,8 @@ Not findings, and each its own slice when taken.
 ## Baselines
 
 At the audit on 2026-10-01: 2,456 Python tests, 816 browser tests, and no
-Ruff findings. On 2026-10-03, after the run snapshot codec: 2,598 Python
-tests passing and 6 skipped, 925 browser tests, no Ruff findings, and 34
+Ruff findings. On 2026-10-03, after `A2-ORG-04`'s first slice: 2,611 Python
+tests passing and 6 skipped, 940 browser tests, no Ruff findings, and 34
 warnings, down from 92 before the lifespan move. One of the 34 is torch
 failing to start CUDA in the agent sandbox, which a machine with a working
 GPU does not raise.

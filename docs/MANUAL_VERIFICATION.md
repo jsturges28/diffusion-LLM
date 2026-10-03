@@ -309,6 +309,9 @@ kept when these were written:
 - **407**: confirmed on 2026-10-03: the run snapshot through its codec,
   after the 2026-10 audit's `A2-ORG-03` moved its tiers and its reading of
   older snapshots into `run_snapshot.js`.
+- **408**: **outstanding**: Analytics through its frame and signal adapter,
+  after the 2026-10 audit's `A2-ORG-04` moved those reads into
+  `overlay_series.js`.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -4725,3 +4728,26 @@ real storage quota, and it overlaps 158, 346, 350, 392 and 404.
       whole, and **What If?** works on it.
     - Do each again with a reload of the page in place of the trip to
       Analytics. The same holds.
+
+## Analytics through its frame and signal adapter
+
+From 2026-10-03 Analytics reads a saved run's frames, in either shape
+the server sends, and its signal manifest through `overlay_series.js`
+(`A2-ORG-04`), a script loaded after `overlays.js` that reaches for no
+page of its own. Its answers are automated against payloads the frames
+endpoint really produced, in `tests/web/static/overlay_series.test.js`;
+this is the page in a real engine, and it overlaps 385 to 388.
+
+408. **Each kind of run reads as it did.** In the desktop app, and then
+    in the browser launcher, open Analytics:
+    - Open a saved LLaDA run and scrub it. The token overlay follows the
+      scrub, and the entropy chart's bars change from frame to frame.
+    - Open an edited LLaDA run. **Diff** is offered, and shows the
+      positions the edit changed.
+    - Open a DiffusionGemma run and scrub to a commit frame. Its entropy
+      is read from the canvas's last draft and says *as of step N*.
+    - Open a SmolLM3 run and scrub it. Each frame adds one token, and
+      the entropy chart reads the run's final values at every frame.
+    - Open a Mamba-3 run and turn on the Forgetting overlay. The tokens
+      are colored by how much each one erased from the state.
+    - Compare two runs. The compare panel draws both.
