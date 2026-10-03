@@ -282,10 +282,11 @@ kept when these were written:
 - **387 and 388**: confirmed on 2026-10-02: DiffusionGemma's entropy
   at a commit frame on both pages, and the generator's profile on a
   diffusion run.
-- **389 to 394**: **outstanding**: runs whose connection dropped,
-  saved on each model, after a model switch, across DiffusionGemma's
-  canvases and through a trip to Analytics; the menu's own
-  stylesheet; and the entropy row held for the diffusion models.
+- **389 to 394**: confirmed on 2026-10-02: runs whose connection
+  dropped, saved on each model, after a model switch, across
+  DiffusionGemma's canvases and through a trip to Analytics; the
+  menu's own stylesheet; and the entropy row held for the diffusion
+  models.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer

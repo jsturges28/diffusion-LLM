@@ -13,7 +13,7 @@ it. Here a finding gets one row and a decision one line, with any longer
 reasoning in `docs/ROADMAP.md`, and git history keeps the rest.
 
 **As of 2026-10-02**, Stage 1 is done but for `A2-TRUST-02`, which waits on
-the maintainer's limits for one run, and two of its fixes still wait on
+the maintainer's limits for one run, and every other Stage 1 fix has cleared
 hardware. Stage 2, cross-supervisor ownership, is next; the report validates
 it as a whole with a two-supervisor hardware run. The report's Sequencing
 section orders the rest, and its Combinations to avoid bind every pass.
@@ -45,10 +45,10 @@ Decisions saying why.
 | A2-XAI-02 | 1 | done | `3aeae87` | 380 to 384 | |
 | A2-XAI-03 | 1 | done | `0242f01` | 385 | |
 | A2-XAI-04 | 1 | done | `b24eeb4` | 386 | |
-| A2-LIFE-02 | 1 | needs hardware | `ef3eb08`, `fa08716` | 389 to 392 | |
+| A2-LIFE-02 | 1 | done | `ef3eb08`, `fa08716` | 389 to 392 | |
 | A2-LIFE-04 | 1 | done | `bf9b7de` | | |
 | A2-META-01 | 1 | done | `4a09032`, `4cc3b7d` | | |
-| A2-ORG-06 | 1 | needs hardware | `e5bbc86` | 393 | |
+| A2-ORG-06 | 1 | done | `e5bbc86` | 393 | |
 | A2-TRUST-02 | 1 | blocked | | | the maintainer's limits for one run |
 | A2-LIFE-01 | 2 | ready | | | |
 | A2-TRUST-01 | 2 | blocked | | | the maintainer's policy without a lease |
@@ -98,7 +98,7 @@ Not findings, and each its own slice when taken.
 | What | State | Commits | Manual items |
 |---|---|---|---|
 | DiffusionGemma's entropy at commit frames, on both pages | done | `d0ecae0`, `067038d` | 387, 388 |
-| The entropy row held for every model that records entropy | needs hardware | `11affa1` | 394 |
+| The entropy row held for every model that records entropy | done | `11affa1` | 394 |
 | DiffusionGemma's stopped text holds only its last canvas and can run ahead of the page | open | | |
 | Edit Frames and What If? on an interrupted run are refused as if it had been replaced | open | | |
 | A resume stopped before its first frame could restore the frames the page cut | open | | |
