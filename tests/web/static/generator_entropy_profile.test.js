@@ -359,3 +359,71 @@ test("an autoregressive run's profile is what it was", () => {
   assert.equal(layers.filled, 1);
   assert.equal(layers.asOfStep, null);
 });
+
+// -- the row's space --
+//
+// Held empty until a run fills it, so the canvas above does not
+// shrink when a profile first appears. It was held for autoregressive
+// models alone, the only ones that recorded entropy when the rule was
+// written, so a diffusion run's profile pushed the canvas up as the
+// run finished.
+
+function bootedOn(model) {
+  const models = modelsFor(model);
+  return loadPage({
+    WebSocket: OpenSocket,
+    fetchImpl: quietFetch(models),
+    bootState: { ui_state: {}, models: models },
+  });
+}
+
+function entropyRow(registry) {
+  return registry.get("entropy-profile-row");
+}
+
+test("a diffusion model holds the row from page load", () => {
+  const { registry } = bootedOn(diffusionModel("llada"));
+  const row = entropyRow(registry);
+
+  assert.equal(row.hidden, false);
+  assert.equal(row.classList.contains("is-empty"), true);
+});
+
+test("the row stays held through a diffusion run", () => {
+  const { context, registry } = bootedOn(diffusionModel("llada"));
+  context.ws = new OpenSocket("ws://test");
+  registry.get("prompt-input").value = "explain yeast";
+  context.startGeneration();
+  context.handleFrame(diffusionFrame(0, 0, false));
+  context.handleFrame(diffusionFrame(1, 0, false));
+
+  assert.equal(entropyRow(registry).hidden, false);
+
+  context.handleDone({ type: "done", final_text: "done" });
+
+  assert.equal(entropyRow(registry).hidden, false);
+  assert.equal(context.entropyProfileShowing(), true);
+});
+
+test("a model declaring no entropy leaves the row out", () => {
+  const silent = diffusionModel("silent");
+  silent.capabilities.signals = [];
+  const { registry } = bootedOn(silent);
+
+  assert.equal(entropyRow(registry).hidden, true);
+});
+
+test("an entropy with no per-position bars leaves it out", () => {
+  // A canvas-level entropy has nothing for the row to draw.
+  const canvasLevel = diffusionModel("canvas-level");
+  canvasLevel.capabilities.signals = [entropyChannel(["frame"])];
+  const { registry } = bootedOn(canvasLevel);
+
+  assert.equal(entropyRow(registry).hidden, true);
+});
+
+test("an autoregressive model holds the row, as before", () => {
+  const { registry } = bootedOn(AUTOREGRESSIVE);
+
+  assert.equal(entropyRow(registry).hidden, false);
+});

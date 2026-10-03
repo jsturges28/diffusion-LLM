@@ -5258,24 +5258,36 @@ function entropyProfilePosition(event) {
 // The entropy row has three states, not the scrubber's two, which is
 // why it does not simply reuse that pattern.
 //
-//   absent    this model reports no entropy at all, so there is
-//             nothing to reserve. Holding a gap here would put a
-//             permanent empty strip under every diffusion run, which
-//             is a worse trade than the shift it would prevent.
-//   reserved  this model does report entropy, but no run has yet
+//   absent    this model declares no entropy the row could draw, so
+//             there is nothing to reserve. Holding a gap here would
+//             put a permanent empty strip under every run, which is a
+//             worse trade than the shift it would prevent.
+//   reserved  this model does record entropy, but no run has yet
 //             produced any. Held, so finishing a run does not shrink
 //             the canvas above it.
 //   shown
 //
-// Autoregressive is the proxy for "reports entropy" because that is
-// what is true today; `ROADMAP-03` would bring it to the diffusion
-// models, at which point this predicate is the thing to revisit.
+// Which models record it is read from what each one declares.
+// Autoregressive stood in for that until the diffusion models
+// recorded entropy too, and from then their profiles pushed the
+// canvas up as each run finished.
 function setEntropyProfileVisible(visible) {
   if (!entropyProfileRow) {
     return;
   }
-  entropyProfileRow.hidden = !visible && !isAppendOnly();
+  entropyProfileRow.hidden = !visible && !entropyDeclared();
   entropyProfileRow.classList.toggle("is-empty", !visible);
+}
+
+// Whether the active model declares a per-position entropy, in a
+// shape the row can draw.
+function entropyDeclared() {
+  var channel = declaredChannel("entropy");
+  if (!channel) {
+    return false;
+  }
+  var shape = (channel.axes || []).join("|");
+  return ENTROPY_SHAPES.indexOf(shape) !== -1;
 }
 
 function entropyProfileShowing() {

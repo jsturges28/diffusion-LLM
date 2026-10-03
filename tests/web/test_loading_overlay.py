@@ -317,18 +317,30 @@ def _badge_body(source: str) -> str:
 
 
 def test_the_entropy_row_is_reserved_only_when_it_can_fill() -> None:
-    """The conditional case. Diffusion models report no entropy
-    today, and a row held for them is a permanent empty strip under
-    every run rather than a shift avoided once."""
+    """The conditional case. A row held for a model that declares no
+    entropy it could draw is a permanent empty strip under every run
+    rather than a shift avoided once, so the reservation follows the
+    model's own declaration. It followed generation shape while only
+    autoregressive models recorded entropy."""
     region = _region(
         "function setEntropyProfileVisible(visible)", 400
     )
 
     assert (
-        "entropyProfileRow.hidden = !visible && !isAppendOnly()"
+        "entropyProfileRow.hidden = !visible && !entropyDeclared()"
         in region
     )
     assert 'classList.toggle("is-empty", !visible)' in region
+
+
+def test_the_reservation_reads_the_declaration() -> None:
+    """The same channel and the same drawable shapes the strip itself
+    is offered for, so the row is never held for bars it cannot
+    draw."""
+    region = _region("function entropyDeclared()", 300)
+
+    assert 'declaredChannel("entropy")' in region
+    assert "ENTROPY_SHAPES" in region
 
 
 def test_the_entropy_row_starts_absent_in_the_markup() -> None:

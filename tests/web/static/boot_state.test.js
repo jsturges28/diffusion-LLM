@@ -35,6 +35,16 @@ const SMOL = {
     family: "autoregressive",
     generation_shape: "append_only",
     supported_devices: ["cuda", "cpu"],
+    // As the registry declares it, which is what decides whether the
+    // entropy row is held.
+    signals: [{
+      name: "entropy",
+      unit: "nats",
+      axes: ["position"],
+      location: "token_record",
+      key: "e",
+      capture: "always",
+    }],
   },
   param_specs: [
     {
@@ -142,9 +152,10 @@ test("the resident model is known at first paint", () => {
 });
 
 test("the entropy row is settled for the resident model", () => {
-  // The conditional reservation: held for a model that reports
-  // entropy, absent for one that never will. It used to be answered
-  // after the fetch, which is a strip appearing under the canvas.
+  // The conditional reservation: held for a model that declares
+  // entropy, absent for one that declares none. It used to be
+  // answered after the fetch, which is a strip appearing under the
+  // canvas.
   const page = loadPage({
     bootState: bootState(),
     fetchImpl: recordingFetch([]),
@@ -153,7 +164,7 @@ test("the entropy row is settled for the resident model", () => {
   const row = page.registry.get("entropy-profile-row");
   assert.equal(
     row.hidden, false,
-    "SmolLM3 is autoregressive, so its row is reserved"
+    "SmolLM3 declares entropy, so its row is reserved"
   );
 });
 

@@ -303,9 +303,11 @@
         </div>
       </div>
       <!-- Per-position entropy profile: one column per generated
-           token, tall where the model was torn. Autoregressive runs
-           sample each position once, so this is a profile across the
-           sequence, not a trajectory of one position. -->
+           token, tall where the model was torn. An autoregressive
+           run samples each position once, so its profile reads
+           across the sequence; a diffusion run's reads the frame
+           under the scrubber. Held empty for every model that
+           records entropy, so a run filling it shifts nothing. -->
       <div id="entropy-profile-row" hidden>
         <span class="entropy-profile-label">Entropy</span>
         <canvas id="entropy-profile" height="34"></canvas>
