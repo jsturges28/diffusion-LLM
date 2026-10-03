@@ -16,8 +16,9 @@ reasoning in `docs/ROADMAP.md`, and git history keeps the rest.
 **As of 2026-10-03**, Stages 1 and 2 are done. Stage 2, cross-supervisor
 ownership, was validated as a whole by the two-supervisor passes confirmed
 for items 310 to 314, 389 to 396, 400 to 404 and 405. Stage 3, extracting
-owners, has begun with `A2-ORG-01`. The report's Sequencing section orders
-the rest, and its Combinations to avoid bind every pass.
+owners, is under way: `A2-ORG-01` and `A2-ORG-02` are done, and
+`A2-DEPS-01` waits on item 406. The report's Sequencing section orders the
+rest, and its Combinations to avoid bind every pass.
 
 ## How to work a finding
 
@@ -57,8 +58,8 @@ Decisions saying why.
 | A2-QUALITY-02 | 2 | done | `1a4fb18` | | |
 | A2-LIFE-03 | 2 | done | `5f42ac3`, `749ecc6` | 400 to 404 | |
 | A2-ORG-01 | 3 | done | `ac7f0b7`, `0355477` | | |
-| A2-ORG-02 | 3 | blocked | | | stage 3 order, in one plan with `A2-DEPS-01` |
-| A2-DEPS-01 | 3 | blocked | | | stage 3 order, in one plan with `A2-ORG-02` |
+| A2-ORG-02 | 3 | done | `c3c007f` | | |
+| A2-DEPS-01 | 3 | needs hardware | `2a6e87d` | 406 | |
 | A2-ORG-03 | 3 | ready | | | |
 | A2-ORG-04 | 3 | blocked | | | stage 3 order |
 | A2-ORG-05 | 3 | blocked | | | `A2-ORG-04` |
@@ -108,6 +109,10 @@ Each settled with the maintainer during remediation.
   download checks it uses. The routes reach the shared helpers through the
   module, so one patch reaches both callers, and those took public names
   in a second commit.
+- `A2-ORG-02` moved the worker's socket shell verbatim into `worker_app.py`
+  with no re-export, so the launcher and the tests import it from there.
+  The resource pump stays in `worker_base.py` with the measurement it
+  reads, which is where the tests' patches reach it.
 
 ## Open decisions
 
@@ -128,9 +133,15 @@ Not findings, and each its own slice when taken.
 | The Help "signals" panel is at its 2,200-word budget | open | | |
 | A long run's save waits seconds on drawing its GIF preview | open | | |
 | The GIF preview is drawn outside the publication lock, so two near-simultaneous replacements can leave the earlier one's | open | | |
+| The process-race tests fork a multi-threaded process, which Python warns about 31 times a run (16 from `DATA-02`'s tests, 15 from `A2-DATA-01`'s) | open | | |
+| The supervisor's own INFO logs reach no handler, so its results-directory line at startup has never been shown | open | | |
 
 ## Baselines
 
 At the audit on 2026-10-01: 2,456 Python tests, 816 browser tests, and no
 Ruff findings. On 2026-10-03, after the model manager move: 2,584 Python
 tests passing and 6 skipped, 902 browser tests, and still no Ruff findings.
+After the worker shell and lifespan moves the same day: 2,592 passing and 6
+skipped, 902 browser tests, no Ruff findings, and 34 warnings where there
+had been 92. One of the 34 is torch failing to start CUDA in the agent
+sandbox, which a machine with a working GPU does not raise.

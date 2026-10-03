@@ -63,15 +63,15 @@ in an analytics suite.
   directory at import, defaulting to `<repo>/results` and overridable by
   `--results-dir` or `DIFFUSION_LLM_RESULTS_DIR`. It does not depend on the
   working directory, which it used to.
-- **Workers**: `src/backends/{llada,dgemma,smollm3,mamba3}_worker.py`
-  via `run_worker.py`; contract in `protocol.py` / `registry.py` /
-  `worker_base.py`, and the two left-to-right workers share
-  `append_only_backend.py`. LLaDA to `.venv` (transformers 4.38.2);
-  DiffusionGemma to `.venv-dgemma` (transformers 5.13); SmolLM3 and Mamba-3
-  to `.venv-ar` (transformers 4.53; Mamba-3 is plain PyTorch). `run_worker.py` takes `--device`, forwarded via
-  `create_worker_app(device=...)` into `Backend.load(device=...)` (kw-only,
-  default "cuda"). Cached weights load with `local_files_only`, so an
-  already-downloaded model activates with no network.
+- **Workers**: `src/backends/{llada,dgemma,smollm3,mamba3}_worker.py` via
+  `run_worker.py`; contract in `protocol.py` / `registry.py` /
+  `worker_base.py` (the model side), served by `worker_app.py` (app, routes,
+  load); the two left-to-right workers share `append_only_backend.py`. LLaDA
+  to `.venv` (transformers 4.38.2); DiffusionGemma to `.venv-dgemma`
+  (transformers 5.13); SmolLM3 and Mamba-3 to `.venv-ar` (transformers 4.53;
+  Mamba-3 is plain PyTorch). `run_worker.py` takes `--device`, forwarded via
+  `create_worker_app(device=...)` into `Backend.load(device=...)`. Cached
+  weights load with `local_files_only`, so a downloaded model needs no network.
 - **Samplers**: `src/inference/{streaming_sampler,dgemma_sampler,ar_sampler}`;
   NF4 in `dgemma_nf4.py`. `mamba3_causal.py` gives Mamba-3 the calling shape
   `ar_sampler` drives. Analytics metrics: `src/analytics/metrics.py`.

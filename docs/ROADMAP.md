@@ -2314,7 +2314,7 @@ are expensive to rediscover and cheap to store.
 - **tokenizer identity, the typed token, and an AR
   top-k knob**, in that order, as three commits.
 
-  The identity is read off the loaded object in `worker_base._health`
+  The identity is read off the loaded object in `worker_app._health`
   (`describe_tokenizer`: class, `name_or_path`, `is_fast`, `vocab_size`),
   cached by the supervisor into `manager.active_tokenizer` on the same
   ready transition that caches `active_versions`, and written into
@@ -2803,8 +2803,11 @@ page appears that this map does not mention.
 
 - `src/backends/` is the **contract between the supervisor and a worker**, plus
   one worker per model. `protocol.py` holds the shared types, `registry.py`
-  declares every model, `worker_base.py` is the scaffolding each worker fills
-  in, and `run_worker.py` is the process entry point. The workers are
+  declares every model, `worker_base.py` is the model side each worker fills
+  in (the `Backend` contract, streaming, provenance and measurement),
+  `worker_app.py` is the socket shell that serves it (the app, its routes,
+  the load it starts and the one generation slot), and `run_worker.py` is
+  the process entry point. The workers are
   `llada_worker.py`, `dgemma_worker.py`, `smollm3_worker.py` and
   `mamba3_worker.py`; the last two share `append_only_backend.py` and differ
   only in how they load. Around them:

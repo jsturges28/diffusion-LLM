@@ -303,6 +303,9 @@ kept when these were written:
   from the 2026-10 audit's `A2-DATA-01`, and with it that audit's Stage 2
   validation. An edit confirmed after the other launcher deleted its run
   saved as a run of its own.
+- **406**: **outstanding**: each worker loading and every way out freeing
+  the card, after the 2026-10 audit's `A2-DEPS-01` moved both apps to
+  lifespan contexts. It is also that audit's measurement 9.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -4662,3 +4665,32 @@ audit's Stage 2 validation.
       error, as a run of its own, and the deleted run does not return.
     - Refresh Analytics in both launchers. They list the same runs, the
       edited one included.
+
+## Starting and stopping through a lifespan
+
+From 2026-10-03 the supervisor and every worker start and stop through
+a lifespan rather than FastAPI's deprecated startup and shutdown hooks
+(`A2-DEPS-01`). A worker starts its load as its app starts, under its
+own environment's FastAPI, and the supervisor sweeps orphaned workers
+before it serves and stops its worker as it exits, even when it exits
+on an error. The order is automated against stand-ins in
+`tests/web/test_server_lifespan.py` and
+`tests/backends/test_worker_lifespan.py`. This is the same with real
+workers on the card, and it is the 2026-10 audit's measurement 9.
+
+406. **Each worker loads, and every way out frees the card.**
+    - Start the browser launcher (`.venv/bin/python main.py`) and load
+      LLaDA, DiffusionGemma and SmolLM3 in turn from the Main Menu. Each
+      reaches ready, which covers one worker per environment: `.venv`,
+      `.venv-dgemma` and `.venv-ar`.
+    - With a model loaded, press Ctrl+C in the launcher's terminal. It
+      prints *Waiting for application shutdown.* and then *Application
+      shutdown complete.*, `pgrep -f src.backends.run_worker` prints
+      nothing, and `nvidia-smi` shows the worker's VRAM returned.
+    - Start the desktop app (`.venv/bin/python desktop.py`), load
+      DiffusionGemma, whose load is the longest, and close the window
+      while it is still loading. Within 35 seconds, the desktop app's
+      shutdown timeout, the worker has ended and its VRAM is back.
+    - Start the desktop app again, load a model, generate, and close the
+      window mid-generation. The worker ends and its VRAM returns in the
+      same time.
