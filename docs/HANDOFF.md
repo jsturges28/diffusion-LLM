@@ -102,17 +102,20 @@ in an analytics suite.
 
 ## Where things stand
 
-**The audit remediation campaign is complete except for a short
-remainder**, listed at the top of `docs/audit/IMPLEMENTATION_LEDGER.md`:
-four findings waiting on hardware, `ORG-02`'s module conversion deferred
-with its reason, and `ROADMAP-04` untaken because nothing needs it yet.
-`docs/audit/IMPLEMENTATION_BRIEF.md` no longer governs every session, so
-`AGENTS.md`'s cadence applies again, but the rules the brief quotes from
-the report's sequencing still bind new work, Mamba included, and taking
-`ROADMAP-04` is campaign work that follows it. `docs/audit/AUDIT_REPORT.md`
-is the immutable analysis behind it all; read only the findings you touch.
+**A second audit is being worked through.** Its 21 findings are in
+`docs/audit/AUDIT_REPORT_2026-10.md` and their state is in
+`docs/audit/IMPLEMENTATION_LEDGER_2026-10.md`: Stage 1 is done but for
+`A2-TRUST-02`, and Stage 2, cross-supervisor ownership, is next. Read the
+ledger first, then only the findings you touch. **The first campaign is
+complete except for a short remainder**, listed at the top of
+`docs/audit/IMPLEMENTATION_LEDGER.md`: four findings waiting on hardware,
+`ORG-02`'s module conversion deferred with its reason, and `ROADMAP-04`
+untaken because nothing needs it yet. `docs/audit/IMPLEMENTATION_BRIEF.md`
+no longer governs every session, but the rules it quotes from the first
+report's sequencing still bind new work, and `docs/audit/AUDIT_REPORT.md`
+remains the immutable analysis behind that campaign.
 
-What the campaign changed that a newcomer trips over:
+What the first campaign changed that a newcomer trips over:
 
 - **Runs are owned.** Saved runs publish whole or not at all, declare a
   schema version and what they captured, and carry the worker's own
@@ -191,6 +194,6 @@ unsettled position through those candidates on a finished run. The
 changing its mind, shipped on 2026-10-01, and the **adaptive-stopping
 readout** on 2026-10-02: its two stop thresholds became parameters, and a
 readout beside the metrics strip shows how far each canvas is from
-stopping. The next direction is to be chosen from the backlog in
-`docs/ROADMAP.md` (frame-linked line charts, per-run notes), which also
-carries the settled decisions.
+stopping. Work in progress follows the second audit's ledger; the next
+feature comes from the backlog in `docs/ROADMAP.md` (frame-linked line
+charts, per-run notes), which also carries the settled decisions.

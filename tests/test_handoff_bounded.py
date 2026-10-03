@@ -91,6 +91,7 @@ def test_it_points_at_where_the_detail_went() -> None:
         "docs/ROADMAP.md",
         "docs/MANUAL_VERIFICATION.md",
         "docs/audit/IMPLEMENTATION_LEDGER.md",
+        "docs/audit/IMPLEMENTATION_LEDGER_2026-10.md",
         "docs/TIGERSTYLE.md",
     ):
         assert target in text, f"handoff never mentions {target}"
