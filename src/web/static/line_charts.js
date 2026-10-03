@@ -1825,6 +1825,13 @@ function lineChartsCreate(options) {
     chartTiming = chartSupportDestroy(chartTiming);
     chartTps = chartSupportDestroy(chartTps);
     chartConfidence = chartSupportDestroy(chartConfidence);
+    // Zoom and the eyes find charts through this registry, and their
+    // buttons take clicks while the next run's metrics are in flight;
+    // a destroyed chart left in it would be handed to them.
+    chartInstances.convergence = null;
+    chartInstances.timing = null;
+    chartInstances.tps = null;
+    chartInstances.confidence = null;
     slotReady.timing.elapsed = false;
     slotReady.timing.tps = false;
     // The stopping page is the overlay load's to reset, since that is

@@ -522,6 +522,19 @@ test("clearing the metrics charts destroys every one", () => {
   assert.ok(page.built.every((chart) => chart.destroyed));
 });
 
+test("a cleared chart no longer answers to its name", () => {
+  // Zoom and the tooltip eyes find a chart by name, and their buttons
+  // still take clicks while the next run's charts are on their way.
+  const page = load();
+  page.lineCharts.renderMetrics(metrics(), false);
+
+  page.lineCharts.clearMetrics();
+
+  for (const name of ["convergence", "timing", "tps", "confidence"]) {
+    assert.equal(page.lineCharts.chart(name), null, name);
+  }
+});
+
 test("a name the controller does not draw answers null", () => {
   const page = load();
   page.lineCharts.renderMetrics(metrics(), false);
