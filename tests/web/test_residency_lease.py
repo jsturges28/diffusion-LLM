@@ -22,16 +22,17 @@ the resident-untouched checks are not decoration.
 Passing proves a second supervisor cannot load while a first holds the
 claim, that its refusal names who to go to, that the loser's own
 resident model and pages are untouched, that switching models inside
-one supervisor is not self-competition, that eviction hands the claim
-over, and that a slow finalize cannot take the claim from a newer
-activation.
+one supervisor is not self-competition, that a peer is refused for the
+whole of another supervisor's switch, that a switch which cannot
+launch gives the machine back, that eviction hands the claim over, and
+that a slow finalize cannot take the claim from a newer activation.
 """
 
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
@@ -49,10 +50,15 @@ class Supervisor:
 
     def __init__(self, lease_file: Path) -> None:
         self.processes: List[FakeProcess] = []
+        # Set to make the next launch fail at the spawn, the way a
+        # missing interpreter would after everything else has passed.
+        self.fail_spawn = False
 
         def spawn(
             command: Any, *, cwd: Any, env: Any
         ) -> FakeProcess:
+            if self.fail_spawn:
+                raise OSError("the test refused this spawn")
             made = FakeProcess(pid=3000 + len(self.processes))
             self.processes.append(made)
             return made
@@ -247,6 +253,95 @@ def test_a_switch_updates_what_the_claim_says(
     assert owner is not None
     assert owner["model"] == CPU_MODEL
     assert owner["device"] == "cpu"
+
+
+def _pause_after_stop(
+    supervisor: Supervisor,
+) -> Tuple[asyncio.Event, asyncio.Event]:
+    """Hold a switch just after its old worker is finalized.
+
+    Where a switch used to give the claim up and, a moment later, take
+    it back. Nothing awaits between the two, so two managers in one
+    process never meet there by chance, while two supervisors in two
+    processes can. Pausing there opens the gap on purpose.
+
+    Installed after the first load, since every activation stops
+    whatever came before it, even when nothing did.
+    """
+    paused = asyncio.Event()
+    resume = asyncio.Event()
+    original = supervisor.manager._stop_locked
+
+    async def stop_then_wait(**kwargs: Any) -> None:
+        await original(**kwargs)
+        paused.set()
+        await resume.wait()
+
+    supervisor.manager._stop_locked = (  # type: ignore[method-assign]
+        stop_then_wait
+    )
+    return paused, resume
+
+
+def test_a_peer_is_refused_throughout_a_switch(
+    lease_file: Path,
+) -> None:
+    """A switch used to release the claim as it finalized its old
+    worker, so a peer arriving before it claimed again got the
+    machine, and the switch, its model already evicted, was then
+    refused. The user paid for an eviction and got nothing."""
+    switching = Supervisor(lease_file)
+    peer = Supervisor(lease_file)
+
+    async def sequence() -> Tuple[Any, Any]:
+        await switching.load(GPU_MODEL, "cuda")
+        paused, resume = _pause_after_stop(switching)
+        switch = asyncio.create_task(
+            switching.load(CPU_MODEL, "cpu")
+        )
+        await paused.wait()
+        refused = None
+        try:
+            await peer.load(GPU_MODEL, "cuda")
+        except ActivationRefused as exc:
+            refused = exc
+        resume.set()
+        (switched,) = await asyncio.gather(
+            switch, return_exceptions=True
+        )
+        return refused, switched
+
+    refused, switched = asyncio.run(sequence())
+
+    assert refused is not None, "the peer took the machine mid-switch"
+    assert switched is None, f"the switch was refused: {switched}"
+    assert switching.manager.is_serving(CPU_MODEL)
+    assert switching.holds_lease is True
+    assert peer.processes == []
+
+
+def test_a_switch_that_cannot_launch_frees_the_claim(
+    lease_file: Path,
+) -> None:
+    """The other half of keeping the claim through a switch. A switch
+    that evicts its model and then cannot start the next one leaves
+    nothing resident, and holding the machine for nothing would lock
+    every other launcher out until this one exits."""
+    only = Supervisor(lease_file)
+    peer = Supervisor(lease_file)
+
+    async def sequence() -> None:
+        await only.load(GPU_MODEL, "cuda")
+        only.fail_spawn = True
+        with pytest.raises(OSError):
+            await only.load(CPU_MODEL, "cpu")
+        await peer.load(GPU_MODEL, "cuda")
+
+    asyncio.run(sequence())
+
+    assert only.holds_lease is False
+    assert peer.holds_lease is True
+    assert peer.manager.is_serving(GPU_MODEL)
 
 
 # -- handing it over --

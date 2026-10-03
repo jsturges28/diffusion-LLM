@@ -913,14 +913,17 @@ class ModelManager:
                 return self.activation_id
             info = REGISTRY[model_id]
             python = self._validate_target(info, device)
-            await self._stop_locked()
+            # A switch, so the claim stays: this supervisor is
+            # replacing its own worker, not giving the machine up.
+            await self._stop_locked(keep_claim=True)
             # After the eviction, which looks wrong for a check that
             # can refuse, and is not. A refusal here can only happen
             # when this supervisor holds no claim, and holding no
             # claim means having no resident worker, so there was
             # nothing for the eviction to cost. A supervisor that does
-            # have a model already owns the claim, and re-claiming it
-            # is a no-op.
+            # have a model still owns the claim, kept through the
+            # eviction above, and re-claiming it is a no-op that
+            # records the model it is switching to.
             #
             # Before the pre-flight, though, which is the ordering
             # that matters: the pre-flight is precisely what cannot be
@@ -1213,7 +1216,7 @@ class ModelManager:
                 return
             if operation != self.activation_id:
                 raise ActivationRefused(self._not_yours_message())
-            await self._stop_locked()
+            await self._stop_locked(keep_claim=False)
 
     def _not_yours_message(self) -> str:
         """Why a cancel was refused, in terms of what is loading."""
@@ -1463,7 +1466,7 @@ class ModelManager:
         # whatever activation happened to hold it.
         await self._end_download()
         async with self._lock:
-            await self._stop_locked()
+            await self._stop_locked(keep_claim=False)
 
     def _claim_residency(self, model_id: str, device: str) -> None:
         """Take the machine-wide claim, or refuse and say who has it.
@@ -1486,7 +1489,7 @@ class ModelManager:
             return
         raise ActivationRefused(_residency_refusal(self._residency))
 
-    async def _stop_locked(self) -> None:
+    async def _stop_locked(self, *, keep_claim: bool) -> None:
         """Stop the resident worker and prove it is gone.
 
         The monitor is cancelled first because this is not the
@@ -1494,9 +1497,15 @@ class ModelManager:
         the same finalization without that step (see
         ``_monitor_startup``), since a task cannot await its own
         cancellation.
+
+        ``keep_claim`` is for a switch, which replaces this
+        supervisor's worker rather than giving the machine up. Every
+        other stop leaves nothing resident, and releases.
         """
         await self._cancel_monitor()
-        await self._finalize(self._proc, error=None)
+        await self._finalize(
+            self._proc, error=None, keep_claim=keep_claim
+        )
 
     async def _cancel_monitor(self) -> None:
         """Stop watching a worker's startup, if we still are."""
@@ -1516,7 +1525,11 @@ class ModelManager:
             logger.exception("startup monitor failed")
 
     async def _finalize(
-        self, handle: Optional[WorkerHandle], *, error: Optional[str]
+        self,
+        handle: Optional[WorkerHandle],
+        *,
+        error: Optional[str],
+        keep_claim: bool = False,
     ) -> None:
         """End a worker and clear the state that described it.
 
@@ -1549,7 +1562,14 @@ class ModelManager:
         # newer activation may already hold the claim, and releasing
         # here would hand the machine away while this supervisor still
         # has a worker coming up.
-        self._residency.release()
+        #
+        # Kept through a switch. Released here and taken back in
+        # `activate`, the claim was free for the instant between, and
+        # a peer arriving then got the machine after this supervisor
+        # had already evicted its model for the one it was switching
+        # to (`A2-LIFE-01`).
+        if not keep_claim:
+            self._residency.release()
         self._proc = None
         self._port = None
         self.active_id = None
