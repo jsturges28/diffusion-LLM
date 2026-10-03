@@ -42,9 +42,14 @@ import httpx
 import websockets
 from fastapi import (
     FastAPI,
+    Request,
     WebSocket,
     WebSocketDisconnect,
 )
+from fastapi.exception_handlers import (
+    request_validation_exception_handler,
+)
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
@@ -111,6 +116,7 @@ from src.inference.vision_geometry import (
 )
 from src.web import collections as collection_ops
 from src.web import run_store
+from src.web.save_limits import BodyLimit
 from src.web.data_root import (
     RESULTS_DIR_ENV,
     resolve_results_dir,
@@ -1686,6 +1692,9 @@ def _read_context_length(
 
 manager = ModelManager()
 app = FastAPI(title="Diffusion LLM Visualizer")
+# Ahead of every route, so a save past its ceiling is refused before
+# Starlette reads the body it would otherwise parse whole.
+app.add_middleware(BodyLimit)
 
 
 @app.on_event("startup")
@@ -2982,6 +2991,47 @@ def _render_run_gif(
             metadata.get("model_type", "diffusion")
         ),
     )
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_refusal(
+    request: Request, exc: RequestValidationError
+) -> Response:
+    """A refused save, in the shape the page reads one from.
+
+    FastAPI's own 422 carries a ``detail`` list and no ``message``,
+    which is the field the page shows, so every save refused for its
+    shape read as "Save failed: unknown". Other routes keep the
+    default.
+    """
+    if request.url.path != "/api/save":
+        return await request_validation_exception_handler(
+            request, exc
+        )
+    return JSONResponse(
+        status_code=422,
+        content={"success": False, "message": _first_problem(exc)},
+    )
+
+
+def _first_problem(exc: RequestValidationError) -> str:
+    """The first thing wrong with a request, in words.
+
+    Built from where and what, never from the offending input, which
+    for a run can be megabytes.
+    """
+    errors = exc.errors()
+    if not errors:
+        return "The save request was not valid."
+    first = errors[0]
+    where = ".".join(
+        str(part) for part in first.get("loc", ()) if part != "body"
+    )
+    reason = str(first.get("msg", "not valid"))
+    reason = reason.removeprefix("Value error, ")
+    if where:
+        return f"{where}: {reason}"
+    return reason
 
 
 @app.post("/api/save")
