@@ -19,6 +19,7 @@ import logging
 import os
 import platform
 import re
+import secrets
 import shutil
 import signal
 import socket
@@ -818,6 +819,11 @@ class ModelManager:
         # worker exactly the way the error message does. Zero means
         # nothing has ever been activated.
         self.activation_id: int = 0
+        # Drawn once per supervisor start. The activation number above
+        # counts from zero again after a restart, so on its own it
+        # would name a new worker the way it named an old one, and a
+        # page left open across the restart could not tell them apart.
+        self.instance: str = secrets.token_hex(4)
         self._proc: Optional[WorkerHandle] = None
         self._port: Optional[int] = None
         self._monitor_task: Optional[asyncio.Task] = None
@@ -894,6 +900,14 @@ class ModelManager:
         if self.active_id == model_id and self._alive():
             return "active"
         return "inactive"
+
+    def worker_identity(self) -> str:
+        """Which worker this supervisor is serving, named so that no
+        other activation, in this supervisor or a later start of it,
+        is named the same way (`A2-LIFE-03`)."""
+        assert self.activation_id > 0, "nothing has been activated"
+        assert self.instance, "the supervisor start has no name"
+        return f"{self.instance}:{self.activation_id}"
 
     def is_serving(self, model_id: str) -> bool:
         """Whether this model can answer a request right now.
@@ -2150,6 +2164,10 @@ async def websocket_proxy(browser: WebSocket) -> None:
                     "model": active_id,
                     "device": manager.active_device,
                     "operation": manager.activation_id,
+                    # What a page compares to notice that the same
+                    # model and device are now a different worker,
+                    # which holds none of the runs it is showing.
+                    "worker": manager.worker_identity(),
                 }
             )
             await _pipe(browser, worker)

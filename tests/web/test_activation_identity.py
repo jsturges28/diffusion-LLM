@@ -395,6 +395,69 @@ def test_the_socket_says_which_model_answered(
     assert first["operation"] == harness.manager.activation_id
 
 
+def test_the_socket_names_the_worker_it_reaches(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What a page compares to tell a replacement of the same model
+    from the worker it was talking to (`A2-LIFE-03`). Not the
+    operation alone, which counts from one again whenever the
+    supervisor restarts, while a page left open keeps reconnecting."""
+    _ready_worker(harness)
+    _stub_worker_socket(monkeypatch, [])
+
+    with harness.client.websocket_connect("/ws") as socket:
+        first = socket.receive_json()
+
+    assert first["worker"] == harness.manager.worker_identity()
+    assert first["worker"].endswith(
+        f":{harness.manager.activation_id}"
+    )
+
+
+def test_each_activation_is_a_different_worker(
+    harness: Harness,
+) -> None:
+    """Even of the same model: one loaded again holds none of the
+    runs the first one did."""
+    _ready_worker(harness)
+    first = harness.manager.worker_identity()
+
+    _activate(harness, "smollm3")
+    _activate(harness, "llada")
+
+    assert harness.manager.worker_identity() != first
+
+
+def _first_worker_of_a_supervisor() -> str:
+    """What one supervisor run names its first worker, the run then
+    ended the way a stopped supervisor ends, giving the machine up."""
+    made = Harness()
+    try:
+
+        async def scenario() -> str:
+            await made.manager.activate("llada", device="cuda")
+            assert made.manager.activation_id == 1
+            named = made.manager.worker_identity()
+            await made.manager.stop()
+            return named
+
+        return asyncio.run(scenario())
+    finally:
+        made.close()
+
+
+def test_a_restarted_supervisor_never_repeats_a_worker() -> None:
+    """Two supervisor runs, each on its first activation, which is
+    what a page left open across a restart sees one after the
+    other."""
+    before = _first_worker_of_a_supervisor()
+    after = _first_worker_of_a_supervisor()
+
+    assert before.endswith(":1")
+    assert after.endswith(":1")
+    assert before != after
+
+
 def test_the_handshake_precedes_worker_traffic(
     harness: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
