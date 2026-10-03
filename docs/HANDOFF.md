@@ -49,16 +49,16 @@ in an analytics suite.
 
 - **Supervisor**: `src/web/server.py` (runs in `.venv`). Serves the **Main
   Menu** at `/` and the generator at `/generate` (gated: redirects to `/` when
-  no model is active; `/index.html` 307s to `/generate`). Model Manager spawns
-  ONE worker at a time with a pre-flight VRAM check; proxies `/ws` (no
-  auto-boot: it errors and closes if no worker is active); serves analytics +
-  save + run-delete, and the Vision page's `/api/vision/*`, which needs no
-  worker; auto-stamps HTML asset URLs. `/api/models` also returns
-  `gpu_name` + `free_vram_gib` + per-model `fits` for the menu. Durable UI
-  state (`src/web/ui_state.py`) is served via `GET`/`PUT /api/ui-state`; the
-  GET reconciles both the "new run" cue and the Analytics collections against
-  existing run folders, so a deleted run can neither inflate the count nor
-  linger in a collection as an unopenable row.
+  no model is active; `/index.html` 307s to `/generate`). The Model Manager
+  (`src/web/model_manager.py`) spawns ONE worker at a time with a pre-flight
+  VRAM check; proxies `/ws` (no auto-boot: it errors and closes if no worker
+  is active); serves analytics + save + run-delete, and the Vision page's
+  `/api/vision/*`, which needs no worker; auto-stamps HTML asset URLs.
+  `/api/models` also returns `gpu_name` + `free_vram_gib` + per-model `fits`
+  for the menu. Durable UI state (`src/web/ui_state.py`) is served via
+  `GET`/`PUT /api/ui-state`; the GET reconciles both the "new run" cue and the
+  Analytics collections against existing run folders, so a deleted run can
+  neither inflate the count nor linger in a collection as an unopenable row.
 - **The data root is explicit.** `src/web/data_root.py` resolves one absolute
   directory at import, defaulting to `<repo>/results` and overridable by
   `--results-dir` or `DIFFUSION_LLM_RESULTS_DIR`. It does not depend on the

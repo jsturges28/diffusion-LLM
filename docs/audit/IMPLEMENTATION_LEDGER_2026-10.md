@@ -16,9 +16,9 @@ reasoning in `docs/ROADMAP.md`, and git history keeps the rest.
 **As of 2026-10-03**, Stage 1 is done, and so is every finding in Stage 2,
 cross-supervisor ownership. The report validates that stage as a whole with
 a two-supervisor run: the passes confirmed for items 310 to 314, 389 to 396
-and 400 to 404, plus item 405 for the shared run lock. The report's
-Sequencing section orders the rest, and its Combinations to avoid bind
-every pass.
+and 400 to 404, plus item 405 for the shared run lock, which is
+outstanding. Stage 3 has begun with `A2-ORG-01`. The report's Sequencing
+section orders the rest, and its Combinations to avoid bind every pass.
 
 ## How to work a finding
 
@@ -57,7 +57,7 @@ Decisions saying why.
 | A2-DATA-01 | 2 | done | `4027c22`, `1b63867`, `a1eac0d` | | |
 | A2-QUALITY-02 | 2 | done | `1a4fb18` | | |
 | A2-LIFE-03 | 2 | done | `5f42ac3`, `749ecc6` | 400 to 404 | |
-| A2-ORG-01 | 3 | ready | | | |
+| A2-ORG-01 | 3 | done | `ac7f0b7`, `0355477` | | |
 | A2-ORG-02 | 3 | blocked | | | stage 3 order, in one plan with `A2-DEPS-01` |
 | A2-DEPS-01 | 3 | blocked | | | stage 3 order, in one plan with `A2-ORG-02` |
 | A2-ORG-03 | 3 | ready | | | |
@@ -105,6 +105,10 @@ Each settled with the maintainer during remediation.
   rather than reloading the page, and so does a run that lost its
   connection, with its own reason. An open edit session closes as Exit does
   unless it holds a branch the page can still save.
+- `A2-ORG-01` moved the manager verbatim with the probes, lease text and
+  download checks it uses. The routes reach the shared helpers through the
+  module, so one patch reaches both callers, and those took public names
+  in a second commit.
 
 ## Open decisions
 
@@ -129,6 +133,5 @@ Not findings, and each its own slice when taken.
 ## Baselines
 
 At the audit on 2026-10-01: 2,456 Python tests, 816 browser tests, and no
-Ruff findings. On 2026-10-02, after the relay test and the worker lock:
-2,582 Python tests passing and 6 skipped, 902 browser tests, and still no
-Ruff findings.
+Ruff findings. On 2026-10-03, after the model manager move: 2,584 Python
+tests passing and 6 skipped, 902 browser tests, and still no Ruff findings.
