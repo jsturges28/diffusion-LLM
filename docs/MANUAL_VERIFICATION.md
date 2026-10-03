@@ -312,8 +312,8 @@ kept when these were written:
 - **408**: confirmed on 2026-10-03: Analytics through its frame and signal
   adapter, after the 2026-10 audit's `A2-ORG-04` moved those reads into
   `overlay_series.js`.
-- **409**: **outstanding**: every page's state and motion after the 2026-10
-  audit's `A2-ORG-05` split the services out of `overlays.js`.
+- **409**: confirmed on 2026-10-03: every page's state and motion after the
+  2026-10 audit's `A2-ORG-05` split the services out of `overlays.js`.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
