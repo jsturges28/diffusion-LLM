@@ -306,6 +306,9 @@ kept when these were written:
 - **406**: confirmed on 2026-10-03: each worker loading and every way out
   freeing the card, after the 2026-10 audit's `A2-DEPS-01` moved both apps
   to lifespan contexts. It was also that audit's measurement 9.
+- **407**: **outstanding**: the run snapshot through its codec, after the
+  2026-10 audit's `A2-ORG-03` moved its tiers and its reading of older
+  snapshots into `run_snapshot.js`.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -4694,3 +4697,31 @@ workers on the card, and it is the 2026-10 audit's measurement 9.
     - Start the desktop app again, load a model, generate, and close the
       window mid-generation. The worker ends and its VRAM returns in the
       same time.
+
+## The run snapshot through its codec
+
+From 2026-10-03 the generator's session snapshot is written and read by
+`run_snapshot.js` (`A2-ORG-03`). The page reads itself into one record,
+the codec chooses the storage tiers and reads older snapshots, and the
+page applies what comes back. The stored keys are unchanged. The round
+trips are automated against the DOM stub in
+`tests/web/static/run_snapshot.test.js`, `snapshot_budget.test.js` and
+`generator_candidates.test.js`; this is the same in a real engine with its
+real storage quota, and it overlaps 158, 346, 350, 392 and 404.
+
+407. **A run of each kind survives a trip away and back.** In the desktop
+    app, and then in the browser launcher:
+    - Generate with LLaDA at its defaults, go to Analytics without saving
+      and come back. The run is on screen, hovering opens the candidates
+      popover at each frame, and **Save** saves it.
+    - Use **Edit Frames**, **Resume to End** and **Confirm**, then take
+      the same trip. Past the edit frame the popover's pager still turns
+      between its Original and Edited pages, each with its own run's
+      candidates.
+    - Start a LLaDA run, press **Stop** mid-run, and take the trip. It
+      comes back stopped, with its frames, and **Save** records it as a
+      stopped run.
+    - Load SmolLM3, generate, and take the trip. The run comes back
+      whole, and **What If?** works on it.
+    - Do each again with a reload of the page in place of the trip to
+      Analytics. The same holds.

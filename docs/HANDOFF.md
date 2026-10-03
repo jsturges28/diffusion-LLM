@@ -141,8 +141,8 @@ What the first campaign changed that a newcomer trips over:
   signal declares its unit and the axes it varies over (`ROADMAP-03`).
 - **The generator's state has owners.** `run_frames.js` and `run_phases.js`
   refuse a frame family out of step and a phase move no button can make,
-  and pages open with their state inlined as `window.__BOOT__` rather than
-  fetching it (`ORG-02`).
+  `run_snapshot.js` alone encodes and decodes the session snapshot, and pages
+  open with their state inlined as `window.__BOOT__` (`ORG-02`, `A2-ORG-03`).
 - **Saving is explicit.** Opening Edit Frames or What If writes nothing.
   Three things save: the Save button, Confirm, and the rescue when another
   window takes the model away, each published under the run token so a

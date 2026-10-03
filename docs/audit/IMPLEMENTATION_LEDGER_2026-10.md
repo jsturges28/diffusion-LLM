@@ -17,8 +17,8 @@ reasoning in `docs/ROADMAP.md`, and git history keeps the rest.
 ownership, was validated as a whole by the two-supervisor passes confirmed
 for items 310 to 314, 389 to 396, 400 to 404 and 405. Stage 3, extracting
 owners, is under way: `A2-ORG-01`, `A2-ORG-02` and `A2-DEPS-01` are done,
-the last confirmed on hardware with item 406. The report's Sequencing
-section orders the rest, and its Combinations to avoid bind every pass.
+and `A2-ORG-03` waits on item 407. The report's Sequencing section orders
+the rest, and its Combinations to avoid bind every pass.
 
 ## How to work a finding
 
@@ -60,7 +60,7 @@ Decisions saying why.
 | A2-ORG-01 | 3 | done | `ac7f0b7`, `0355477` | | |
 | A2-ORG-02 | 3 | done | `c3c007f` | | |
 | A2-DEPS-01 | 3 | done | `2a6e87d` | 406 | |
-| A2-ORG-03 | 3 | ready | | | |
+| A2-ORG-03 | 3 | needs hardware | `a4ff5e5` | 407 | |
 | A2-ORG-04 | 3 | blocked | | | stage 3 order |
 | A2-ORG-05 | 3 | blocked | | | `A2-ORG-04` |
 
@@ -113,6 +113,9 @@ Each settled with the maintainer during remediation.
   with no re-export, so the launcher and the tests import it from there.
   The resource pump stays in `worker_base.py` with the measurement it
   reads, which is where the tests' patches reach it.
+- `A2-ORG-03`'s codec is `run_snapshot.js`. Its first cut leaves the storage
+  calls and every write to page globals and the DOM in `app.js`, and keeps
+  the stored keys and their order, so an older snapshot still restores.
 
 ## Open decisions
 
@@ -139,9 +142,8 @@ Not findings, and each its own slice when taken.
 ## Baselines
 
 At the audit on 2026-10-01: 2,456 Python tests, 816 browser tests, and no
-Ruff findings. On 2026-10-03, after the model manager move: 2,584 Python
-tests passing and 6 skipped, 902 browser tests, and still no Ruff findings.
-After the worker shell and lifespan moves the same day: 2,592 passing and 6
-skipped, 902 browser tests, no Ruff findings, and 34 warnings where there
-had been 92. One of the 34 is torch failing to start CUDA in the agent
-sandbox, which a machine with a working GPU does not raise.
+Ruff findings. On 2026-10-03, after the run snapshot codec: 2,598 Python
+tests passing and 6 skipped, 925 browser tests, no Ruff findings, and 34
+warnings, down from 92 before the lifespan move. One of the 34 is torch
+failing to start CUDA in the agent sandbox, which a machine with a working
+GPU does not raise.
