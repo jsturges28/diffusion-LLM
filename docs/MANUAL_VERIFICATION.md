@@ -314,8 +314,9 @@ kept when these were written:
   `overlay_series.js`.
 - **409**: confirmed on 2026-10-03: every page's state and motion after the
   2026-10 audit's `A2-ORG-05` split the services out of `overlays.js`.
-- **410**: **outstanding**: Analytics' line charts after the 2026-10 audit's
-  `A2-ORG-04` moved them into a controller of their own, `line_charts.js`.
+- **410**: confirmed on 2026-10-03: Analytics' line charts through their
+  controller, after the 2026-10 audit's `A2-ORG-04` moved them into
+  `line_charts.js`.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
