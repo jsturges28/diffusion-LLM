@@ -33,7 +33,7 @@ from starlette.testclient import TestClient
 
 from src.analytics.metrics import load_run_frames
 from src.backends.protocol import CANDIDATE_BUDGET_RECORDS
-from src.backends.registry import LLADA
+from src.backends.registry import LLADA, run_bounds
 from src.web import server
 from src.web.server import (
     RemaskEdit,
@@ -418,12 +418,18 @@ def test_candidates_no_reader_could_place_are_refused(
         _diffusion_request(**overrides)
 
 
-def _one_frame_of(positions: int) -> Dict[str, Any]:
-    row = {"id": 1, "t": "a", "p": 1.0}
+def _frames_holding(positions: int) -> Dict[str, Any]:
+    """A capture of ``positions`` sets in all, over as many frames as
+    it takes when no frame can be wider than a LLaDA canvas."""
+    entry = {"h": 1, "c": [{"id": 1, "t": "a", "p": 1.0}]}
+    canvas = run_bounds(LLADA.id).frame_positions_max
+    sets = []
+    for start in range(0, positions, canvas):
+        sets.append([entry] * min(canvas, positions - start))
     return {
         "k": 5,
-        "frames": [1],
-        "sets": [[{"h": 1, "c": [row]}] * positions],
+        "frames": list(range(1, len(sets) + 1)),
+        "sets": sets,
     }
 
 
@@ -433,7 +439,7 @@ def test_candidates_at_the_budget_are_accepted() -> None:
     fits."""
     positions = CANDIDATE_BUDGET_RECORDS // 5
 
-    request = _diffusion_request(**_one_frame_of(positions))
+    request = _diffusion_request(**_frames_holding(positions))
 
     assert request.candidates is not None
 
@@ -442,7 +448,7 @@ def test_candidates_past_the_budget_are_refused() -> None:
     positions = CANDIDATE_BUDGET_RECORDS // 5 + 1
 
     with pytest.raises(ValidationError, match="budget"):
-        _diffusion_request(**_one_frame_of(positions))
+        _diffusion_request(**_frames_holding(positions))
 
 
 def test_a_candidates_file_that_is_not_an_object_is_rejected(

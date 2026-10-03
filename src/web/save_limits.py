@@ -4,9 +4,11 @@ A save is the one request here that carries a whole run, and nothing
 bounded it: Starlette reads and parses the complete JSON before any
 field is validated, so a single crafted POST could allocate far beyond
 any run the app can make, and write as much under the results root
-(`A2-TRUST-02`). The limits a parsed save answers to field by field
-live with ``SaveRunRequest``; this is the layer in front of them,
-which refuses on size alone, before the body is held in memory.
+(`A2-TRUST-02`). This is the layer in front of the field checks,
+which refuses on size alone, before the body is held in memory. The
+caps below it hold whichever model made the run; the bounds that
+depend on the model are read off its sliders by the registry, and
+``SaveRunRequest`` applies both.
 
 Its own module for the same reason as ``model_lease``: it is small, it
 is policy, and nothing here needs the server.
@@ -45,6 +47,18 @@ BODY_CHUNKS_MAX = 1 << 20
 assert SAVE_BODY_BYTES_MAX > 141 * MIB, (
     "the ceiling must hold the largest run the sliders allow"
 )
+
+# The longest display text one token or candidate carries. No
+# vocabulary entry approaches it; the typed-token preview stops at
+# 200 characters for the same reason.
+TOKEN_TEXT_CHARS_MAX = 256
+
+# A model id, a run token or a run id, all short strings made here.
+IDENTIFIER_CHARS_MAX = 128
+
+# The blocks a save carries through as they came, its parameters and
+# the worker's provenance, measured as JSON. A few KiB in practice.
+FREEFORM_JSON_CHARS_MAX = 64 * 1024
 
 
 class BodyLimit:

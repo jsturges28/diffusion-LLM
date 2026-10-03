@@ -8,6 +8,7 @@ worker venv never imports another model's dependencies.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Dict, Tuple
 
 from src.backends.environments import environment_names
@@ -640,3 +641,120 @@ for _model in REGISTRY.values():
         f"{_model.id} runs in {_model.environment!r}, which"
         " pyproject.toml does not declare"
     )
+
+
+# -- How large one run can be --
+#
+# What a save is held to (`A2-TRUST-02`). The tops of a model's own
+# sliders are the product's limit for one run, so its bounds are read
+# off them rather than written out: widening a slider widens what a
+# save of that model may carry, and a test holds the save's byte
+# ceiling above the largest run any model can make.
+
+
+@dataclass(frozen=True)
+class RunBounds:
+    """The most one run of a model can hold, field by field."""
+
+    # Frames the run records. An edited run's pre-edit layer is held
+    # to the same count, being another run of the same model.
+    frames_max: int
+    # Positions the run generates, across every canvas.
+    positions_max: int
+    # Positions one frame shows: one canvas, on a diffusion model.
+    frame_positions_max: int
+
+
+# DiffusionGemma decodes canvas by canvas, each this many tokens, as
+# its Max Tokens help says. Must match the checkpoint's own
+# ``canvas_length``, which only the worker reads.
+DGEMMA_CANVAS_TOKENS = 256
+
+
+def _slider_top(model: ModelInfo, name: str) -> int:
+    """The most ``name`` can be set to on any device: the top of its
+    experimental range, or of an override's where that is higher."""
+    specs = [spec for spec in model.param_specs if spec.name == name]
+    assert len(specs) == 1, f"{model.id} has no one {name} slider"
+    spec = specs[0]
+    assert spec.experimental is not None, (
+        f"{model.id}'s {name} has no experimental range"
+    )
+    tops = [spec.experimental[1]]
+    for override in (spec.overrides or {}).values():
+        if override.experimental is not None:
+            tops.append(override.experimental[1])
+    return int(max(tops))
+
+
+def _canvas_bounds(*, steps: int, positions: int) -> RunBounds:
+    """One canvas denoised: the opening frame, then one per step."""
+    assert steps >= 1
+    assert positions >= 1
+    return RunBounds(
+        frames_max=steps + 1,
+        positions_max=positions,
+        frame_positions_max=positions,
+    )
+
+
+def _canvases_bounds(
+    *, steps: int, positions: int, canvas: int
+) -> RunBounds:
+    """Canvas after canvas: a draft per step, then the commit."""
+    assert steps >= 1
+    assert canvas >= 1
+    canvases = -(-positions // canvas)
+    return RunBounds(
+        frames_max=canvases * (steps + 1),
+        positions_max=canvases * canvas,
+        frame_positions_max=canvas,
+    )
+
+
+def _append_bounds(*, positions: int) -> RunBounds:
+    """A frame per position, the last one holding the whole run."""
+    assert positions >= 1
+    return RunBounds(
+        frames_max=positions,
+        positions_max=positions,
+        frame_positions_max=positions,
+    )
+
+
+RUN_BOUNDS: Dict[str, RunBounds] = {
+    LLADA.id: _canvas_bounds(
+        steps=_slider_top(LLADA, "steps"),
+        positions=_slider_top(LLADA, "gen_length"),
+    ),
+    DGEMMA.id: _canvases_bounds(
+        steps=_slider_top(DGEMMA, "max_denoising_steps"),
+        positions=_slider_top(DGEMMA, "max_new_tokens"),
+        canvas=DGEMMA_CANVAS_TOKENS,
+    ),
+    SMOLLM3.id: _append_bounds(
+        positions=_slider_top(SMOLLM3, "max_new_tokens"),
+    ),
+    MAMBA3.id: _append_bounds(
+        positions=_slider_top(MAMBA3, "max_new_tokens"),
+    ),
+}
+
+assert set(RUN_BOUNDS) == set(REGISTRY), (
+    "every model says how large one run of it can be"
+)
+
+# For a model this build does not register, which a save can name
+# when it was made under another build: the most any model allows.
+RUN_BOUNDS_WIDEST = RunBounds(
+    frames_max=max(b.frames_max for b in RUN_BOUNDS.values()),
+    positions_max=max(b.positions_max for b in RUN_BOUNDS.values()),
+    frame_positions_max=max(
+        b.frame_positions_max for b in RUN_BOUNDS.values()
+    ),
+)
+
+
+def run_bounds(model_id: str) -> RunBounds:
+    """How large one run of ``model_id`` can be."""
+    return RUN_BOUNDS.get(model_id, RUN_BOUNDS_WIDEST)

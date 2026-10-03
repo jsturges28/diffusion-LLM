@@ -35,6 +35,7 @@ from typing import (
     List,
     Optional,
     Set,
+    Sized,
     Tuple,
 )
 
@@ -81,9 +82,11 @@ from src.analytics.metrics import (
 )
 from src.backends.protocol import (
     CANDIDATE_BUDGET_RECORDS,
+    CANDIDATES_PER_POSITION,
     ERROR_NO_MODEL_ACTIVE,
     ERROR_SCOPE_FATAL,
     ERROR_WORKER_UNREACHABLE,
+    PROMPT_CHARS_MAX,
     SAVED_MODEL_TYPE_AUTOREGRESSIVE,
     SAVED_MODEL_TYPE_DIFFUSION,
     HubFiles,
@@ -99,7 +102,11 @@ from src.backends.environments import (
     lock_for,
 )
 from src.backends.params import ParamValue, coerce, default_of
-from src.backends.registry import DEFAULT_MODEL, REGISTRY
+from src.backends.registry import (
+    DEFAULT_MODEL,
+    REGISTRY,
+    run_bounds,
+)
 from src.inference.render_gif import history_to_gif
 from src.inference.vision_encoders import (
     EncoderUnavailable,
@@ -116,7 +123,12 @@ from src.inference.vision_geometry import (
 )
 from src.web import collections as collection_ops
 from src.web import run_store
-from src.web.save_limits import BodyLimit
+from src.web.save_limits import (
+    FREEFORM_JSON_CHARS_MAX,
+    IDENTIFIER_CHARS_MAX,
+    TOKEN_TEXT_CHARS_MAX,
+    BodyLimit,
+)
 from src.web.data_root import (
     RESULTS_DIR_ENV,
     resolve_results_dir,
@@ -2189,7 +2201,7 @@ class TokenRecord(BaseModel):
 
     model_config = STRICT
 
-    t: str
+    t: str = Field(max_length=TOKEN_TEXT_CHARS_MAX)
     m: bool
     id: int
     c: Optional[float] = None
@@ -2213,7 +2225,7 @@ class TokenAlternative(BaseModel):
     model_config = STRICT
 
     id: int
-    t: str
+    t: str = Field(max_length=TOKEN_TEXT_CHARS_MAX)
     p: float
     rank: Optional[int] = None
 
@@ -2386,10 +2398,20 @@ class RunProvenance(BaseModel):
 
 
 class SaveRunRequest(BaseModel):
+    """One run, sent whole to be saved.
+
+    Held to what one run of its model can be (`A2-TRUST-02`): text
+    fields to their caps here, and every list to the bounds the
+    registry reads off the model's sliders, once the fields have
+    parsed. A save past either is a 422 naming the field.
+    """
+
     model_config = STRICT
 
-    model: str = DEFAULT_MODEL
-    prompt: str
+    model: str = Field(
+        default=DEFAULT_MODEL, max_length=IDENTIFIER_CHARS_MAX
+    )
+    prompt: str = Field(max_length=PROMPT_CHARS_MAX)
     params: Dict[str, Any] = Field(default_factory=dict)
     # One of two ways to describe the same frames. ``frames`` plus
     # ``frame_tokens`` is the per-frame form a snapshot model sends;
@@ -2448,12 +2470,16 @@ class SaveRunRequest(BaseModel):
     # frame (`LIFE-01`). The store publishes under it, so a save that
     # was already made once lands on the run it made rather than on a
     # second copy. Absent for a run whose snapshot predates it.
-    run_token: Optional[str] = None
+    run_token: Optional[str] = Field(
+        default=None, max_length=IDENTIFIER_CHARS_MAX
+    )
     # When set, replace this existing run instead of creating a new
     # one. Used when a saved run is edited-and-resumed: the edited
     # (bundled) run replaces its pre-edit original so it is a single
     # Analytics row rather than two.
-    run_id: Optional[str] = None
+    run_id: Optional[str] = Field(
+        default=None, max_length=IDENTIFIER_CHARS_MAX
+    )
     # The revision the client believes it is replacing, echoed from
     # the save that produced it. The replacement is refused if the run
     # has moved on since, so two windows editing one run cannot have
@@ -2471,6 +2497,11 @@ class SaveRunRequest(BaseModel):
     # Defaulted rather than optional because absent and false mean
     # the same thing here: only a run that says it was stopped was.
     partial: bool = False
+
+    @model_validator(mode="after")
+    def _within_bounds(self) -> "SaveRunRequest":
+        _check_run_bounds(self)
+        return self
 
     def normalized(self) -> "SaveRunRequest":
         """This request with its per-frame text filled in.
@@ -2519,6 +2550,148 @@ class SaveRunRequest(BaseModel):
             "one frame per position, or the run is not the run"
         )
         return expanded
+
+
+# A field as a refusal names it, and what it holds, if anything.
+CountedField = Tuple[str, Optional[Sized]]
+
+
+def _check_run_bounds(body: SaveRunRequest) -> None:
+    """Refuse a save holding more than one run of its model can.
+
+    Counted, not cross-checked: whether the frames agree with each
+    other is checked later, once the run is known to be one the app
+    could have made. A ValueError, which the save reports as a 422
+    naming the field.
+    """
+    bounds = run_bounds(body.model)
+    run_text = bounds.positions_max * TOKEN_TEXT_CHARS_MAX
+    frame_text = bounds.frame_positions_max * TOKEN_TEXT_CHARS_MAX
+    checks: Tuple[Tuple[List[CountedField], int], ...] = (
+        (_per_frame(body), bounds.frames_max),
+        (_per_position(body), bounds.positions_max),
+        (_per_canvas(body), bounds.frame_positions_max),
+        (_per_alternative_set(body), CANDIDATES_PER_POSITION + 1),
+        ([("final_text", body.final_text)], run_text),
+        (_frame_texts(body), frame_text),
+        (_carried_through(body), FREEFORM_JSON_CHARS_MAX),
+    )
+    for fields, limit in checks:
+        _check_counts(fields=fields, limit=limit, model=body.model)
+
+
+def _check_counts(
+    *, fields: List[CountedField], limit: int, model: str
+) -> None:
+    """Refuse the first of ``fields`` holding more than ``limit``."""
+    assert limit >= 1, "every bound admits something"
+    for name, values in fields:
+        if values is None:
+            continue
+        count = len(values)
+        if count > limit:
+            raise ValueError(
+                f"{name} holds {count:,}, past the {limit:,} one"
+                f" {model} run can hold"
+            )
+
+
+def _per_frame(body: SaveRunRequest) -> List[CountedField]:
+    """Everything kept one per frame, the pre-edit layer's too."""
+    fields: List[CountedField] = [
+        ("frames", body.frames),
+        ("frame_tokens", body.frame_tokens),
+        ("original_frame_tokens", body.original_frame_tokens),
+        ("per_frame_elapsed", body.per_frame_elapsed),
+        (
+            "original_per_frame_elapsed",
+            body.original_per_frame_elapsed,
+        ),
+        ("mean_conf", body.mean_conf),
+        ("original_mean_conf", body.original_mean_conf),
+        ("canvas_index", body.canvas_index),
+        ("remask_edits", body.remask_edits),
+    ]
+    # A capture's record budget bounds its candidates but not its
+    # frames, and a capture of empty frames costs nothing against it.
+    for name, capture in _captures(body):
+        fields.append((f"{name}.frames", capture.frames))
+        fields.append((f"{name}.segments", capture.segments))
+    return fields
+
+
+def _per_position(body: SaveRunRequest) -> List[CountedField]:
+    """Everything kept one per position, across the whole run."""
+    return [
+        ("frame_positions", body.frame_positions),
+        ("original_frame_positions", body.original_frame_positions),
+        ("alternatives", body.alternatives),
+        ("original_alternatives", body.original_alternatives),
+    ]
+
+
+def _per_canvas(body: SaveRunRequest) -> List[CountedField]:
+    """What each frame holds: one canvas, on a diffusion run."""
+    fields: List[CountedField] = []
+    layers = (
+        ("frame_tokens", body.frame_tokens),
+        ("original_frame_tokens", body.original_frame_tokens),
+    )
+    for name, layer in layers:
+        for index, tokens in enumerate(layer or []):
+            fields.append((f"{name}[{index}]", tokens))
+    for index, edit in enumerate(body.remask_edits or []):
+        field = f"remask_edits[{index}]"
+        fields.append((field, edit.token_positions))
+    for name, capture in _captures(body):
+        for index, sets in enumerate(capture.sets):
+            fields.append((f"{name}.sets[{index}]", sets))
+    return fields
+
+
+def _per_alternative_set(body: SaveRunRequest) -> List[CountedField]:
+    """Each position's alternatives: the captured candidates, then the
+    committed token where they missed it, as the sampler adds it."""
+    fields: List[CountedField] = []
+    layers = (
+        ("alternatives", body.alternatives),
+        ("original_alternatives", body.original_alternatives),
+    )
+    for name, layer in layers:
+        for index, entries in enumerate(layer or []):
+            fields.append((f"{name}[{index}]", entries))
+    return fields
+
+
+def _frame_texts(body: SaveRunRequest) -> List[CountedField]:
+    return [
+        (f"frames[{index}]", text)
+        for index, text in enumerate(body.frames or [])
+    ]
+
+
+def _carried_through(body: SaveRunRequest) -> List[CountedField]:
+    """The blocks a save keeps as they came, measured as JSON."""
+    provenance: Optional[str] = None
+    if body.provenance is not None:
+        provenance = body.provenance.model_dump_json()
+    return [
+        ("params", json.dumps(body.params)),
+        ("provenance", provenance),
+    ]
+
+
+def _captures(
+    body: SaveRunRequest,
+) -> List[Tuple[str, FrameCandidates]]:
+    captures: List[Tuple[str, FrameCandidates]] = []
+    if body.candidates is not None:
+        captures.append(("candidates", body.candidates))
+    if body.original_candidates is not None:
+        captures.append(
+            ("original_candidates", body.original_candidates)
+        )
+    return captures
 
 
 def _display_run_path(run_dir: Path) -> str:
