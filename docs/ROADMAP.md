@@ -1856,7 +1856,7 @@ are expensive to rediscover and cheap to store.
   Settings, the analytics "new run" cue, prompt history, and the generate
   teaser now persist in `results/ui_state.json` via `GET`/`PUT /api/ui-state`
   (`src/web/ui_state.py`), hydrated into localStorage on boot (`persistHydrate`
-  / `persistSet` in `overlays.js`). This fixes desktop-app persistence, which
+  / `persistSet` in `persist.js`). This fixes desktop-app persistence, which
   the QtWebEngine profile keyed by the launcher's varying window origin/port; it
   also unifies state across the browser and desktop entry points. The cue is
   reconciled against existing runs on read, so a deleted run cannot inflate the

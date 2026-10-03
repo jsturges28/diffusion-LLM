@@ -79,11 +79,11 @@ in an analytics suite.
   `reference/llada/` behind a differential test (`ORG-03`).
 - **Frontend** (shared, schema-driven, no framework or bundler):
   `src/web/static/` holds `menu`, `index`/`app`, `analytics`, `settings` and
-  `vision`, plus `overlays.js` for the shared color ramps, the layered-diff
-  builder, the "new run" registry and the durable-UI-state layer. Analytics
-  reads a run's frames and signals through `overlay_series.js`; its detail and
-  compare fetches are fenced by `detail_requests.js`. Chart libraries and the
-  webfont are vendored under `static/vendor/`, so every page works offline.
+  `vision`, plus `overlays.js` for the shared visuals and settings model and
+  `persist.js` for durable UI state; a page loads only the modules it calls.
+  Analytics reads runs through `overlay_series.js`; `detail_requests.js` fences
+  its detail and compare fetches. Chart libraries and the webfont are vendored
+  under `static/vendor/`, so every page works offline.
 - **Analytics reads** are split by cost: `/api/analytics/runs` carries only
   what the table draws (about 326 bytes a run), and the prompt, parameters
   and per-frame arrays are fetched per run from `/runs/{id}/metadata` when

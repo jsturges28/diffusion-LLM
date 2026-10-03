@@ -17,9 +17,9 @@ reasoning in `docs/ROADMAP.md`, and git history keeps the rest.
 ownership, was validated as a whole by the two-supervisor passes confirmed
 for items 310 to 314, 389 to 396, 400 to 404 and 405. Stage 3, extracting
 owners, is under way: `A2-ORG-01`, `A2-ORG-02`, `A2-DEPS-01` and
-`A2-ORG-03` are done, and `A2-ORG-04`'s first slice is confirmed on
-hardware with item 408. The report's Sequencing section orders the rest,
-and its Combinations to avoid bind every pass.
+`A2-ORG-03` are done, `A2-ORG-04`'s first slice is confirmed with item 408,
+and `A2-ORG-05` waits on item 409. The report's Sequencing section orders
+the rest, and its Combinations to avoid bind every pass.
 
 ## How to work a finding
 
@@ -63,7 +63,7 @@ Decisions saying why.
 | A2-DEPS-01 | 3 | done | `2a6e87d` | 406 | |
 | A2-ORG-03 | 3 | done | `a4ff5e5` | 407 | |
 | A2-ORG-04 | 3 | ready | `64281e2`, `548f022` | 408 | |
-| A2-ORG-05 | 3 | ready | | | |
+| A2-ORG-05 | 3 | needs hardware | `23cc75a`, `d13cdc2` | 409 | |
 
 ## Decisions
 
@@ -108,14 +108,15 @@ Each settled with the maintainer during remediation.
   unless it holds a branch the page can still save.
 - `A2-ORG-01` moved the manager verbatim. The routes reach its shared
   helpers through the module, so one patch reaches both callers.
-- `A2-ORG-02` moved the worker's socket shell into `worker_app.py` with no
-  re-export. The resource pump stays in `worker_base.py`, where the tests'
-  patches reach it.
+- `A2-ORG-02` moved the socket shell into `worker_app.py`, with no re-export;
+  the resource pump stays in `worker_base.py`, where the tests patch it.
 - `A2-ORG-03`'s codec is `run_snapshot.js`. Storage and every write to page
   state stay in `app.js`, and the stored keys are unchanged.
 - `A2-ORG-04` is taken in slices. The first gave every page one script list
   in the DOM stub, and moved Analytics' frame and signal reads into
   `overlay_series.js`; the chart and token-viewer controllers remain.
+- `A2-ORG-05` gave persistence, activation progress and reduced motion
+  modules of their own; the settings model stays with the glow code.
 
 ## Open decisions
 
@@ -142,8 +143,8 @@ Not findings, and each its own slice when taken.
 ## Baselines
 
 At the audit on 2026-10-01: 2,456 Python tests, 816 browser tests, and no
-Ruff findings. On 2026-10-03, after `A2-ORG-04`'s first slice: 2,611 Python
-tests passing and 6 skipped, 940 browser tests, no Ruff findings, and 34
+Ruff findings. On 2026-10-03, after `A2-ORG-05`: 2,641 Python tests
+passing and 6 skipped, 945 browser tests, no Ruff findings, and 34
 warnings, down from 92 before the lifespan move. One of the 34 is torch
 failing to start CUDA in the agent sandbox, which a machine with a working
 GPU does not raise.

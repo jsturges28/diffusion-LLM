@@ -312,6 +312,8 @@ kept when these were written:
 - **408**: confirmed on 2026-10-03: Analytics through its frame and signal
   adapter, after the 2026-10 audit's `A2-ORG-04` moved those reads into
   `overlay_series.js`.
+- **409**: **outstanding**: every page's state and motion after the 2026-10
+  audit's `A2-ORG-05` split the services out of `overlays.js`.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -4751,3 +4753,31 @@ this is the page in a real engine, and it overlaps 385 to 388.
     - Open a Mamba-3 run and turn on the Forgetting overlay. The tokens
       are colored by how much each one erased from the state.
     - Compare two runs. The compare panel draws both.
+
+## The pages' services, apart from the visual code
+
+From 2026-10-03 `overlays.js` holds the visual code and the settings
+model, and nothing else (`A2-ORG-05`). Durable UI state, the new-runs
+registry and the last-run key are `persist.js`, activation progress is
+`activation_progress.js`, and the reduced-motion check is
+`reduced_motion.js`. Each page loads only the modules it calls, which
+`tests/web/test_page_services.py` holds it to, so the menu and Vision
+load no `overlays.js`. This is the split in a real engine and across
+restarts.
+
+409. **Every page keeps its state and its motion.** In the desktop app,
+    and then in the browser launcher:
+    - On the Main Menu, load a model. The activation bar sweeps, then
+      fills to Ready. With reduced motion forced (see *Forcing reduced
+      motion*), each model's description and the Loading label appear
+      whole instead of resolving out of block glyphs.
+    - Save a run in the generator and go back to the menu. Its
+      Analytics link counts the run as new.
+    - Open Analytics. The run is marked new, and opening it clears the
+      mark there and on the menu.
+    - In Settings, move a glow slider. The preview follows it. Quit the
+      app and start it again, and the change is still there.
+    - Move the overlay drawer on the generator and on Analytics, and
+      the download toast's corner if one shows. After a restart, each is
+      where it was left.
+    - Open Vision and choose an image. It draws as it did.
