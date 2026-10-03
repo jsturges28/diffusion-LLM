@@ -15,8 +15,10 @@ reasoning in `docs/ROADMAP.md`, and git history keeps the rest.
 
 **As of 2026-10-03**, Stage 1 is done, and so is every finding in Stage 2,
 cross-supervisor ownership. The report validates that stage as a whole with
-a two-supervisor run before Stage 3 begins. The report's Sequencing section
-orders the rest, and its Combinations to avoid bind every pass.
+a two-supervisor run: the passes confirmed for items 310 to 314, 389 to 396
+and 400 to 404, plus item 405 for the shared run lock. The report's
+Sequencing section orders the rest, and its Combinations to avoid bind
+every pass.
 
 ## How to work a finding
 

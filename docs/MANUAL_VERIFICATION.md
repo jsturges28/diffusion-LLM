@@ -299,6 +299,10 @@ kept when these were written:
   connection. Each locks its edit tools in place with its reason, an
   open edit session closes unless it awaits Confirm, and a trip to
   Analytics with nothing reloaded leaves a run editable.
+- **405**: **outstanding.** Two launchers sharing saved runs, from the
+  2026-10 audit's `A2-DATA-01`, and the last of its Stage 2 validation:
+  an edit confirmed after the other launcher deleted its run saves as a
+  run of its own.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -4635,3 +4639,26 @@ hardware are in `tests/web/static/generator_run_lock.test.js`,
 404. **A trip to Analytics with nothing reloaded.** Finish a run, go to
     Analytics and back with no other window touching the model.
     **Edit Frames** works, and a resume from it runs.
+
+## Two launchers sharing saved runs
+
+From 2026-10-02 saving and deleting a run take one lock in the data
+root that every launcher shares (`A2-DATA-01`), and a save whose run
+was deleted meanwhile becomes a run of its own. Its races are
+automated with real processes in `tests/web/test_run_store.py`. This
+is the hand check across two launchers, and with the passes already
+confirmed for 310 to 314, 389 to 396 and 400 to 404 it is the 2026-10
+audit's Stage 2 validation.
+
+405. **An edit confirmed after the other launcher deleted its run.**
+    Start the browser launcher (`.venv/bin/python main.py`, port 8000)
+    and the desktop app (`.venv/bin/python desktop.py`) on the same
+    `results/` folder, and load a model in the browser one.
+    - In the browser launcher, generate a run, save it, open **Edit
+      Frames** (**What If?** on SmolLM3), and take the edit as far as
+      **Confirm**.
+    - In the desktop app's Analytics, delete that run.
+    - Back in the browser launcher, click **Confirm**. It saves with no
+      error, as a run of its own, and the deleted run does not return.
+    - Refresh Analytics in both launchers. They list the same runs, the
+      edited one included.
