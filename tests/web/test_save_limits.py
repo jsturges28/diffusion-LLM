@@ -38,7 +38,7 @@ from src.backends.protocol import (
     PROMPT_CHARS_MAX,
 )
 from src.backends.registry import REGISTRY, RunBounds, run_bounds
-from src.web import save_limits, server
+from src.web import run_store, save_limits, server
 
 # Small enough that a body past it costs nothing to build, large
 # enough that an ordinary short run fits beneath it.
@@ -101,9 +101,9 @@ def _written(results: Path) -> list:
 
 
 def _published(results: Path) -> list:
-    return [
-        name for name in _written(results) if not name.startswith(".")
-    ]
+    """The runs a save published, counted as the store counts them,
+    since the root also holds the store's own lock and scratch."""
+    return sorted(run_store.list_run_ids(results))
 
 
 # -- the ceiling, before anything is parsed --

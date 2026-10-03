@@ -7,7 +7,8 @@ copies of the same traversal guard existed and a fourth call site had
 none. This module is the one place that decides what a run directory
 is and how one comes into or goes out of existence.
 
-**It imports only the standard library, deliberately.** No FastAPI, no
+**It imports only the standard library, deliberately**, and the
+data-root lock, which is held to the same rule. No FastAPI, no
 torch, no Pydantic. That is not tidiness: it is what lets the tests
 race publication in threads, inject write failures, and check every
 traversal case without starting an app or loading a model. A test
@@ -28,12 +29,13 @@ from __future__ import annotations
 
 import json
 import shutil
-import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
+
+from src.web.data_root_lock import DataRootLock
 
 # The file whose presence makes a directory a run. Every reader in the
 # app already treats a folder without it as not-a-run.
@@ -418,7 +420,7 @@ def save(
     # the same shape as the revision race below. Creates serialise
     # too as a result, which costs nothing: a save is a person
     # pressing a button.
-    with _PUBLISH_LOCK:
+    with _PUBLISH_LOCK.held(root):
         target = run_id
         published = find_run_by_token(root, run_token or "")
         if published is not None:
@@ -434,12 +436,14 @@ def save(
         )
 
 
-# Guards resolve-identity-then-publish, and within that
-# read-revision-then-publish. In-process only, which is the right
-# scope today because one supervisor owns the data root; `LIFE-05` is
-# where a second one becomes possible, and `ui_state.py` carries the
-# interprocess pattern to copy if it ever does.
-_PUBLISH_LOCK = threading.Lock()
+# Guards resolve-identity-then-publish, within that
+# read-revision-then-publish, and the rename that deletes a run. Held
+# through a sidecar in the data root, because every supervisor using
+# that root must take the same one: the browser launcher and the
+# desktop app are two of them, and a lock that lived in one process
+# let both make a run for one generation, or both replace one
+# revision with the later silently winning (`A2-DATA-01`).
+_PUBLISH_LOCK = DataRootLock("runs.lock")
 
 
 def _publish_new(
@@ -679,13 +683,22 @@ def delete(root: Path, run_id: str) -> None:
     concurrent read finds either a whole run or nothing at all. Only
     then is the content removed, which is the slow part and the part
     that used to happen in place.
+
+    The rename holds the publication lock, so no save is part way
+    through replacing the run when it goes: one that began first
+    finishes and is then deleted with the run, and one that begins
+    after finds the run gone. Without it, a replacement in flight
+    recreated the folder the delete had just removed. The removal
+    runs after the lock is released, since nothing can reach the
+    renamed copy.
     """
-    run_dir = resolve_run_dir(root, run_id)
-    trash_root = root / TRASH_DIR_NAME
-    trash_root.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
-    condemned = trash_root / f"{run_id}-{stamp}"
-    run_dir.replace(condemned)
+    with _PUBLISH_LOCK.held(root):
+        run_dir = resolve_run_dir(root, run_id)
+        trash_root = root / TRASH_DIR_NAME
+        trash_root.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
+        condemned = trash_root / f"{run_id}-{stamp}"
+        run_dir.replace(condemned)
     shutil.rmtree(condemned, ignore_errors=True)
 
 

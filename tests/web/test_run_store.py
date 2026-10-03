@@ -1,11 +1,12 @@
 """Tests for the module that owns the saved-run directory.
 
 Strategy: drive `run_store` directly against `tmp_path`, including
-with real threads. No FastAPI, no app, no model, which is the point of
-the module existing: these properties were previously only reachable
-through an HTTP endpoint inside a two-thousand-line application
-module, so none of them was ever tested. The first test enforces that
-isolation rather than trusting it.
+with real threads, and with forked processes where two supervisors
+share one data root. No FastAPI, no app, no model, which is the
+point of the module existing: these properties were previously only
+reachable through an HTTP endpoint inside a two-thousand-line
+application module, so none of them was ever tested. The first test
+enforces that isolation rather than trusting it.
 
 What passing proves is the finding's claim in reverse. Two saves of
 one model in the same second used to share a directory and interleave
@@ -25,9 +26,11 @@ from __future__ import annotations
 
 import builtins
 import json
+import multiprocessing
 import threading
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 
 import pytest
 
@@ -1077,6 +1080,179 @@ def test_racing_saves_of_one_generation_make_one_run(
     assert len(landed) == 8
     assert len(set(landed)) == 1
     assert len(run_store.list_run_ids(tmp_path)) == 1
+
+
+# -- two supervisors at once --
+#
+# The browser launcher and the desktop app are separate processes
+# pointed at one data root, so a lock that lives in one process is no
+# lock between them (`A2-DATA-01`). Forked processes stand in for the
+# two. Each race widens its window by making a step the lock must
+# cover pause, patched before the fork so every child inherits it:
+# a process the lock fails to exclude then acts inside another's
+# window, and the outcome shows it.
+
+PROCESSES = 4
+
+# Long enough that processes the lock fails to exclude all read
+# before any of them writes.
+PAUSE_SECONDS = 0.2
+
+TOKEN = "a3f9c1:1"
+
+# How a replacing process reports what happened to it.
+COMMITTED = 0
+REFUSED = 3
+
+
+def _pausing(
+    real: Callable[..., Any],
+    on_entry: Callable[[], None] = lambda: None,
+) -> Callable[..., Any]:
+    """``real``, then a pause, so the answer it gave goes stale if
+    anything else is let in before the caller acts on it."""
+
+    def paused(*args: Any, **kwargs: Any) -> Any:
+        answer = real(*args, **kwargs)
+        on_entry()
+        time.sleep(PAUSE_SECONDS)
+        return answer
+
+    return paused
+
+
+def _in_processes(
+    target: Callable[..., None], calls: List[Tuple[Any, ...]]
+) -> List[Any]:
+    """Exit codes of ``target`` run once per argument tuple, each in
+    its own forked process; None for one that never finished."""
+    context = multiprocessing.get_context("fork")
+    procs = [
+        context.Process(target=target, args=args) for args in calls
+    ]
+    for proc in procs:
+        proc.start()
+    for proc in procs:
+        proc.join(timeout=30)
+    return [proc.exitcode for proc in procs]
+
+
+def _save_generation(root: Path, marker: int) -> None:
+    run_store.save(
+        root,
+        _bundle(final_text=f"body {marker}"),
+        model_id="llada",
+        run_token=TOKEN,
+    )
+
+
+def _replace(root: Path, run_id: str, base: int) -> None:
+    try:
+        _save(root, run_id=run_id, expected_revision=base)
+    except RevisionConflictError:
+        raise SystemExit(REFUSED) from None
+
+
+def test_processes_saving_one_generation_make_one_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each would find no run under the token and make its own."""
+    monkeypatch.setattr(
+        run_store,
+        "find_run_by_token",
+        _pausing(run_store.find_run_by_token),
+    )
+
+    codes = _in_processes(
+        _save_generation, [(tmp_path, i) for i in range(PROCESSES)]
+    )
+
+    assert codes == [0] * PROCESSES
+    assert len(run_store.list_run_ids(tmp_path)) == 1
+
+
+def test_processes_replacing_one_revision_commit_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each would read the same revision and publish a successor of
+    it, the later metadata silently winning."""
+    run_id, base = _save(tmp_path)
+    real_read = run_store.read_revision
+    monkeypatch.setattr(
+        run_store, "read_revision", _pausing(real_read)
+    )
+    calls = [(tmp_path, run_id, base)] * PROCESSES
+
+    codes = _in_processes(_replace, calls)
+
+    assert sorted(codes) == [COMMITTED] + [REFUSED] * (PROCESSES - 1)
+    assert real_read(tmp_path, run_id) == base + 1
+
+
+def _delete_bounded(root: Path, run_id: str) -> None:
+    """Delete from this process, failing rather than hanging if the
+    lock never lets it through."""
+    deleter = threading.Thread(
+        target=run_store.delete, args=(root, run_id), daemon=True
+    )
+    deleter.start()
+    deleter.join(timeout=30)
+    assert not deleter.is_alive(), "the delete never got the lock"
+
+
+def test_a_delete_waits_for_a_replacement_from_another_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The replacement used to recreate the folder the delete had
+    just removed, so a run the user deleted came back."""
+    run_id, base = _save(tmp_path)
+    inside = multiprocessing.get_context("fork").Event()
+    monkeypatch.setattr(
+        run_store,
+        "read_revision",
+        _pausing(run_store.read_revision, on_entry=inside.set),
+    )
+    context = multiprocessing.get_context("fork")
+    replacer = context.Process(
+        target=_replace, args=(tmp_path, run_id, base)
+    )
+
+    replacer.start()
+    assert inside.wait(timeout=10), "the replacement never started"
+    _delete_bounded(tmp_path, run_id)
+    replacer.join(timeout=30)
+
+    assert replacer.exitcode == COMMITTED
+    assert not (tmp_path / run_id).exists()
+    assert run_store.list_run_ids(tmp_path) == []
+
+
+def test_a_delete_waits_for_a_replacement_in_the_same_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two windows on one launcher, which a delete taking no lock at
+    all left exposed even before a second supervisor existed."""
+    run_id, base = _save(tmp_path)
+    inside = threading.Event()
+    monkeypatch.setattr(
+        run_store,
+        "read_revision",
+        _pausing(run_store.read_revision, on_entry=inside.set),
+    )
+    replacer = threading.Thread(
+        target=_save,
+        args=(tmp_path,),
+        kwargs={"run_id": run_id, "expected_revision": base},
+    )
+
+    replacer.start()
+    assert inside.wait(timeout=10), "the replacement never started"
+    _delete_bounded(tmp_path, run_id)
+    replacer.join(timeout=30)
+
+    assert not replacer.is_alive()
+    assert not (tmp_path / run_id).exists()
+    assert run_store.list_run_ids(tmp_path) == []
 
 
 def test_a_lookup_ignores_a_run_it_cannot_read(
