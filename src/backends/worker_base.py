@@ -50,6 +50,7 @@ from src.backends.protocol import (
     MSG_SUBSTITUTE,
     MSG_TOKENIZE,
     MSG_TOKENIZE_RESULT,
+    PROMPT_CHARS_MAX,
     TERMINAL_CANCELLED,
     ModelInfo,
     request_error,
@@ -90,17 +91,13 @@ TOKENIZE_TEXT_MAX_CHARS = 200
 # Still bounded, because unbounded per-keystroke work is not an
 # option. Reaching a million characters means the prompt is past every
 # window this app serves by a wide margin, so the client treats a
-# truncated count as over the window rather than as a floor.
-COUNT_PROMPT_MAX_CHARS = 1_000_000
+# truncated count as over the window rather than as a floor. It is
+# the cap a run refuses past, too, so a prompt counted in full is one
+# the worker will take.
+COUNT_PROMPT_MAX_CHARS = PROMPT_CHARS_MAX
 
 assert COUNT_PROMPT_MAX_CHARS > TOKENIZE_TEXT_MAX_CHARS, (
     "counting a prompt must allow more than previewing a token"
-)
-# The claim the client's truncated-means-over rule rests on: even at
-# a generous four characters per token, a prompt this long cannot fit
-# the largest window any registered model declares.
-assert COUNT_PROMPT_MAX_CHARS // 4 > 200_000, (
-    "a truncated prompt must exceed any real context window"
 )
 
 def rewind_retained_history(
@@ -1026,10 +1023,19 @@ class Backend(ABC):
         prompts that fit; the readout beside the prompt is blank in
         that case for the same reason.
 
+        The one bound that holds regardless is ``PROMPT_CHARS_MAX``,
+        checked first: it needs no tokenizer, and it is all a model
+        with no window has (`A2-TRUST-02`).
+
         Raises ``ValueError``, which every ``_validate_generate``
         already turns into an invalid-request envelope.
         """
         assert isinstance(prompt, str), "prompt must be a string"
+        if len(prompt) > PROMPT_CHARS_MAX:
+            raise ValueError(
+                f"Prompt is {len(prompt):,} characters; the limit"
+                f" is {PROMPT_CHARS_MAX:,}. Shorten it."
+            )
         model = getattr(self, "model", None)
         tokenizer = getattr(self, "tokenizer", None)
         if model is None or tokenizer is None:

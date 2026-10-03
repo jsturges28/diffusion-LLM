@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
+from src.backends.protocol import PROMPT_CHARS_MAX
 from src.backends.text_adapter import ChatTextAdapter
 from src.backends.worker_base import (
     CONTEXT_LENGTH_SANE_MAX,
@@ -463,6 +464,51 @@ def test_the_thinking_flag_reaches_the_refusal() -> None:
         backend.check_prompt_fits(
             "she ran home today", thinking=True
         )
+
+
+# -- refusing a prompt past the character cap --
+#
+# The one bound a model with no window has (`A2-TRUST-02`). Mamba-3
+# declares none, so nothing refused a prompt of any length, and the
+# save of such a run would then have been refused instead.
+
+
+def _windowless_backend() -> _StubBackend:
+    """A loaded backend whose checkpoint declares no window."""
+    return _StubBackend(
+        _TemplateTokenizer(),
+        model=_StubModel(_UNSPECIFIED_LENGTH),
+    )
+
+
+def test_a_prompt_past_the_cap_is_refused() -> None:
+    with pytest.raises(ValueError, match="1,000,000") as raised:
+        _windowless_backend().check_prompt_fits(
+            "a" * (PROMPT_CHARS_MAX + 1)
+        )
+
+    assert len(f"Error: {raised.value}") < 80, str(raised.value)
+
+
+def test_a_prompt_at_the_cap_goes_on_to_the_window() -> None:
+    """The boundary from the permissive side: at the cap the window
+    decides, and a model with no window refuses nothing."""
+    _windowless_backend().check_prompt_fits("a" * PROMPT_CHARS_MAX)
+
+
+def test_the_cap_is_checked_before_anything_loads() -> None:
+    """It needs no tokenizer, so it is the cheapest check and comes
+    first, ahead of the early return for a backend not yet loaded."""
+    with pytest.raises(ValueError):
+        _StubBackend(_TemplateTokenizer()).check_prompt_fits(
+            "a" * (PROMPT_CHARS_MAX + 1)
+        )
+
+
+def test_counting_stops_where_running_does() -> None:
+    """A prompt the readout counts in full is one the worker will
+    take, so the two bounds are one number."""
+    assert COUNT_PROMPT_MAX_CHARS == PROMPT_CHARS_MAX
 
 
 # -- the count does not stall the socket --

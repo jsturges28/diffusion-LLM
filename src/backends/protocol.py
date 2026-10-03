@@ -80,6 +80,24 @@ CANDIDATE_BUDGET_RECORDS = 160 * 128 * CANDIDATES_PER_POSITION
 
 assert CANDIDATE_BUDGET_RECORDS == 102_400, "the ROADMAP's budget"
 
+# The longest prompt anything here takes, in characters. A run refuses
+# one past it, a save refuses one past it, and counting stops at it,
+# so the readout never counts a prompt the worker would not run. Here
+# rather than in the worker so the supervisor holds saves to the same
+# number without importing worker code.
+#
+# Past every window this app serves by a wide margin, and the one
+# bound a model with no window has: Mamba-3 declares none, so nothing
+# else would refuse its prompt (`A2-TRUST-02`).
+PROMPT_CHARS_MAX = 1_000_000
+
+# What the claim above rests on: even at a generous four characters a
+# token, a prompt this long cannot fit the largest window any
+# registered model declares.
+assert PROMPT_CHARS_MAX // 4 > 200_000, (
+    "a prompt at the cap must exceed any real context window"
+)
+
 
 class SignalChannel(BaseModel):
     """One XAI signal, described rather than inferred.
