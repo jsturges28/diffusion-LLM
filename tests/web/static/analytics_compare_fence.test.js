@@ -86,7 +86,7 @@ function analyticsPage(fetchImpl) {
       resize() {},
     };
   };
-  context.chartsAvailable = true;
+  context.chartSupportAvailable = true;
   return { context, built };
 }
 

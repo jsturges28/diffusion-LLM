@@ -198,16 +198,7 @@ var btnColDeleteClose =
 
 // ---- Chart.js defaults ----
 
-// Whether the charting library loaded at all. Everything below this
-// point used to assume it had, and the assumption was made at the
-// top level of the file: one missing script and the whole of
-// analytics.js failed to parse past here, taking the run table, the
-// metadata, the overlays and deletion down with the charts. The
-// library is vendored now so this should always be true, but the
-// page should degrade rather than disappear if it ever is not.
-var chartsAvailable = typeof Chart !== "undefined";
-
-if (chartsAvailable) {
+if (chartSupportAvailable) {
   Chart.defaults.color = "#888888";
   Chart.defaults.borderColor = "#1e1e1e";
   Chart.defaults.font.family =
@@ -220,9 +211,9 @@ if (chartsAvailable) {
 // side. The stroke is centered, so it covers only half that inset
 // and leaves a half-pixel of white showing between the border and
 // the fill (a whole physical pixel at 2x). Dropping the white
-// backing removes that edge; see lineLabelColor for the border half
-// of the same swatch.
-if (chartsAvailable) {
+// backing removes that edge; see chartSupportLineLabelColor for the
+// border half of the same swatch.
+if (chartSupportAvailable) {
   Chart.defaults.plugins.tooltip.multiKeyBackground =
     "transparent";
 
@@ -253,7 +244,7 @@ var TOOLTIP_CORNERS = ["tl", "tr", "bl", "br"];
 //
 // When no corner is free the box has to sit on the data, and
 // burnThroughPlugin redraws the line through it.
-if (chartsAvailable) {
+if (chartSupportAvailable) {
   Chart.Tooltip.positioners.smart =
     function (elements, eventPosition) {
       var chart = this.chart;
@@ -929,64 +920,6 @@ function resumeBoundarySet(resumeStartSet, remaskSet) {
     set[keys[i]] = true;
   }
   return set;
-}
-
-// Room under the x axis for the zoom controls docked in the chart's
-// bottom-left corner. The y-axis gutter alone is narrower than the
-// three buttons, so without this the pill would overlap the first
-// tick label. Not used by the compare panel, which has no dock.
-function chartGutterLayout() {
-  return { padding: { bottom: 16 } };
-}
-
-// Shared zoom plugin options for scroll + pinch.
-function zoomPluginOptions() {
-  return {
-    zoom: {
-      wheel: { enabled: true },
-      pinch: { enabled: true },
-      mode: "x",
-    },
-    pan: {
-      enabled: true,
-      mode: "x",
-    },
-  };
-}
-
-// Shared tooltip title callback that prefixes
-// the frame number so it reads "Frame 112"
-// on its own line rather than just "112".
-function tooltipTitle(items) {
-  if (items.length === 0) { return ""; }
-  return "Frame " + items[0].label;
-}
-
-// Shared tooltip swatch color for the line charts. A line's
-// backgroundColor is an area wash at around 0.1 alpha, so a swatch
-// filled with it reads as almost nothing; the line's own color is
-// what tells one series from another in a two-row tooltip.
-//
-// The border is deliberately invisible rather than absent. Chart.js
-// resolves the swatch stroke as ``borderWidth || 1``, so asking for
-// zero still strokes a pixel, and that ring plus the white backing
-// underneath (see the multiKeyBackground default above) is what made
-// the chip read as a colored frame around a lighter square. With
-// both suppressed the swatch is exactly the inset fill.
-//
-// The entropy chart deliberately does not use this: its bars carry
-// solid per-bar colors, so its swatches already read correctly and
-// showing the hovered bar's own ramp color says more than the series
-// color would.
-function lineLabelColor(ctx) {
-  var color = ctx.dataset.borderColor;
-  if (typeof color !== "string") {
-    color = "#ffffff";
-  }
-  return {
-    borderColor: "transparent",
-    backgroundColor: color,
-  };
 }
 
 // ---- Sorting ----
@@ -2647,13 +2580,6 @@ function escHtml(s) {
 
 // ---- Chart rendering ----
 
-function destroyChart(chart) {
-  if (chart) {
-    chart.destroy();
-  }
-  return null;
-}
-
 // Inline Chart.js plugin: dashed vertical markers at the frame
 // indices where a new canvas (block) begins. Empty list is a
 // no-op, so single-canvas (LLaDA) runs draw nothing.
@@ -3324,10 +3250,10 @@ function loadRunCharts(runId, run, token) {
 function clearRunCharts() {
   resetTooltipToggles();
   resetComparePins();
-  chartConvergence = destroyChart(chartConvergence);
-  chartTiming = destroyChart(chartTiming);
-  chartTps = destroyChart(chartTps);
-  chartConfidence = destroyChart(chartConfidence);
+  chartConvergence = chartSupportDestroy(chartConvergence);
+  chartTiming = chartSupportDestroy(chartTiming);
+  chartTps = chartSupportDestroy(chartTps);
+  chartConfidence = chartSupportDestroy(chartConfidence);
   slotReady.timing.elapsed = false;
   slotReady.timing.tps = false;
   // The stopping page is the overlay load's to reset, since that is
@@ -3359,7 +3285,7 @@ function hideChartsError() {
 }
 
 function renderRunCharts(data, run) {
-  if (!chartsAvailable) {
+  if (!chartSupportAvailable) {
     showChartsUnavailable(CHARTS_MISSING_MESSAGE);
     return;
   }
@@ -5082,7 +5008,7 @@ function convergenceOptions(remaskSet) {
   return {
     responsive: true,
     maintainAspectRatio: false,
-    layout: chartGutterLayout(),
+    layout: chartSupportGutterLayout(),
     interaction: {
       mode: "index",
       intersect: false,
@@ -5095,8 +5021,8 @@ function convergenceOptions(remaskSet) {
         xAlign: "left",
         yAlign: "top",
         callbacks: {
-          title: tooltipTitle,
-          labelColor: lineLabelColor,
+          title: chartSupportTooltipTitle,
+          labelColor: chartSupportLineLabelColor,
           label: function (ctx) {
             return ctx.dataset.label + ": "
               + ctx.formattedValue;
@@ -5108,7 +5034,7 @@ function convergenceOptions(remaskSet) {
           },
         },
       },
-      zoom: zoomPluginOptions(),
+      zoom: chartSupportZoomOptions(),
     },
     scales: {
       x: {
@@ -5356,7 +5282,7 @@ function tpsOptions(remaskSet) {
   return {
     responsive: true,
     maintainAspectRatio: false,
-    layout: chartGutterLayout(),
+    layout: chartSupportGutterLayout(),
     interaction: {
       mode: "index",
       intersect: false,
@@ -5372,8 +5298,8 @@ function tpsOptions(remaskSet) {
           return seriesRowVisible("tps", item);
         },
         callbacks: {
-          title: tooltipTitle,
-          labelColor: lineLabelColor,
+          title: chartSupportTooltipTitle,
+          labelColor: chartSupportLineLabelColor,
           label: function (ctx) {
             return ctx.dataset.label + ": "
               + ctx.formattedValue + " T/s";
@@ -5388,7 +5314,7 @@ function tpsOptions(remaskSet) {
           },
         },
       },
-      zoom: zoomPluginOptions(),
+      zoom: chartSupportZoomOptions(),
     },
     scales: {
       x: {
@@ -5505,7 +5431,7 @@ function timingOptions(remaskSet) {
   return {
     responsive: true,
     maintainAspectRatio: false,
-    layout: chartGutterLayout(),
+    layout: chartSupportGutterLayout(),
     interaction: {
       mode: "index",
       intersect: false,
@@ -5521,8 +5447,8 @@ function timingOptions(remaskSet) {
           return seriesRowVisible("timing", item);
         },
         callbacks: {
-          title: tooltipTitle,
-          labelColor: lineLabelColor,
+          title: chartSupportTooltipTitle,
+          labelColor: chartSupportLineLabelColor,
           label: function (ctx) {
             return ctx.dataset.label + ": "
               + ctx.formattedValue + "s";
@@ -5540,7 +5466,7 @@ function timingOptions(remaskSet) {
           },
         },
       },
-      zoom: zoomPluginOptions(),
+      zoom: chartSupportZoomOptions(),
     },
     scales: {
       x: {
@@ -5664,7 +5590,7 @@ function confidenceOptions() {
   return {
     responsive: true,
     maintainAspectRatio: false,
-    layout: chartGutterLayout(),
+    layout: chartSupportGutterLayout(),
     interaction: {
       mode: "index",
       intersect: false,
@@ -5680,15 +5606,15 @@ function confidenceOptions() {
           return seriesRowVisible("confidence", item);
         },
         callbacks: {
-          title: tooltipTitle,
-          labelColor: lineLabelColor,
+          title: chartSupportTooltipTitle,
+          labelColor: chartSupportLineLabelColor,
           label: function (ctx) {
             return ctx.dataset.label + ": "
               + ctx.formattedValue + "%";
           },
         },
       },
-      zoom: zoomPluginOptions(),
+      zoom: chartSupportZoomOptions(),
     },
     scales: {
       x: {
@@ -5734,7 +5660,7 @@ var STOPPING_STOP_RADIUS = 4;
 // Tear the chart down and take its page out of the slot. Called
 // before a new run's frames are fetched, beside clearEntropyChart.
 function clearStoppingChart() {
-  chartStopping = destroyChart(chartStopping);
+  chartStopping = chartSupportDestroy(chartStopping);
   chartInstances.stopping = null;
   slotReady.confidence.stopping = false;
   var section = document.getElementById("stopping-section");
@@ -5893,7 +5819,7 @@ function stoppingOptions(rule, edited) {
   return {
     responsive: true,
     maintainAspectRatio: false,
-    layout: chartGutterLayout(),
+    layout: chartSupportGutterLayout(),
     interaction: {
       mode: "index",
       intersect: false,
@@ -5909,8 +5835,8 @@ function stoppingOptions(rule, edited) {
           return seriesRowVisible("stopping", item);
         },
         callbacks: {
-          title: tooltipTitle,
-          labelColor: lineLabelColor,
+          title: chartSupportTooltipTitle,
+          labelColor: chartSupportLineLabelColor,
           label: function (ctx) {
             return ctx.dataset.label + ": "
               + overlaysStopEntropyText(ctx.parsed.y) + " nats";
@@ -5921,7 +5847,7 @@ function stoppingOptions(rule, edited) {
           },
         },
       },
-      zoom: zoomPluginOptions(),
+      zoom: chartSupportZoomOptions(),
     },
     scales: stoppingScales(rule),
   };
@@ -6033,7 +5959,7 @@ function stopThresholdPlugin(threshold) {
 // frames are fetched, and on the paths where a run turns out to carry
 // no usable records at all.
 function clearEntropyChart() {
-  chartEntropy = destroyChart(chartEntropy);
+  chartEntropy = chartSupportDestroy(chartEntropy);
   chartInstances.entropy = null;
   // The chart owns one direction of the cross-highlight, so tearing
   // it down while a bar is hovered would otherwise strand the class
@@ -6054,7 +5980,7 @@ function clearEntropyChart() {
 // from a newer build, or at a channel whose declaration is wrong, and
 // either way the axes are the useful thing to show.
 function showEntropyUnavailable(data) {
-  chartEntropy = destroyChart(chartEntropy);
+  chartEntropy = chartSupportDestroy(chartEntropy);
   chartInstances.entropy = null;
   clearTokenHighlight();
   var section = document.getElementById("entropy-section");
@@ -6327,7 +6253,7 @@ function entropyLayerCanvasOf(seriesKey) {
 // a time series. Hidden for runs saved without the entropy signal.
 function renderEntropyChart(data) {
   var section = document.getElementById("entropy-section");
-  if (!chartsAvailable) {
+  if (!chartSupportAvailable) {
     clearEntropyChart();
     return;
   }
@@ -6480,7 +6406,7 @@ function entropyChartOptions(divergence) {
   return {
     responsive: true,
     maintainAspectRatio: false,
-    layout: chartGutterLayout(),
+    layout: chartSupportGutterLayout(),
     interaction: {
       mode: "index",
       intersect: false,
@@ -6504,7 +6430,7 @@ function entropyChartOptions(divergence) {
           },
         },
       },
-      zoom: zoomPluginOptions(),
+      zoom: chartSupportZoomOptions(),
     },
     scales: {
       x: {
@@ -6530,8 +6456,8 @@ function entropyChartOptions(divergence) {
   };
 }
 
-// The shared tooltipTitle prefixes "Frame", which would misread this
-// chart's x axis.
+// The shared chartSupportTooltipTitle prefixes "Frame", which would
+// misread this chart's x axis.
 function positionTooltipTitle(items) {
   if (items.length === 0) {
     return "";
@@ -6591,7 +6517,7 @@ function showComparison(ids) {
   detailRequests.cancel();
   renderTable();
 
-  if (!chartsAvailable) {
+  if (!chartSupportAvailable) {
     // The compare view is nothing but a chart, so there is no
     // reduced version of it to show.
     return;
@@ -6620,7 +6546,7 @@ function showComparison(ids) {
 }
 
 function renderComparison(results) {
-  chartCompareConv = destroyChart(chartCompareConv);
+  chartCompareConv = chartSupportDestroy(chartCompareConv);
 
   var convCanvas = document.getElementById(
     "chart-compare-conv"
@@ -6731,11 +6657,11 @@ function compareChartOptions(xLabel, yLabel) {
         xAlign: "left",
         yAlign: "top",
         callbacks: {
-          title: tooltipTitle,
-          labelColor: lineLabelColor,
+          title: chartSupportTooltipTitle,
+          labelColor: chartSupportLineLabelColor,
         },
       },
-      zoom: zoomPluginOptions(),
+      zoom: chartSupportZoomOptions(),
     },
     scales: {
       x: {

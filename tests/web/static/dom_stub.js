@@ -69,6 +69,7 @@ const ANALYTICS_SCRIPTS = [
   "persist.js",
   "overlays.js",
   "overlay_series.js",
+  "chart_support.js",
   "run_candidates.js",
   "candidate_flicker.js",
   "detail_requests.js",

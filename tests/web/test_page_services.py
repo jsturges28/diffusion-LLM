@@ -1,7 +1,7 @@
 """Each page loads exactly the shared modules it uses (`A2-ORG-05`).
 
-Strategy: read every page's first-party scripts and the four modules
-the pages' shared code lives in. A module is used on a page when one
+Strategy: read every page's first-party scripts and the modules the
+pages' shared code lives in. A module is used on a page when one
 of the page's other scripts names something the module defines,
 comments aside. Then require that a page loads a module exactly when
 it uses it, and before the first script that does.
@@ -38,14 +38,16 @@ MODULES = (
     "reduced_motion.js",
     "activation_progress.js",
     "overlays.js",
+    "chart_support.js",
 )
 
 # What the rule below comes to today, written out so a reader sees
-# the split without running it: the menu and Vision draw no tokens.
+# the split without running it: the menu and Vision draw no tokens,
+# and only Analytics draws charts.
 VISUAL_PAGE = {"persist.js", "reduced_motion.js", "overlays.js"}
 EXPECTED: Dict[str, Set[str]] = {
-    "index.html": set(MODULES),
-    "analytics.html": VISUAL_PAGE,
+    "index.html": set(MODULES) - {"chart_support.js"},
+    "analytics.html": VISUAL_PAGE | {"chart_support.js"},
     "menu.html": {
         "persist.js",
         "reduced_motion.js",
