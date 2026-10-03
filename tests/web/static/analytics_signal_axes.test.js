@@ -100,8 +100,10 @@ test("a per-position channel reads the final frame", () => {
   const data = run(["position"]);
   const series = context.overlaySeriesOf(data, false);
 
-  const at = context.channelFrameIndex(
-    context.signalChannel(data, "entropy"), series
+  const at = context.overlaySeriesChannelFrame(
+    context.overlaySeriesChannel(data, "entropy"),
+    series,
+    context.overlayFrameIndex
   );
 
   assert.equal(at, 2);
@@ -115,8 +117,10 @@ test("a frame-by-position channel follows the scrub", () => {
   const series = context.overlaySeriesOf(data, false);
   context.overlayFrameIndex = 1;
 
-  const at = context.channelFrameIndex(
-    context.signalChannel(data, "entropy"), series
+  const at = context.overlaySeriesChannelFrame(
+    context.overlaySeriesChannel(data, "entropy"),
+    series,
+    context.overlayFrameIndex
   );
 
   assert.equal(at, 1);
@@ -145,8 +149,10 @@ test("a scrub past the last frame is clamped", () => {
   const series = context.overlaySeriesOf(data, false);
   context.overlayFrameIndex = 99;
 
-  const at = context.channelFrameIndex(
-    context.signalChannel(data, "entropy"), series
+  const at = context.overlaySeriesChannelFrame(
+    context.overlaySeriesChannel(data, "entropy"),
+    series,
+    context.overlayFrameIndex
   );
 
   assert.equal(at, 2);
@@ -158,10 +164,13 @@ test("a drawable channel reports ok", () => {
   const { context } = page();
 
   assert.equal(
-    context.entropyAvailability(run(["frame", "position"])), "ok"
+    context.overlaySeriesEntropyAvailability(
+      run(["frame", "position"])
+    ),
+    "ok"
   );
   assert.equal(
-    context.entropyAvailability(run(["position"])), "ok"
+    context.overlaySeriesEntropyAvailability(run(["position"])), "ok"
   );
 });
 
@@ -172,7 +181,8 @@ test("a shape this build cannot draw reports unsupported", () => {
   const { context } = page();
 
   assert.equal(
-    context.entropyAvailability(run(["canvas"])), "unsupported"
+    context.overlaySeriesEntropyAvailability(run(["canvas"])),
+    "unsupported"
   );
 });
 
@@ -184,7 +194,9 @@ test("a run with no entropy at all reports absent", () => {
     signals: [channel(["position"])],
   };
 
-  assert.equal(context.entropyAvailability(bare), "absent");
+  assert.equal(
+    context.overlaySeriesEntropyAvailability(bare), "absent"
+  );
 });
 
 // -- runs from before the manifest existed --
@@ -194,7 +206,7 @@ test("a run with no manifest is read as it always was", () => {
   // before", not "unsupported", or the corpus goes dark.
   const { context } = page();
 
-  assert.equal(context.entropyAvailability(run()), "ok");
+  assert.equal(context.overlaySeriesEntropyAvailability(run()), "ok");
 });
 
 test("an unmanifested run still reads the final frame", () => {
@@ -202,8 +214,10 @@ test("an unmanifested run still reads the final frame", () => {
   const data = run();
   const series = context.overlaySeriesOf(data, false);
 
-  const at = context.channelFrameIndex(
-    context.signalChannel(data, "entropy"), series
+  const at = context.overlaySeriesChannelFrame(
+    context.overlaySeriesChannel(data, "entropy"),
+    series,
+    context.overlayFrameIndex
   );
 
   assert.equal(at, 2);
@@ -218,11 +232,14 @@ test("axes join in declaration order", () => {
   const { context } = page();
 
   assert.equal(
-    context.channelShape(channel(["frame", "position"])),
+    context.overlaySeriesChannelShape(channel(["frame", "position"])),
     "frame|position"
   );
-  assert.equal(context.channelShape(channel(["position"])), "position");
-  assert.equal(context.channelShape(null), "");
+  assert.equal(
+    context.overlaySeriesChannelShape(channel(["position"])),
+    "position"
+  );
+  assert.equal(context.overlaySeriesChannelShape(null), "");
 });
 
 // -- the chart, as a saved run opens and is scrubbed --
@@ -568,7 +585,9 @@ test("a DiffusionGemma run's entropy is found past commits", () => {
   const { context } = page();
   const payload = committedPayload();
 
-  assert.equal(context.entropyAvailability(payload), "ok");
+  assert.equal(
+    context.overlaySeriesEntropyAvailability(payload), "ok"
+  );
   assert.equal(context.overlayEntropyAvailable(payload), true);
 });
 

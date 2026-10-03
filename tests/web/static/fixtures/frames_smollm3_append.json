@@ -1,0 +1,84 @@
+{
+ "alternatives": null,
+ "alternatives_available": false,
+ "candidates": null,
+ "canvas_index": null,
+ "frames": null,
+ "original_alternatives": null,
+ "original_candidates": null,
+ "original_frames": null,
+ "original_positions": null,
+ "positions": [
+  {
+   "c": 0.5,
+   "e": 1.2,
+   "id": 200,
+   "m": false,
+   "t": " Yeast"
+  },
+  {
+   "c": 0.5,
+   "e": 1.3,
+   "id": 201,
+   "m": false,
+   "t": " eats"
+  },
+  {
+   "c": 0.5,
+   "e": 1.4,
+   "id": 202,
+   "m": false,
+   "t": " sugar"
+  }
+ ],
+ "records_available": true,
+ "remask_edits": [],
+ "run_id": "fixture",
+ "signals": [
+  {
+   "axes": [
+    "position"
+   ],
+   "budget_records": null,
+   "capture": "always",
+   "key": "c",
+   "location": "token_record",
+   "name": "confidence",
+   "unit": "probability"
+  },
+  {
+   "axes": [
+    "position"
+   ],
+   "budget_records": null,
+   "capture": "always",
+   "key": "e",
+   "location": "token_record",
+   "name": "entropy",
+   "unit": "nats"
+  },
+  {
+   "axes": [
+    "frame"
+   ],
+   "budget_records": null,
+   "capture": "always",
+   "key": "mean_conf",
+   "location": "frame_scalar",
+   "name": "mean_confidence",
+   "unit": "probability"
+  },
+  {
+   "axes": [
+    "position"
+   ],
+   "budget_records": null,
+   "capture": "opt_in",
+   "key": "alternatives",
+   "location": "sidecar",
+   "name": "alternatives",
+   "unit": "probability"
+  }
+ ],
+ "stop_rule": null
+}

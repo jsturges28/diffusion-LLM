@@ -86,7 +86,7 @@ function readAll(context, payload) {
     frames,
     finalIndex: context.overlaySeriesFinalIndex(series),
     final: context.overlaySeriesFinal(series),
-    hasEntropy: context.framesHaveEntropy(series),
+    hasEntropy: context.overlaySeriesHasEntropy(series),
     entropy: context.entropySeriesFrom(series),
     commitSteps: context.overlaySeriesCommitSteps(series),
   };

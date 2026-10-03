@@ -63,6 +63,7 @@ const GENERATOR_SCRIPTS = [
 const ANALYTICS_SCRIPTS = [
   "custom_select.js",
   "overlays.js",
+  "overlay_series.js",
   "run_candidates.js",
   "candidate_flicker.js",
   "detail_requests.js",
