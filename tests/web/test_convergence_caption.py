@@ -1,6 +1,6 @@
 """How the convergence chart says which measure it is showing.
 
-Strategy: source inspection of `analytics.js` and `analytics.html`,
+Strategy: source inspection of `line_charts.js` and `analytics.html`,
 the approach this repo uses for its classic-script pages. Which
 measure a run gets is decided server-side and tested in
 `test_metrics_basis_choice.py`; this covers only how that decision
@@ -27,20 +27,20 @@ from pathlib import Path
 STATIC = (
     Path(__file__).resolve().parents[2] / "src" / "web" / "static"
 )
-ANALYTICS_JS = STATIC / "analytics.js"
+LINE_CHARTS_JS = STATIC / "line_charts.js"
 ANALYTICS_HTML = STATIC / "analytics.html"
 ANALYTICS_CSS = STATIC / "analytics.css"
 
 
 def _js() -> str:
-    return ANALYTICS_JS.read_text(encoding="utf-8")
+    return LINE_CHARTS_JS.read_text(encoding="utf-8")
 
 
 def _region(anchor: str, chars: int) -> str:
     source = _js()
     start = source.find(anchor)
     assert start != -1, (
-        f"anchor {anchor!r} is gone from analytics.js; update this"
+        f"anchor {anchor!r} is gone from line_charts.js; update this"
         " test rather than deleting it"
     )
     return source[start : start + chars]
