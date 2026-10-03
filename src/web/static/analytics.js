@@ -2261,6 +2261,9 @@ function showInvalidDetail(run) {
 }
 
 function showDetail(runId) {
+  // Hiding the compare panel stops nothing; its late answer
+  // would paint behind the dialog.
+  compareRequests.cancel();
   activeRunId = runId;
   // A run the catalog could not read has nothing to fetch. Say why
   // and stop, rather than firing two requests that can only fail and
