@@ -26,16 +26,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { loadPage } = require("./dom_stub.js");
-
-const MENU_SCRIPTS = [
-  "overlays.js",
-  "model_client.js",
-  "activation_client.js",
-  "download_client.js",
-  "download_toast.js",
-  "menu.js",
-];
+const { loadPage, MENU_SCRIPTS } = require("./dom_stub.js");
 
 const LLADA = {
   id: "llada",

@@ -55,6 +55,40 @@ const GENERATOR_SCRIPTS = [
   "app.js",
 ];
 
+// The other pages' own orders, kept here for the same reason and so
+// that each exists once: a test copying its own would go on passing
+// against a page that had moved on. Analytics loads the charting
+// vendors first, and those are stubbed below rather than listed.
+// tests/web/test_page_script_lists.py holds each list to its page.
+const ANALYTICS_SCRIPTS = [
+  "custom_select.js",
+  "overlays.js",
+  "run_candidates.js",
+  "candidate_flicker.js",
+  "detail_requests.js",
+  "collections_client.js",
+  "download_client.js",
+  "download_toast.js",
+  "analytics.js",
+];
+
+const MENU_SCRIPTS = [
+  "overlays.js",
+  "model_client.js",
+  "activation_client.js",
+  "download_client.js",
+  "download_toast.js",
+  "menu.js",
+];
+
+const SETTINGS_SCRIPTS = [
+  "custom_select.js",
+  "overlays.js",
+  "download_client.js",
+  "download_toast.js",
+  "settings.js",
+];
+
 // Chart's config assignment walks arbitrary nested paths and none of
 // it reaches the behaviour under test, so the stub says yes to
 // everything rather than enumerating what the page happens to set.
@@ -720,4 +754,7 @@ module.exports = {
   makeElement,
   FakeSocket,
   GENERATOR_SCRIPTS,
+  ANALYTICS_SCRIPTS,
+  MENU_SCRIPTS,
+  SETTINGS_SCRIPTS,
 };

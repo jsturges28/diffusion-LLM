@@ -23,23 +23,11 @@ const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
-const { loadPage } = require("./dom_stub.js");
+const { loadPage, ANALYTICS_SCRIPTS } = require("./dom_stub.js");
 
 const OVERLAYS = path.join(
   __dirname, "..", "..", "..", "src", "web", "static", "overlays.js"
 );
-
-const ANALYTICS_SCRIPTS = [
-  "custom_select.js",
-  "overlays.js",
-  "run_candidates.js",
-  "candidate_flicker.js",
-  "detail_requests.js",
-  "collections_client.js",
-  "download_client.js",
-  "download_toast.js",
-  "analytics.js",
-];
 
 const FORGETTING = {
   name: "forgetting",

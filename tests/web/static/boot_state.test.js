@@ -25,7 +25,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { loadPage } = require("./dom_stub.js");
+const { loadPage, ANALYTICS_SCRIPTS } = require("./dom_stub.js");
 
 const SMOL = {
   id: "smollm3",
@@ -279,20 +279,6 @@ test("a page with no font API still sizes its fields", () => {
 });
 
 // -- and the same bargain on Analytics --
-
-// The page's real script order, minus nothing: `model_client.js` came
-// out of it when the nav link stopped being a fetch.
-const ANALYTICS_SCRIPTS = [
-  "custom_select.js",
-  "overlays.js",
-  "run_candidates.js",
-  "candidate_flicker.js",
-  "detail_requests.js",
-  "collections_client.js",
-  "download_client.js",
-  "download_toast.js",
-  "analytics.js",
-];
 
 const RUN_ROW = {
   run_id: "2026-09-01_02-29-09_smollm3",

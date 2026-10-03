@@ -25,19 +25,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { loadPage } = require("./dom_stub.js");
-
-const ANALYTICS_SCRIPTS = [
-  "custom_select.js",
-  "overlays.js",
-  "run_candidates.js",
-  "candidate_flicker.js",
-  "detail_requests.js",
-  "collections_client.js",
-  "download_client.js",
-  "download_toast.js",
-  "analytics.js",
-];
+const { loadPage, ANALYTICS_SCRIPTS } = require("./dom_stub.js");
 
 // A short canvas with a line break in the middle of it, which is the
 // shape the maintainer hit: position 2 is a newline sitting between

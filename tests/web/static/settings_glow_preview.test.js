@@ -21,15 +21,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { loadPage } = require("./dom_stub.js");
-
-const SETTINGS_SCRIPTS = [
-  "custom_select.js",
-  "overlays.js",
-  "download_client.js",
-  "download_toast.js",
-  "settings.js",
-];
+const { loadPage, SETTINGS_SCRIPTS } = require("./dom_stub.js");
 
 // The pace every class is held to: 38 words at 90ms, or nine
 // diffusion bursts at 380ms.

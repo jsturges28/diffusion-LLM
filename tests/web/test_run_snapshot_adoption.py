@@ -1,11 +1,12 @@
 """The generator's run snapshot goes through its codec (`A2-ORG-03`).
 
 Strategy: read the shipped `app.js`, `index.html` and
-`run_snapshot.js`, and the DOM stub's script list. The codec's rules
-are exercised in `tests/web/static/run_snapshot.test.js`, and the
-page-level round trips in `snapshot_budget.test.js` and its
-neighbours; what neither can check is whether the page still builds or
-reads the snapshot around the codec.
+`run_snapshot.js`. The codec's rules are exercised in
+`tests/web/static/run_snapshot.test.js`, and the page-level round
+trips in `snapshot_budget.test.js` and its neighbours; what neither
+can check is whether the page still builds or reads the snapshot
+around the codec. That the DOM stub loads the page in its own order
+is `tests/web/test_page_script_lists.py`'s to prove, for every page.
 
 What passing proves is that the snapshot's format has one owner. The
 page reads itself into a record and applies what comes back, and
@@ -27,9 +28,6 @@ STATIC = (
 APP_JS = STATIC / "app.js"
 INDEX_HTML = STATIC / "index.html"
 MODULE_JS = STATIC / "run_snapshot.js"
-DOM_STUB_JS = (
-    Path(__file__).resolve().parent / "static" / "dom_stub.js"
-)
 
 # What a codec with no page and no storage has no reason to name.
 PAGE_NAMES = ("document", "window", "sessionStorage", "localStorage")
@@ -77,13 +75,6 @@ def _page_scripts() -> List[str]:
     return re.findall(r'<script src="/([^"?]+)"', html)
 
 
-def _stub_scripts() -> List[str]:
-    stub = DOM_STUB_JS.read_text(encoding="utf-8")
-    block = stub[stub.index("const GENERATOR_SCRIPTS = [") :]
-    block = block[: block.index("];")]
-    return re.findall(r'"([^"]+\.js)"', block)
-
-
 def test_the_module_loads_after_what_it_reads() -> None:
     scripts = _page_scripts()
     at = scripts.index("run_snapshot.js")
@@ -91,12 +82,6 @@ def test_the_module_loads_after_what_it_reads() -> None:
     assert scripts.index("run_frames.js") < at
     assert scripts.index("run_candidates.js") < at
     assert at < scripts.index("app.js")
-
-
-def test_the_stub_loads_the_page_in_the_page_s_order() -> None:
-    """Classic scripts share one scope, so a test page loaded without
-    the module fails on an undefined global rather than saying why."""
-    assert _stub_scripts() == _page_scripts()
 
 
 def test_the_module_reaches_for_no_page_and_no_storage() -> None:

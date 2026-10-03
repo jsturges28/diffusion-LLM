@@ -23,19 +23,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { loadPage } = require("./dom_stub.js");
-
-const ANALYTICS_SCRIPTS = [
-  "custom_select.js",
-  "overlays.js",
-  "run_candidates.js",
-  "candidate_flicker.js",
-  "detail_requests.js",
-  "collections_client.js",
-  "download_client.js",
-  "download_toast.js",
-  "analytics.js",
-];
+const { loadPage, ANALYTICS_SCRIPTS } = require("./dom_stub.js");
 
 const SHA = "08b83a6feb34df1a6011b80c3c00c7563e963b07";
 

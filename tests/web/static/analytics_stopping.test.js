@@ -20,19 +20,11 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { loadPage, makeElement } = require("./dom_stub.js");
-
-const ANALYTICS_SCRIPTS = [
-  "custom_select.js",
-  "overlays.js",
-  "run_candidates.js",
-  "candidate_flicker.js",
-  "detail_requests.js",
-  "collections_client.js",
-  "download_client.js",
-  "download_toast.js",
-  "analytics.js",
-];
+const {
+  loadPage,
+  makeElement,
+  ANALYTICS_SCRIPTS,
+} = require("./dom_stub.js");
 
 const RULE = {
   confidence_threshold: 0.005,
