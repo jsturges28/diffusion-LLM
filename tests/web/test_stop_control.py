@@ -31,6 +31,7 @@ STATIC = (
 )
 APP_JS = STATIC / "app.js"
 INDEX_HTML = STATIC / "index.html"
+SNAPSHOT_JS = STATIC / "run_snapshot.js"
 
 
 def _app() -> str:
@@ -145,11 +146,14 @@ def test_the_save_carries_the_stopped_flag() -> None:
 
 
 def test_the_flag_survives_a_trip_to_analytics() -> None:
-    """Otherwise a stopped run returns looking complete."""
+    """Otherwise a stopped run returns looking complete. The snapshot
+    codec reads the flag back; the page applies it."""
     source = _app()
+    codec = SNAPSHOT_JS.read_text(encoding="utf-8")
 
     assert "runInterrupted: runInterrupted," in source
-    assert "runInterrupted = !!s.runInterrupted;" in source
+    assert "runInterrupted: !!source.runInterrupted," in codec
+    assert "runInterrupted = restored.runInterrupted;" in source
 
 
 def test_a_fresh_run_clears_the_flag() -> None:

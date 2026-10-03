@@ -37,6 +37,9 @@ APP_JS = (
 )
 
 
+SNAPSHOT_JS = APP_JS.with_name("run_snapshot.js")
+
+
 def _source() -> str:
     return APP_JS.read_text(encoding="utf-8")
 
@@ -96,11 +99,16 @@ def test_the_save_omits_it_rather_than_sending_null() -> None:
 def test_the_envelope_survives_a_trip_to_analytics() -> None:
     """The session snapshot is the gap in which another window can
     switch the model, so it is exactly where this must not be
-    dropped."""
+    dropped. The snapshot codec reads it back; the page applies it."""
     source = _source()
+    codec = SNAPSHOT_JS.read_text(encoding="utf-8")
+    guard = (
+        'source.provenance && typeof source.provenance === "object"'
+    )
 
     assert "provenance: lastRunProvenance" in source
-    assert "lastRunProvenance =\n    s.provenance" in source
+    assert guard in codec
+    assert "lastRunProvenance = restored.provenance;" in source
 
 
 def test_a_new_run_clears_the_previous_envelope() -> None:

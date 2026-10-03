@@ -28,6 +28,7 @@ APP_JS = (
     / "static"
     / "app.js"
 )
+SNAPSHOT_JS = APP_JS.with_name("run_snapshot.js")
 
 
 def _source() -> str:
@@ -109,11 +110,19 @@ def test_a_reload_carries_it() -> None:
 
 def test_a_restore_defaults_it_to_empty() -> None:
     """Snapshots written before runs had identities have no token, and
-    reading `undefined` back would send it to the worker."""
-    region = _region("function restoreSessionState()", 3000)
-    guarded = 'typeof s.runToken === "string" ? s.runToken : ""'
+    reading `undefined` back would send it to the worker. The default
+    is the snapshot codec's; the page applies what it decodes."""
+    codec = SNAPSHOT_JS.read_text(encoding="utf-8")
+    guarded = (
+        'runToken: typeof source.runToken === "string"\n'
+        "      ? source.runToken\n"
+        '      : "",'
+    )
 
-    assert guarded in region
+    assert guarded in codec
+    assert "activeRunToken = restored.runToken;" in _region(
+        "function restoreSessionStateApply(restored)", 600
+    )
 
 
 # -- where it ends --

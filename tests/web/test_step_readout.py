@@ -38,10 +38,18 @@ STATIC = (
     Path(__file__).resolve().parents[2] / "src" / "web" / "static"
 )
 APP_JS = STATIC / "app.js"
+SNAPSHOT_JS = STATIC / "run_snapshot.js"
+
+# How the snapshot codec reads the step total back.
+TOTAL_READ = 'typeof source.lastRunTotalSteps === "number"'
 
 
 def _app() -> str:
     return APP_JS.read_text(encoding="utf-8")
+
+
+def _snapshot() -> str:
+    return SNAPSHOT_JS.read_text(encoding="utf-8")
 
 
 def _region(anchor: str, chars: int) -> str:
@@ -194,15 +202,20 @@ def test_a_fresh_run_clears_it() -> None:
 
 
 def test_it_survives_a_trip_to_analytics() -> None:
+    """Carried by the page's record, read back by the snapshot codec,
+    and applied by the page."""
     source = _app()
 
     assert "lastRunTotalSteps: lastRunTotalSteps," in source
-    assert "typeof s.lastRunTotalSteps === \"number\"" in source
+    assert TOTAL_READ in _snapshot()
+    assert "lastRunTotalSteps = restored.lastRunTotalSteps;" in source
 
 
 def test_an_adaptive_model_restores_as_having_no_total() -> None:
     # null, not zero: a zero total would render "Step 5/0" rather
     # than falling through to the canvas form.
-    body = _region('typeof s.lastRunTotalSteps === "number"', 200)
+    codec = _snapshot()
+    start = codec.find(TOTAL_READ)
+    assert start != -1, "the codec no longer reads the step total"
 
-    assert ": null" in body
+    assert ": null" in codec[start : start + 200]

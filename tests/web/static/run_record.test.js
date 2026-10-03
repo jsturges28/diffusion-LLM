@@ -221,12 +221,10 @@ test("an older snapshot falls back to the text it kept", () => {
   // Written before the run carried its prompt: the box text at that
   // time is the best record left of what ran.
   const { context } = loadPage({});
+  const runPrompt = context.runSnapshotRunPrompt;
 
-  assert.equal(
-    context.restoredRunPrompt({ runPrompt: RAN, prompt: BROWSED }),
-    RAN
-  );
-  assert.equal(context.restoredRunPrompt({ prompt: ` ${RAN} ` }), RAN);
-  assert.equal(context.restoredRunPrompt({ prompt: "" }), null);
-  assert.equal(context.restoredRunPrompt({}), null);
+  assert.equal(runPrompt({ runPrompt: RAN, prompt: BROWSED }), RAN);
+  assert.equal(runPrompt({ prompt: ` ${RAN} ` }), RAN);
+  assert.equal(runPrompt({ prompt: "" }), null);
+  assert.equal(runPrompt({}), null);
 });

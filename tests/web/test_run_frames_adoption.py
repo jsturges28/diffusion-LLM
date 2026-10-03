@@ -28,6 +28,7 @@ STATIC = (
 APP_JS = STATIC / "app.js"
 INDEX_HTML = STATIC / "index.html"
 MODULE_JS = STATIC / "run_frames.js"
+SNAPSHOT_JS = STATIC / "run_snapshot.js"
 
 # What the two families used to be called as free variables. The
 # second is the baseline: the run as it was before the first edit,
@@ -51,6 +52,12 @@ FORMER_NAMES = (
 
 def _app() -> str:
     return APP_JS.read_text(encoding="utf-8")
+
+
+def _snapshot() -> str:
+    """The snapshot codec, which serialises both families for the
+    page and reads them back."""
+    return SNAPSHOT_JS.read_text(encoding="utf-8")
 
 
 # -- nothing reaches around the module --
@@ -149,19 +156,24 @@ def test_a_fresh_run_clears_through_it() -> None:
 
 def test_the_snapshot_is_serialised_through_it() -> None:
     """Both payloads: the light one that survives a storage-quota
-    refusal, and the full one."""
-    region = _region("function saveSessionState()", 2600)
-    light = "runFramesToJson(runFrames, RUN_FRAME_LIGHT_FIELDS)"
+    refusal, and the full one. The codec serialises the family the
+    page hands it."""
+    codec = _snapshot()
+    light = "runFramesToJson(record.frames, RUN_FRAME_LIGHT_FIELDS)"
+    handed = _region("function saveSessionState()", 2600)
 
-    assert light in region
-    assert "runFramesToJson(runFrames)" in region
+    assert light in codec
+    assert "runFramesToJson(record.frames)" in codec
+    assert "frames: runFrames," in handed
 
 
 def test_the_snapshot_is_read_back_through_it() -> None:
-    region = _region("function restoreSessionState()", 1200)
+    region = _region(
+        "function restoreSessionStateApply(restored)", 400
+    )
 
-    assert "runFramesFromJson(s)" in region
-    assert "runFramesRestore(runFrames, restored)" in region
+    assert "runFramesFromJson(source)" in _snapshot()
+    assert "runFramesRestore(runFrames, restored.frames)" in region
 
 
 # -- and so does the baseline --
@@ -184,8 +196,13 @@ def test_the_baseline_is_frozen_through_the_module() -> None:
 
 
 def test_the_baseline_is_cleared_and_stored_through_it() -> None:
+    """Stored and read back by the codec, and put back in place by the
+    page, into the one baseline it holds."""
     source = _app()
+    codec = _snapshot()
+    assigned = "originalRunAssign(originalRun, restored.original)"
 
     assert "originalRunClear(originalRun)" in source
-    assert "originalRunToJson(originalRun)" in source
-    assert "originalRunRestore(originalRun, s," in source
+    assert "originalRunToJson(record.original)" in codec
+    assert "originalRunFromJson(" in codec
+    assert assigned in source

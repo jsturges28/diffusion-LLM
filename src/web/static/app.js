@@ -9551,15 +9551,11 @@ allModals.forEach(function (modal) {
 // activates a model (see overlaysClearLastRun for why both pages do).
 var SESSION_KEY = OVERLAYS_LAST_RUN_KEY;
 
+// The page's run, read into the one record run_snapshot.js turns into
+// what storage is offered. Whether the run is worth keeping, and which
+// tier gives way first, are the codec's to decide.
 function saveSessionState() {
-  if (
-    !activeModelId
-    || runFramesLength(runFrames) < 2
-    || !lastFinalText
-  ) {
-    return;
-  }
-  var base = {
+  sessionStoreFirstFitting(runSnapshotTiers({
     model: activeModelId,
     // Part of the snapshot's identity, not decoration. The same model
     // on the other device is a different worker with its own output,
@@ -9605,50 +9601,12 @@ function saveSessionState() {
     lastRunTotalSteps: lastRunTotalSteps,
     statusElapsed: statusElapsed.textContent,
     statusMessage: statusMessage.textContent,
-  };
-  // The three that survive a storage-quota refusal: enough to redraw
-  // the run and report its timings. The other three are per-token
-  // detail and ride the full payload below.
-  Object.assign(
-    base, runFramesToJson(runFrames, RUN_FRAME_LIGHT_FIELDS)
-  );
-  var full = Object.assign({}, base, runFramesToJson(runFrames), {
+    frames: runFrames,
     positionAlts: positionAlts,
-  }, originalRunToJson(originalRun));
-  // Most complete first, each tier dropping what the next can live
-  // without when the sessionStorage quota refuses it (long runs).
-  // Candidates go first: packed, a default LLaDA run's are about a
-  // million characters against the desktop app's 5.2 million for the
-  // whole snapshot, and losing them costs less than losing the
-  // per-token detail they explain.
-  sessionStoreFirstFitting(candidateTiers(full).concat([full, base]));
-}
-
-// The snapshot's fuller payloads, most complete first: both runs'
-// candidates, then the live run's alone, so the pre-edit run's give
-// way first. The pre-edit run's are written only once an edit has
-// made them a store of their own; before that they are the live
-// run's, and writing them twice could cost the quota the tokens.
-function candidateTiers(full) {
-  var tiers = [];
-  var withLive = Object.assign({}, full, {
-    candidates: runCandidatesToSnapshot(runCandidates),
-  });
-  if (originalCandidatesKeptApart()) {
-    tiers.push(Object.assign({}, withLive, {
-      originalCandidates: runCandidatesToSnapshot(originalCandidates),
-    }));
-  }
-  if (!runCandidatesIsEmpty(runCandidates)) {
-    tiers.push(withLive);
-  }
-  return tiers;
-}
-
-function originalCandidatesKeptApart() {
-  return originalCandidates !== null
-    && originalCandidates !== runCandidates
-    && !runCandidatesIsEmpty(originalCandidates);
+    original: originalRun,
+    candidates: runCandidates,
+    originalCandidates: originalCandidates,
+  }));
 }
 
 // Write the first payload the sessionStorage quota accepts, or none.
@@ -9670,120 +9628,60 @@ function clearSessionState() {
   overlaysClearLastRun();
 }
 
-// A snapshot written before the run carried its own prompt has only
-// the box text from when it was taken, which is the best record left
-// of what ran.
-function restoredRunPrompt(snapshot) {
-  if (typeof snapshot.runPrompt === "string") {
-    return snapshot.runPrompt;
-  }
-  if (typeof snapshot.prompt === "string" && snapshot.prompt !== "") {
-    return snapshot.prompt.trim();
-  }
-  return null;
-}
-
-// The pre-edit run's candidates as a snapshot left them. An unedited
-// run never writes them, being the live run's own. An edited run's
-// may have given way to the storage quota, and that one gets an
-// empty store, so its Original page shows nothing rather than the
-// edited run's candidates under the original's tokens.
-function restoredOriginalCandidates(snapshot) {
-  if (snapshot.originalCandidates) {
-    return runCandidatesFromSnapshot(snapshot.originalCandidates);
-  }
-  if (remaskEdits.length > 0) {
-    return runCandidatesCreate();
-  }
-  return runCandidates;
-}
-
 function restoreSessionState() {
   if (!activeModelId) {
     return false;
   }
-  var raw;
+  var stored = null;
   try {
-    raw = sessionStorage.getItem(SESSION_KEY);
+    stored = sessionStorage.getItem(SESSION_KEY);
   } catch (_e) {
     return false;
   }
-  if (!raw) {
+  var restored = runSnapshotDecode(stored, {
+    model: activeModelId,
+    device: activeDevice,
+  });
+  if (restored === null) {
     return false;
   }
-  var s;
-  try {
-    s = JSON.parse(raw);
-  } catch (_e) {
-    return false;
-  }
-  if (!s) {
-    return false;
-  }
-  // Snapshots written before the device joined the identity have no
-  // `device` key at all. Treating that as a mismatch would silently
-  // drop one in-flight run per upgrade, so it is read as "matches",
-  // and the clear-on-switch covers the case it cannot.
-  var sameDevice =
-    s.device === undefined || s.device === activeDevice;
-  // A snapshot that hit the storage quota carries only three of the
-  // six, so the run comes back renderable but without its per-token
-  // detail. That is allowed, and the first Edit-Frames truncate
-  // squares the missing three up to the same length as the rest.
-  var restored = runFramesFromJson(s);
-  if (
-    s.model !== activeModelId
-    || !sameDevice
-    || runFramesLength(restored) < 2
-  ) {
-    return false;
-  }
+  restoreSessionStateApply(restored);
+  return true;
+}
 
-  runFramesRestore(runFrames, restored);
+// What run_snapshot.js decoded, put back into the page: the run
+// first, then the controls that read it.
+function restoreSessionStateApply(restored) {
+  runFramesRestore(runFrames, restored.frames);
   invalidateRunMemos();
-  lastFinalText = s.finalText || "";
-  lastRunPrompt = restoredRunPrompt(s);
-  lastRunParams = s.params || null;
-  lastRunPromptLen =
-    typeof s.promptLen === "number" ? s.promptLen : null;
-  // Absent in snapshots written before runs had identities, which
-  // reads as "no token" and costs one refused edit on the upgrade
-  // rather than an edit answered from the wrong run.
-  activeRunToken =
-    typeof s.runToken === "string" ? s.runToken : "";
-  // Absent in snapshots older than worker names, which reads as
-  // unknown and keeps the run editable, as such runs always were.
-  runWorker = typeof s.worker === "string" ? s.worker : "";
-  lastRunProvenance =
-    s.provenance && typeof s.provenance === "object"
-      ? s.provenance
-      : null;
-  remaskEdits = s.remaskEdits || [];
-  originalRunRestore(originalRun, s, runFramesLength(runFrames));
-  positionAlts = s.positionAlts || [];
-  runCandidates = runCandidatesFromSnapshot(s.candidates);
-  originalCandidates = restoredOriginalCandidates(s);
-  editedRunSaved = !!s.editedRunSaved;
+  lastFinalText = restored.finalText;
+  lastRunPrompt = restored.runPrompt;
+  lastRunParams = restored.params;
+  lastRunPromptLen = restored.promptLen;
+  activeRunToken = restored.runToken;
+  runWorker = restored.worker;
+  lastRunProvenance = restored.provenance;
+  remaskEdits = restored.remaskEdits;
+  originalRunAssign(originalRun, restored.original);
+  positionAlts = restored.positionAlts;
+  runCandidates = restored.candidates;
+  originalCandidates = restored.originalCandidates;
+  editedRunSaved = restored.editedRunSaved;
   // Restored with the rest, or a stopped run would come back from
   // Analytics looking complete and save itself that way.
-  runInterrupted = !!s.runInterrupted;
-  // Absent in snapshots written before it existed, which reads as
-  // "kept its connection", as every run was treated then.
-  runLostConnection = !!s.runLostConnection;
-  runSaved = !!s.runSaved;
-  lastSavedRunId = s.lastSavedRunId || null;
-  lastSavedRevision =
-    typeof s.lastSavedRevision === "number"
-      ? s.lastSavedRevision
-      : null;
+  runInterrupted = restored.runInterrupted;
+  runLostConnection = restored.runLostConnection;
+  runSaved = restored.runSaved;
+  lastSavedRunId = restored.lastSavedRunId;
+  lastSavedRevision = restored.lastSavedRevision;
   updateGenerateButton();
-  if (s.prompt) {
-    promptInput.value = s.prompt;
+  if (restored.prompt) {
+    promptInput.value = restored.prompt;
   }
 
   if (thinkingPanel && thinkingContent) {
-    if (s.thinking) {
-      thinkingContent.textContent = s.thinking;
+    if (restored.thinking) {
+      thinkingContent.textContent = restored.thinking;
       thinkingPanel.hidden = false;
     } else {
       thinkingPanel.hidden = true;
@@ -9797,24 +9695,20 @@ function restoreSessionState() {
 
   // Restore the footer readouts (Step / Elapsed / message) so the
   // status bar reflects the completed run rather than resetting.
-  lastRunTotalSteps =
-    typeof s.lastRunTotalSteps === "number"
-      ? s.lastRunTotalSteps
-      : null;
-  if (s.statusStep) {
-    statusStep.textContent = s.statusStep;
+  lastRunTotalSteps = restored.lastRunTotalSteps;
+  if (restored.statusStep) {
+    statusStep.textContent = restored.statusStep;
   }
-  if (s.statusElapsed) {
-    statusElapsed.textContent = s.statusElapsed;
+  if (restored.statusElapsed) {
+    statusElapsed.textContent = restored.statusElapsed;
   }
   // Recomputed rather than replayed from stored text, so it honors
   // the mode in effect now: the setting is global and may have been
   // switched on another page since this run finished.
   renderTpsFooter(currentTokensPerSecond());
-  if (s.statusMessage) {
-    statusMessage.textContent = s.statusMessage;
+  if (restored.statusMessage) {
+    statusMessage.textContent = restored.statusMessage;
   }
-  return true;
 }
 
 // ---- Session-scoped form state (params + prompt draft) ----

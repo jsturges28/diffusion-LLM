@@ -629,14 +629,20 @@ function originalRunFromJson(source, fallbackTotal) {
 
 // In place, for the same reason the live family is: whoever holds
 // the baseline keeps the same object, so a reference taken anywhere
-// stays valid.
-function originalRunRestore(original, source, fallbackTotal) {
-  var parsed = originalRunFromJson(source, fallbackTotal);
-  original.totalFrames = parsed.totalFrames;
-  original.shape = parsed.shape;
-  original.positions = parsed.positions;
+// stays valid. `decoded` is a baseline as originalRunFromJson builds
+// one.
+function originalRunAssign(original, decoded) {
+  original.totalFrames = decoded.totalFrames;
+  original.shape = decoded.shape;
+  original.positions = decoded.positions;
   for (var i = 0; i < ORIGINAL_RUN_FIELDS.length; i++) {
     var name = ORIGINAL_RUN_FIELDS[i];
-    original[name] = parsed[name];
+    original[name] = decoded[name];
   }
+}
+
+function originalRunRestore(original, source, fallbackTotal) {
+  originalRunAssign(
+    original, originalRunFromJson(source, fallbackTotal)
+  );
 }
