@@ -32,10 +32,10 @@ from fastapi.testclient import TestClient
 from src.backends import worker_base
 from src.backends.protocol import ModelCapabilities, ModelInfo
 from src.backends.resource_sampler import KIND_CPU, KIND_VRAM
+from src.backends.worker_app import create_worker_app
 from src.backends.worker_base import (
     Backend,
     FrameStreamer,
-    create_worker_app,
     pump_resource_samples,
     resource_sample_kind,
 )

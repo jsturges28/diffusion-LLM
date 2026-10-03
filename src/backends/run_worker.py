@@ -19,7 +19,7 @@ import os
 import uvicorn
 
 from src.backends.registry import REGISTRY
-from src.backends.worker_base import create_worker_app
+from src.backends.worker_app import create_worker_app
 
 # Disable the Xet download client before the worker module import in
 # main() (which transitively imports transformers -> huggingface_hub).

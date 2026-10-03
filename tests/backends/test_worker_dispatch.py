@@ -34,7 +34,7 @@ from typing import Any, Dict, Iterator, List, Optional
 import pytest
 from fastapi.testclient import TestClient
 
-from src.backends import worker_base
+from src.backends import worker_app
 from src.backends.protocol import (
     ERROR_BUSY,
     ERROR_NO_TOKENIZER,
@@ -45,11 +45,11 @@ from src.backends.protocol import (
     ModelCapabilities,
     ModelInfo,
 )
+from src.backends.worker_app import create_worker_app
 from src.backends.worker_base import (
     Backend,
     FrameStreamer,
     StaleRunError,
-    create_worker_app,
 )
 
 MODEL_ID = "stub"
@@ -546,13 +546,13 @@ def test_a_disconnect_waits_for_its_own_run(
     real server does not, so the wait itself never finishes here.
     """
     settled: List[Any] = []
-    real = worker_base._settle_generation
+    real = worker_app._settle_generation
 
     async def recording(task: Any) -> None:
         settled.append(task)
         await real(task)
 
-    monkeypatch.setattr(worker_base, "_settle_generation", recording)
+    monkeypatch.setattr(worker_app, "_settle_generation", recording)
     with _window(client) as socket:
         _park(backend, socket)
 

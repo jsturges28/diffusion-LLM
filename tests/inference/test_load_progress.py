@@ -448,7 +448,7 @@ def test_sample_reports_zero_fraction_when_indeterminate(
 def test_sample_is_tagged_as_the_load_phase(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """worker_base tells a load apart from a download by this key."""
+    """worker_app tells a load apart from a download by this key."""
     patch_counters(monkeypatch, rss=1500, cuda=0)
     sample = load_progress.progress_sample(
         baseline_rss=1000, target_bytes=1000, peak_fraction=0.0

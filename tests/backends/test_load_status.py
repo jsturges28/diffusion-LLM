@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.backends.worker_base import resolve_load_status
+from src.backends.worker_app import resolve_load_status
 
 
 def test_no_progress_is_a_plain_load() -> None:
