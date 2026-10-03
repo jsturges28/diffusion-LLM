@@ -77,14 +77,16 @@ _IGNORED_PREFIXES = (
 # it named may since have been renamed or deleted; holding history to
 # the present tense would just mean never writing history down.
 #
-# The audit report is here for a stronger reason: the campaign's brief
-# declares it immutable, so a test that demanded edits to it would be
-# asking for a rule to be broken. Its file citations are part of the
-# record of what was believed on the day it was written.
+# The audit reports are here for a stronger reason: each campaign's
+# brief declares its report immutable, so a test that demanded edits
+# to one would be asking for a rule to be broken. Their file citations
+# are part of the record of what was believed on the day each was
+# written, including modules a finding proposes and nobody has created
+# yet.
 _UNCHECKED_DOC_PREFIXES = (
     ".cursor/plans/",
     "archive/",
-    "docs/audit/AUDIT_REPORT.md",
+    "docs/audit/AUDIT_REPORT",
     "src/web/static/vendor/",
 )
 
