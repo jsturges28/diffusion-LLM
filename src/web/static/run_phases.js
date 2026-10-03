@@ -149,21 +149,57 @@ function runPhasesEditing(phase) {
 // Why the run on screen cannot be edited at all, or "" when it can.
 //
 // Asked before a session opens, and before anything is sent from one
-// already open. A run whose connection dropped mid-run never received
-// the terminal frame that names the run the worker holds, so every
-// edit of it would be refused, and refused as though another run had
-// replaced it, which is not what happened. The real reason belongs on
-// the buttons, before anyone presses one.
+// already open. Two ways a run outlives what the worker holds, both
+// known on the page before anyone presses a button, which is where
+// the real reason belongs.
+//
+// A run whose connection dropped mid-run never received the terminal
+// frame that names the run the worker holds, so every edit of it
+// would be refused, and refused as though another run had replaced
+// it, which is not what happened.
 var RUN_EDIT_BLOCKED_LOST_CONNECTION =
   "This run lost its connection mid-run, so it can be saved but"
   + " not edited. Generate again to edit.";
+// A run made by a worker that is no longer resident (`A2-LIFE-03`):
+// the same model loaded again, by another page of the app or after a
+// restart, holds none of the runs the first one did.
+var RUN_EDIT_BLOCKED_REPLACED =
+  "The model has been reloaded since this run was made, so it can"
+  + " be saved but not edited. Generate again to edit.";
 
+// `run` is { lostConnection, madeBy, resident }: whether the run lost
+// its connection, the worker that made it, and the worker the socket
+// reaches now. A worker is "" when nobody named it, which is no
+// reason to lock: the worker still refuses an edit it cannot answer,
+// as every run was treated before workers had names.
 function runPhasesEditBlock(run) {
   if (typeof run.lostConnection !== "boolean") {
     throw new Error("lostConnection must be a boolean");
   }
+  if (typeof run.madeBy !== "string") {
+    throw new Error("madeBy must be a string");
+  }
+  if (typeof run.resident !== "string") {
+    throw new Error("resident must be a string");
+  }
   if (run.lostConnection) {
     return RUN_EDIT_BLOCKED_LOST_CONNECTION;
   }
+  if (run.madeBy === "" || run.resident === "") {
+    return "";
+  }
+  if (run.madeBy !== run.resident) {
+    return RUN_EDIT_BLOCKED_REPLACED;
+  }
   return "";
+}
+
+// Whether closing the open session would throw away a branch the
+// page can still save: one finished and awaiting Confirm, which is a
+// save and needs no worker, or one cut off mid-flight, which the
+// dropped-connection path chose to keep on screen. Any other phase
+// holds nothing that closing it would lose.
+function runPhasesKeepsWork(phase) {
+  return phase.mode === RUN_PHASE_REVIEW
+    || phase.mode === RUN_PHASE_GENERATING;
 }

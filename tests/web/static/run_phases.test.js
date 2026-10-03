@@ -331,12 +331,21 @@ test("a phase outside the table is refused", () => {
 
 // -- whether a run can be edited at all --
 
+// The page's view of one run: made by the worker that is resident,
+// and nothing wrong with it, unless a test says otherwise.
+function runOf(overrides) {
+  return Object.assign(
+    { lostConnection: false, madeBy: "a1b2:1", resident: "a1b2:1" },
+    overrides
+  );
+}
+
 test("a run that lost its connection cannot be edited", () => {
   // No terminal frame named the run the worker holds, so the worker
   // would refuse every edit of it.
   const api = load();
 
-  const reason = api.runPhasesEditBlock({ lostConnection: true });
+  const reason = api.runPhasesEditBlock(runOf({ lostConnection: true }));
 
   assert.equal(reason, api.RUN_EDIT_BLOCKED_LOST_CONNECTION);
   assert.match(reason, /saved but not edited/);
@@ -347,7 +356,7 @@ test("a run that kept its connection can be edited", () => {
   // terminal frame, and the worker still holds it.
   const api = load();
 
-  assert.equal(api.runPhasesEditBlock({ lostConnection: false }), "");
+  assert.equal(api.runPhasesEditBlock(runOf({})), "");
 });
 
 test("a missing answer is a mistake, not a yes", () => {
@@ -355,5 +364,89 @@ test("a missing answer is a mistake, not a yes", () => {
   // edited, which is the failure this exists to prevent.
   const api = load();
 
-  assert.throws(() => api.runPhasesEditBlock({}), /boolean/);
+  assert.throws(
+    () => api.runPhasesEditBlock({ madeBy: "", resident: "" }),
+    /boolean/
+  );
+});
+
+test("a run made by a worker that has been replaced cannot be edited", () => {
+  // The same model loaded again holds none of the runs the first
+  // one did, whichever window or restart reloaded it.
+  const api = load();
+
+  for (const resident of ["a1b2:2", "c3d4:1"]) {
+    const reason = api.runPhasesEditBlock(runOf({ resident }));
+
+    assert.equal(reason, api.RUN_EDIT_BLOCKED_REPLACED);
+    assert.match(reason, /reloaded since this run was made/);
+  }
+});
+
+test("a worker nobody named is no reason to lock", () => {
+  // A run from a snapshot older than worker names, or a page that has
+  // not heard from its socket yet. The worker still refuses an edit
+  // it cannot answer, which is how every run was treated before.
+  const api = load();
+
+  assert.equal(api.runPhasesEditBlock(runOf({ madeBy: "" })), "");
+  assert.equal(api.runPhasesEditBlock(runOf({ resident: "" })), "");
+});
+
+test("a lost connection is the reason given when both apply", () => {
+  // It is the one that happened to this run first.
+  const api = load();
+
+  const reason = api.runPhasesEditBlock(
+    runOf({ lostConnection: true, resident: "a1b2:2" })
+  );
+
+  assert.equal(reason, api.RUN_EDIT_BLOCKED_LOST_CONNECTION);
+});
+
+test("a worker that is not a string is a mistake", () => {
+  const api = load();
+
+  assert.throws(
+    () => api.runPhasesEditBlock(runOf({ madeBy: null })),
+    /string/
+  );
+  assert.throws(
+    () => api.runPhasesEditBlock(runOf({ resident: 3 })),
+    /string/
+  );
+});
+
+test("only review and generating hold work a session would lose", () => {
+  // Review holds a finished branch Confirm can still save; generating
+  // after a dropped connection holds the branch the page kept. Every
+  // other phase holds nothing that closing it would throw away.
+  const api = load();
+  const phase = api.runPhasesCreate();
+  const keeps = {};
+
+  for (const mode of [
+    null,
+    "select",
+    "edit",
+    "choice",
+    "select_target",
+    "substitute",
+    "generating",
+    "review",
+  ]) {
+    phase.mode = mode;
+    keeps[String(mode)] = api.runPhasesKeepsWork(phase);
+  }
+
+  assert.deepEqual(keeps, {
+    null: false,
+    select: false,
+    edit: false,
+    choice: false,
+    select_target: false,
+    substitute: false,
+    generating: true,
+    review: true,
+  });
 });

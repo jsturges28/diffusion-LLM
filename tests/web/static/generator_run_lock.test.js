@@ -18,6 +18,15 @@
 // stateful request reaches the worker for a locked run, even from a
 // session already open, and before anything is cut from the run.
 //
+// The second half is `A2-LIFE-03`: the same model on the same device
+// can be a different worker, reloaded from another window or after a
+// restart, and the page only compared model and device. Passing proves
+// a run made by a worker that is gone locks in place and says why,
+// that reconnecting to the same worker leaves it alone, that a run
+// restored after a trip to Analytics is judged the same way, that an
+// open session closes unless it holds a branch the page can still
+// save, and that an older supervisor or snapshot behaves as before.
+//
 // Run with: node --test tests/web/static/
 
 "use strict";
@@ -35,6 +44,7 @@ OpenSocket.OPEN = 1;
 const MASK = "\u2591";
 
 const LOST = /lost its connection mid-run/;
+const REPLACED = /reloaded since this run was made/;
 
 // What a page sends that only the worker holding its run can answer.
 const STATEFUL = ["resume", "substitute", "probe", "rewind"];
@@ -109,10 +119,26 @@ function tick() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+// The frame a socket opens with, naming the worker it reaches.
+function resident(model, worker) {
+  const frame = {
+    type: "resident",
+    model: model.id,
+    device: "cuda",
+    operation: 1,
+  };
+  if (worker !== undefined) {
+    frame.worker = worker;
+  }
+  return frame;
+}
+
 // A page running `model` with a generation under way, and the socket
 // it opened for itself. Two ticks, as in the interrupted-save tests:
 // the first drains connects still pending from pages built earlier.
-async function runOn(model) {
+// With `worker`, the socket first says which worker it reaches, as a
+// supervisor that names its workers does.
+async function runOn(model, worker) {
   await tick();
   const mark = FakeSocket.opened.length;
   const models = modelsFor(model);
@@ -124,6 +150,9 @@ async function runOn(model) {
   await tick();
   assert.equal(FakeSocket.opened.length, mark + 1);
   const { context, registry } = page;
+  if (worker !== undefined) {
+    context.handleResident(resident(model, worker));
+  }
   registry.get("prompt-input").value = "explain yeast";
   context.startGeneration();
   assert.equal(context.isGenerating, true, "the run did not start");
@@ -301,4 +330,151 @@ test("nor is a probe or a rewind sent once the page reconnects", async () => {
   context.rewindWorkerRun();
 
   assert.deepEqual(stateful(reconnected), []);
+});
+
+// -- a run whose worker is gone (`A2-LIFE-03`) --
+
+// A LLaDA run that finished on `worker`, which held it.
+async function finishedLlada(worker) {
+  const run = await runOn(LLADA, worker);
+  run.context.handleFrame(
+    snapshotFrame(0, MASK + MASK, opening(LLADA))
+  );
+  run.context.handleFrame(snapshotFrame(1, "ab"));
+  run.context.handleDone({
+    type: "done",
+    final_text: "ab",
+    run_token: "a3f9c1:1",
+  });
+  return run;
+}
+
+test("a run whose worker was replaced is locked, saying why", async () => {
+  // Reloaded from another window: same model, same device, a worker
+  // that holds none of this page's runs.
+  const { context, registry } = await finishedLlada("b0a7:1");
+  const button = registry.get("btn-edit-frames");
+
+  context.handleResident(resident(LLADA, "b0a7:2"));
+
+  assert.equal(isLocked(button), true);
+  assert.match(button.title, REPLACED);
+  assert.match(registry.get("status-message").textContent, REPLACED);
+});
+
+test("a restart under the run locks it the same way", async () => {
+  // The activation number starts again at one after a restart, so
+  // only the supervisor's own name tells the two workers apart.
+  const { context, registry } = await finishedLlada("b0a7:1");
+
+  context.handleResident(resident(LLADA, "c1d2:1"));
+
+  assert.equal(isLocked(registry.get("btn-edit-frames")), true);
+});
+
+test("reconnecting to the same worker leaves the run editable", async () => {
+  // Every socket open sends the frame, so a page that locked on all
+  // of them would lock every run on the first blip.
+  const { context, registry, socket } = await finishedLlada("b0a7:1");
+
+  context.handleResident(resident(LLADA, "b0a7:1"));
+  context.enterRemaskMode();
+
+  assert.equal(isLocked(registry.get("btn-edit-frames")), false);
+  assert.equal(context.runPhase.mode, "select");
+  assert.deepEqual(stateful(socket), ["rewind"]);
+});
+
+test("a locked run sends nothing to the worker that replaced it", async () => {
+  // The socket is open here, unlike a dropped connection, so the lock
+  // is all that keeps the request off the wire.
+  const { context, socket } = await finishedLlada("b0a7:1");
+  context.handleResident(resident(LLADA, "b0a7:2"));
+  context.typedEntryToken = { id: 7, t: " ale" };
+  context.typedEntryPos = 0;
+
+  context.enterRemaskMode();
+  context.requestTypedProbe();
+
+  assert.equal(context.runPhase.mode, null);
+  assert.deepEqual(stateful(socket), []);
+});
+
+// The trip to Analytics and back, as far as this page can tell: the
+// run is forgotten, restored from the snapshot, and the socket opens
+// again to say which worker it now reaches.
+function returnFromAnalytics(run) {
+  const button = run.registry.get("btn-edit-frames");
+  run.context.runWorker = "";
+  run.context.residentWorker = "";
+  run.context.setButtonUnlocked(button, "");
+  assert.equal(run.context.restoreSessionState(), true);
+  return button;
+}
+
+test("a restored run locks once the socket names another worker", async () => {
+  const run = await finishedLlada("b0a7:1");
+  const button = returnFromAnalytics(run);
+
+  run.context.handleResident(resident(LLADA, "b0a7:2"));
+
+  assert.equal(isLocked(button), true);
+  assert.match(button.title, REPLACED);
+});
+
+test("and stays editable when the socket names the same one", async () => {
+  const run = await finishedLlada("b0a7:1");
+  const button = returnFromAnalytics(run);
+
+  run.context.handleResident(resident(LLADA, "b0a7:1"));
+
+  assert.equal(isLocked(button), false);
+});
+
+test("an open frame selection closes when its worker goes", async () => {
+  // Nothing in it can be saved yet, and nothing in it can run now.
+  const { context, registry } = await finishedLlada("b0a7:1");
+  context.enterRemaskMode();
+  assert.equal(context.runPhase.mode, "select");
+
+  context.handleResident(resident(LLADA, "b0a7:2"));
+
+  assert.equal(context.runPhase.mode, null);
+  assert.equal(isLocked(registry.get("btn-edit-frames")), true);
+});
+
+test("a branch awaiting Confirm is kept, and Retry locks", async () => {
+  // Confirm is a save, which needs no worker, so the finished branch
+  // stays saveable. Retry would start the edit again on a worker
+  // that does not hold the run.
+  const { context, registry, socket } = await finishedLlada("b0a7:1");
+  context.runPhase.mode = "review";
+  const retry = registry.get("btn-retry-edit");
+
+  context.handleResident(resident(LLADA, "b0a7:2"));
+  context.retryGuidedEdit();
+
+  assert.equal(context.runPhase.mode, "review");
+  assert.equal(isLocked(retry), true);
+  assert.match(retry.title, REPLACED);
+  assert.equal(isLocked(registry.get("btn-confirm-edit")), false);
+  assert.deepEqual(stateful(socket), []);
+});
+
+test("a supervisor that names no worker changes nothing", async () => {
+  const { context, registry } = await finishedLlada("b0a7:1");
+
+  context.handleResident(resident(LLADA));
+
+  assert.equal(isLocked(registry.get("btn-edit-frames")), false);
+});
+
+test("a run made before workers were named stays editable", async () => {
+  // Its worker is unknown, so the worker's own refusal is still what
+  // answers an edit it cannot serve, as it always was.
+  const { context, registry } = await finishedLlada(undefined);
+
+  context.handleResident(resident(LLADA, "b0a7:2"));
+
+  assert.equal(isLocked(registry.get("btn-edit-frames")), false);
 });

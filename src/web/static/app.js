@@ -256,6 +256,8 @@ var btnConfirmEdit =
   document.getElementById("btn-confirm-edit");
 var btnRetryEdit =
   document.getElementById("btn-retry-edit");
+// The markup's own tooltip, put back when a lock on Retry lifts.
+var RETRY_EDIT_TITLE = btnRetryEdit.title;
 var btnExitEdit =
   document.getElementById("btn-exit-edit");
 var remaskRandomizeRow =
@@ -319,6 +321,17 @@ var lastRunPromptLen = null;
 // result then looks like a valid answer to the wrong question. Empty
 // until a run finishes here.
 var activeRunToken = "";
+// The worker the socket reaches, as the supervisor named it on the
+// latest resident frame, and the worker that made the run on screen.
+// The token above cannot tell a replaced worker from its own before
+// a request is refused; these can, from the moment the socket opens
+// (`A2-LIFE-03`). The second rides the session snapshot, so a run
+// whose model was reloaded during a trip to Analytics comes back
+// locked rather than live. Empty while unknown: before the first
+// frame, from a supervisor that names no workers, or for a run
+// restored from a snapshot older than the names.
+var residentWorker = "";
+var runWorker = "";
 // What the worker attested about itself on the done frame: which
 // model and checkpoint, the device it actually loaded onto, its
 // library versions, and its tokenizer. Held here and submitted with
@@ -2058,7 +2071,8 @@ function handleModelStatus(data) {
 
 // The supervisor's statement of who this socket reaches, sent before
 // any worker traffic. Almost always the model this page was built
-// for, in which case there is nothing to do.
+// for, in which case the only question left is whether it is still
+// the worker that made the run on screen (adoptResidentWorker).
 //
 // When it is not, another window switched the model out from under
 // us. This page's cached model, device, capability gates and entire
@@ -2075,6 +2089,7 @@ function handleResident(data) {
   var sameDevice =
     !data.device || !activeDevice || data.device === activeDevice;
   if (sameModel && sameDevice) {
+    adoptResidentWorker(data.worker);
     return;
   }
   // Nothing here may be generated against, and the reconnect loop
@@ -2093,6 +2108,35 @@ function handleResident(data) {
   statusMessage.textContent =
     "The model was changed to " + name + " in another window.";
   rescueRunThenReload();
+}
+
+// The same model and device, which may still be a different worker:
+// loaded again from another window, or after the supervisor restarted.
+// Everything this page was built for still holds, its model, device
+// and form, so nothing reloads. Only the run on screen goes stale,
+// held by no live worker, and it locks in place, still savable.
+//
+// An open session closes the way Exit does, since nothing in it can
+// run now, unless it holds a branch the page can still save
+// (runPhasesKeepsWork): Confirm needs no worker.
+function adoptResidentWorker(worker) {
+  if (typeof worker !== "string" || worker === "") {
+    return;
+  }
+  var wasBlocked = runEditBlock() !== "";
+  residentWorker = worker;
+  var blocked = runEditBlock();
+  if (!blocked || wasBlocked) {
+    updateEditFramesLock();
+    return;
+  }
+  if (runPhasesEditing(runPhase) && !runPhasesKeepsWork(runPhase)) {
+    exitRemaskMode();
+  }
+  updateEditFramesLock();
+  statusRowReflow(function () {
+    statusMessage.textContent = blocked;
+  });
 }
 
 // How long to let a rescue save finish before reloading anyway. The
@@ -2550,6 +2594,8 @@ function handleDone(data) {
   if (typeof data.run_token === "string") {
     activeRunToken = data.run_token;
   }
+  // The worker that finished it is the one the socket reaches now.
+  runWorker = residentWorker;
   if (thinkingPanel && thinkingContent) {
     if (data.thinking) {
       thinkingContent.textContent = data.thinking;
@@ -6351,14 +6397,17 @@ function runIsMultiCanvas() {
 function updateEditFramesLock() {
   // A run the worker cannot answer for is locked whatever else holds,
   // and with its own reason, since that is the one that applies.
+  // Retry locks too: it would start the edit again on that worker.
   var blocked = runEditBlock();
   if (blocked) {
     setButtonLocked(btnEditFrames, blocked);
     if (btnWhatIf) {
       setButtonLocked(btnWhatIf, blocked);
     }
+    setButtonLocked(btnRetryEdit, blocked);
     return;
   }
+  setButtonUnlocked(btnRetryEdit, RETRY_EDIT_TITLE);
   // An edited save in flight locks too, not just a completed one:
   // confirmGuidedEdit fires the save and re-shows the buttons before
   // its async handler can set editedRunSaved, which would otherwise
@@ -6400,7 +6449,11 @@ function updateEditFramesLock() {
 
 // Why the run on screen cannot be edited at all, or "" when it can.
 function runEditBlock() {
-  return runPhasesEditBlock({ lostConnection: runLostConnection });
+  return runPhasesEditBlock({
+    lostConnection: runLostConnection,
+    madeBy: runWorker,
+    resident: residentWorker,
+  });
 }
 
 // Whether a request about the run on screen must not be sent, saying
@@ -7483,6 +7536,9 @@ function confirmGuidedEdit() {
 // edit session. Autoregressive runs re-enter substitution, whose
 // session has no frame-selection phase to restart into.
 function retryGuidedEdit() {
+  if (editRequestRefused()) {
+    return;
+  }
   var wasSubstitution = supportsSubstitution();
   restoreEditSnapshot();
   resetGuidedMode();
@@ -7985,6 +8041,7 @@ function resetRunState() {
   // under way, so a token surviving here names a run neither end
   // holds.
   activeRunToken = "";
+  runWorker = "";
   originalRunClear(originalRun);
   positionAlts = [];
   runCandidates = runCandidatesCreate();
@@ -9530,6 +9587,7 @@ function saveSessionState() {
     // is correct, which is the whole point of carrying the token
     // rather than a bare counter.
     runToken: activeRunToken,
+    worker: runWorker,
     thinking:
       thinkingPanel && !thinkingPanel.hidden
         ? thinkingContent.textContent
@@ -9693,6 +9751,9 @@ function restoreSessionState() {
   // rather than an edit answered from the wrong run.
   activeRunToken =
     typeof s.runToken === "string" ? s.runToken : "";
+  // Absent in snapshots older than worker names, which reads as
+  // unknown and keeps the run editable, as such runs always were.
+  runWorker = typeof s.worker === "string" ? s.worker : "";
   lastRunProvenance =
     s.provenance && typeof s.provenance === "object"
       ? s.provenance

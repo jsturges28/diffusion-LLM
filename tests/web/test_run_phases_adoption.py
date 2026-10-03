@@ -84,10 +84,12 @@ def test_leaving_a_session_uses_the_module() -> None:
 
 def test_session_open_checks_use_the_helper() -> None:
     """Rather than comparing the phase against null in two places,
-    which is the comparison that goes stale when a phase is added."""
+    which is the comparison that goes stale when a phase is added.
+    The third is a replaced worker closing an open session
+    (`A2-LIFE-03`), which asks the same question."""
     source = _app()
 
-    assert source.count("runPhasesEditing(runPhase)") == 2
+    assert source.count("runPhasesEditing(runPhase)") == 3
 
 
 def test_the_module_loads_first_and_has_no_dom() -> None:
