@@ -96,10 +96,10 @@ def _plenty_of_vram(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        model_manager, "_gpu_name", lambda: "Fake GPU"
+        model_manager, "gpu_name", lambda: "Fake GPU"
     )
     monkeypatch.setattr(
-        model_manager, "_free_vram_gib", lambda: 99.0
+        model_manager, "free_vram_gib", lambda: 99.0
     )
 
 
@@ -305,7 +305,7 @@ def test_a_model_that_cannot_fit_evicts_nothing(
     only refuses the genuinely hopeless case."""
     harness = _resident()
     monkeypatch.setattr(
-        model_manager, "_free_vram_gib", lambda: 0.5
+        model_manager, "free_vram_gib", lambda: 0.5
     )
 
     with pytest.raises(
@@ -327,7 +327,7 @@ def test_the_refusal_says_the_model_is_still_loaded(
     they had just lost their model, which is what used to happen."""
     harness = _resident()
     monkeypatch.setattr(
-        model_manager, "_free_vram_gib", lambda: 0.5
+        model_manager, "free_vram_gib", lambda: 0.5
     )
 
     with pytest.raises(RuntimeError) as caught:
@@ -383,7 +383,7 @@ def test_a_reclaimable_resident_lets_the_next_model_fit(
             return free_while_resident
         return free_while_resident + resident
 
-    monkeypatch.setattr(model_manager, "_free_vram_gib", free_vram)
+    monkeypatch.setattr(model_manager, "free_vram_gib", free_vram)
 
     async def scenario() -> None:
         await harness.manager.activate(
@@ -406,7 +406,7 @@ def test_an_unreadable_gpu_does_not_block_activation(
     the same call."""
     harness = _resident()
     monkeypatch.setattr(
-        model_manager, "_free_vram_gib", lambda: None
+        model_manager, "free_vram_gib", lambda: None
     )
 
     async def scenario() -> None:
@@ -470,7 +470,7 @@ def test_the_post_eviction_check_refuses_the_same_way(
         # once it is gone (so the real check refuses).
         return 99.0 if harness.resident_holds_vram() else 0.5
 
-    monkeypatch.setattr(model_manager, "_free_vram_gib", free_vram)
+    monkeypatch.setattr(model_manager, "free_vram_gib", free_vram)
 
     with pytest.raises(model_manager.ActivationRefused):
         asyncio.run(

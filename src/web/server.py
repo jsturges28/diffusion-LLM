@@ -186,7 +186,7 @@ async def _startup() -> None:
     )
     # Reap any worker orphaned by a prior crashed supervisor before we
     # start serving, so stale workers cannot keep holding VRAM.
-    await asyncio.to_thread(model_manager._sweep_orphan_workers)
+    await asyncio.to_thread(model_manager.sweep_orphan_workers)
 
 
 @app.on_event("shutdown")
@@ -260,7 +260,7 @@ def _models_snapshot() -> Dict[str, Any]:
     Runs the blocking ``nvidia-smi`` probes here so the endpoint can
     offload it to a thread and keep the event loop responsive.
     """
-    free_vram_gib = model_manager._free_vram_gib()
+    free_vram_gib = model_manager.free_vram_gib()
     active_id = manager.active_id
     # Only a resident GPU worker reclaims VRAM when stopped; a
     # CPU-resident model frees no VRAM, so it must not inflate the
@@ -292,16 +292,16 @@ def _models_snapshot() -> Dict[str, Any]:
         data["downloadable"] = is_hub_checkpoint(
             info.checkpoint
         )
-        data["downloaded"] = model_manager._is_downloaded(
+        data["downloaded"] = model_manager.is_downloaded(
             info.checkpoint, info.revision, info.companion
         )
-        data["partial"] = model_manager._is_partial(info.checkpoint)
+        data["partial"] = model_manager.is_partial(info.checkpoint)
         models.append(data)
-    gpu = model_manager._gpu_name()
+    gpu = model_manager.gpu_name()
     # Only classify the failure reason when the name is unreadable, so
     # a healthy system pays no extra nvidia-smi call.
     gpu_status = (
-        "ok" if gpu is not None else model_manager._gpu_status()
+        "ok" if gpu is not None else model_manager.gpu_status()
     )
     return {
         "models": models,
@@ -319,8 +319,8 @@ def _models_snapshot() -> Dict[str, Any]:
         "gpu_name": gpu,
         "free_vram_gib": free_vram_gib,
         "gpu_status": gpu_status,
-        "cpu_name": model_manager._cpu_name(),
-        "free_ram_gib": model_manager._free_ram_gib(),
+        "cpu_name": model_manager.cpu_name(),
+        "free_ram_gib": model_manager.free_ram_gib(),
     }
 
 
@@ -1321,9 +1321,9 @@ def _describe_processor(
     else:
         device = manager.active_device
     if device == "cuda":
-        return "GPU", model_manager._gpu_name()
+        return "GPU", model_manager.gpu_name()
     if device == "cpu":
-        return "CPU", model_manager._cpu_name()
+        return "CPU", model_manager.cpu_name()
     return "Unknown", None
 
 
@@ -1475,7 +1475,7 @@ def _reproducibility_block(
         tokenizer = dict(manager.active_tokenizer)
     return {
         "seed": body.params.get("seed"),
-        "gpu": model_manager._gpu_name(),
+        "gpu": model_manager.gpu_name(),
         "git_commit": _git_commit(),
         # The model's commit, beside the app's. The pair is the whole
         # answer to "what produced this": ``git_commit`` pins the code
@@ -2370,7 +2370,7 @@ async def analytics_system_info() -> JSONResponse:
     """
     return JSONResponse(
         content={
-            "gpu_name": model_manager._gpu_name(),
+            "gpu_name": model_manager.gpu_name(),
             "results_dir": _display_run_path(RESULTS_DIR),
         }
     )
@@ -2970,7 +2970,7 @@ def _models_boot_state() -> Dict[str, Any]:
         "active_tokenizer": dict(manager.active_tokenizer),
         "active_context_length": manager.active_context_length,
         "default": DEFAULT_MODEL,
-        "gpu_name": model_manager._gpu_name(),
+        "gpu_name": model_manager.gpu_name(),
     }
 
 

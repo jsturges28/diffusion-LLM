@@ -80,7 +80,7 @@ logger = logging.getLogger("diffusion_supervisor")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Disable the Xet download client before the first huggingface_hub
-# import. Here huggingface_hub is imported lazily (in _is_downloaded /
+# import. Here huggingface_hub is imported lazily (in is_downloaded /
 # the download task), so setting the flag now, at module load, still
 # precedes it. The flag is cached in hf constants at import time, so
 # setting it any later is a no-op; Xet bypasses our tqdm progress
@@ -282,7 +282,7 @@ def _nvidia_smi_query(field: str) -> Optional[str]:
 _gpu_name_cached: Optional[str] = None
 
 
-def _gpu_name() -> Optional[str]:
+def gpu_name() -> Optional[str]:
     """Best-effort GPU name via nvidia-smi. Cached once it reads."""
     global _gpu_name_cached
     if _gpu_name_cached is not None:
@@ -291,7 +291,7 @@ def _gpu_name() -> Optional[str]:
     return _gpu_name_cached
 
 
-def _free_vram_gib() -> Optional[float]:
+def free_vram_gib() -> Optional[float]:
     """Free GPU memory in GiB via nvidia-smi (None if unknown)."""
     raw = _nvidia_smi_query("memory.free")
     if raw is None:
@@ -302,7 +302,7 @@ def _free_vram_gib() -> Optional[float]:
         return None
 
 
-def _gpu_status() -> str:
+def gpu_status() -> str:
     """Classify GPU availability for a clearer Main Menu message.
 
     Returns one of: "ok", "no_nvidia_smi", "mismatch" (driver/library
@@ -331,7 +331,7 @@ def _gpu_status() -> str:
     return "error"
 
 
-def _cpu_name() -> Optional[str]:
+def cpu_name() -> Optional[str]:
     """Best-effort CPU model name, from /proc/cpuinfo then platform.
 
     Returned to the Main Menu so a GPU-less user can see what will run
@@ -351,7 +351,7 @@ def _cpu_name() -> Optional[str]:
     return fallback or None
 
 
-def _free_ram_gib() -> Optional[float]:
+def free_ram_gib() -> Optional[float]:
     """Available system RAM in GiB (Linux /proc/meminfo), or None."""
     try:
         text = Path("/proc/meminfo").read_text(encoding="utf-8")
@@ -390,7 +390,7 @@ def _proc_ppid(pid_dir: Path) -> Optional[int]:
     return None
 
 
-def _sweep_orphan_workers() -> None:
+def sweep_orphan_workers() -> None:
     """Terminate leftover worker processes orphaned by a prior crash.
 
     A worker whose supervisor died is reparented to init (ppid 1) yet
@@ -427,7 +427,7 @@ def _sweep_orphan_workers() -> None:
             pass
 
 
-def _is_partial(checkpoint: str) -> bool:
+def is_partial(checkpoint: str) -> bool:
     """Whether an interrupted fetch left parts of this one behind.
 
     Reported beside ``downloaded`` because that flag alone cannot
@@ -450,7 +450,7 @@ def _is_partial(checkpoint: str) -> bool:
         return False
 
 
-def _is_downloaded(
+def is_downloaded(
     checkpoint: str,
     revision: Optional[str] = None,
     companion: Optional[HubFiles] = None,
@@ -464,7 +464,7 @@ def _is_downloaded(
     A partial cache (an interrupted download leaving ``*.incomplete``
     parts) counts as not-downloaded so the menu keeps its download
     veneer and a re-click resumes, rather than the model being
-    marked ready and hanging on load. ``_is_partial`` above is what
+    marked ready and hanging on load. ``is_partial`` above is what
     lets that veneer say "resume" rather than "download".
 
     The question is asked about the pinned commit, not the repository.
@@ -762,7 +762,7 @@ class ModelManager:
         detected and CPU otherwise, so a GPU-less host still works.
         """
         if device is None:
-            return "cuda" if _gpu_name() is not None else "cpu"
+            return "cuda" if gpu_name() is not None else "cpu"
         if device not in ("cuda", "cpu"):
             raise ValueError(
                 f"invalid device: {device!r}"
@@ -1010,7 +1010,7 @@ class ModelManager:
         """
         if device == "cpu" or info.min_vram_gib <= 0:
             return
-        free = _free_vram_gib()
+        free = free_vram_gib()
         if free is None:
             return  # unreadable; the post-eviction check will say so
         reclaimable = 0.0
@@ -1378,14 +1378,14 @@ class ModelManager:
         deadline = (
             time.monotonic() + self._vram_settle_timeout_s
         )
-        free = _free_vram_gib()
+        free = free_vram_gib()
         while (
             free is not None
             and free < required
             and time.monotonic() < deadline
         ):
             await asyncio.sleep(0.5)
-            free = _free_vram_gib()
+            free = free_vram_gib()
         if free is None:
             logger.warning(
                 "free VRAM unreadable; skipping pre-flight"

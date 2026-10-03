@@ -181,10 +181,10 @@ def _no_vram_preflight(
     it live would make every case here depend on nvidia-smi.
     """
     monkeypatch.setattr(
-        model_manager, "_gpu_name", lambda: "Fake GPU"
+        model_manager, "gpu_name", lambda: "Fake GPU"
     )
     monkeypatch.setattr(
-        model_manager, "_free_vram_gib", lambda: 99.0
+        model_manager, "free_vram_gib", lambda: 99.0
     )
 
 

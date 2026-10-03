@@ -364,29 +364,29 @@ def test_the_menu_calls_a_finished_artifact_downloaded(
     supervisor's probe: the two must not be able to disagree about
     what a directory is.
     """
-    from src.web.model_manager import _is_downloaded
+    from src.web.model_manager import is_downloaded
 
-    assert _is_downloaded(str(_finished(tmp_path / "nf4")))
+    assert is_downloaded(str(_finished(tmp_path / "nf4")))
 
 
 def test_the_menu_does_not_call_a_bare_directory_downloaded(
     tmp_path: Path,
 ) -> None:
     """The finding in one assertion. This used to be True."""
-    from src.web.model_manager import _is_downloaded
+    from src.web.model_manager import is_downloaded
 
     directory = tmp_path / "nf4"
     directory.mkdir()
 
-    assert not _is_downloaded(str(directory))
+    assert not is_downloaded(str(directory))
 
 
 def test_the_menu_does_not_call_a_truncated_save_downloaded(
     tmp_path: Path,
 ) -> None:
-    from src.web.model_manager import _is_downloaded
+    from src.web.model_manager import is_downloaded
 
     directory = _finished(tmp_path / "nf4")
     (directory / WEIGHTS).write_bytes(PAYLOAD[:5])
 
-    assert not _is_downloaded(str(directory))
+    assert not is_downloaded(str(directory))

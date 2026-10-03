@@ -36,7 +36,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.web import server as server_module
-from src.web.model_manager import _is_partial
+from src.web.model_manager import is_partial
 from src.web.server import app
 
 MENU_JS = (
@@ -104,14 +104,14 @@ def test_a_local_checkpoint_is_never_partial() -> None:
     """DiffusionGemma's weights are produced offline by the quantize
     script rather than fetched, so there is no partial state for
     them to be in and nothing to resume."""
-    assert _is_partial("~/models/diffusiongemma-nf4") is False
-    assert _is_partial("/opt/weights/thing") is False
+    assert is_partial("~/models/diffusiongemma-nf4") is False
+    assert is_partial("/opt/weights/thing") is False
 
 
 def test_a_probe_failure_reports_not_partial(
     monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Same posture as `_is_downloaded`: a cache we cannot read is
+    """Same posture as `is_downloaded`: a cache we cannot read is
     not a cache we should promise to resume."""
     from src.inference import hf_download
 
@@ -122,7 +122,7 @@ def test_a_probe_failure_reports_not_partial(
         hf_download, "has_partial_download", _boom
     )
 
-    assert _is_partial("org/model") is False
+    assert is_partial("org/model") is False
 
 
 def test_the_registry_is_what_gets_asked(

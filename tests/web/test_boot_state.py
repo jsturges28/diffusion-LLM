@@ -400,9 +400,9 @@ def probes(monkeypatch: pytest.MonkeyPatch) -> Iterator[List[str]]:
 def test_the_gpu_name_is_read_once(probes: List[str]) -> None:
     """It cannot change under a running process, and it was being
     read on every page load of three pages."""
-    first = model_manager._gpu_name()
+    first = model_manager.gpu_name()
     for _ in range(10):
-        model_manager._gpu_name()
+        model_manager.gpu_name()
 
     assert first == "NVIDIA GeForce RTX 4090"
     assert probes == ["name"]
@@ -424,8 +424,8 @@ def test_a_failed_read_is_not_remembered(
 
     monkeypatch.setattr(model_manager, "_nvidia_smi_query", _flaky)
 
-    assert model_manager._gpu_name() is None
-    assert model_manager._gpu_name() == "NVIDIA GeForce RTX 4090"
+    assert model_manager.gpu_name() is None
+    assert model_manager.gpu_name() == "NVIDIA GeForce RTX 4090"
     assert len(calls) == 2
 
 
@@ -443,8 +443,8 @@ def test_free_vram_is_never_cached(
 
     monkeypatch.setattr(model_manager, "_nvidia_smi_query", _record)
 
-    model_manager._free_vram_gib()
-    model_manager._free_vram_gib()
+    model_manager.free_vram_gib()
+    model_manager.free_vram_gib()
 
     assert calls == ["memory.free", "memory.free"]
 

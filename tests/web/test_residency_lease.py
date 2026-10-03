@@ -104,9 +104,9 @@ def lease_file(tmp_path: Path) -> Path:
 @pytest.fixture(autouse=True)
 def _plenty_of_vram(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        model_manager, "_gpu_name", lambda: "Fake GPU"
+        model_manager, "gpu_name", lambda: "Fake GPU"
     )
-    monkeypatch.setattr(model_manager, "_free_vram_gib", lambda: 99.0)
+    monkeypatch.setattr(model_manager, "free_vram_gib", lambda: 99.0)
 
 
 @pytest.fixture(autouse=True)

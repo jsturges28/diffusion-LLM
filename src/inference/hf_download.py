@@ -148,8 +148,9 @@ def is_repo_cached(
 ) -> bool:
     """Whether ``revision`` of ``repo_id`` is fully cached.
 
-    Both the fast path here and the supervisor's ``_is_downloaded``
-    use this so an interrupted download (leaving ``*.incomplete``
+    Both the fast path here and the supervisor's
+    ``model_manager.is_downloaded`` use this so an interrupted
+    download (leaving ``*.incomplete``
     blobs) is treated as not-downloaded rather than complete.
     Re-downloading then resumes the remaining parts instead of the
     cache being misread as ready and the model hanging on load.

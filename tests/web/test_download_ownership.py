@@ -213,7 +213,7 @@ def test_a_model_is_downloaded_only_with_its_companion(
         lambda repo, files, **kw: borrowed["present"],
     )
     checkpoint, revision = "org/model", "a" * 40
-    is_downloaded = model_manager._is_downloaded
+    is_downloaded = model_manager.is_downloaded
 
     missing = is_downloaded(checkpoint, revision, _DONOR)
     borrowed["present"] = True
