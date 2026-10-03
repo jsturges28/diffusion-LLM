@@ -241,6 +241,80 @@ test("the last frame of a light restore is null", () => {
   assert.equal(api.runFramesTokensLast(frames), null);
 });
 
+// -- the text a run had reached --
+//
+// What a run that ended without a terminal frame is saved with: a
+// connection that drops mid-run sends none. DiffusionGemma sends one
+// canvas per frame, so its latest frame alone would drop every canvas
+// before the one it was cut in.
+
+// A snapshot run whose frames are [canvas, text] pairs, in order.
+function canvasRun(api, plan) {
+  const frames = api.runFramesCreate();
+  plan.forEach(([canvas, text], index) => {
+    const step = entry(index);
+    step.canvasIndex = canvas;
+    step.history = text;
+    api.runFramesAppend(frames, step);
+  });
+  return frames;
+}
+
+test("a single canvas reads as its latest frame", () => {
+  const api = load();
+  const frames = canvasRun(api, [
+    [0, "\u2591\u2591"],
+    [0, "a\u2591"],
+    [0, "ab"],
+  ]);
+
+  assert.equal(api.runFramesLatestText(frames), "ab");
+});
+
+test("unresolved positions stay as the frame drew them", () => {
+  // What the screen showed, not a finished text: a diffusion run cut
+  // off mid-denoise keeps its masks rather than reading as fluent
+  // prose with words silently missing.
+  const api = load();
+  const frames = canvasRun(api, [
+    [0, "\u2591\u2591"],
+    [0, "a\u2591"],
+  ]);
+
+  assert.equal(api.runFramesLatestText(frames), "a\u2591");
+});
+
+test("each canvas contributes its own last frame", () => {
+  // Two drafts and a commit on the first canvas, then a draft of the
+  // second still in progress: the commit, then that draft.
+  const api = load();
+  const frames = canvasRun(api, [
+    [0, "\u2591\u2591"],
+    [0, "a\u2591"],
+    [0, "ab"],
+    [1, "\u2591\u2591"],
+    [1, "c\u2591"],
+  ]);
+
+  assert.equal(api.runFramesLatestText(frames), "abc\u2591");
+});
+
+test("an append run reads as its positions joined", () => {
+  const api = load();
+
+  assert.equal(
+    api.runFramesLatestText(appendRun(api, 3)), "t0t1t2"
+  );
+});
+
+test("an empty run has no text to read", () => {
+  const api = load();
+
+  assert.equal(
+    api.runFramesLatestText(api.runFramesCreate()), null
+  );
+});
+
 test("the baseline reads a frame the same way", () => {
   // Diff and crossfade put a live frame beside a baseline frame, so
   // a difference in how they are reached would read as a difference

@@ -21,10 +21,12 @@ rather than where it was told to load, is in
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import pytest
 
+from src.backends.registry import LLADA
+from src.web import run_store
 from src.web.server import (
     RunProvenance,
     SaveRunRequest,
@@ -419,4 +421,37 @@ def test_an_unattested_run_saves_no_cost_block() -> None:
     """
     meta = _build_metadata(_request(provenance=None))
 
+    assert "resources" not in meta
+
+
+# -- a run whose connection dropped --
+
+
+def _llada_manifest() -> List[Dict[str, Any]]:
+    return [
+        channel.model_dump(mode="json")
+        for channel in LLADA.capabilities.signals
+    ]
+
+
+def test_an_interrupted_run_is_described_by_its_opening_frame(
+    switched_supervisor: None,
+) -> None:
+    """The run the opening envelope exists for. A dropped connection
+    sends no terminal frame, so the save carries what the run's first
+    frame attested: the worker, without what the run cost. It is
+    still the run's own account, where the supervisor's would by now
+    describe the model that replaced it, and it brings the signal
+    manifest that keeps a diffusion run's entropy reading its
+    frames."""
+    opening = _provenance(signals=_llada_manifest())
+
+    meta = _build_metadata(
+        _request(provenance=opening, partial=True)
+    )
+
+    assert meta["processor"] == "CPU"
+    assert meta["reproducibility"]["attested"] is True
+    assert meta["reproducibility"]["versions"] == RUN_VERSIONS
+    assert meta[run_store.SIGNALS_KEY] == _llada_manifest()
     assert "resources" not in meta

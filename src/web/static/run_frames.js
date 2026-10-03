@@ -217,6 +217,35 @@ function runFramesTextAt(frames, index) {
   return stored === undefined ? null : stored;
 }
 
+// The text a run had reached, for a run that ended without a terminal
+// frame to say it: a connection that drops mid-run sends none.
+//
+// Not simply the latest frame. A snapshot model may send one canvas
+// per frame, as DiffusionGemma does, and its latest frame holds only
+// the canvas it was cut in, so each canvas contributes its own last
+// frame, in order. A single-canvas run reduces to its latest frame
+// and an append run to its positions joined. Unresolved positions
+// stay as the frames drew them: this is what the screen showed, not
+// a finished text.
+function runFramesLatestText(frames) {
+  var count = runFramesLength(frames);
+  if (count === 0) {
+    return null;
+  }
+  if (runFramesIsAppend(frames)) {
+    return runFramesTextAt(frames, count - 1);
+  }
+  var parts = [];
+  for (var i = 0; i < count; i++) {
+    var closesCanvas = i === count - 1
+      || frames.canvasIndex[i + 1] !== frames.canvasIndex[i];
+    if (closesCanvas) {
+      parts.push(runFramesTextAt(frames, i));
+    }
+  }
+  return parts.join("");
+}
+
 // The pre-edit baseline reads the same way, and needs to: the diff
 // and crossfade overlays put a live frame and a baseline frame side
 // by side, so a difference in how they are reached would show up as

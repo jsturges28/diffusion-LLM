@@ -2494,8 +2494,18 @@ function enterInterruptedState() {
   // the scrubber and Save stay available. What the run cannot do
   // is claim it finished.
   if (runFramesLength(runFrames) > 0) {
+    // No terminal frame is coming to say what the run's text was,
+    // so it is read off the frames the page received. Without it
+    // Save, the session snapshot and the model-switch rescue all
+    // had nothing to write and declined without a word.
+    lastFinalText = runFramesLatestText(runFrames);
     setSaveAvailable(true);
     activateScrubber();
+    // Kept the way a finished run is, so leaving for Analytics
+    // before saving does not lose it (skip while mid guided-edit).
+    if (runPhase.mode === null) {
+      saveSessionState();
+    }
   }
 }
 
@@ -8265,10 +8275,13 @@ function saveRun() {
   if (isSaving) {
     return Promise.resolve();
   }
+  // Said rather than swallowed: Save is offered once a run has
+  // frames, and a click that does nothing reads as a broken button.
   if (
     runFramesLength(runFrames) === 0
     || !lastFinalText
   ) {
+    saveRunRefused("This run produced nothing to save.");
     return Promise.resolve();
   }
   // Saving a run that came back without its per-token detail writes
@@ -8278,13 +8291,11 @@ function saveRun() {
   // makes the stored payload linear and the light restore stops
   // happening at all.
   if (runFramesLackDetail(runFrames)) {
-    statusRowReflow(function () {
-      statusMessage.textContent =
-        "This run came back without its per-token detail and"
-          + " cannot be saved in full. Generate it again to save"
-          + " it.";
-    });
-    statusMessage.style.color = "var(--danger)";
+    saveRunRefused(
+      "This run came back without its per-token detail and"
+        + " cannot be saved in full. Generate it again to save"
+        + " it."
+    );
     return Promise.resolve();
   }
 
@@ -8503,6 +8514,15 @@ function saveRun() {
       statusMessage.style.color =
         "var(--danger)";
     });
+}
+
+// Why a save did not happen, on the line where a save's result always
+// goes and in the color a failed one takes.
+function saveRunRefused(message) {
+  statusRowReflow(function () {
+    statusMessage.textContent = message;
+  });
+  statusMessage.style.color = "var(--danger)";
 }
 
 // ---- Event listeners ----

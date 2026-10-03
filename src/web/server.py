@@ -2381,9 +2381,11 @@ class SaveRunRequest(BaseModel):
     # capture at the frame it branched from.
     original_candidates: Optional[FrameCandidates] = None
     # What the worker said about itself when this run finished,
-    # echoed back from the terminal frame. Absent for a run whose
-    # snapshot predates this field, which then falls back to the
-    # supervisor's current view, as every save used to do.
+    # echoed back from the terminal frame. A run whose connection
+    # dropped has none, and sends what its opening frame carried
+    # instead: the same envelope less what the run cost. Absent for a
+    # run whose snapshot predates this field, which then falls back to
+    # the supervisor's current view, as every save used to do.
     provenance: Optional[RunProvenance] = None
     # Which generation produced this run, from the same terminal
     # frame (`LIFE-01`). The store publishes under it, so a save that
