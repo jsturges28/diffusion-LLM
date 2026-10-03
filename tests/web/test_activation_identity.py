@@ -17,13 +17,18 @@ so either window could kill the other's load with a button that gave
 no sign of having reached across.
 
 The reconnect half, that a page whose worker was replaced is told so,
-is the `resident` frame checked at the end.
+is the `resident` frame checked near the end. After it comes the
+relay itself (`A2-QUALITY-02`): a message each way through the real
+route, and a teardown that finishes the half it cancels before the
+worker's connection is let go.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -420,3 +425,156 @@ def test_a_socket_with_no_serving_model_is_turned_away(
         first = socket.receive_json()
 
     assert first["type"] == "error"
+
+
+# -- the relay, both ways --
+
+
+class _AnsweringWorkerSocket:
+    """A worker end that answers each message with one of its own.
+
+    The fake above only plays a script at the page, so nothing sent
+    from the page was ever seen to arrive. This one records what it
+    is sent and replies to it. With ``hang_up_after`` it ends its
+    stream after that many replies, the way a worker that exits does;
+    without, it runs until the proxy cancels it.
+
+    ``settled`` turns true once its stream has finished, either way,
+    and ``settled_when_released`` records whether that had happened
+    by the time the proxy let go of the connection.
+    """
+
+    def __init__(self, hang_up_after: Optional[int] = None) -> None:
+        self.received: List[str] = []
+        self.hang_up_after = hang_up_after
+        self.settled = False
+        self.settled_when_released: Optional[bool] = None
+        self.released = threading.Event()
+        # Made on first use, inside the app's own event loop.
+        self._replies: Optional[asyncio.Queue] = None
+
+    def _queue(self) -> asyncio.Queue:
+        if self._replies is None:
+            self._replies = asyncio.Queue()
+        return self._replies
+
+    async def send(self, message: str) -> None:
+        self.received.append(message)
+        asked = json.loads(message).get("type")
+        reply = json.dumps({"type": "answer", "to": asked})
+        await self._queue().put(reply)
+        if self.hang_up_after == len(self.received):
+            await self._queue().put(None)
+
+    async def __aiter__(self) -> Any:
+        try:
+            while True:
+                reply = await self._queue().get()
+                if reply is None:
+                    return
+                yield reply
+        finally:
+            self.settled = True
+
+
+class _AnsweringConnect:
+    def __init__(self, socket: _AnsweringWorkerSocket) -> None:
+        self._socket = socket
+
+    async def __aenter__(self) -> _AnsweringWorkerSocket:
+        return self._socket
+
+    async def __aexit__(self, *_exc: Any) -> bool:
+        self._socket.settled_when_released = self._socket.settled
+        self._socket.released.set()
+        return False
+
+
+def _answering_worker(
+    monkeypatch: pytest.MonkeyPatch,
+    hang_up_after: Optional[int] = None,
+) -> _AnsweringWorkerSocket:
+    socket = _AnsweringWorkerSocket(hang_up_after)
+    monkeypatch.setattr(
+        server.websockets,
+        "connect",
+        lambda url, **kwargs: _AnsweringConnect(socket),
+    )
+    return socket
+
+
+# Far beyond what a relay of one in-memory message takes.
+RECEIVE_TIMEOUT_SECONDS = 5.0
+
+
+def _receive(socket: Any) -> Dict[str, Any]:
+    """The page's next message, failing rather than hanging.
+
+    A test client's receive has no timeout, so a relay that dropped a
+    direction would hang the suite. The reader is a daemon, and a
+    failed test cancels the client's pending receive on its way out.
+    """
+    box: List[Dict[str, Any]] = []
+    reader = threading.Thread(
+        target=lambda: box.append(socket.receive_json()), daemon=True
+    )
+    reader.start()
+    reader.join(timeout=RECEIVE_TIMEOUT_SECONDS)
+    assert box, "nothing reached the page"
+    return box[0]
+
+
+def test_a_page_message_reaches_the_worker_and_is_answered(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ready_worker(harness)
+    worker = _answering_worker(monkeypatch)
+
+    with harness.client.websocket_connect("/ws") as socket:
+        resident = _receive(socket)
+        socket.send_text('{"type": "generate"}')
+        answer = _receive(socket)
+
+    assert resident["type"] == "resident"
+    assert worker.received == ['{"type": "generate"}']
+    assert answer == {"type": "answer", "to": "generate"}
+
+
+def test_a_page_leaving_settles_the_worker_stream_first(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The page's half finishes, so the worker's is cancelled, and
+    it has to have stopped by the time the connection it reads from
+    is let go. Cancelling without waiting returned while it was still
+    reading."""
+    _ready_worker(harness)
+    worker = _answering_worker(monkeypatch)
+
+    with harness.client.websocket_connect("/ws") as socket:
+        _receive(socket)
+        socket.send_text('{"type": "generate"}')
+        _receive(socket)
+
+    released = worker.released.wait(RECEIVE_TIMEOUT_SECONDS)
+    assert released, "the proxy never let go"
+    assert worker.settled_when_released is True
+
+
+def test_a_worker_hanging_up_ends_the_proxy(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other direction. Waited on rather than read off the page's
+    socket: a test client never sees a close when a handler returns
+    without sending one, where uvicorn would drop the connection."""
+    _ready_worker(harness)
+    worker = _answering_worker(monkeypatch, hang_up_after=1)
+
+    with harness.client.websocket_connect("/ws") as socket:
+        _receive(socket)
+        socket.send_text('{"type": "generate"}')
+        answer = _receive(socket)
+        released = worker.released.wait(RECEIVE_TIMEOUT_SECONDS)
+
+    assert answer["type"] == "answer"
+    assert released, "the proxy outlived the worker it relayed"
+    assert worker.settled_when_released is True

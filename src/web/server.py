@@ -2099,6 +2099,16 @@ async def _pipe(browser: WebSocket, worker: Any) -> None:
     )
     for task in pending:
         task.cancel()
+    if not pending:
+        return
+    # Cancelling only asks. The caller closes the worker's connection
+    # as soon as this returns, so the half still reading from it has
+    # to have stopped first (`A2-QUALITY-02`). ``wait`` rather than
+    # ``gather``: were this task cancelled meanwhile, gather would
+    # re-raise the half's cancellation instead of this task's own,
+    # which a cancel scope around the handler would not recognise.
+    await asyncio.wait(pending)
+    assert all(task.done() for task in pending), "a half outlived it"
 
 
 @app.websocket("/ws")
