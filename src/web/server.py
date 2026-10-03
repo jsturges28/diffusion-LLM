@@ -24,6 +24,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import (
     Any,
+    AsyncIterator,
     Callable,
     Dict,
     List,
@@ -165,14 +166,10 @@ def _git_commit() -> Optional[str]:
 
 
 manager = ModelManager()
-app = FastAPI(title="Diffusion LLM Visualizer")
-# Ahead of every route, so a save past its ceiling is refused before
-# Starlette reads the body it would otherwise parse whole.
-app.add_middleware(BodyLimit)
 
 
-@app.on_event("startup")
-async def _startup() -> None:
+@contextlib.asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # Say where the data is before anything reads or writes it. The
     # incident this guards against was silent: two result trees, no
     # error, and a repository that looked like no work had happened.
@@ -187,11 +184,19 @@ async def _startup() -> None:
     # Reap any worker orphaned by a prior crashed supervisor before we
     # start serving, so stale workers cannot keep holding VRAM.
     await asyncio.to_thread(model_manager.sweep_orphan_workers)
+    # In a finally, so the manager stops even when the lifespan ends
+    # in an error: a worker left running keeps its VRAM after the
+    # supervisor is gone.
+    try:
+        yield
+    finally:
+        await manager.stop()
 
 
-@app.on_event("shutdown")
-async def _shutdown() -> None:
-    await manager.stop()
+app = FastAPI(title="Diffusion LLM Visualizer", lifespan=_lifespan)
+# Ahead of every route, so a save past its ceiling is refused before
+# Starlette reads the body it would otherwise parse whole.
+app.add_middleware(BodyLimit)
 
 
 # -- Model API --

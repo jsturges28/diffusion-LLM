@@ -15,10 +15,18 @@ without an app.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Callable, Coroutine, Dict, Optional
+from typing import (
+    Any,
+    AsyncIterator,
+    Callable,
+    Coroutine,
+    Dict,
+    Optional,
+)
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -330,17 +338,21 @@ def create_worker_app(
     place a model on CPU or GPU per activation. The routes only
     register here; what each one does is in the functions below.
     """
-    app = FastAPI(title=f"worker:{backend.model_info.id}")
     load = _LoadState()
     # Worker-scoped, like the lock it replaces: one model on one
     # device, so two connected windows contend for the same slot.
     generation = _Generation()
 
-    @app.on_event("startup")
-    async def _startup() -> None:
+    @contextlib.asynccontextmanager
+    async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         load.task = asyncio.create_task(
             _load_model(backend, device, load)
         )
+        yield
+
+    app = FastAPI(
+        title=f"worker:{backend.model_info.id}", lifespan=_lifespan
+    )
 
     @app.get("/health")
     async def _health() -> JSONResponse:
