@@ -77,6 +77,25 @@ def lease_path() -> Path:
     return resolved
 
 
+class LeaseUnavailable(RuntimeError):
+    """There is no lease to take, because its file cannot be opened.
+
+    Raised where ``acquire`` used to answer True and log a warning: a
+    lease that declined to exist let two launchers each load a model
+    while the app went on promising that only one could, and the only
+    sign was a line in a terminal nobody had open (`A2-TRUST-01`). The
+    caller refuses activation with the path, so the person who can
+    fix it is told where to look.
+    """
+
+    def __init__(self, path: Path, reason: str) -> None:
+        assert isinstance(path, Path), "the path must be a Path"
+        assert reason != "", "a reason has to say something"
+        super().__init__(f"no model lease at {path}: {reason}")
+        self.path = path
+        self.reason = reason
+
+
 class PrimaryModelLease:
     """This process's claim on being the one with a model loaded.
 
@@ -121,6 +140,10 @@ class PrimaryModelLease:
         ``owner`` is written for somebody else to read, so it should
         carry what a person needs to act: which process, and where its
         window is.
+
+        Raises ``LeaseUnavailable`` when there is no file to lock at
+        all, which is a different answer from somebody else holding
+        it.
         """
         assert isinstance(owner, dict), "owner must be a dict"
         if self.held:
@@ -134,18 +157,14 @@ class PrimaryModelLease:
             handle = self.path.open(  # noqa: SIM115
                 "a+", encoding="utf-8"
             )
-        except OSError:
-            # An unwritable runtime directory. Refusing every
-            # activation over this would be worse than the race it
-            # prevents, so the lease declines to exist and says so
-            # loudly once.
-            logger.warning(
-                "no model lease at %s; cannot enforce one resident"
-                " model across processes",
-                self.path,
-                exc_info=True,
-            )
-            return True
+        except OSError as exc:
+            # An unwritable runtime directory, or a path that is not a
+            # directory at all. Loading anyway would keep the app
+            # usable by quietly breaking the one guarantee the lease
+            # exists for, so it refuses instead, and says where.
+            raise LeaseUnavailable(
+                self.path, exc.strerror or str(exc)
+            ) from exc
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:

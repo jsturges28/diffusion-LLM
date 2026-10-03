@@ -115,7 +115,11 @@ from src.web.data_root import (
     RESULTS_DIR_ENV,
     resolve_results_dir,
 )
-from src.web.model_lease import PrimaryModelLease
+from src.web.model_lease import (
+    RUNTIME_DIR_ENV,
+    LeaseUnavailable,
+    PrimaryModelLease,
+)
 from src.web.ui_state import (
     load_ui_state,
     mutate_ui_state_key,
@@ -228,6 +232,24 @@ def _residency_refusal(lease: PrimaryModelLease) -> str:
         f"{who}{holding}. Only one model can be resident on this"
         " machine at a time, so unload it there, or close it, and"
         " try again."
+    )
+
+
+def _lease_unavailable_refusal(error: LeaseUnavailable) -> str:
+    """What to tell somebody with nowhere to keep a lease.
+
+    A refusal rather than a warning (`A2-TRUST-01`): the lease is what
+    keeps two launchers from loading two models into one card, so
+    loading without it would break the promise it exists to keep.
+    Names the path and the variable that moves it, because those are
+    the two things a person can change.
+    """
+    return (
+        f"Could not create the model lock at {error.path}"
+        f" ({error.reason}), so this app cannot make sure only one"
+        " model is loaded on this machine. Make"
+        f" {error.path.parent} writable, or set {RUNTIME_DIR_ENV}"
+        " to a directory that is, and try again."
     )
 
 
@@ -1485,7 +1507,13 @@ class ModelManager:
             "model": model_id,
             "device": device,
         }
-        if self._residency.acquire(owner):
+        try:
+            granted = self._residency.acquire(owner)
+        except LeaseUnavailable as exc:
+            raise ActivationRefused(
+                _lease_unavailable_refusal(exc)
+            ) from exc
+        if granted:
             return
         raise ActivationRefused(_residency_refusal(self._residency))
 

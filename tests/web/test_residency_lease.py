@@ -193,6 +193,30 @@ def test_a_refused_supervisor_keeps_its_own_worker(
     assert second.workers_alive == 1
 
 
+def test_a_supervisor_without_a_lease_loads_nothing(
+    tmp_path: Path,
+) -> None:
+    """The refuse policy where a person meets it (`A2-TRUST-01`).
+
+    Refused before anything spawns, and in words that name the file
+    that could not be made and how to get one, rather than loading
+    without the one-model guarantee the app promises. The lease sits
+    under a regular file, which no user, root included, can open.
+    """
+    not_a_directory = tmp_path / "a-file"
+    not_a_directory.write_text("", encoding="utf-8")
+    lease = not_a_directory / LEASE_FILE_NAME
+    unguarded = Supervisor(lease)
+
+    with pytest.raises(ActivationRefused) as raised:
+        asyncio.run(unguarded.load(GPU_MODEL, "cuda"))
+
+    assert str(lease) in str(raised.value)
+    assert "XDG_RUNTIME_DIR" in str(raised.value)
+    assert unguarded.processes == []
+    assert unguarded.holds_lease is False
+
+
 def test_a_cpu_model_takes_the_claim_too(lease_file: Path) -> None:
     """The lease guards residency, not the GPU.
 

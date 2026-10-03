@@ -21,9 +21,9 @@ somebody to go and close a window that is not open.
 
 Passing proves a second claimant is refused while a first holds, that
 it can name the holder, that a dead holder blocks nobody, that stale
-or unparseable contents are never reported as an owner, and that the
-lease declines to exist rather than blocking every activation when its
-directory cannot be written.
+or unparseable contents are never reported as an owner, and that a
+lease whose file cannot be created says so, naming the path, rather
+than answering as though it were held.
 """
 
 from __future__ import annotations
@@ -41,6 +41,7 @@ from src.web.model_lease import (
     LEASE_FILE_NAME,
     RUNTIME_DIR_ENV,
     RUNTIME_DIR_FALLBACK,
+    LeaseUnavailable,
     PrimaryModelLease,
     lease_path,
 )
@@ -278,30 +279,31 @@ def test_a_missing_file_names_nobody(tmp_path: Path) -> None:
 # -- when it cannot exist at all --
 
 
-def test_an_unwritable_directory_does_not_block_activation(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+def test_a_lease_that_cannot_be_created_says_so(
+    tmp_path: Path,
 ) -> None:
-    """A deliberate choice, and the loud kind.
+    """The refuse policy (`A2-TRUST-01`).
 
-    If the runtime directory cannot be written there is no lease to
-    take, and the options are to refuse every activation or to run
-    without the cross-process guarantee. Refusing would break the app
-    on a host where nothing is wrong with the model; running logs a
-    warning saying exactly which guarantee is missing.
+    This used to answer True, logging a warning: a host whose runtime
+    directory could not be written ran without the cross-process
+    guarantee while the app went on promising it, and the only sign
+    was a line in a terminal. Raising, with the path, is what lets
+    activation refuse in words a person can act on.
+
+    The directory is a regular file rather than a read-only
+    directory, because a suite running as root writes straight
+    through permission bits.
     """
-    unwritable = tmp_path / "locked-out"
-    unwritable.mkdir()
-    unwritable.chmod(0o500)
-    lease = PrimaryModelLease(unwritable / LEASE_FILE_NAME)
-    try:
-        with caplog.at_level("WARNING"):
-            granted = lease.acquire(BROWSER)
-    finally:
-        unwritable.chmod(0o700)
+    not_a_directory = tmp_path / "a-file"
+    not_a_directory.write_text("", encoding="utf-8")
+    lease = PrimaryModelLease(not_a_directory / LEASE_FILE_NAME)
 
-    assert granted is True
+    with pytest.raises(LeaseUnavailable) as raised:
+        lease.acquire(BROWSER)
+
+    assert raised.value.path == not_a_directory / LEASE_FILE_NAME
+    assert raised.value.reason != ""
     assert lease.held is False
-    assert "one resident" in caplog.text
 
 
 def test_the_real_path_is_absolute(
@@ -319,14 +321,27 @@ def test_the_module_needs_no_server(
 ) -> None:
     """Small and policy-only, like data_root. Asserted so a later
     convenience import cannot quietly pull FastAPI into a module the
-    desktop launcher may one day want to read on its own."""
-    import importlib
+    desktop launcher may one day want to read on its own.
+
+    Run as a fresh copy rather than reloaded in place. A reload
+    rebuilds every class in the shared module, so the server, which
+    imported them first, would go on catching a `LeaseUnavailable`
+    the lease no longer raises, and every test after this one would
+    see a lease that fails open again.
+    """
+    import importlib.util
 
     monkeypatch.setitem(sys.modules, "src.web.server", None)
+    spec = importlib.util.spec_from_file_location(
+        "model_lease_alone", model_lease.__file__
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    alone = importlib.util.module_from_spec(spec)
 
-    importlib.reload(model_lease)
+    spec.loader.exec_module(alone)
 
-    assert model_lease.LEASE_FILE_NAME == LEASE_FILE_NAME
+    assert alone.LEASE_FILE_NAME == LEASE_FILE_NAME
 
 
 def test_the_lock_is_exclusive_not_advisory_only(
