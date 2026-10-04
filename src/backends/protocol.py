@@ -394,6 +394,12 @@ MSG_CANCEL = "cancel"
 # changes. Present only when true, matching the rest of this
 # protocol, where a field absent means "no" rather than "unknown".
 TERMINAL_CANCELLED = "cancelled"
+# Set on a ``resume`` that carries a stopped branch on from a frame
+# rather than editing it, so nothing is remasked. A flag of its own
+# rather than an empty position list, so an edit that lost its
+# positions on the way is still refused as malformed instead of
+# running as a continue. Present only when true.
+RESUME_CONTINUE = "continue"
 # Resolve a typed string against the loaded vocabulary, for the
 # What If typed-token preview. A read-only lookup, not a generation
 # request, so it is answered without the generation lock.
@@ -549,6 +555,43 @@ def request_id_of(data: Dict[str, object]) -> Optional[int]:
     if isinstance(raw, int):
         return raw
     return None
+
+
+def resume_remask_positions(
+    data: Dict[str, object], length: int
+) -> List[int]:
+    """The canvas positions a ``resume`` remasks.
+
+    One rule for every worker that resumes. A continue
+    (``RESUME_CONTINUE``) remasks nothing and says so by sending no
+    positions; any other resume is an edit and remasks at least one,
+    each on a canvas of ``length`` positions. Raises ``ValueError``
+    with the message the page shows for a malformed request.
+    """
+    assert length > 0, "a canvas has positions"
+    raw = data.get("remask_positions", [])
+    if data.get(RESUME_CONTINUE) is True:
+        if not isinstance(raw, list) or len(raw) > 0:
+            raise ValueError(
+                "A continue remasks nothing, so it sends no"
+                " remask_positions."
+            )
+        return []
+    if not isinstance(raw, list) or len(raw) == 0:
+        raise ValueError(
+            "remask_positions must be a non-empty list."
+        )
+    positions: List[int] = []
+    for item in raw:
+        pos = int(item)
+        if pos < 0 or pos >= length:
+            raise ValueError(
+                f"remask position {pos} out of range"
+                f" [0, {length})."
+            )
+        positions.append(pos)
+    assert len(positions) > 0, "an edit remasks something"
+    return positions
 
 
 def request_error(

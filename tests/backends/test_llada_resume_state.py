@@ -30,6 +30,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Tuple,
 )
 
 import pytest
@@ -40,6 +41,7 @@ from src.backends.llada_worker import (
     LladaBackend,
     _commit_resume,
 )
+from src.backends.protocol import RESUME_CONTINUE
 from src.inference.checkpoint import (
     FrameCheckpoint,
     LladaFrame,
@@ -279,14 +281,18 @@ def _resume(
     frame_index: int = 2,
     max_frames: Optional[int] = None,
     cancelled: bool = False,
+    positions: Tuple[int, ...] = (0, 1),
+    continuing: bool = False,
 ) -> None:
     payload: Dict[str, Any] = {
         "frame_index": frame_index,
-        "remask_positions": [0, 1],
+        "remask_positions": list(positions),
         "run_token": backend.run_token,
     }
     if max_frames is not None:
         payload["max_frames"] = max_frames
+    if continuing:
+        payload[RESUME_CONTINUE] = True
     stop = threading.Event()
     if cancelled:
         stop.set()
@@ -552,6 +558,58 @@ def test_the_final_frame_is_refused() -> None:
 
     _assert_run_untouched(backend, original)
     assert "final frame" in ws.sent[0]["message"]
+
+
+# -- carrying a stopped branch on --
+
+
+def test_a_continue_resumes_with_nothing_remasked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Continue carries a stopped branch on from a frame as it was.
+    The sampler is told it is continuing and remasks nothing, and
+    the frames that come back commit like any resume's."""
+    entries: List[Dict[str, Any]] = []
+    _install_resume_stub(monkeypatch, frames=2, entries=entries)
+    backend = _backend()
+    ws = _StubWebSocket()
+
+    _resume(
+        backend, ws, frame_index=3, positions=(), continuing=True
+    )
+
+    assert not any(m.get("type") == "error" for m in ws.sent)
+    assert entries[0]["remask_positions"] == []
+    assert entries[0]["continuing"] is True
+    state = backend.last_run_state
+    assert state is not None
+    assert len(state["frame_checkpoints"]) == 3 + 2
+
+
+def test_a_continue_that_names_positions_is_refused() -> None:
+    """Either an edit or a continue, never both, so the request is
+    malformed rather than read one way or the other."""
+    backend = _backend()
+    original = _snapshot(backend)
+    ws = _StubWebSocket()
+
+    _resume(backend, ws, positions=(0,), continuing=True)
+
+    _assert_run_untouched(backend, original)
+    assert "remasks nothing" in ws.sent[0]["message"]
+
+
+def test_an_edit_with_no_positions_is_still_refused() -> None:
+    """An empty list is not a continue: an edit that lost its
+    positions on the way must not run as one."""
+    backend = _backend()
+    original = _snapshot(backend)
+    ws = _StubWebSocket()
+
+    _resume(backend, ws, positions=())
+
+    _assert_run_untouched(backend, original)
+    assert "non-empty" in ws.sent[0]["message"]
 
 
 # -- the commit itself --

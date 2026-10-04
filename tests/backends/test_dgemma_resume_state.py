@@ -56,6 +56,7 @@ from src.backends.protocol import (
     ERROR_GENERATION_FAILED,
     ERROR_INVALID_REQUEST,
     ERROR_STALE_RUN,
+    RESUME_CONTINUE,
     TERMINAL_CANCELLED,
 )
 from src.backends.text_adapter import DGEMMA_TEXT
@@ -347,6 +348,20 @@ class _DenoisingModel:
         )
 
 
+class _SeedRecordingModel(_DenoisingModel):
+    """The stub model, keeping the canvas each ``generate`` was
+    seeded with, which is the frame a resume re-enters."""
+
+    def __init__(self) -> None:
+        self.seeds: List[List[int]] = []
+
+    def generate(
+        self, *, streamer: Any, **kwargs: Any
+    ) -> torch.Tensor:
+        self.seeds.append(kwargs["decoder_input_ids"][0].tolist())
+        return super().generate(streamer=streamer, **kwargs)
+
+
 def _with_real_sampler(backend: DgemmaBackend) -> DgemmaBackend:
     """Let ``handle_resume`` run the real ``streaming_resume``.
 
@@ -466,6 +481,8 @@ def _resume(
     frame_index: int = RESUME_FRAME,
     max_frames: object = None,
     run_token: Optional[str] = None,
+    positions: Tuple[int, ...] = (0, 1),
+    continuing: bool = False,
 ) -> None:
     """Send one resume request and wait for it to finish.
 
@@ -475,13 +492,15 @@ def _resume(
     payload: Dict[str, Any] = {
         "type": "resume",
         "frame_index": frame_index,
-        "remask_positions": [0, 1],
+        "remask_positions": list(positions),
         "run_token": (
             backend.run_token if run_token is None else run_token
         ),
     }
     if max_frames is not None:
         payload["max_frames"] = max_frames
+    if continuing:
+        payload[RESUME_CONTINUE] = True
     asyncio.run(
         backend.handle_resume(
             socket,  # type: ignore[arg-type]
@@ -1135,6 +1154,111 @@ def test_a_resume_leaves_the_step_budget_alone(
     assert worker.DgemmaBackend.REWIND_KEYS == (
         ("frame_history", "generated_frame_history"),
     )
+
+
+# -- carrying a stopped branch on --
+
+
+def test_a_continue_resumes_with_nothing_remasked(
+    monkeypatch: pytest.MonkeyPatch, worker: ModuleType
+) -> None:
+    """Continue carries a stopped branch on from a frame as it was:
+    the sampler is asked to renoise nothing, and the frames that
+    come back commit like any resume's."""
+    calls: List[Dict[str, Any]] = []
+    _install_scripted_sampler(
+        monkeypatch, worker, frames=2, calls=calls
+    )
+    backend = _backend(worker)
+    original = _history(backend)
+    socket = _RecordingSocket()
+
+    _resume(
+        backend,
+        socket,
+        threading.Event(),
+        positions=(),
+        continuing=True,
+    )
+
+    assert socket.errors() == []
+    assert calls[0]["remask_positions"] == []
+    _assert_branch_kept(
+        backend,
+        original,
+        frame_index=RESUME_FRAME,
+        branch=_branch_values(2),
+    )
+
+
+def test_a_continue_reenters_the_frame_as_it_was(
+    worker: ModuleType,
+) -> None:
+    """The real sampler: with nothing renoised, ``generate`` is
+    seeded with the frame's own canvas."""
+    backend = _with_real_sampler(_backend(worker))
+    model = _SeedRecordingModel()
+    backend.model = model
+    socket = _RecordingSocket()
+
+    _resume(
+        backend,
+        socket,
+        threading.Event(),
+        positions=(),
+        continuing=True,
+    )
+
+    assert socket.errors() == []
+    assert model.seeds == [[RESUME_FRAME] * CANVAS_LENGTH]
+
+
+def test_a_continue_that_names_positions_is_refused(
+    monkeypatch: pytest.MonkeyPatch, worker: ModuleType
+) -> None:
+    """Either an edit or a continue, never both, so the request is
+    malformed rather than read one way or the other."""
+    calls: List[Dict[str, Any]] = []
+    _install_scripted_sampler(
+        monkeypatch, worker, frames=3, calls=calls
+    )
+    backend = _backend(worker)
+    original = _history(backend)
+    socket = _RecordingSocket()
+
+    _resume(
+        backend,
+        socket,
+        threading.Event(),
+        positions=(0,),
+        continuing=True,
+    )
+
+    assert calls == []
+    _assert_same_objects(_history(backend), original)
+    error = _assert_one_error(socket, code=ERROR_INVALID_REQUEST)
+    assert "remasks nothing" in error["message"]
+
+
+def test_an_edit_with_no_positions_is_still_refused(
+    monkeypatch: pytest.MonkeyPatch, worker: ModuleType
+) -> None:
+    """An empty list is not a continue: an edit that lost its
+    positions on the way must not run as one."""
+    calls: List[Dict[str, Any]] = []
+    _install_scripted_sampler(
+        monkeypatch, worker, frames=3, calls=calls
+    )
+    backend = _backend(worker)
+    original = _history(backend)
+    socket = _RecordingSocket()
+
+    _resume(backend, socket, threading.Event(), positions=())
+
+    assert calls == []
+    _assert_same_objects(_history(backend), original)
+    error = _assert_one_error(socket, code=ERROR_INVALID_REQUEST)
+    assert "non-empty" in error["message"]
 
 
 # -- refused before the sampler runs --

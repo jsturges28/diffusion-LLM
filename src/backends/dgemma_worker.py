@@ -29,6 +29,7 @@ from src.backends.protocol import (
     TERMINAL_CANCELLED,
     request_error,
     request_id_of,
+    resume_remask_positions,
 )
 from src.backends.registry import DGEMMA
 from src.backends.worker_base import (
@@ -343,21 +344,8 @@ class DgemmaBackend(Backend):
                 f"frame_index {frame_index} is out of range"
                 f" [0, {len(history) - 1}]."
             )
-        raw = data.get("remask_positions", [])
-        if not isinstance(raw, list) or len(raw) == 0:
-            raise ValueError(
-                "remask_positions must be a non-empty list."
-            )
         canvas_length = int(history[frame_index].ids.numel())
-        positions: List[int] = []
-        for pos in raw:
-            pos = int(pos)
-            if pos < 0 or pos >= canvas_length:
-                raise ValueError(
-                    f"remask position {pos} out of range"
-                    f" [0, {canvas_length})."
-                )
-            positions.append(pos)
+        positions = resume_remask_positions(data, canvas_length)
         remaining = max(
             1, state["max_denoising_steps"] - frame_index
         )

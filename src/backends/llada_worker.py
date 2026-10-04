@@ -28,8 +28,10 @@ from src.backends.protocol import (
     ERROR_STALE_RUN,
     MSG_GENERATE,
     MSG_RESUME,
+    RESUME_CONTINUE,
     request_error,
     request_id_of,
+    resume_remask_positions,
 )
 from src.backends.registry import LLADA
 from src.backends.worker_base import (
@@ -393,21 +395,8 @@ class LladaBackend(Backend):
                 f"frame_index {frame_index} is out of range"
                 f" [0, {len(history) - 1}]."
             )
-        raw = data.get("remask_positions", [])
-        if not isinstance(raw, list) or len(raw) == 0:
-            raise ValueError(
-                "remask_positions must be a non-empty list."
-            )
         gen_length: int = state["gen_length"]
-        positions: List[int] = []
-        for pos in raw:
-            pos = int(pos)
-            if pos < 0 or pos >= gen_length:
-                raise ValueError(
-                    f"remask position {pos} out of range"
-                    f" [0, {gen_length})."
-                )
-            positions.append(pos)
+        positions = resume_remask_positions(data, gen_length)
         remaining = state["total_steps"] - frame_index
         if remaining <= 0:
             raise ValueError(
@@ -417,6 +406,7 @@ class LladaBackend(Backend):
             "frame_index": frame_index,
             "remask_positions": positions,
             "remaining_steps": remaining,
+            "continuing": data.get(RESUME_CONTINUE) is True,
         }
 
     async def handle_resume(
@@ -495,6 +485,7 @@ class LladaBackend(Backend):
                 alternatives=state["alternatives"],
                 cancel_event=cancel_event,
                 frame_checkpoints=resume_history,
+                continuing=resume_params["continuing"],
             )
             done = await stream.run(
                 generator, start, max_frames=max_frames

@@ -87,7 +87,14 @@ def _resume(
     remaining_steps: int = 1,
     temperature: float = 0.0,
     base_rng: Any = None,
+    continuing: bool = False,
 ) -> List[Dict[str, Any]]:
+    # Passed only when set, so every other test calls the sampler
+    # exactly as a resume that edits does.
+    extra: Dict[str, Any] = {}
+    if continuing:
+        extra["continuing"] = True
+
     async def collect() -> List[Dict[str, Any]]:
         frames: List[Dict[str, Any]] = []
         generator = streaming_resume(
@@ -110,6 +117,7 @@ def _resume(
             remaining_steps=remaining_steps,
             gen_length=GEN_LENGTH,
             temperature=temperature,
+            **extra,
         )
         async for item in generator:
             frames.append(item)
@@ -180,6 +188,33 @@ def test_the_mean_averages_measurements_not_inventions() -> None:
     frames = _resume(remask_positions=[1])
 
     assert frames[0]["mean_conf"] == 0.55
+
+
+# -- carrying a stopped branch on --
+
+
+def test_a_continue_opens_on_the_frame_as_it_was() -> None:
+    """Nothing is remasked, so the first frame is the recorded one:
+    every written token in place at the confidence it was revealed
+    at, and only the position already masked still masked."""
+    frames = _resume(remask_positions=[], continuing=True)
+    first = frames[0]
+
+    masked = [token["m"] for token in first["tokens"]]
+    assert masked == [False, False, False, True]
+    assert _conf_at(first, 0) == 0.2
+    assert _conf_at(first, 1) == 0.4
+    assert _conf_at(first, 2) == 0.9
+
+
+def test_a_continue_remasks_nothing() -> None:
+    with pytest.raises(AssertionError, match="remasks nothing"):
+        _resume(remask_positions=[1], continuing=True)
+
+
+def test_an_edit_remasks_something() -> None:
+    with pytest.raises(AssertionError, match="remasks something"):
+        _resume(remask_positions=[])
 
 
 # -- reproducibility --

@@ -604,8 +604,10 @@ async def streaming_resume(
     alternatives: bool = False,
     cancel_event: threading.Event | None = None,
     frame_checkpoints: List[FrameCheckpoint] | None = None,
+    continuing: bool = False,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    """Resume diffusion from a saved frame with user remasks.
+    """Resume diffusion from a saved frame with user remasks, or with
+    none when ``continuing``.
 
     Reconstructs the full sequence tensor from prompt_ids and
     base_tokens, applies remasks, then runs remaining_steps of
@@ -636,9 +638,20 @@ async def streaming_resume(
     alternatives :
         Capture candidates as generate does, at this resume's own
         frame indices; the client places them after the resume point.
+    continuing :
+        Carry a stopped branch on from this frame as it was, which
+        remasks nothing. Every other resume is an edit and remasks
+        at least one position.
     """
     assert remaining_steps > 0
-    assert len(remask_positions) > 0
+    if continuing:
+        assert len(remask_positions) == 0, (
+            "a continue remasks nothing"
+        )
+    else:
+        assert len(remask_positions) > 0, (
+            "an edit remasks something"
+        )
 
     # Before the canvas is touched, so the first step draws from the
     # state the chosen frame left behind rather than from whatever
