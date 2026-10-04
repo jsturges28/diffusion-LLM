@@ -326,7 +326,7 @@ kept when these were written:
 - **413**: confirmed on 2026-10-03: an edit session's Back after Select
   Frame, and Continue in review on a stopped Resume to End, on LLaDA and
   DiffusionGemma.
-- **414**: **outstanding**: the save path in both launchers: the
+- **414**: confirmed on 2026-10-04: the save path in both launchers: the
   supervisor's own log lines, a Save that answers before its GIF is drawn,
   and a GIF that follows the run's latest revision.
 

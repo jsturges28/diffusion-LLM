@@ -133,10 +133,10 @@ Not findings, and each its own slice when taken.
 | A resume stopped before its first frame could restore the frames the page cut | done | `f5fc6ac` | 412 |
 | An interrupted save carries no run token, so a retried save can duplicate | accepted | | |
 | The Help "signals" panel is at its 2,200-word budget | open | | |
-| A long run's save waits seconds on drawing its GIF preview | needs hardware | `cf4a402` | 414 |
-| The GIF preview is drawn outside the publication lock, so two near-simultaneous replacements can leave the earlier one's | needs hardware | `cf4a402` | 414 |
+| A long run's save waits seconds on drawing its GIF preview | done | `cf4a402` | 414 |
+| The GIF preview is drawn outside the publication lock, so two near-simultaneous replacements can leave the earlier one's | done | `cf4a402` | 414 |
 | The process-race tests fork a multi-threaded process, which Python warns about 31 times a run (16 from `DATA-02`'s tests, 15 from `A2-DATA-01`'s) | done | `b670e62` | |
-| The supervisor's own INFO logs reach no handler, so its results-directory line at startup has never been shown | needs hardware | `315866f` | 414 |
+| The supervisor's own INFO logs reach no handler, so its results-directory line at startup has never been shown | done | `315866f` | 414 |
 | A cleared line chart stayed reachable by name, so zoom or an eye clicked during a load reached a destroyed chart | done | `0507c6d` | |
 
 ## Baselines
