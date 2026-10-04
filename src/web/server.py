@@ -80,6 +80,7 @@ from src.inference.vision_geometry import (
 )
 from src.web import analytics_api
 from src.web import collections as collection_ops
+from src.web import conversation_api
 from src.web import model_manager
 from src.web import run_store
 from src.web import save_pipeline
@@ -181,6 +182,13 @@ app.include_router(
             results_dir=_current_results_dir,
             repo_root=REPO_ROOT,
             gpu_name=_current_gpu_name,
+        )
+    )
+)
+app.include_router(
+    conversation_api.create_conversation_router(
+        conversation_api.ConversationApiDependencies(
+            results_dir=_current_results_dir,
         )
     )
 )
