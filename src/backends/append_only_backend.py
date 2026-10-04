@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import WebSocket
 
+from src.backends.context_pack import ContextRequestError
 from src.backends.params import resolve_params
 from src.backends.protocol import (
     ERROR_GENERATION_FAILED,
@@ -93,13 +94,15 @@ class AppendOnlyBackend(Backend):
                 data.get("experimental", False)
             ),
         )
-        prompt = str(data.get("prompt", "")).strip()
-        if not prompt:
-            raise ValueError("prompt must not be empty")
-        params["prompt"] = prompt
-        self.check_prompt_fits(
-            prompt, thinking=bool(params.get("thinking", False))
+        thinking = bool(params.get("thinking", False))
+        prompt = self.prepare_generation_prompt(
+            data,
+            output_reserve=int(params["max_new_tokens"]),
+            thinking=thinking,
         )
+        params["prompt"] = prompt.value
+        params["prompt_text"] = prompt.pending_user_text
+        params["context_pack"] = prompt.context_pack
         return params
 
     async def handle_generate(
@@ -111,6 +114,16 @@ class AppendOnlyBackend(Backend):
     ) -> None:
         try:
             params = self._validate_generate(data)
+        except ContextRequestError as exc:
+            await ws.send_json(
+                request_error(
+                    message=str(exc),
+                    code=exc.code,
+                    request_type=MSG_GENERATE,
+                    request_id=request_id_of(data),
+                )
+            )
+            return
         except (ValueError, TypeError) as exc:
             await ws.send_json(
                 request_error(
@@ -130,7 +143,7 @@ class AppendOnlyBackend(Backend):
         # This is also what frees the previous run's KV cache, and it
         # happens before the new one allocates so the two never sit
         # in device memory at once.
-        self.begin_run()
+        self.begin_run(context_pack=params.get("context_pack"))
         state: Dict[str, Any] = {}
         try:
             generator = streaming_generate(
@@ -164,7 +177,19 @@ class AppendOnlyBackend(Backend):
             # Copied key by key, not via update(params): the trace's
             # "alternatives" is the per-position candidate list, while
             # the param of that name is the capture flag.
-            state["prompt"] = params["prompt"]
+            prompt = params["prompt"]
+            state["prompt"] = prompt
+            prompt_text = (
+                prompt
+                if isinstance(prompt, str)
+                else prompt[-1].content
+            )
+            state["prompt_text"] = params.get(
+                "prompt_text", prompt_text
+            )
+            context_pack = params.get("context_pack")
+            if context_pack is not None:
+                state["context_pack"] = context_pack
             state["max_new_tokens"] = params["max_new_tokens"]
             state["thinking"] = thinking
             state["seed"] = params["seed"]

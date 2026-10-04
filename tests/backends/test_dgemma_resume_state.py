@@ -52,6 +52,7 @@ from typing import (
 import pytest
 import torch
 
+from src.backends.context_pack import MessageRecord
 from src.backends.protocol import (
     ERROR_GENERATION_FAILED,
     ERROR_INVALID_REQUEST,
@@ -1154,6 +1155,33 @@ def test_a_resume_leaves_the_step_budget_alone(
     assert worker.DgemmaBackend.REWIND_KEYS == (
         ("frame_history", "generated_frame_history"),
     )
+
+
+def test_resume_reuses_the_retained_packed_input(
+    monkeypatch: pytest.MonkeyPatch, worker: ModuleType
+) -> None:
+    """A resume templates the same included conversation suffix."""
+    calls: List[Dict[str, Any]] = []
+    _install_scripted_sampler(
+        monkeypatch, worker, frames=2, calls=calls
+    )
+    backend = _backend(worker)
+    state = backend.last_run_state
+    assert state is not None
+    packed = (
+        MessageRecord("user", "first", "1"),
+        MessageRecord("assistant", "answer", "2"),
+        MessageRecord("user", "next", "3"),
+    )
+    state["prompt"] = packed
+
+    _resume(
+        backend,
+        _RecordingSocket(),
+        threading.Event(),
+    )
+
+    assert calls[0]["prompt"] == packed
 
 
 # -- carrying a stopped branch on --

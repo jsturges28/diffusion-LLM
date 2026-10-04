@@ -62,8 +62,12 @@ from typing import (
 
 import torch
 
+from src.backends.context_pack import PromptInput
 from src.backends.protocol import TERMINAL_CANCELLED
-from src.backends.text_adapter import TextAdapter
+from src.backends.text_adapter import (
+    TextAdapter,
+    build_prompt_inputs,
+)
 from src.inference.frame_queue import (
     frame_queue_close,
     frame_queue_create,
@@ -1354,7 +1358,7 @@ def probe_token(
     model: Any,
     tokenizer: Any,
     adapter: TextAdapter,
-    prompt: str,
+    prompt: PromptInput,
     prefix_ids: List[int],
     token_id: int,
     thinking: bool = False,
@@ -1390,8 +1394,12 @@ def probe_token(
     been ranked.
     """
     assert token_id >= 0, "token_id must be non-negative"
-    inputs = adapter.build_inputs(
-        tokenizer, model, prompt, thinking=thinking
+    inputs = build_prompt_inputs(
+        adapter,
+        tokenizer,
+        model,
+        prompt,
+        thinking=thinking,
     )
     probs, _past, _mask = _position_distribution(
         model=model,
@@ -1437,7 +1445,7 @@ async def streaming_generate(
     model: Any,
     tokenizer: Any,
     adapter: TextAdapter,
-    prompt: str,
+    prompt: PromptInput,
     *,
     max_new_tokens: int = 256,
     temperature: float = 0.6,
@@ -1460,8 +1468,12 @@ async def streaming_generate(
     ``state_sink``, when given, receives the run's per-position trace
     so the worker can serve a later substitution.
     """
-    inputs = adapter.build_inputs(
-        tokenizer, model, prompt, thinking=thinking
+    inputs = build_prompt_inputs(
+        adapter,
+        tokenizer,
+        model,
+        prompt,
+        thinking=thinking,
     )
     out_queue: "queue.Queue[Any]" = frame_queue_create()
     result: Dict[str, Any] = {}
@@ -1502,7 +1514,7 @@ async def streaming_substitute(
     model: Any,
     tokenizer: Any,
     adapter: TextAdapter,
-    prompt: str,
+    prompt: PromptInput,
     *,
     position: int,
     forced_id: int,
@@ -1550,8 +1562,12 @@ async def streaming_substitute(
     assert len(prefix_ids) == position, (
         "prefix length must equal the forced position"
     )
-    inputs = adapter.build_inputs(
-        tokenizer, model, prompt, thinking=thinking
+    inputs = build_prompt_inputs(
+        adapter,
+        tokenizer,
+        model,
+        prompt,
+        thinking=thinking,
     )
     out_queue: "queue.Queue[Any]" = frame_queue_create()
     result: Dict[str, Any] = {}

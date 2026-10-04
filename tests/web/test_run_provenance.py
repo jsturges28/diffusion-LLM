@@ -284,6 +284,42 @@ def test_an_attested_run_without_a_window_omits_it(
     assert block == {"prompt_tokens": 1240}
 
 
+def test_the_context_pack_round_trips_into_saved_metadata() -> None:
+    packed = {
+        "included_turn_ids": [
+            "00000001",
+            "00000002",
+            "00000003",
+        ],
+        "first_included_index": 2,
+        "omitted_turn_count": 2,
+        "prompt_token_count": 120,
+        "output_reserve": 64,
+        "requested_total_budget": 4096,
+        "effective_total_budget": 2048,
+        "conversation": {
+            "conversation_id": "a" * 32,
+            "conversation_revision": 4,
+            "assistant_turn_id": "00000004",
+        },
+    }
+    meta = _build_metadata(
+        _request(
+            prompt_len=999,
+            provenance=_provenance(context_pack=packed),
+        )
+    )
+
+    assert meta["context"]["prompt_tokens"] == 120
+    assert meta["context"]["context_pack"] == packed
+
+
+def test_a_legacy_save_has_no_context_pack_metadata() -> None:
+    meta = _build_metadata(_request())
+
+    assert "context_pack" not in meta["context"]
+
+
 # -- the label follows the frames --
 
 

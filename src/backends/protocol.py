@@ -12,7 +12,12 @@ from __future__ import annotations
 from enum import Enum
 from typing import Dict, List, Literal, Optional, Tuple, Union
 
-from pydantic import BaseModel
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    model_validator,
+)
 
 
 class ParamType(str, Enum):
@@ -167,6 +172,60 @@ class SignalChannel(BaseModel):
     budget_records: Optional[int] = None
 
 
+class ContextPolicyLimits(BaseModel):
+    """One device's bounded conversation-context policy.
+
+    These figures are product policy, not claims about a checkpoint's
+    theoretical window. The loaded window is read separately and may
+    lower the effective budget at request time.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    default_tokens: int = Field(gt=0)
+    max_tokens: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def _ordered(self) -> "ContextPolicyLimits":
+        if self.default_tokens > self.max_tokens:
+            raise ValueError(
+                "context policy default exceeds its maximum"
+            )
+        return self
+
+
+class ContextPolicy(ContextPolicyLimits):
+    """Per-model context policy with optional device overrides."""
+
+    status: Literal["provisional"]
+    overrides: Dict[str, ContextPolicyLimits] = Field(
+        default_factory=dict
+    )
+
+    @model_validator(mode="after")
+    def _known_devices(self) -> "ContextPolicy":
+        unknown = set(self.overrides) - {"cpu", "cuda"}
+        if unknown:
+            names = ", ".join(sorted(unknown))
+            raise ValueError(
+                f"unknown context policy devices: {names}"
+            )
+        return self
+
+    def limits_for(
+        self, device: Optional[str]
+    ) -> ContextPolicyLimits:
+        """The policy for ``device``, or the model-wide policy."""
+        if device is not None:
+            override = self.overrides.get(device)
+            if override is not None:
+                return override
+        return ContextPolicyLimits(
+            default_tokens=self.default_tokens,
+            max_tokens=self.max_tokens,
+        )
+
+
 class ModelCapabilities(BaseModel):
     """Feature flags a worker advertises to the frontend."""
 
@@ -252,6 +311,12 @@ class ModelCapabilities(BaseModel):
     # nothing enforced a memory budget for. A model that needs a GPU
     # now has to say so.
     supported_devices: Tuple[str, ...]
+    # A deliberately conservative bound for structured conversation
+    # requests. This is separate from a checkpoint's architectural
+    # context length: policy chooses how much history this product is
+    # willing to pack, while the loaded checkpoint supplies a second,
+    # independent hard cap when it declares one.
+    context_policy: ContextPolicy
     # Which XAI signals this model emits, and in what shape. Declared
     # here so the UI can offer an overlay before any run exists,
     # rather than deciding per token from whether a float happened to
@@ -264,6 +329,20 @@ class ModelCapabilities(BaseModel):
     # field would instead force every future model to restate the four
     # channels that are the same everywhere.
     signals: Tuple[SignalChannel, ...] = ()
+
+    @model_validator(mode="after")
+    def _context_devices_declared(self) -> "ModelCapabilities":
+        undeclared = (
+            set(self.context_policy.overrides)
+            - set(self.supported_devices)
+        )
+        if undeclared:
+            names = ", ".join(sorted(undeclared))
+            raise ValueError(
+                "context policy overrides unsupported devices:"
+                f" {names}"
+            )
+        return self
 
 
 # The declared values of the two axes, so a test can enumerate them
@@ -513,6 +592,13 @@ ERROR_GENERATION_FAILED = "generation_failed"
 ERROR_UNKNOWN_MESSAGE = "unknown_message"
 # The run a stateful request names is not the run the worker holds.
 ERROR_STALE_RUN = "stale_run"
+# Structured-context failures are split so an API client can
+# distinguish a malformed transcript from a valid transcript whose
+# requested or effective budget cannot hold it.
+ERROR_MALFORMED_MESSAGES = "malformed_messages"
+ERROR_INVALID_MESSAGE_ROLE = "invalid_message_role"
+ERROR_INVALID_MESSAGE_ORDER = "invalid_message_order"
+ERROR_CONTEXT_BOUNDS = "context_bounds"
 
 # Which scope each request type's failures carry. Generation-class
 # requests own the run; the rest own only themselves.

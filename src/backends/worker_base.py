@@ -15,24 +15,36 @@ handler a backend implements writes its replies to one.
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import secrets
 import threading
 import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import (
     Any,
     AsyncGenerator,
     Callable,
     Dict,
     List,
+    Mapping,
     Optional,
     Tuple,
 )
 
 from fastapi import WebSocket
 
+from src.backends.context_pack import (
+    ContextRequestError,
+    PackedContext,
+    PromptInput,
+    pack_context,
+    parse_messages,
+)
 from src.backends.protocol import (
+    ERROR_CONTEXT_BOUNDS,
+    ERROR_MALFORMED_MESSAGES,
     ERROR_NO_TOKENIZER,
     ERROR_STALE_RUN,
     MSG_COUNT_PROMPT,
@@ -54,7 +66,10 @@ from src.backends.resource_sampler import (
     CpuSampler,
     vram_sample,
 )
-from src.backends.text_adapter import TextAdapter
+from src.backends.text_adapter import (
+    TextAdapter,
+    count_prompt_input_tokens,
+)
 
 logger = logging.getLogger("diffusion_worker")
 
@@ -89,6 +104,32 @@ COUNT_PROMPT_MAX_CHARS = PROMPT_CHARS_MAX
 assert COUNT_PROMPT_MAX_CHARS > TOKENIZE_TEXT_MAX_CHARS, (
     "counting a prompt must allow more than previewing a token"
 )
+
+
+@dataclass(frozen=True)
+class PreparedPrompt:
+    """One validated legacy prompt or packed message suffix."""
+
+    value: PromptInput
+    pending_user_text: str
+    context_pack: Optional[Dict[str, object]]
+
+
+def _context_output_reserve(data: Mapping[str, object]) -> int:
+    """The output budget a structured count must reserve."""
+    value = data.get("output_reserve")
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ContextRequestError(
+            "messages count requires a positive output_reserve",
+            code=ERROR_CONTEXT_BOUNDS,
+        )
+    if value < 1:
+        raise ContextRequestError(
+            "output_reserve must be at least 1",
+            code=ERROR_CONTEXT_BOUNDS,
+        )
+    return value
+
 
 def rewind_retained_history(
     state: Optional[Dict[str, Any]],
@@ -348,6 +389,12 @@ def worker_envelope(backend: Backend) -> Dict[str, Any]:
         envelope["signals"] = [
             channel.model_dump() for channel in signals
         ]
+    context_pack = getattr(backend, "run_context_pack", None)
+    if context_pack is not None:
+        # Fresh for each envelope. The opening and terminal frames
+        # must attest the same immutable decision without sharing a
+        # mutable list of turn ids on the wire.
+        envelope["context_pack"] = copy.deepcopy(context_pack)
     # The commit, alongside the repo name rather than folded into it.
     # ``checkpoint`` is what the user recognises and what the menu
     # shows; the commit is what makes the name mean one thing. Omitted
@@ -583,6 +630,11 @@ class Backend(ABC):
     # members below are what make it safe to read, and the three of
     # them have to move together.
     last_run_state: Optional[Dict[str, Any]] = None
+    # The exact structured-context decision for the retained run.
+    # None for every legacy string request. It travels on both
+    # provenance envelopes and is copied into each backend's retained
+    # state so resume and What If keep the same model input.
+    run_context_pack: Optional[Dict[str, object]] = None
     # Which retained histories a rewind restores, as (working,
     # baseline) key pairs. Empty for a backend whose intervention
     # never rewrites the retained run: SmolLM3's What If branch is
@@ -619,7 +671,11 @@ class Backend(ABC):
             return ""
         return f"{self._run_nonce}:{self.run_counter}"
 
-    def begin_run(self) -> None:
+    def begin_run(
+        self,
+        *,
+        context_pack: Optional[Dict[str, object]] = None,
+    ) -> None:
         """Retire the previous run and its token, together.
 
         Called by every ``handle_generate`` after validation and
@@ -644,6 +700,11 @@ class Backend(ABC):
         if not self._run_nonce:
             self._run_nonce = secrets.token_hex(4)
         self.last_run_state = None
+        self.run_context_pack = (
+            None
+            if context_pack is None
+            else copy.deepcopy(context_pack)
+        )
         self.run_counter += 1
         # Asked of where the model actually landed, not of whether the
         # host has a card: a CPU-placed model on a CUDA machine has no
@@ -808,13 +869,7 @@ class Backend(ABC):
     async def handle_count_prompt(
         self, ws: WebSocket, data: Dict[str, Any]
     ) -> None:
-        """Report how many tokens a prompt becomes.
-
-        Implemented on the base class like ``handle_tokenize``,
-        because every backend templates a prompt and the answer is
-        just an encode. The per-model part is
-        ``prompt_token_count``.
-        """
+        """Report an exact legacy count or structured context pack."""
         tokenizer = getattr(self, "tokenizer", None)
         if tokenizer is None:
             await ws.send_json(
@@ -826,11 +881,14 @@ class Backend(ABC):
                 )
             )
             return
+        if "messages" in data:
+            await self._handle_count_messages(ws, data)
+            return
         raw = data.get("text", "")
         text = raw[:COUNT_PROMPT_MAX_CHARS] if (
             isinstance(raw, str)
         ) else ""
-        # Off the event loop, because this is bounded at 200,000
+        # Off the event loop, because this is bounded at one million
         # characters rather than at something small: templating and
         # encoding that much is real work, and doing it inline stalled
         # every frame and every Cancel behind one keystroke's readout.
@@ -854,8 +912,49 @@ class Backend(ABC):
             }
         )
 
+    async def _handle_count_messages(
+        self, ws: WebSocket, data: Dict[str, Any]
+    ) -> None:
+        """Pack a structured count through generation's exact path."""
+        try:
+            if "text" in data:
+                raise ContextRequestError(
+                    "send messages or text, not both",
+                    code=ERROR_MALFORMED_MESSAGES,
+                )
+            reserve = _context_output_reserve(data)
+            packed = await asyncio.to_thread(
+                self.pack_message_context,
+                data,
+                output_reserve=reserve,
+                thinking=bool(data.get("thinking", False)),
+            )
+        except ContextRequestError as exc:
+            await ws.send_json(
+                request_error(
+                    message=str(exc),
+                    code=exc.code,
+                    request_type=MSG_COUNT_PROMPT,
+                    request_id=request_id_of(data),
+                )
+            )
+            return
+        await ws.send_json(
+            {
+                "type": MSG_COUNT_PROMPT_RESULT,
+                "request_id": int(data.get("request_id", 0)),
+                "chars": sum(
+                    len(message.content)
+                    for message in packed.messages
+                ),
+                "truncated": False,
+                "count": packed.manifest.prompt_token_count,
+                "context_pack": packed.attestation(),
+            }
+        )
+
     def prompt_token_count(
-        self, prompt: str, *, thinking: bool = False
+        self, prompt: PromptInput, *, thinking: bool = False
     ) -> int:
         """Tokens the prompt occupies before generation.
 
@@ -871,13 +970,93 @@ class Backend(ABC):
         implementations to stay in step. Three of them used to: this
         one, LLaDA's override of it, and two samplers.
         """
-        assert isinstance(prompt, str), "prompt must be a string"
-        if prompt == "":
+        if isinstance(prompt, str) and prompt == "":
             return 0
         tokenizer = getattr(self, "tokenizer", None)
         assert tokenizer is not None, "no tokenizer loaded"
-        return self.text_adapter.count_prompt_tokens(
-            tokenizer, prompt, thinking=thinking
+        return count_prompt_input_tokens(
+            self.text_adapter,
+            tokenizer,
+            prompt,
+            thinking=thinking,
+        )
+
+    def prepare_generation_prompt(
+        self,
+        data: Dict[str, Any],
+        *,
+        output_reserve: int,
+        thinking: bool,
+    ) -> PreparedPrompt:
+        """Validate generation input without changing run state."""
+        if "messages" in data:
+            if "prompt" in data:
+                raise ContextRequestError(
+                    "send messages or prompt, not both",
+                    code=ERROR_MALFORMED_MESSAGES,
+                )
+            packed = self.pack_message_context(
+                data,
+                output_reserve=output_reserve,
+                thinking=thinking,
+            )
+            return PreparedPrompt(
+                value=packed.messages,
+                pending_user_text=packed.messages[-1].content,
+                context_pack=packed.attestation(),
+            )
+        prompt = str(data.get("prompt", "")).strip()
+        if not prompt:
+            raise ValueError("prompt must not be empty")
+        self.check_prompt_fits(prompt, thinking=thinking)
+        return PreparedPrompt(
+            value=prompt,
+            pending_user_text=prompt,
+            context_pack=None,
+        )
+
+    def pack_message_context(
+        self,
+        data: Mapping[str, object],
+        *,
+        output_reserve: int,
+        thinking: bool,
+    ) -> PackedContext:
+        """Apply the model/device policy and exact adapter count."""
+        messages, conversation = parse_messages(data)
+        limits = (
+            self.model_info.capabilities.context_policy.limits_for(
+                self.effective_device
+            )
+        )
+        model = getattr(self, "model", None)
+        tokenizer = getattr(self, "tokenizer", None)
+        assert tokenizer is not None, "no tokenizer loaded"
+        checkpoint = describe_context_length(model, tokenizer)
+        requested = data.get("context_budget")
+        if requested is not None and (
+            isinstance(requested, bool)
+            or not isinstance(requested, int)
+        ):
+            raise ContextRequestError(
+                "context_budget must be a positive integer",
+                code=ERROR_CONTEXT_BOUNDS,
+            )
+        return pack_context(
+            messages,
+            count_tokens=lambda candidate: (
+                self.text_adapter.count_message_tokens(
+                    tokenizer,
+                    candidate,
+                    thinking=thinking,
+                )
+            ),
+            output_reserve=output_reserve,
+            policy_default_tokens=limits.default_tokens,
+            policy_max_tokens=limits.max_tokens,
+            requested_total_budget=requested,
+            checkpoint_window=checkpoint,
+            conversation=conversation,
         )
 
     def check_prompt_fits(

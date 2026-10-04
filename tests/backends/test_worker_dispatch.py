@@ -36,6 +36,7 @@ from fastapi.testclient import TestClient
 
 from src.backends import worker_app
 from src.backends.protocol import (
+    ContextPolicy,
     ERROR_BUSY,
     ERROR_NO_TOKENIZER,
     ERROR_SCOPE_REQUEST,
@@ -67,6 +68,11 @@ def _model_info() -> ModelInfo:
             generation_shape="iterative_canvas",
             input_mode="chat",
             supported_devices=("cuda", "cpu"),
+            context_policy=ContextPolicy(
+                status="provisional",
+                default_tokens=4096,
+                max_tokens=8192,
+            ),
         ),
         worker_module="none",
         environment="none",

@@ -27,6 +27,10 @@ from typing import (
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from src.backends.context_pack import (
+    IDENTIFIER_CHARS_MAX as CONTEXT_IDENTIFIER_CHARS_MAX,
+)
+from src.backends.context_pack import MESSAGE_CANDIDATES_MAX
 from src.backends.protocol import (
     CANDIDATE_BUDGET_RECORDS,
     CANDIDATES_PER_POSITION,
@@ -209,8 +213,68 @@ class RunProvenance(BaseModel):
     versions: Dict[str, str] = Field(default_factory=dict)
     tokenizer: Dict[str, Any] = Field(default_factory=dict)
     context_length: Optional[int] = None
+    context_pack: Optional["ContextPackProvenance"] = None
     signals: List[Dict[str, Any]] = Field(default_factory=list)
     resources: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ContextConversationProvenance(BaseModel):
+    """The durable conversation owner attested by the worker."""
+
+    model_config = STRICT
+
+    conversation_id: str = Field(
+        max_length=CONTEXT_IDENTIFIER_CHARS_MAX
+    )
+    conversation_revision: int = Field(ge=1)
+    assistant_turn_id: str = Field(
+        max_length=CONTEXT_IDENTIFIER_CHARS_MAX
+    )
+
+
+class ContextPackProvenance(BaseModel):
+    """The exact bounded suffix the worker supplied to the model."""
+
+    model_config = STRICT
+
+    included_turn_ids: List[str] = Field(
+        min_length=1,
+        max_length=MESSAGE_CANDIDATES_MAX,
+    )
+    first_included_index: int = Field(ge=0)
+    omitted_turn_count: int = Field(ge=0)
+    prompt_token_count: int = Field(ge=1)
+    output_reserve: int = Field(ge=1)
+    requested_total_budget: int = Field(ge=1)
+    effective_total_budget: int = Field(ge=1)
+    conversation: Optional[ContextConversationProvenance] = None
+
+    @model_validator(mode="after")
+    def _coherent(self) -> "ContextPackProvenance":
+        if self.first_included_index != self.omitted_turn_count:
+            raise ValueError(
+                "context pack index and omitted count disagree"
+            )
+        if self.omitted_turn_count % 2 != 0:
+            raise ValueError(
+                "context pack omitted a partial exchange"
+            )
+        total = self.prompt_token_count + self.output_reserve
+        if total > self.effective_total_budget:
+            raise ValueError(
+                "context pack exceeds its effective budget"
+            )
+        if (
+            self.effective_total_budget
+            > self.requested_total_budget
+        ):
+            raise ValueError(
+                "effective context budget exceeds the request"
+            )
+        return self
+
+
+RunProvenance.model_rebuild()
 
 
 class SaveRunRequest(BaseModel):
@@ -478,10 +542,25 @@ def _context_metadata(
     current: CurrentModelFacts,
 ) -> Dict[str, Any]:
     """The prompt and context-window block, when measurable."""
-    if prompt_len is None:
+    packed = (
+        provenance.context_pack
+        if provenance is not None
+        else None
+    )
+    if prompt_len is None and packed is None:
         return {}
-    assert prompt_len >= 0, "prompt_len must be non-negative"
-    block: Dict[str, Any] = {"prompt_tokens": prompt_len}
+    measured = (
+        packed.prompt_token_count
+        if packed is not None
+        else prompt_len
+    )
+    assert measured is not None
+    assert measured >= 0, "prompt length must be non-negative"
+    block: Dict[str, Any] = {"prompt_tokens": measured}
+    if packed is not None:
+        block["context_pack"] = packed.model_dump(
+            exclude_none=True
+        )
     if provenance is not None:
         window = provenance.context_length
     else:

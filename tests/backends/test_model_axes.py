@@ -22,6 +22,8 @@ import pytest
 from pydantic import ValidationError
 
 from src.backends.protocol import (
+    ContextPolicy,
+    ContextPolicyLimits,
     FAMILIES,
     GENERATION_SHAPE_APPEND_ONLY,
     GENERATION_SHAPE_ITERATIVE_CANVAS,
@@ -40,6 +42,13 @@ from src.backends.registry import (
 )
 
 
+_CONTEXT_POLICY = ContextPolicy(
+    status="provisional",
+    default_tokens=4096,
+    max_tokens=8192,
+)
+
+
 def _capabilities(
     *,
     family: str,
@@ -55,6 +64,7 @@ def _capabilities(
         supported_devices=devices,
         supports_resume=resume,
         input_mode=input_mode,
+        context_policy=_CONTEXT_POLICY,
     )
 
 
@@ -97,6 +107,34 @@ def test_some_model_can_still_run_without_a_gpu() -> None:
     ]
 
     assert cpu_capable, "no model is loadable without a GPU"
+
+
+def test_every_context_policy_is_explicitly_provisional() -> None:
+    """Policy limits must not read as measured checkpoint windows."""
+    for model_id, info in REGISTRY.items():
+        policy = info.capabilities.context_policy
+        assert policy.status == "provisional", model_id
+        assert policy.default_tokens == 4096, model_id
+        assert policy.max_tokens == 8192, model_id
+
+
+def test_append_only_cpu_policy_is_conservative() -> None:
+    for model in (SMOLLM3, MAMBA3):
+        limits = model.capabilities.context_policy.limits_for("cpu")
+        assert limits.default_tokens == 2048
+        assert limits.max_tokens == 4096
+
+
+def test_gpu_policy_stays_at_the_model_default() -> None:
+    for model in REGISTRY.values():
+        limits = model.capabilities.context_policy.limits_for("cuda")
+        assert limits.default_tokens == 4096
+        assert limits.max_tokens == 8192
+
+
+def test_an_inverted_context_policy_is_refused() -> None:
+    with pytest.raises(ValidationError):
+        ContextPolicyLimits(default_tokens=8192, max_tokens=4096)
 
 
 # -- the axes are independent --
@@ -227,6 +265,7 @@ def test_any_family_may_take_any_shape(family: str) -> None:
         "generation_shape",
         "supported_devices",
         "input_mode",
+        "context_policy",
     ],
 )
 def test_an_omitted_axis_is_refused(missing: str) -> None:
@@ -238,6 +277,7 @@ def test_an_omitted_axis_is_refused(missing: str) -> None:
         "generation_shape": GENERATION_SHAPE_ITERATIVE_CANVAS,
         "supported_devices": ("cuda",),
         "input_mode": "chat",
+        "context_policy": _CONTEXT_POLICY,
     }
     del fields[missing]
 
@@ -264,6 +304,7 @@ def test_an_unknown_axis_value_is_refused(
         "generation_shape": GENERATION_SHAPE_ITERATIVE_CANVAS,
         "supported_devices": ("cuda",),
         "input_mode": "chat",
+        "context_policy": _CONTEXT_POLICY,
     }
     fields[field] = value
 

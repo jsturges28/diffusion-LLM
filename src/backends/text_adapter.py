@@ -34,10 +34,17 @@ from __future__ import annotations
 
 from typing import (
     Any,
+    Dict,
+    List,
     Optional,
     Protocol,
     Set,
     Tuple,
+)
+
+from src.backends.context_pack import (
+    MessageRecord,
+    PromptInput,
 )
 
 # How a prompt reaches the model. ``chat`` wraps it in a template's
@@ -76,6 +83,25 @@ class TextAdapter(Protocol):
     ) -> int:
         """How many tokens ``build_inputs`` would produce."""
 
+    def build_message_inputs(
+        self,
+        tokenizer: Any,
+        model: Any,
+        messages: Tuple[MessageRecord, ...],
+        *,
+        thinking: bool,
+    ) -> Any:
+        """A chronological message suffix as model-ready inputs."""
+
+    def count_message_tokens(
+        self,
+        tokenizer: Any,
+        messages: Tuple[MessageRecord, ...],
+        *,
+        thinking: bool,
+    ) -> int:
+        """How many tokens ``build_message_inputs`` would produce."""
+
     def stop_ids(self, tokenizer: Any, model: Any) -> Set[int]:
         """Token ids that end generation."""
 
@@ -84,6 +110,52 @@ class TextAdapter(Protocol):
 
     def split_channels(self, raw: str) -> Tuple[str, str]:
         """``raw`` as (reasoning, answer), both sanitized."""
+
+
+def build_prompt_inputs(
+    adapter: TextAdapter,
+    tokenizer: Any,
+    model: Any,
+    prompt: PromptInput,
+    *,
+    thinking: bool,
+) -> Any:
+    """Build either a legacy string or a typed message suffix."""
+    if isinstance(prompt, str):
+        return adapter.build_inputs(
+            tokenizer, model, prompt, thinking=thinking
+        )
+    return adapter.build_message_inputs(
+        tokenizer, model, prompt, thinking=thinking
+    )
+
+
+def count_prompt_input_tokens(
+    adapter: TextAdapter,
+    tokenizer: Any,
+    prompt: PromptInput,
+    *,
+    thinking: bool,
+) -> int:
+    """Count either input through its adapter's exact build path."""
+    if isinstance(prompt, str):
+        return adapter.count_prompt_tokens(
+            tokenizer, prompt, thinking=thinking
+        )
+    return adapter.count_message_tokens(
+        tokenizer, prompt, thinking=thinking
+    )
+
+
+def _single_user_message(prompt: str) -> Tuple[MessageRecord, ...]:
+    """The typed spelling of the legacy one-user-turn wrapper."""
+    return (
+        MessageRecord(
+            role="user",
+            content=prompt,
+            turn_id="prompt",
+        ),
+    )
 
 
 class ChatTextAdapter:
@@ -123,8 +195,25 @@ class ChatTextAdapter:
         """
         assert isinstance(prompt, str), "prompt must be a string"
         assert prompt != "", "cannot build inputs for no prompt"
+        return self.build_message_inputs(
+            tokenizer,
+            model,
+            _single_user_message(prompt),
+            thinking=thinking,
+        )
+
+    def build_message_inputs(
+        self,
+        tokenizer: Any,
+        model: Any,
+        messages: Tuple[MessageRecord, ...],
+        *,
+        thinking: bool,
+    ) -> Any:
+        """Apply the real role template to every included message."""
+        assert messages, "cannot build inputs for no messages"
         encoded = tokenizer.apply_chat_template(
-            self._chat(prompt),
+            self._chat(messages),
             tokenize=True,
             add_generation_prompt=True,
             return_dict=True,
@@ -146,8 +235,23 @@ class ChatTextAdapter:
         assert isinstance(prompt, str), "prompt must be a string"
         if prompt == "":
             return 0
+        return self.count_message_tokens(
+            tokenizer,
+            _single_user_message(prompt),
+            thinking=thinking,
+        )
+
+    def count_message_tokens(
+        self,
+        tokenizer: Any,
+        messages: Tuple[MessageRecord, ...],
+        *,
+        thinking: bool,
+    ) -> int:
+        """Count the same complete template the builder applies."""
+        assert messages, "cannot count no messages"
         encoded = tokenizer.apply_chat_template(
-            self._chat(prompt),
+            self._chat(messages),
             tokenize=True,
             add_generation_prompt=True,
             return_dict=True,
@@ -194,9 +298,14 @@ class ChatTextAdapter:
         assert isinstance(raw, str), "split takes a string"
         return "", self.sanitize(raw).strip()
 
-    def _chat(self, prompt: str) -> list:
-        """The prompt as the one-turn chat a template expects."""
-        return [{"role": "user", "content": prompt}]
+    def _chat(
+        self, messages: Tuple[MessageRecord, ...]
+    ) -> List[Dict[str, str]]:
+        """The exact chronological roles a template expects."""
+        return [
+            {"role": message.role, "content": message.content}
+            for message in messages
+        ]
 
 
 class CompletionTextAdapter:
@@ -228,7 +337,25 @@ class CompletionTextAdapter:
         """
         assert isinstance(prompt, str), "prompt must be a string"
         assert prompt != "", "cannot build inputs for no prompt"
-        encoded = tokenizer(prompt, return_tensors="pt")
+        return self.build_message_inputs(
+            tokenizer,
+            model,
+            _single_user_message(prompt),
+            thinking=thinking,
+        )
+
+    def build_message_inputs(
+        self,
+        tokenizer: Any,
+        model: Any,
+        messages: Tuple[MessageRecord, ...],
+        *,
+        thinking: bool,
+    ) -> Any:
+        """Encode raw chronological text without invented labels."""
+        assert messages, "cannot build inputs for no messages"
+        text = _completion_text(messages)
+        encoded = tokenizer(text, return_tensors="pt")
         return encoded.to(model.device)
 
     def count_prompt_tokens(
@@ -238,7 +365,24 @@ class CompletionTextAdapter:
         assert isinstance(prompt, str), "prompt must be a string"
         if prompt == "":
             return 0
-        encoded = tokenizer(prompt, return_tensors="pt")
+        return self.count_message_tokens(
+            tokenizer,
+            _single_user_message(prompt),
+            thinking=thinking,
+        )
+
+    def count_message_tokens(
+        self,
+        tokenizer: Any,
+        messages: Tuple[MessageRecord, ...],
+        *,
+        thinking: bool,
+    ) -> int:
+        """Count the same raw chronology the builder encodes."""
+        assert messages, "cannot count no messages"
+        encoded = tokenizer(
+            _completion_text(messages), return_tensors="pt"
+        )
         count = int(encoded["input_ids"].shape[-1])
         assert count > 0, "an encoded prompt has tokens"
         return count
@@ -267,6 +411,14 @@ class CompletionTextAdapter:
         """No reasoning channel: the whole output is the answer."""
         assert isinstance(raw, str), "split takes a string"
         return "", self.sanitize(raw).strip()
+
+
+def _completion_text(
+    messages: Tuple[MessageRecord, ...],
+) -> str:
+    """Raw turn text in order, without role labels or separators."""
+    assert messages, "a completion needs at least one message"
+    return "".join(message.content for message in messages)
 
 
 _THINK_OPEN = "<think>"

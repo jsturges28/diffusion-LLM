@@ -26,11 +26,16 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import pytest
 
-from src.backends.protocol import ModelCapabilities, ModelInfo
+from src.backends.protocol import (
+    ContextPolicy,
+    ModelCapabilities,
+    ModelInfo,
+)
 from src.backends.worker_base import (
     FrameStreamer,
     library_versions,
     provenance_envelope,
+    worker_envelope,
 )
 from src.inference.hf_download import revision_from_snapshot
 
@@ -293,6 +298,11 @@ class _StubBackend:
                 generation_shape="iterative_canvas",
                 input_mode="chat",
                 supported_devices=("cuda", "cpu"),
+                context_policy=ContextPolicy(
+                    status="provisional",
+                    default_tokens=4096,
+                    max_tokens=8192,
+                ),
             ),
             worker_module="none",
             # Not a declared environment, deliberately. Resolving one
@@ -365,6 +375,26 @@ def test_the_envelope_omits_an_unreadable_context_window() -> None:
     )
 
     assert "context_length" not in envelope
+
+
+def test_the_envelope_attests_the_run_context_pack() -> None:
+    backend = _StubBackend("cpu")
+    backend.run_context_pack = {
+        "included_turn_ids": ["1", "2", "3"],
+        "first_included_index": 0,
+        "omitted_turn_count": 0,
+        "prompt_token_count": 20,
+        "output_reserve": 10,
+        "requested_total_budget": 64,
+        "effective_total_budget": 64,
+    }
+
+    opening = worker_envelope(backend)  # type: ignore[arg-type]
+    terminal = provenance_envelope(backend)  # type: ignore[arg-type]
+
+    assert opening["context_pack"] == backend.run_context_pack
+    assert terminal["context_pack"] == backend.run_context_pack
+    assert opening["context_pack"] is not backend.run_context_pack
 
 
 # -- the commit, which is the other half of "which model" --

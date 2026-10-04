@@ -30,10 +30,12 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
+from src.backends.context_pack import MessageRecord
 from src.backends.text_adapter import (
     DGEMMA_TEXT,
     INPUT_MODE_CHAT,
     INPUT_MODE_COMPLETION,
+    MAMBA3_TEXT,
     SMOLLM3_TEXT,
     ChatTextAdapter,
     CompletionTextAdapter,
@@ -86,6 +88,8 @@ class _ChatTokenizer:
 
     def __init__(self, vocabulary: Optional[Dict[str, int]] = None):
         self.thinking_seen: List[bool] = []
+        self.chats_seen: List[List[Dict[str, str]]] = []
+        self.texts_seen: List[str] = []
         self.template_calls = 0
         self.raw_calls = 0
         self.eos_token_id = 2
@@ -113,7 +117,10 @@ class _ChatTokenizer:
         assert tokenize is True, "the adapters ask for ids"
         self.template_calls += 1
         self.thinking_seen.append(enable_thinking)
-        words = len(chat[0]["content"].split())
+        self.chats_seen.append([dict(message) for message in chat])
+        words = sum(
+            len(message["content"].split()) for message in chat
+        )
         markers = (
             self.MARKERS_THINKING
             if enable_thinking
@@ -123,6 +130,7 @@ class _ChatTokenizer:
 
     def __call__(self, text: str, **kwargs: Any) -> Any:
         self.raw_calls += 1
+        self.texts_seen.append(text)
         return _Encoded(list(range(len(text.split()))))
 
     def convert_tokens_to_ids(self, token: str) -> int:
@@ -174,6 +182,59 @@ def test_the_completion_count_matches_its_inputs_too() -> None:
 
     assert counted == built["input_ids"].shape[-1]
     assert tokenizer.template_calls == 0
+
+
+def _message_suffix() -> tuple[MessageRecord, ...]:
+    return (
+        MessageRecord("user", "first question", "1"),
+        MessageRecord("assistant", "first answer", "2"),
+        MessageRecord("user", "next question", "3"),
+    )
+
+
+@pytest.mark.parametrize(
+    "adapter",
+    [SMOLLM3_TEXT, DGEMMA_TEXT],
+    ids=["smollm3", "diffusiongemma"],
+)
+def test_chat_message_count_matches_built_inputs(
+    adapter: Any,
+) -> None:
+    """Every included role reaches the real template in order."""
+    tokenizer = _ChatTokenizer()
+    messages = _message_suffix()
+
+    built = adapter.build_message_inputs(
+        tokenizer, _Model(), messages, thinking=False
+    )
+    counted = adapter.count_message_tokens(
+        tokenizer, messages, thinking=False
+    )
+
+    assert counted == built["input_ids"].shape[-1]
+    assert tokenizer.chats_seen[0] == [
+        {"role": message.role, "content": message.content}
+        for message in messages
+    ]
+
+
+def test_mamba_messages_are_raw_chronological_text() -> None:
+    """Mamba gets no role labels and no invented separators."""
+    tokenizer = _ChatTokenizer()
+    messages = _message_suffix()
+    adapter = MAMBA3_TEXT
+
+    built = adapter.build_message_inputs(
+        tokenizer, _Model(), messages, thinking=False
+    )
+    counted = adapter.count_message_tokens(
+        tokenizer, messages, thinking=False
+    )
+
+    expected = "".join(message.content for message in messages)
+    assert tokenizer.texts_seen == [expected, expected]
+    assert tokenizer.template_calls == 0
+    assert counted == built["input_ids"].shape[-1]
 
 
 @pytest.mark.parametrize(

@@ -29,6 +29,7 @@ import pytest
 # The handlers live in the shared append-only shell, so that is where
 # the sampler entry points they call are replaced.
 from src.backends import append_only_backend
+from src.backends.context_pack import MessageRecord
 from src.backends.protocol import (
     ERROR_SCOPE_REQUEST,
     ERROR_STALE_RUN,
@@ -164,7 +165,9 @@ def _install_branch_stub(
         *_args: Any, **kwargs: Any
     ) -> AsyncGenerator[Dict[str, Any], None]:
         if calls is not None:
-            calls.append(kwargs)
+            recorded = dict(kwargs)
+            recorded["_prompt"] = _args[3]
+            calls.append(recorded)
         yield {"type": "frame", "index": 1}
         sink = kwargs.get("state_sink")
         if sink is not None:
@@ -320,6 +323,27 @@ def test_substitution_is_handed_the_runs_own_cache(
 
     assert len(calls) == 1
     assert calls[0]["cache"] is _CACHE_SENTINEL
+
+
+def test_substitution_reuses_the_retained_packed_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """What If must not collapse a packed conversation to one turn."""
+    calls: List[Dict[str, Any]] = []
+    _install_branch_stub(monkeypatch, calls)
+    backend = Smollm3Backend()
+    state = _run_state()
+    packed = (
+        MessageRecord("user", "first", "1"),
+        MessageRecord("assistant", "answer", "2"),
+        MessageRecord("user", "next", "3"),
+    )
+    state["prompt"] = packed
+    _seed_run(backend, state)
+
+    _substitute(backend, position=0, token_id=7)
+
+    assert calls[0]["_prompt"] == packed
 
 
 def test_a_run_without_a_cache_still_substitutes(

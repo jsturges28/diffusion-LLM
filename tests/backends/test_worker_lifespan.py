@@ -22,7 +22,11 @@ from typing import Any, Dict, List
 from fastapi import WebSocket
 from fastapi.testclient import TestClient
 
-from src.backends.protocol import ModelCapabilities, ModelInfo
+from src.backends.protocol import (
+    ContextPolicy,
+    ModelCapabilities,
+    ModelInfo,
+)
 from src.backends.worker_app import create_worker_app
 from src.backends.worker_base import Backend, FrameStreamer
 
@@ -42,6 +46,11 @@ def _model_info() -> ModelInfo:
             generation_shape="iterative_canvas",
             input_mode="chat",
             supported_devices=("cuda", "cpu"),
+            context_policy=ContextPolicy(
+                status="provisional",
+                default_tokens=4096,
+                max_tokens=8192,
+            ),
         ),
         worker_module="none",
         environment="none",

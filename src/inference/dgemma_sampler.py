@@ -29,11 +29,15 @@ from typing import (
 import torch
 from transformers.generation.streamers import BaseStreamer
 
+from src.backends.context_pack import PromptInput
 from src.backends.protocol import (
     CANDIDATES_PER_POSITION,
     TERMINAL_CANCELLED,
 )
-from src.backends.text_adapter import TextAdapter
+from src.backends.text_adapter import (
+    TextAdapter,
+    build_prompt_inputs,
+)
 from src.inference.candidate_capture import (
     CandidateCapture,
     StepCandidates,
@@ -712,7 +716,7 @@ async def streaming_generate(
     model: Any,
     tokenizer: Any,
     adapter: TextAdapter,
-    prompt: str,
+    prompt: PromptInput,
     *,
     max_new_tokens: int = 256,
     max_denoising_steps: int = 48,
@@ -740,8 +744,12 @@ async def streaming_generate(
     stopping rule: a canvas ends once its mean entropy is below the
     first and it has held still for the second's number of steps.
     """
-    inputs = adapter.build_inputs(
-        tokenizer, model, prompt, thinking=thinking
+    inputs = build_prompt_inputs(
+        adapter,
+        tokenizer,
+        model,
+        prompt,
+        thinking=thinking,
     )
     prompt_len = int(inputs["input_ids"].shape[1])
 
@@ -786,7 +794,7 @@ async def streaming_resume(
     tokenizer: Any,
     adapter: TextAdapter,
     *,
-    prompt: str,
+    prompt: PromptInput,
     base: FrameCheckpoint,
     remask_positions: List[int],
     remaining_steps: int,
@@ -824,8 +832,12 @@ async def streaming_resume(
             f" expected {canvas_length}"
         )
 
-    inputs = adapter.build_inputs(
-        tokenizer, model, prompt, thinking=thinking
+    inputs = build_prompt_inputs(
+        adapter,
+        tokenizer,
+        model,
+        prompt,
+        thinking=thinking,
     )
     prompt_len = int(inputs["input_ids"].shape[1])
 

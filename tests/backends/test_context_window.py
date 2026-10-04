@@ -22,11 +22,17 @@ from __future__ import annotations
 
 import asyncio
 import time
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 import pytest
 
-from src.backends.protocol import PROMPT_CHARS_MAX
+from src.backends.context_pack import MessageRecord
+from src.backends.protocol import (
+    ERROR_INVALID_MESSAGE_ORDER,
+    ContextPolicy,
+    PROMPT_CHARS_MAX,
+)
 from src.backends.text_adapter import ChatTextAdapter
 from src.backends.worker_base import (
     CONTEXT_LENGTH_SANE_MAX,
@@ -34,7 +40,11 @@ from src.backends.worker_base import (
     Backend,
     describe_context_length,
 )
-from src.inference.streaming_sampler import build_llada_inputs
+from src.inference.streaming_sampler import (
+    LLADA_TEXT,
+    build_llada_inputs,
+    build_llada_message_inputs,
+)
 
 # What transformers hands back for a checkpoint that declares no
 # maximum length. The reason the fallback needs a bound at all.
@@ -96,7 +106,11 @@ class _TemplateTokenizer:
             "counting must template for a reply, as a run does"
         )
         self.thinking_seen.append(enable_thinking)
-        words = chat[0]["content"].split()
+        words = [
+            word
+            for message in chat
+            for word in message["content"].split()
+        ]
         markers = (
             self.MARKERS_THINKING
             if enable_thinking
@@ -133,6 +147,16 @@ class _StubBackend(Backend):
         # backend looks like: the refusal has nothing to read then and
         # must not invent a ceiling.
         self.model = model
+        self.effective_device = "cuda"
+        self.model_info = SimpleNamespace(
+            capabilities=SimpleNamespace(
+                context_policy=ContextPolicy(
+                    status="provisional",
+                    default_tokens=4096,
+                    max_tokens=8192,
+                )
+            )
+        )
 
     def load(self, *, device: str = "cuda") -> None:
         raise NotImplementedError
@@ -313,6 +337,67 @@ def test_counting_without_a_tokenizer_reports_an_error() -> None:
     assert "No tokenizer" in ws.sent[0]["message"]
 
 
+def _message_payload() -> Dict[str, Any]:
+    return {
+        "messages": [
+            {
+                "role": "user",
+                "content": "first question",
+                "turn_id": "00000001",
+            },
+            {
+                "role": "assistant",
+                "content": "first answer",
+                "turn_id": "00000002",
+            },
+            {
+                "role": "user",
+                "content": "next question",
+                "turn_id": "00000003",
+            },
+        ],
+        "conversation_id": "a" * 32,
+        "conversation_revision": 3,
+        "assistant_turn_id": "00000004",
+        "context_budget": 100,
+        "output_reserve": 20,
+        "request_id": 4,
+    }
+
+
+def test_count_and_generation_use_the_same_context_pack() -> None:
+    """The count reply is the generation decision, not an estimate."""
+    backend = _StubBackend(
+        _TemplateTokenizer(), model=_StubModel(80)
+    )
+    payload = _message_payload()
+
+    counted = _count(backend, payload).sent[0]
+    prepared = backend.prepare_generation_prompt(
+        payload,
+        output_reserve=20,
+        thinking=False,
+    )
+
+    assert counted["count"] == (
+        prepared.context_pack["prompt_token_count"]
+    )
+    assert counted["context_pack"] == prepared.context_pack
+    assert counted["context_pack"]["effective_total_budget"] == 80
+
+
+def test_a_malformed_message_count_is_request_scoped() -> None:
+    backend = _StubBackend(_TemplateTokenizer())
+    payload = _message_payload()
+    payload["messages"] = payload["messages"][:-1]
+
+    reply = _count(backend, payload).sent[0]
+
+    assert reply["type"] == "error"
+    assert reply["code"] == ERROR_INVALID_MESSAGE_ORDER
+    assert reply["scope"] == "request"
+
+
 # -- build_llada_inputs --
 
 
@@ -321,6 +406,7 @@ class _LladaTokenizer:
 
     def __init__(self) -> None:
         self.special_tokens_seen: List[bool] = []
+        self.chats_seen: List[List[Dict[str, str]]] = []
 
     def apply_chat_template(
         self,
@@ -330,7 +416,11 @@ class _LladaTokenizer:
     ) -> str:
         assert tokenize is False, "LLaDA encodes separately"
         assert add_generation_prompt is True
-        return "<|start|> " + chat[0]["content"] + " <|end|>"
+        self.chats_seen.append([dict(message) for message in chat])
+        content = " ".join(
+            message["content"] for message in chat
+        )
+        return "<|start|> " + content + " <|end|>"
 
     def __call__(
         self,
@@ -366,6 +456,28 @@ def test_the_llada_encode_adds_no_second_bos() -> None:
     build_llada_inputs(tokenizer, "she ran")
 
     assert tokenizer.special_tokens_seen == [False]
+
+
+def test_llada_messages_keep_the_two_step_encode() -> None:
+    """Multiple roles template to text, then tokenize once."""
+    tokenizer = _LladaTokenizer()
+    messages = (
+        MessageRecord("user", "first question", "1"),
+        MessageRecord("assistant", "first answer", "2"),
+        MessageRecord("user", "next question", "3"),
+    )
+
+    encoded = build_llada_message_inputs(tokenizer, messages)
+    count = LLADA_TEXT.count_message_tokens(
+        tokenizer, messages, thinking=False
+    )
+
+    assert count == encoded["input_ids"].shape[-1]
+    assert tokenizer.chats_seen[0] == [
+        {"role": message.role, "content": message.content}
+        for message in messages
+    ]
+    assert tokenizer.special_tokens_seen == [False, False]
 
 
 # -- refusing a prompt that cannot run --

@@ -21,6 +21,7 @@ from transformers.models.auto.tokenization_auto import (
     AutoTokenizer,
 )
 
+from src.backends.context_pack import ContextRequestError
 from src.backends.params import resolve_params
 from src.backends.protocol import (
     ERROR_GENERATION_FAILED,
@@ -55,6 +56,7 @@ from src.inference.load_progress import (
 from src.inference.streaming_sampler import (
     LLADA_TEXT,
     build_llada_inputs,
+    build_llada_message_inputs,
     streaming_generate,
     streaming_resume,
 )
@@ -240,11 +242,14 @@ class LladaBackend(Backend):
             ),
         )
 
-        prompt = str(data.get("prompt", "")).strip()
-        if not prompt:
-            raise ValueError("prompt must not be empty")
-        params["prompt"] = prompt
-        self.check_prompt_fits(prompt)
+        prompt = self.prepare_generation_prompt(
+            data,
+            output_reserve=int(params["gen_length"]),
+            thinking=False,
+        )
+        params["prompt"] = prompt.value
+        params["prompt_text"] = prompt.pending_user_text
+        params["context_pack"] = prompt.context_pack
 
         # The arithmetic itself lives with the algorithm, which is the
         # only place that knows what a block is. It raises ValueError
@@ -270,6 +275,16 @@ class LladaBackend(Backend):
     ) -> None:
         try:
             params = self._validate_generate(data)
+        except ContextRequestError as exc:
+            await ws.send_json(
+                request_error(
+                    message=str(exc),
+                    code=exc.code,
+                    request_type=MSG_GENERATE,
+                    request_id=request_id_of(data),
+                )
+            )
+            return
         except (ValueError, TypeError) as exc:
             await ws.send_json(
                 request_error(
@@ -281,7 +296,7 @@ class LladaBackend(Backend):
             )
             return
 
-        self.begin_run()
+        self.begin_run(context_pack=params.get("context_pack"))
         _apply_seed(params["seed"])
         start = time.monotonic()
         frame_checkpoints: List[FrameCheckpoint] = []
@@ -332,8 +347,17 @@ class LladaBackend(Backend):
     ) -> None:
         # The generator's own encode, so a resumed run re-enters the
         # exact prefix it produced rather than a re-derivation of it.
-        encoded = build_llada_inputs(
-            self.tokenizer, params["prompt"]
+        prompt = params["prompt"]
+        if isinstance(prompt, str):
+            encoded = build_llada_inputs(self.tokenizer, prompt)
+        else:
+            encoded = build_llada_message_inputs(
+                self.tokenizer, prompt
+            )
+        prompt_text = (
+            prompt
+            if isinstance(prompt, str)
+            else prompt[-1].content
         )
         prompt_ids = encoded["input_ids"].cpu()
         gen_length = params["gen_length"]
@@ -348,6 +372,8 @@ class LladaBackend(Backend):
             dim=-1,
         ).cpu()
         self.last_run_state = {
+            "prompt": prompt,
+            "prompt_text": params.get("prompt_text", prompt_text),
             "frame_checkpoints": frame_checkpoints,
             # The same checkpoints under a second name, as the run
             # was generated. A resume replaces the list above; this
@@ -375,6 +401,11 @@ class LladaBackend(Backend):
             # then this is all a resume has to go on.
             "seed": params["seed"],
         }
+        context_pack = params.get("context_pack")
+        if context_pack is not None:
+            self.last_run_state["context_pack"] = params[
+                "context_pack"
+            ]
 
     # -- resume --
 

@@ -14,6 +14,8 @@ from typing import Dict, Tuple
 from src.backends.environments import environment_names
 from src.backends.protocol import (
     CANDIDATE_BUDGET_RECORDS,
+    ContextPolicy,
+    ContextPolicyLimits,
     HubFiles,
     ModelCapabilities,
     ModelInfo,
@@ -123,6 +125,27 @@ DEFAULT_MODEL = "llada"
 
 _SEED_MAX = 2**31 - 1
 
+# Conservative product policy for structured conversation packing,
+# not a measured checkpoint window. A loaded checkpoint may lower the
+# effective budget independently. Hardware tuning remains explicit
+# debt in docs/MANUAL_VERIFICATION.md.
+_CONTEXT_POLICY_GPU = ContextPolicy(
+    status="provisional",
+    default_tokens=4096,
+    max_tokens=8192,
+)
+_CONTEXT_POLICY_GPU_CPU = ContextPolicy(
+    status="provisional",
+    default_tokens=4096,
+    max_tokens=8192,
+    overrides={
+        "cpu": ContextPolicyLimits(
+            default_tokens=2048,
+            max_tokens=4096,
+        )
+    },
+)
+
 # One parameter for both diffusion models, since the capture and its
 # budget are shared. On by default, as the autoregressive one is: a
 # default LLaDA run's candidates are about 4 MiB, and a run that
@@ -171,6 +194,7 @@ LLADA = ModelInfo(
         # headroom pre-flight skips CPU entirely. Declaring the truth
         # closes a 17 GiB host allocation nothing was measuring.
         supported_devices=("cuda",),
+        context_policy=_CONTEXT_POLICY_GPU,
         signals=_DIFFUSION_SIGNALS,
     ),
     param_specs=[
@@ -289,6 +313,7 @@ DGEMMA = ModelInfo(
         # else, but it did so inside load(), by which point the
         # previous model had already been evicted for it.
         supported_devices=("cuda",),
+        context_policy=_CONTEXT_POLICY_GPU,
         signals=_DIFFUSION_SIGNALS,
     ),
     param_specs=[
@@ -430,6 +455,7 @@ SMOLLM3 = ModelInfo(
         # The model a GPU-less host can use, so CPU is a placement
         # this one genuinely supports rather than one it inherited.
         supported_devices=("cuda", "cpu"),
+        context_policy=_CONTEXT_POLICY_GPU_CPU,
         signals=_AUTOREGRESSIVE_SIGNALS,
     ),
     param_specs=[
@@ -606,6 +632,7 @@ MAMBA3 = ModelInfo(
         # CPU decoding cleared the bar set to decide exactly this:
         # 4.3 tokens a second in float32 against 3 (manual item 328).
         supported_devices=("cuda", "cpu"),
+        context_policy=_CONTEXT_POLICY_GPU_CPU,
         signals=_STATE_SPACE_SIGNALS,
     ),
     # The same sampler, so the same knobs and the same lower CPU

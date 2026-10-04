@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import WebSocket
 from transformers import AutoTokenizer  # type: ignore[attr-defined]
 
+from src.backends.context_pack import ContextRequestError
 from src.backends.params import resolve_params
 from src.backends.text_adapter import DGEMMA_TEXT
 from src.backends.protocol import (
@@ -201,13 +202,14 @@ class DgemmaBackend(Backend):
                 data.get("experimental", False)
             ),
         )
-        prompt = str(data.get("prompt", "")).strip()
-        if not prompt:
-            raise ValueError("prompt must not be empty")
-        params["prompt"] = prompt
-        self.check_prompt_fits(
-            prompt, thinking=bool(params["thinking"])
+        prompt = self.prepare_generation_prompt(
+            data,
+            output_reserve=int(params["max_new_tokens"]),
+            thinking=bool(params["thinking"]),
         )
+        params["prompt"] = prompt.value
+        params["prompt_text"] = prompt.pending_user_text
+        params["context_pack"] = prompt.context_pack
         return params
 
     async def handle_generate(
@@ -219,6 +221,16 @@ class DgemmaBackend(Backend):
     ) -> None:
         try:
             params = self._validate_generate(data)
+        except ContextRequestError as exc:
+            await ws.send_json(
+                request_error(
+                    message=str(exc),
+                    code=exc.code,
+                    request_type=MSG_GENERATE,
+                    request_id=request_id_of(data),
+                )
+            )
+            return
         except (ValueError, TypeError) as exc:
             await ws.send_json(
                 request_error(
@@ -230,7 +242,7 @@ class DgemmaBackend(Backend):
             )
             return
 
-        self.begin_run()
+        self.begin_run(context_pack=params.get("context_pack"))
         start = time.monotonic()
         frame_history: List[FrameCheckpoint] = []
         try:
@@ -282,8 +294,15 @@ class DgemmaBackend(Backend):
         confidence was derived from, and the random state the next
         step would have drawn from.
         """
+        prompt = params["prompt"]
+        prompt_text = (
+            prompt
+            if isinstance(prompt, str)
+            else prompt[-1].content
+        )
         self.last_run_state = {
-            "prompt": params["prompt"],
+            "prompt": prompt,
+            "prompt_text": params.get("prompt_text", prompt_text),
             "t_max": params["t_max"],
             "t_min": params["t_min"],
             # So an edit stops its canvas by the rule the run it
@@ -313,6 +332,11 @@ class DgemmaBackend(Backend):
             # canvases.
             "generated_frame_history": list(frame_history),
         }
+        context_pack = params.get("context_pack")
+        if context_pack is not None:
+            self.last_run_state["context_pack"] = params[
+                "context_pack"
+            ]
 
 
     # -- resume --

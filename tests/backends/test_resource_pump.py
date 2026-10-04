@@ -30,7 +30,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.backends import worker_base
-from src.backends.protocol import ModelCapabilities, ModelInfo
+from src.backends.protocol import (
+    ContextPolicy,
+    ModelCapabilities,
+    ModelInfo,
+)
 from src.backends.resource_sampler import KIND_CPU, KIND_VRAM
 from src.backends.worker_app import create_worker_app
 from src.backends.worker_base import (
@@ -301,6 +305,11 @@ class _CardBackend(Backend):
                 generation_shape="iterative_canvas",
                 input_mode="chat",
                 supported_devices=("cuda", "cpu"),
+                context_policy=ContextPolicy(
+                    status="provisional",
+                    default_tokens=4096,
+                    max_tokens=8192,
+                ),
             ),
             worker_module="none",
             environment="none",

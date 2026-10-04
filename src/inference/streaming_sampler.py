@@ -20,10 +20,15 @@ from typing import (
     Dict,
     List,
     Optional,
+    Tuple,
 )
 
 import torch
 
+from src.backends.context_pack import (
+    MessageRecord,
+    PromptInput,
+)
 from src.backends.protocol import CANDIDATES_PER_POSITION
 from src.backends.text_adapter import ChatTextAdapter
 from src.inference.candidate_capture import (
@@ -139,9 +144,30 @@ def build_llada_inputs(
     silent no-op on some versions and an error on others.
     """
     assert isinstance(prompt, str), "prompt must be a string"
-    message = {"role": "user", "content": prompt}
+    return build_llada_message_inputs(
+        tokenizer,
+        (
+            MessageRecord(
+                role="user",
+                content=prompt,
+                turn_id="prompt",
+            ),
+        ),
+    )
+
+
+def build_llada_message_inputs(
+    tokenizer: Any,
+    messages: Tuple[MessageRecord, ...],
+) -> Dict[str, torch.Tensor]:
+    """Template all included roles, then encode in LLaDA's shape."""
+    assert messages, "cannot build inputs for no messages"
+    chat = [
+        {"role": message.role, "content": message.content}
+        for message in messages
+    ]
     chat_text = tokenizer.apply_chat_template(
-        [message],
+        chat,
         add_generation_prompt=True,
         tokenize=False,
     )
@@ -190,6 +216,18 @@ class LladaTextAdapter(ChatTextAdapter):
         encoded = build_llada_inputs(tokenizer, prompt)
         return encoded.to(model.device)
 
+    def build_message_inputs(
+        self,
+        tokenizer: Any,
+        model: Any,
+        messages: Tuple[MessageRecord, ...],
+        *,
+        thinking: bool,
+    ) -> Any:
+        """The same two-step message encode, on the model device."""
+        encoded = build_llada_message_inputs(tokenizer, messages)
+        return encoded.to(model.device)
+
     def count_prompt_tokens(
         self, tokenizer: Any, prompt: str, *, thinking: bool
     ) -> int:
@@ -198,6 +236,19 @@ class LladaTextAdapter(ChatTextAdapter):
         if prompt == "":
             return 0
         encoded = build_llada_inputs(tokenizer, prompt)
+        count = int(encoded["input_ids"].shape[-1])
+        assert count > 0, "a templated prompt has tokens"
+        return count
+
+    def count_message_tokens(
+        self,
+        tokenizer: Any,
+        messages: Tuple[MessageRecord, ...],
+        *,
+        thinking: bool,
+    ) -> int:
+        """Count the generator's exact two-step message encode."""
+        encoded = build_llada_message_inputs(tokenizer, messages)
         count = int(encoded["input_ids"].shape[-1])
         assert count > 0, "a templated prompt has tokens"
         return count
@@ -374,7 +425,7 @@ def _flush_candidates(
 async def streaming_generate(
     model: Any,
     tokenizer: Any,
-    prompt: str,
+    prompt: PromptInput,
     *,
     steps: int = 128,
     gen_length: int = 128,
@@ -425,7 +476,10 @@ async def streaming_generate(
     total_steps = schedule.total_steps
     assert total_steps == steps, "the schedule must spend every step"
 
-    encoded = build_llada_inputs(tokenizer, prompt)
+    if isinstance(prompt, str):
+        encoded = build_llada_inputs(tokenizer, prompt)
+    else:
+        encoded = build_llada_message_inputs(tokenizer, prompt)
     input_ids = encoded["input_ids"].to(model.device)
     attention_mask = encoded["attention_mask"].to(
         model.device

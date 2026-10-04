@@ -329,6 +329,10 @@ kept when these were written:
 - **414**: confirmed on 2026-10-04: the save path in both launchers: the
   supervisor's own log lines, a Save that answers before its GIF is drawn,
   and a GIF that follows the run's latest revision.
+- **415 to 418**: **not yet validated.** These are the hardware tuning and
+  real-checkpoint checks for the provisional structured-context policy.
+  The automated suite pins exact packing and protocol behavior; these items
+  decide whether the conservative totals should move on this hardware.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -4972,3 +4976,44 @@ both launchers with a real model.
       the GIF is drawn, the desktop app well within its 35 seconds. The
       run is in Analytics with its GIF. A second Ctrl+C quits at once,
       and the run is kept without its GIF.
+
+## Provisional structured-context policy
+
+Structured message requests now use an exact suffix pack with conservative
+policy totals. The values below are explicitly provisional: they are not
+checkpoint-window measurements. These checks need the real tokenizers,
+models and target devices before anyone raises or lowers them.
+
+415. **The GPU defaults leave practical headroom.** On each of LLaDA,
+    DiffusionGemma, SmolLM3 and Mamba-3 on GPU, send a structured
+    conversation near the 4,096-token default with the model's default
+    output reserve. Confirm generation begins without an out-of-memory
+    error, its first and terminal frames carry identical
+    `context_pack` provenance, and the reported prompt tokens plus output
+    reserve do not exceed the effective total. Repeat near the 8,192-token
+    policy maximum. Record latency and peak memory before changing either
+    policy value.
+
+416. **The CPU overrides stay usable.** Run SmolLM3 and Mamba-3 on CPU with
+    structured conversations near the 2,048-token default and then near
+    the 4,096-token maximum. Confirm the pending user turn is retained,
+    oldest whole exchanges are omitted as needed, and the process remains
+    responsive enough to cancel. Record count time, first-token latency,
+    memory and decode rate before tuning the CPU limits.
+
+417. **Templates and raw completion history agree with the models.** Send
+    the same three-turn transcript to each model. On LLaDA,
+    DiffusionGemma and SmolLM3, inspect the tokenizer input and confirm the
+    checkpoint's actual user and assistant role template was applied. On
+    Mamba-3, confirm the input is the turn text concatenated in
+    chronological order with no invented role labels or separators. For
+    every model, the `count_prompt` result and generation provenance must
+    report the same included turn ids and prompt-token count.
+
+418. **Stateful follow-ups retain the packed input.** Generate from a
+    structured conversation, then resume on each diffusion model and run
+    What If on SmolLM3 and Mamba-3. Confirm the follow-up conditions on the
+    same packed suffix, keeps the same `context_pack` provenance, and saves
+    that pack under `metadata.json`'s context block. Also request a total
+    above policy and a pending user turn too large to fit; each must be
+    refused before inference with a bounded-context protocol error.
