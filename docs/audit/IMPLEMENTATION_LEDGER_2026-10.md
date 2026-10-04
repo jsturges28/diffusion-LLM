@@ -128,9 +128,9 @@ Not findings, and each its own slice when taken.
 |---|---|---|---|
 | DiffusionGemma's entropy at commit frames, on both pages | done | `d0ecae0`, `067038d` | 387, 388 |
 | The entropy row held for every model that records entropy | done | `11affa1` | 394 |
-| DiffusionGemma's stopped text holds only its last canvas and can run ahead of the page | needs hardware | `21f473f` | 412 |
+| DiffusionGemma's stopped text holds only its last canvas and can run ahead of the page | done | `21f473f` | 412 |
 | Edit Frames and What If? on an interrupted run are refused as if it had been replaced | done | `cc47981` | 402 |
-| A resume stopped before its first frame could restore the frames the page cut | needs hardware | `f5fc6ac` | 412 |
+| A resume stopped before its first frame could restore the frames the page cut | done | `f5fc6ac` | 412 |
 | An interrupted save carries no run token, so a retried save can duplicate | accepted | | |
 | The Help "signals" panel is at its 2,200-word budget | open | | |
 | A long run's save waits seconds on drawing its GIF preview | open | | |

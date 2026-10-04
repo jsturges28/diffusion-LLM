@@ -320,9 +320,9 @@ kept when these were written:
 - **411**: confirmed on 2026-10-03: Analytics' token viewer and entropy chart
   through their controller, after the 2026-10 audit's `A2-ORG-04` moved them
   into `token_viewer.js`.
-- **412**: **outstanding**: a stopped run keeping what the page received,
-  from two items raised during the 2026-10 remediation: DiffusionGemma's
-  stopped text, and a resume stopped before its first frame.
+- **412**: confirmed on 2026-10-03: a stopped run keeping what the page
+  received, from two items raised during the 2026-10 remediation:
+  DiffusionGemma's stopped text, and a resume stopped before its first frame.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
