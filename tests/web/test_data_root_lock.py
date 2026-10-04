@@ -3,7 +3,7 @@
 Strategy: every holder writes an enter line and an exit line to a
 shared log while it holds the lock, with a pause between them. If two
 ever held it at once, their lines interleave, so the log is the
-evidence rather than any claim the lock makes about itself. Forked
+evidence rather than any claim the lock makes about itself. Separate
 processes stand in for the browser launcher and the desktop app, two
 supervisors pointed at one data root, which is the case a
 ``threading.Lock`` cannot reach.
@@ -17,13 +17,14 @@ keeps every process contending on the same inode.
 
 from __future__ import annotations
 
-import multiprocessing
 import threading
 import time
 from pathlib import Path
 from typing import List
 
 from src.web.data_root_lock import DataRootLock
+
+from process_race import race_context
 
 HOLDERS = 6
 
@@ -63,7 +64,7 @@ def _assert_never_overlapped(root: Path, holders: int) -> None:
 
 
 def test_processes_never_hold_it_at_once(tmp_path: Path) -> None:
-    context = multiprocessing.get_context("fork")
+    context = race_context()
     procs = [
         context.Process(
             target=_hold_and_log, args=(tmp_path, f"process-{index}")

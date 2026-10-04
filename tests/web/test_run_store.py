@@ -1,7 +1,7 @@
 """Tests for the module that owns the saved-run directory.
 
 Strategy: drive `run_store` directly against `tmp_path`, including
-with real threads, and with forked processes where two supervisors
+with real threads, and with separate processes where two supervisors
 share one data root. No FastAPI, no app, no model, which is the
 point of the module existing: these properties were previously only
 reachable through an HTTP endpoint inside a two-thousand-line
@@ -25,12 +25,13 @@ to decide a directory is a run.
 from __future__ import annotations
 
 import builtins
+import contextlib
 import json
-import multiprocessing
 import threading
 import time
+from multiprocessing.synchronize import Event as ProcessEvent
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Tuple
 
 import pytest
 
@@ -41,6 +42,8 @@ from src.web.run_store import (
     RunBundle,
     RunNotFoundError,
 )
+
+from process_race import race_context
 
 FORBIDDEN_IMPORTS = ("fastapi", "torch", "transformers", "pydantic")
 
@@ -1125,11 +1128,12 @@ def test_racing_saves_of_one_generation_make_one_run(
 #
 # The browser launcher and the desktop app are separate processes
 # pointed at one data root, so a lock that lives in one process is no
-# lock between them (`A2-DATA-01`). Forked processes stand in for the
-# two. Each race widens its window by making a step the lock must
-# cover pause, patched before the fork so every child inherits it:
-# a process the lock fails to exclude then acts inside another's
-# window, and the outcome shows it.
+# lock between them (`A2-DATA-01`). Processes from `race_context()`
+# stand in for the two. Each race widens its window by making a step
+# the lock must cover pause, and each child installs that pause for
+# itself, because a forkserver child inherits none of the test's
+# patches: a process the lock fails to exclude then acts inside
+# another's window, and the outcome shows it.
 
 PROCESSES = 4
 
@@ -1160,14 +1164,27 @@ def _pausing(
     return paused
 
 
+@contextlib.contextmanager
+def _paused(name: str, entered: ProcessEvent) -> Iterator[None]:
+    """``run_store.<name>`` paused in this process for the block,
+    setting ``entered`` whenever it is called."""
+    real = getattr(run_store, name)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            run_store, name, _pausing(real, on_entry=entered.set)
+        )
+        yield
+
+
 def _in_processes(
-    target: Callable[..., None], calls: List[Tuple[Any, ...]]
+    target: Callable[..., None], calls: List[Dict[str, Any]]
 ) -> List[Any]:
-    """Exit codes of ``target`` run once per argument tuple, each in
-    its own forked process; None for one that never finished."""
-    context = multiprocessing.get_context("fork")
+    """Exit codes of ``target`` run once per set of keyword
+    arguments, each in its own process; None for one that never
+    finished."""
+    context = race_context()
     procs = [
-        context.Process(target=target, args=args) for args in calls
+        context.Process(target=target, kwargs=call) for call in calls
     ]
     for proc in procs:
         proc.start()
@@ -1176,56 +1193,64 @@ def _in_processes(
     return [proc.exitcode for proc in procs]
 
 
-def _save_generation(root: Path, marker: int) -> None:
-    run_store.save(
-        root,
-        _bundle(final_text=f"body {marker}"),
-        model_id="llada",
-        run_token=TOKEN,
-    )
+def _save_generation(
+    *, root: Path, marker: int, entered: ProcessEvent
+) -> None:
+    with _paused("find_run_by_token", entered):
+        run_store.save(
+            root,
+            _bundle(final_text=f"body {marker}"),
+            model_id="llada",
+            run_token=TOKEN,
+        )
 
 
-def _replace(root: Path, run_id: str, base: int) -> None:
-    try:
-        _save(root, run_id=run_id, expected_revision=base)
-    except RevisionConflictError:
-        raise SystemExit(REFUSED) from None
+def _replace(
+    *, root: Path, run_id: str, base: int, entered: ProcessEvent
+) -> None:
+    with _paused("read_revision", entered):
+        try:
+            _save(root, run_id=run_id, expected_revision=base)
+        except RevisionConflictError:
+            raise SystemExit(REFUSED) from None
 
 
 def test_processes_saving_one_generation_make_one_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     """Each would find no run under the token and make its own."""
-    monkeypatch.setattr(
-        run_store,
-        "find_run_by_token",
-        _pausing(run_store.find_run_by_token),
-    )
+    entered = race_context().Event()
+    calls = [
+        {"root": tmp_path, "marker": marker, "entered": entered}
+        for marker in range(PROCESSES)
+    ]
 
-    codes = _in_processes(
-        _save_generation, [(tmp_path, i) for i in range(PROCESSES)]
-    )
+    codes = _in_processes(_save_generation, calls)
 
     assert codes == [0] * PROCESSES
+    assert entered.is_set(), "no process paused"
     assert len(run_store.list_run_ids(tmp_path)) == 1
 
 
 def test_processes_replacing_one_revision_commit_once(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     """Each would read the same revision and publish a successor of
     it, the later metadata silently winning."""
     run_id, base = _save(tmp_path)
-    real_read = run_store.read_revision
-    monkeypatch.setattr(
-        run_store, "read_revision", _pausing(real_read)
-    )
-    calls = [(tmp_path, run_id, base)] * PROCESSES
+    entered = race_context().Event()
+    call = {
+        "root": tmp_path,
+        "run_id": run_id,
+        "base": base,
+        "entered": entered,
+    }
 
-    codes = _in_processes(_replace, calls)
+    codes = _in_processes(_replace, [call] * PROCESSES)
 
     assert sorted(codes) == [COMMITTED] + [REFUSED] * (PROCESSES - 1)
-    assert real_read(tmp_path, run_id) == base + 1
+    assert entered.is_set(), "no process paused"
+    assert run_store.read_revision(tmp_path, run_id) == base + 1
 
 
 def _delete_bounded(root: Path, run_id: str) -> None:
@@ -1240,20 +1265,21 @@ def _delete_bounded(root: Path, run_id: str) -> None:
 
 
 def test_a_delete_waits_for_a_replacement_from_another_process(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     """The replacement used to recreate the folder the delete had
     just removed, so a run the user deleted came back."""
     run_id, base = _save(tmp_path)
-    inside = multiprocessing.get_context("fork").Event()
-    monkeypatch.setattr(
-        run_store,
-        "read_revision",
-        _pausing(run_store.read_revision, on_entry=inside.set),
-    )
-    context = multiprocessing.get_context("fork")
+    context = race_context()
+    inside = context.Event()
     replacer = context.Process(
-        target=_replace, args=(tmp_path, run_id, base)
+        target=_replace,
+        kwargs={
+            "root": tmp_path,
+            "run_id": run_id,
+            "base": base,
+            "entered": inside,
+        },
     )
 
     replacer.start()

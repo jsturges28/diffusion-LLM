@@ -23,7 +23,6 @@ lock taken over the wrong span looks identical from the outside.
 from __future__ import annotations
 
 import json
-import multiprocessing
 import threading
 import time
 from pathlib import Path
@@ -37,6 +36,8 @@ from src.web.ui_state import (
     mutate_ui_state_key,
     set_ui_state_key,
 )
+
+from process_race import race_context
 
 
 def test_load_missing_file_returns_empty(tmp_path: Path) -> None:
@@ -194,7 +195,7 @@ def test_processes_racing_a_key_lose_nothing(tmp_path: Path) -> None:
     hypothetical here: the browser entry point and the desktop app are
     separate processes pointed at one results directory."""
     workers = 8
-    context = multiprocessing.get_context("fork")
+    context = race_context()
     procs = [
         context.Process(target=_append_one, args=(tmp_path,))
         for _ in range(workers)

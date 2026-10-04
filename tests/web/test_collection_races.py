@@ -2,9 +2,9 @@
 
 Strategy: skip HTTP and race `_collections_apply`, which is the whole
 of what an endpoint does once the body is parsed. Threads cover two
-tabs against one supervisor; forked processes cover the browser entry
-point and the desktop app pointed at one results directory, which is
-the case a `threading.Lock` cannot reach.
+tabs against one supervisor; separate processes cover the browser
+entry point and the desktop app pointed at one results directory,
+which is the case a `threading.Lock` cannot reach.
 
 This is `DATA-02`'s stated verification, and it is the reason the
 operations exist at all. Under the write path they replaced, every
@@ -27,8 +27,8 @@ two racing clients settles one way rather than corrupting the list.
 from __future__ import annotations
 
 import json
-import multiprocessing
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -38,6 +38,8 @@ import src.web.server as server
 from src.web import collections as ops
 from src.web.ui_state import load_ui_state
 
+from process_race import race_context
+
 _KEY = "diffusion_collections"
 
 # Enough contention to fail reliably when the lock is wrong. The
@@ -45,6 +47,10 @@ _KEY = "diffusion_collections"
 # transform at this width.
 THREADS = 16
 PROCESSES = 8
+
+# Long enough that processes the lock fails to exclude all read the
+# list before any of them writes it.
+PAUSE_SECONDS = 0.05
 
 
 def _run_id(index: int) -> str:
@@ -85,6 +91,28 @@ def _file_one(root: Path, index: int) -> None:
             current, "papers", _run_id(index), existing
         )
     )
+
+
+def _file_one_paused(root: Path, index: int) -> None:
+    """``_file_one`` with the filing paused between its read and its
+    write, installed here because a process from ``race_context``
+    inherits no patch from the test.
+
+    Threads start together, so their race contends as it is. A process
+    acts only once it has imported the server, which spreads their
+    starts far wider than one filing takes, so without the pause they
+    mostly file one after another and a missing lock goes unseen.
+    """
+    real_add_run = ops.add_run
+
+    def add_run_paused(*args: Any, **kwargs: Any) -> Any:
+        filed = real_add_run(*args, **kwargs)
+        time.sleep(PAUSE_SECONDS)
+        return filed
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(ops, "add_run", add_run_paused)
+        _file_one(root, index)
 
 
 def _filed(root: Path) -> List[str]:
@@ -156,10 +184,10 @@ def test_processes_filing_at_once_lose_nothing(
     """The half a threading lock cannot give. Two supervisors is not
     hypothetical: the browser entry point and the desktop app are
     separate processes pointed at one results directory."""
-    context = multiprocessing.get_context("fork")
+    context = race_context()
     procs = [
         context.Process(
-            target=_file_one, args=(results_dir, index)
+            target=_file_one_paused, args=(results_dir, index)
         )
         for index in range(PROCESSES)
     ]
