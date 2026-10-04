@@ -2838,6 +2838,10 @@ page appears that this map does not mention.
   `data_root.py`, `data_root_lock.py` (one writer at a time over the data
   root, whichever launcher it is), `save_limits.py` (how large a save may be)
   and `model_lease.py` (which of this machine's launchers may hold a model).
+  `supervisor_logging.py` belongs to the launchers rather than the server:
+  the log configuration both hand uvicorn, so the supervisor's own lines
+  reach the terminal. It imports no server code, since `main.py` builds it
+  before the server resolves its data root.
 - `src/analytics/` computes the intrinsic metrics in `metrics.py`.
 
 **The frontend** is `src/web/static/`: five pages (`menu.html`, `index.html`,

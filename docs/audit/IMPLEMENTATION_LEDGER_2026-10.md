@@ -17,8 +17,8 @@ reasoning in `docs/ROADMAP.md`, and git history keeps the rest.
 findings. Stage 2, cross-supervisor ownership, was validated as a whole by
 the two-supervisor passes confirmed for items 310 to 314, 389 to 396, 400 to
 404 and 405. Stage 3, extracting owners, closed with `A2-ORG-04`'s token
-viewer, confirmed with item 411. The open rows under Raised during
-remediation remain, each its own slice when taken.
+viewer, confirmed with item 411. The one open row under Raised during
+remediation, the Help signals panel's budget, is its own slice when taken.
 
 ## How to work a finding
 
@@ -95,7 +95,7 @@ Each settled with the maintainer during remediation.
   alike, and is the only one Mamba-3, with no window, has.
 - Deleting a run takes the publication lock too, and a save whose run has
   vanished becomes a new run, decided inside that lock (`A2-DATA-01`). Its
-  verification is the suite's forked-process races; the Stage 2
+  verification is the suite's cross-process races; the Stage 2
   two-supervisor run covers it on hardware.
 - The resident worker is named by a value drawn when the supervisor starts
   plus its activation number, which alone starts again after a restart
@@ -133,17 +133,17 @@ Not findings, and each its own slice when taken.
 | A resume stopped before its first frame could restore the frames the page cut | done | `f5fc6ac` | 412 |
 | An interrupted save carries no run token, so a retried save can duplicate | accepted | | |
 | The Help "signals" panel is at its 2,200-word budget | open | | |
-| A long run's save waits seconds on drawing its GIF preview | open | | |
-| The GIF preview is drawn outside the publication lock, so two near-simultaneous replacements can leave the earlier one's | open | | |
-| The process-race tests fork a multi-threaded process, which Python warns about 31 times a run (16 from `DATA-02`'s tests, 15 from `A2-DATA-01`'s) | open | | |
-| The supervisor's own INFO logs reach no handler, so its results-directory line at startup has never been shown | open | | |
+| A long run's save waits seconds on drawing its GIF preview | needs hardware | `cf4a402` | 414 |
+| The GIF preview is drawn outside the publication lock, so two near-simultaneous replacements can leave the earlier one's | needs hardware | `cf4a402` | 414 |
+| The process-race tests fork a multi-threaded process, which Python warns about 31 times a run (16 from `DATA-02`'s tests, 15 from `A2-DATA-01`'s) | done | `b670e62` | |
+| The supervisor's own INFO logs reach no handler, so its results-directory line at startup has never been shown | needs hardware | `315866f` | 414 |
 | A cleared line chart stayed reachable by name, so zoom or an eye clicked during a load reached a destroyed chart | done | `0507c6d` | |
 
 ## Baselines
 
 At the audit on 2026-10-01: 2,456 Python tests, 816 browser tests, and no
-Ruff findings. On 2026-10-03, after `A2-ORG-04`'s token viewer: 2,662 Python
-tests passing and 6 skipped, 986 browser tests, no Ruff findings, and 34
-warnings, down from 92 before the lifespan move. One of the 34 is torch
-failing to start CUDA in the agent sandbox, which a machine with a working
-GPU does not raise.
+Ruff findings. On 2026-10-03, after the save path's rows: 2,693 Python tests
+passing and 6 skipped, 1,006 browser tests, no Ruff findings, and 3
+warnings, down from 92 before the lifespan move and 34 before the race tests
+left `fork`. One is torch failing to start CUDA in the agent sandbox, which a
+machine with a working GPU does not raise; two are Hugging Face deprecations.

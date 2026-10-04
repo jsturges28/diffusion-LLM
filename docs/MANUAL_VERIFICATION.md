@@ -326,6 +326,9 @@ kept when these were written:
 - **413**: confirmed on 2026-10-03: an edit session's Back after Select
   Frame, and Continue in review on a stopped Resume to End, on LLaDA and
   DiffusionGemma.
+- **414**: **outstanding**: the save path in both launchers: the
+  supervisor's own log lines, a Save that answers before its GIF is drawn,
+  and a GIF that follows the run's latest revision.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -4936,3 +4939,36 @@ suites; this is the same against real models.
       new frame appears. Review is back as it was, and the status line
       reads "Stopped before the edit produced a frame. The run is
       unchanged."
+
+## The save path in both launchers
+
+From 2026-10-03 the supervisor's own log lines reach the terminal, where
+before only uvicorn's did. A save answers once its run is published, and
+`diffusion.gif` is drawn by a background task just after, then moved into
+the run only while the run is still the revision drawn. Both are tested
+without a GPU, in `tests/web/test_supervisor_logging.py` and
+`tests/web/test_save_preview.py`, and the sandbox timed a 256-frame save's
+reply at 0.03 seconds with its GIF 10.6 seconds later. This is the same in
+both launchers with a real model.
+
+414. **The save path in both launchers.** In the browser launcher
+    (`.venv/bin/python main.py`), then in the desktop app
+    (`.venv/bin/python desktop.py`):
+    - At startup the terminal shows `INFO:     results directory: ...`,
+      naming the folder runs are saved to.
+    - Load LLaDA, run it at **Gen Length** 256 and **Steps** 256, and
+      Save. The checkmark appears within about a second. The terminal
+      shows `INFO:     saved run to ...`, then a few seconds later
+      `INFO:     drew the preview for ... at revision 1`, and the run's
+      `diffusion.gif` is in its folder.
+    - Click Edit Frames on that run, remask a token, Lock In, Resume to
+      End and Confirm. The folder's GIF ends on the edited text. If the
+      edit was saved while the first GIF was still drawing, the terminal
+      also shows `dropped the preview for ...: revision 1 was replaced or
+      deleted while it was drawn`.
+    - Save another long run and quit straight away: Ctrl+C in the browser
+      launcher's terminal, or close the desktop window. The terminal shows
+      `Waiting for background tasks to complete.`, and the app exits once
+      the GIF is drawn, the desktop app well within its 35 seconds. The
+      run is in Analytics with its GIF. A second Ctrl+C quits at once,
+      and the run is kept without its GIF.
