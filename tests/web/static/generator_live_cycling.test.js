@@ -272,10 +272,14 @@ test("a resume's frames cycle the same way", () => {
   const page = streaming(DRAFTS);
   const { context } = page;
   context.handleDone({ type: "done", final_text: "done" });
-  context.remaskEdits = [{ frame_index: 1, token_positions: [2, 3] }];
-  context.truncateRunArraysAt(1);
+  context.generatorEdit.restoreArtifacts({
+    remaskEdits: [{
+      frame_index: 1,
+      token_positions: [2, 3],
+    }],
+  });
+  context.generatorRun.truncate(1);
   context.generatorCanvas.invalidate();
-  context.isResuming = true;
 
   context.handleFrame(frameOf(DRAFTS[1], 0, 2));
 

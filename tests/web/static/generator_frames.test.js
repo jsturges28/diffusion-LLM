@@ -250,11 +250,11 @@ test("a scrubbed frame's tokens are the run's own prefix", () => {
 
 test("navigating sets the scrub position the renderers read", () => {
   const { context } = runThrough(WORDS);
-  context.activateScrubber();
+  context.generatorEdit.activate();
 
-  context.navigateToFrame(2);
+  context.generatorEdit.navigate(2);
 
-  assert.equal(context.currentScrubFrame, 2);
+  assert.equal(context.generatorEdit.currentFrame(), 2);
 });
 
 // -- the pre-edit baseline --
@@ -499,7 +499,7 @@ test("the append save payload carries the run whole", () => {
 test("an append run can be cut and continued", () => {
   const { context } = streamAppend(WORDS);
 
-  context.truncateRunArraysAt(2);
+  context.generatorRun.truncate(2);
   context.handleFrame(
     appendFrame(3, ["The", " cat", " ran"])
   );
@@ -516,7 +516,7 @@ test("cutting an append run leaves no phantom frames", () => {
   // run and a length there is a lie about how many frames exist.
   const { context } = streamAppend(WORDS);
 
-  context.truncateRunArraysAt(2);
+  context.generatorRun.truncate(2);
   const held = frames(context);
 
   assert.equal(held.count, 2);
@@ -529,7 +529,7 @@ test("cutting an append run leaves no phantom frames", () => {
 test("a cut append run keeps its scalars in step", () => {
   const { context } = streamAppend(WORDS);
 
-  context.truncateRunArraysAt(2);
+  context.generatorRun.truncate(2);
   const held = frames(context);
 
   assert.equal(held.elapsed.length, 2);
@@ -544,7 +544,7 @@ test("a cut run's baseline still reads the original", () => {
   const { context } = streamAppend(WORDS);
   captureOriginal(context);
 
-  context.truncateRunArraysAt(2);
+  context.generatorRun.truncate(2);
   context.handleFrame(appendFrame(3, ["The", " cat", " ran"]));
 
   assert.equal(
@@ -562,7 +562,7 @@ test("an edit session can be abandoned and the run restored", () => {
   const { context } = streamAppend(WORDS);
   const before = context.generatorRun.captureCheckpoint();
 
-  context.truncateRunArraysAt(2);
+  context.generatorRun.truncate(2);
   context.handleFrame(appendFrame(3, ["The", " cat", " ran"]));
   context.generatorRun.restoreCheckpoint(before);
 

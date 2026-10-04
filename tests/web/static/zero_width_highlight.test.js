@@ -86,9 +86,16 @@ function generatorProfile(page) {
     elapsed: 0,
     revealed: [],
   });
-  page.context.scrubberActive = true;
-  page.context.currentScrubFrame = 0;
-  page.context.generatorCanvas.renderFrame(0);
+  page.context.generatorRun.appendFrame({
+    text: frame.map((item) => item.t).join(""),
+    tokens: frame,
+    canvas_index: 0,
+    mean_conf: 0.9,
+    elapsed: 0,
+    revealed: [],
+  });
+  page.context.generatorEdit.activate();
+  page.context.generatorEdit.navigate(0);
   page.context.generatorReadouts.updateProfile();
   const profile = page.registry.get("entropy-profile");
   profile.clientWidth = WORDS.length * 100;
@@ -159,11 +166,12 @@ test("the generator marks a lit newline", () => {
   const page = loadPage({});
   const { context } = page;
   const profile = generatorProfile(page);
-  fillWithTokens(context, context.outputArea);
+  const output = page.registry.get("output-area");
+  fillWithTokens(context, output);
 
   pointGeneratorProfile(profile, 2);
 
-  const classes = classesAt(context.outputArea, 2);
+  const classes = classesAt(output, 2);
   assert.equal(classes.has("token-cross-highlight"), true);
   assert.equal(classes.has("token-zero-width"), true);
 });
@@ -172,11 +180,12 @@ test("the generator leaves a lit word unmarked", () => {
   const page = loadPage({});
   const { context } = page;
   const profile = generatorProfile(page);
-  fillWithTokens(context, context.outputArea);
+  const output = page.registry.get("output-area");
+  fillWithTokens(context, output);
 
   pointGeneratorProfile(profile, 1);
 
-  const classes = classesAt(context.outputArea, 1);
+  const classes = classesAt(output, 1);
   assert.equal(classes.has("token-cross-highlight"), true);
   assert.equal(classes.has("token-zero-width"), false);
 });
@@ -188,12 +197,13 @@ test("clearing takes the marker with it", () => {
   const page = loadPage({});
   const { context } = page;
   const profile = generatorProfile(page);
-  fillWithTokens(context, context.outputArea);
+  const output = page.registry.get("output-area");
+  fillWithTokens(context, output);
   pointGeneratorProfile(profile, 2);
 
   profile.dispatch("mouseleave");
 
-  const classes = classesAt(context.outputArea, 2);
+  const classes = classesAt(output, 2);
   assert.equal(classes.has("token-cross-highlight"), false);
   assert.equal(classes.has("token-zero-width"), false);
 });
@@ -205,16 +215,17 @@ test("moving the highlight moves the marker", () => {
   const page = loadPage({});
   const { context } = page;
   const profile = generatorProfile(page);
-  fillWithTokens(context, context.outputArea);
+  const output = page.registry.get("output-area");
+  fillWithTokens(context, output);
   pointGeneratorProfile(profile, 2);
 
   pointGeneratorProfile(profile, 3);
 
   assert.equal(
-    classesAt(context.outputArea, 2).has("token-zero-width"), false
+    classesAt(output, 2).has("token-zero-width"), false
   );
   assert.equal(
-    classesAt(context.outputArea, 3).has("token-zero-width"), false
+    classesAt(output, 3).has("token-zero-width"), false
   );
 });
 

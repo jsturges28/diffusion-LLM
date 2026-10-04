@@ -143,12 +143,15 @@ async function finishedRun() {
 // Edit Frames on `frame`, one token remasked and locked in.
 function lockedEditAt(run, frame) {
   const { context } = run;
-  context.enterRemaskMode();
-  context.navigateToFrame(frame);
-  context.selectCurrentFrame();
-  context.toggleRemaskPosition(1);
-  context.lockInEdits();
-  assert.equal(context.runPhase.mode, "choice");
+  context.generatorEdit.enterFrames();
+  context.generatorEdit.navigate(frame);
+  context.generatorEdit.selectFrame();
+  context.generatorEdit.togglePosition(1);
+  context.generatorEdit.lockSelection();
+  assert.equal(
+    context.generatorEdit.phaseState().mode,
+    "choice"
+  );
 }
 
 function press(run, id) {
@@ -190,7 +193,10 @@ test("a stopped Resume to End puts the run back", async () => {
 
   assert.equal(run.context.generatorRun.frameCount(), 4);
   assert.equal(run.context.generatorRun.finalText(), "abc");
-  assert.equal(run.context.remaskEdits.length, 0);
+  assert.equal(
+    run.context.generatorEdit.readArtifacts().remaskEdits.length,
+    0
+  );
   assert.equal(run.context.generatorRun.interrupted(), false);
   assert.equal(statusLine(run), UNCHANGED);
 });
@@ -202,9 +208,10 @@ test("and goes back to the choice it was sent from", async () => {
 
   stoppedBeforeAFrame(run);
 
-  assert.equal(run.context.runPhase.mode, "choice");
-  assert.equal(run.context.runPhase.lockedEdits.length, 1);
-  assert.equal(run.context.currentScrubFrame, 2);
+  const phase = run.context.generatorEdit.phaseState();
+  assert.equal(phase.mode, "choice");
+  assert.equal(phase.lockedEdits.length, 1);
+  assert.equal(run.context.generatorEdit.currentFrame(), 2);
   assert.equal(
     run.registry.get("guided-edit-status").textContent,
     "1 token locked on Frame 2."
@@ -222,7 +229,10 @@ test("from where the same resume can be sent again", async () => {
   const sent = resumesSent(run.socket);
   assert.equal(sent.length, 2);
   assert.deepEqual(sent[1], sent[0]);
-  assert.equal(run.context.runPhase.mode, "generating");
+  assert.equal(
+    run.context.generatorEdit.phaseState().mode,
+    "generating"
+  );
 });
 
 test("the run keeps its thinking", async () => {
@@ -246,17 +256,18 @@ test("a stopped Run to Here goes back to its target", async () => {
   const run = await finishedRun();
   lockedEditAt(run, 1);
   press(run, "btn-edit-another");
-  run.context.navigateToFrame(3);
+  run.context.generatorEdit.navigate(3);
   press(run, "btn-run-to-here");
   assert.equal(resumesSent(run.socket)[0].max_frames, 3);
 
   stoppedBeforeAFrame(run);
 
   assert.equal(run.context.generatorRun.frameCount(), 4);
-  assert.equal(run.context.runPhase.mode, "select_target");
-  assert.equal(run.context.runPhase.targetFrame, null);
-  assert.equal(run.context.runPhase.guidedAction, null);
-  assert.equal(run.context.currentScrubFrame, 3);
+  const phase = run.context.generatorEdit.phaseState();
+  assert.equal(phase.mode, "select_target");
+  assert.equal(phase.targetFrame, null);
+  assert.equal(phase.guidedAction, null);
+  assert.equal(run.context.generatorEdit.currentFrame(), 3);
   assert.equal(statusLine(run), UNCHANGED);
 
   press(run, "btn-run-to-here");
@@ -283,7 +294,13 @@ test("a resume stopped after a frame keeps its branch", async () => {
   });
 
   assert.equal(run.context.generatorRun.frameCount(), 3);
-  assert.equal(run.context.runPhase.mode, "review");
-  assert.equal(run.context.remaskEdits.length, 1);
+  assert.equal(
+    run.context.generatorEdit.phaseState().mode,
+    "review"
+  );
+  assert.equal(
+    run.context.generatorEdit.readArtifacts().remaskEdits.length,
+    1
+  );
   assert.equal(statusLine(run), "Stopped.");
 });

@@ -42,6 +42,7 @@ APP_JS = (
     / "app.js"
 )
 CANVAS_JS = APP_JS.with_name("generator_canvas.js")
+EDIT_JS = APP_JS.with_name("generator_edit.js")
 
 
 def _source() -> str:
@@ -130,11 +131,11 @@ def test_the_hooks_with_nothing_to_do_stay_off() -> None:
 def test_the_drawer_is_hidden_while_a_run_streams() -> None:
     """The premise of the test above, pinned so it cannot quietly
     stop being true and leave the reasoning stale."""
-    source = APP_JS.read_text(encoding="utf-8")
-    start = source.index("function deactivateScrubber()")
+    source = EDIT_JS.read_text(encoding="utf-8")
+    start = source.index("function deactivate()")
     body = source[start : start + 400]
 
-    assert "generatorCanvas.deactivate()" in body
+    assert "canvas.deactivate()" in body
 
 
 # -- what the hook reads --

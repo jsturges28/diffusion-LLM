@@ -1,11 +1,9 @@
 """The generator moves between editing phases only through the table.
 
-Strategy: read the shipped `app.js` and `index.html`. The table and
-every legal and illegal move are exercised in
-`tests/web/static/run_phases.test.js`; what cannot be checked there is
-whether the page still sets the phase behind its back. One direct
-assignment would put the workflow back where it was, because the
-table only constrains the moves that go through it.
+Strategy: read the shipped `generator_edit.js` and `index.html`. The
+table and every legal and illegal move are exercised in
+`tests/web/static/run_phases.test.js`; what cannot be checked there
+is whether the controller still sets the phase behind its back.
 
 What passing proves is narrow but load-bearing. The guided edit flow
 needs a GPU to exercise, so this refactor cannot be run here at all.
@@ -23,7 +21,7 @@ from pathlib import Path
 STATIC = (
     Path(__file__).resolve().parents[2] / "src" / "web" / "static"
 )
-APP_JS = STATIC / "app.js"
+EDIT_JS = STATIC / "generator_edit.js"
 INDEX_HTML = STATIC / "index.html"
 MODULE_JS = STATIC / "run_phases.js"
 
@@ -36,12 +34,12 @@ FORMER_NAMES = (
 )
 
 
-def _app() -> str:
-    return APP_JS.read_text(encoding="utf-8")
+def _edit() -> str:
+    return EDIT_JS.read_text(encoding="utf-8")
 
 
 def test_no_phase_field_is_a_variable_of_its_own() -> None:
-    source = _app()
+    source = _edit()
 
     for name in FORMER_NAMES:
         pattern = r"(?<![\w.$])" + name + r"(?![\w$])"
@@ -49,7 +47,7 @@ def test_no_phase_field_is_a_variable_of_its_own() -> None:
 
 
 def test_the_phase_is_declared_once_and_held() -> None:
-    source = _app()
+    source = _edit()
     writes = re.findall(r"(?<![\w.$])runPhase\s*=(?!=)", source)
 
     assert source.count("var runPhase = runPhasesCreate()") == 1
@@ -59,7 +57,7 @@ def test_the_phase_is_declared_once_and_held() -> None:
 def test_the_phase_is_never_assigned_directly() -> None:
     """The whole guarantee. A table that only constrains the moves
     routed through it constrains nothing."""
-    source = _app()
+    source = _edit()
     writes = re.findall(r"runPhase\.mode\s*=(?!=)", source)
 
     assert writes == []
@@ -68,7 +66,7 @@ def test_the_phase_is_never_assigned_directly() -> None:
 def test_every_move_names_a_constant() -> None:
     """A string literal here would be a typo away from a phase
     nothing enters, and the table would never see it."""
-    source = _app()
+    source = _edit()
     calls = re.findall(r"runPhasesEnter\(runPhase, ([^)]+)\)", source)
 
     # Three put a resume stopped before its first frame back in the
@@ -79,7 +77,7 @@ def test_every_move_names_a_constant() -> None:
 
 
 def test_leaving_a_session_uses_the_module() -> None:
-    source = _app()
+    source = _edit()
 
     assert "runPhasesReset(runPhase)" in source
 
@@ -89,16 +87,19 @@ def test_session_open_checks_use_the_helper() -> None:
     which is the comparison that goes stale when a phase is added.
     The third is a replaced worker closing an open session
     (`A2-LIFE-03`), which asks the same question."""
-    source = _app()
+    source = _edit()
 
-    assert source.count("runPhasesEditing(runPhase)") == 3
+    assert source.count("runPhasesEditing(runPhase)") == 4
 
 
 def test_the_module_loads_first_and_has_no_dom() -> None:
     html = INDEX_HTML.read_text(encoding="utf-8")
     module = MODULE_JS.read_text(encoding="utf-8")
 
-    assert html.index("/run_phases.js") < html.index("/app.js")
+    assert html.index("/run_phases.js") < html.index(
+        "/generator_edit.js"
+    )
+    assert html.index("/generator_edit.js") < html.index("/app.js")
     assert "document" not in module
     assert "window" not in module
 
@@ -108,13 +109,14 @@ def test_a_resume_is_cleared_before_the_phase_moves() -> None:
     back in edit used to set the phase and then clear the resume it
     had just finished; the module checks consistency on arrival, so
     the clear has to come first."""
-    source = _app()
+    source = _edit()
+    function = source[source.index("function handleGuidedDone()") :]
     cleared = (
         "runPhase.guidedAction = null;\n"
         "    runPhase.targetFrame = null;"
     )
-    start = source.find(cleared)
+    start = function.find(cleared)
 
     assert start != -1
-    after = source[start : start + 200]
+    after = function[start : start + 240]
     assert "runPhasesEnter(runPhase, RUN_PHASE_EDIT)" in after

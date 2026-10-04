@@ -182,7 +182,7 @@ function withClass(node, name) {
 // empty.
 function popoverAt(context, registry, frame, position) {
   const popover = registry.get("token-alts-popover");
-  context.navigateToFrame(frame);
+  context.generatorEdit.navigate(frame);
   popover.children = [];
   context.generatorCandidates.showPopover(position, null);
   return popover;
@@ -265,7 +265,9 @@ function editedRun(options) {
     { frames: 3, captured: [1, 2] }, options || {}
   );
   const run = finishedRun();
-  run.context.remaskEdits = [EDIT_AT_2];
+  run.context.generatorEdit.restoreArtifacts({
+    remaskEdits: [EDIT_AT_2],
+  });
   resumeFrom(run.context, 2, settings.frames);
   if (settings.captured !== null) {
     run.context.handleMessage(candidatesMessage(settings.captured));
@@ -345,9 +347,12 @@ test("the frame the edit branched at already has two runs", () => {
 
 test("the runs part at the earliest edit, whatever the order", () => {
   const { context, registry } = editedRun();
-  context.remaskEdits = [
-    { frame_index: 3, token_positions: [2] }, EDIT_AT_2,
-  ];
+  context.generatorEdit.restoreArtifacts({
+    remaskEdits: [
+      { frame_index: 3, token_positions: [2] },
+      EDIT_AT_2,
+    ],
+  });
   context.generatorCanvas.setBlend(0.2);
 
   const popover = popoverAt(context, registry, 2, 1);
@@ -469,8 +474,7 @@ test("an unedited run saves its candidates once", async () => {
 // -- an edit, Retry, and the snapshot --
 
 function resumeFrom(context, offset, frames) {
-  context.truncateRunArraysAt(offset);
-  context.isResuming = true;
+  context.generatorRun.truncate(offset);
   for (let local = 0; local < frames; local++) {
     context.handleFrame(canvasFrame(offset + local));
   }
@@ -538,7 +542,9 @@ test("a new run's Original page never shows the last run's", () => {
     context.handleFrame(canvasFrame(index));
   }
   context.handleDone({ type: "done", final_text: WORDS.join("") });
-  context.remaskEdits = [EDIT_AT_2];
+  context.generatorEdit.restoreArtifacts({
+    remaskEdits: [EDIT_AT_2],
+  });
   context.generatorCanvas.setBlend(0.2);
 
   const popover = popoverAt(context, registry, 3, 1);
@@ -548,11 +554,11 @@ test("a new run's Original page never shows the last run's", () => {
 
 test("Retry brings the run's candidates back", () => {
   const { context } = finishedRun();
-  context.captureEditSnapshot();
+  context.generatorEdit.enterFrames();
   resumeFrom(context, 2, 3);
   context.handleMessage(candidatesMessage([1]));
 
-  context.restoreEditSnapshot();
+  context.generatorEdit.exit();
 
   assert.deepEqual(
     Array.from(context.generatorRun.candidateFrames(false)),
@@ -675,7 +681,7 @@ test("over the quota, the pre-edit candidates give way first", () => {
 // width} per position the flicker is stepping. The width is read
 // before it stops, since stopping hands each span back as drawn.
 function cyclingAt(context, frame) {
-  context.navigateToFrame(frame);
+  context.generatorEdit.navigate(frame);
   const entries = [...context.flickerEntries].map((entry) => ({
     span: entry.span,
     position: entry.position,
@@ -709,7 +715,7 @@ test("a finished run's unsettled positions cycle", () => {
 test("a tick shows the slot the clock is in", () => {
   const { context } = finishedRun();
   chooseCandidates(context);
-  context.navigateToFrame(3);
+  context.generatorEdit.navigate(3);
   const entry = context.flickerEntries[0];
 
   context.flickerNow = () => 0;
@@ -757,7 +763,7 @@ test("nothing cycles mid-edit", () => {
   // The canvas is a click target there, not something to read.
   const { context } = finishedRun();
   chooseCandidates(context);
-  context.beginEditSession();
+  context.generatorEdit.enterFrames();
 
   assert.equal(cyclingAt(context, 3).length, 0);
 });
@@ -774,7 +780,7 @@ test("cycling needs a finished run the user is not editing", () => {
   context.generatorCanvas.renderFrame(3);
   assert.equal(context.flickerEntries.length, 0);
   context.isGenerating = false;
-  context.beginEditSession();
+  context.generatorEdit.enterFrames();
   assert.equal(context.flickerEntries.length, 0);
 });
 
@@ -799,7 +805,9 @@ function branchMessage(frames) {
 
 test("each crossfade layer cycles its own run's candidates", () => {
   const { context } = finishedRun();
-  context.remaskEdits = [EDIT_AT_2];
+  context.generatorEdit.restoreArtifacts({
+    remaskEdits: [EDIT_AT_2],
+  });
   resumeFrom(context, 2, 3);
   context.handleMessage(branchMessage([1, 2]));
   context.handleDone({ type: "done", final_text: WORDS.join("") });

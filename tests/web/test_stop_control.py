@@ -141,7 +141,7 @@ def test_a_stopped_run_keeps_its_frames() -> None:
     body = _region("function enterInterruptedState()", 900)
 
     assert "setSaveAvailable(true)" in body
-    assert "activateScrubber()" in body
+    assert "generatorEdit.activate()" in body
 
 
 def test_the_save_carries_the_stopped_flag() -> None:

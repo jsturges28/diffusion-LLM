@@ -247,9 +247,9 @@ test("a run cut off by a dropped connection is locked, saying why", async () => 
 test("Edit Frames then opens nothing", async () => {
   const { context, socket } = await cutOffLlada();
 
-  context.enterRemaskMode();
+  context.generatorEdit.enterFrames();
 
-  assert.equal(context.runPhase.mode, null);
+  assert.equal(context.generatorEdit.phaseState().mode, null);
   assert.deepEqual(stateful(socket), []);
 });
 
@@ -281,7 +281,8 @@ test("the lock comes back from a trip to Analytics", async () => {
   const { context, registry } = await cutOffLlada();
   const button = registry.get("btn-edit-frames");
   context.generatorRun.reset();
-  context.setButtonUnlocked(button, "");
+  button.classList.remove("is-locked");
+  button.removeAttribute("aria-disabled");
 
   assert.equal(context.restoreSessionState(), true);
 
@@ -289,35 +290,51 @@ test("the lock comes back from a trip to Analytics", async () => {
   assert.match(button.title, LOST);
 });
 
-test("a resume already composed is refused before the run is cut", async () => {
+test("a composed resume is refused before a stale run is cut", async () => {
   // A session open as the run stopped being editable keeps its own
   // buttons. The request must not go, and the frames must not be cut
   // back for a branch that will never arrive.
-  const { context, registry, socket } = await cutOffLlada();
+  const { context, registry, socket } =
+    await finishedLlada("b0a7:1");
+  context.generatorEdit.enterFrames();
+  context.generatorEdit.navigate(1);
+  context.generatorEdit.selectFrame();
+  context.generatorEdit.togglePosition(0);
+  context.generatorEdit.lockSelection();
   const frames = context.generatorRun.frameCount();
-  context.runPhase.mode = "choice";
-  context.runPhase.lockedEdits.push({
-    frame_index: 0,
-    token_positions: [0],
-  });
+  const before = stateful(socket);
+  context.generatorRun.adoptResidentWorker("b0a7:2");
 
-  context.doGuidedResume("end");
+  context.generatorEdit.resumeToEnd();
 
   assert.equal(context.generatorRun.frameCount(), frames);
-  assert.deepEqual(stateful(socket), []);
-  assert.match(registry.get("status-message").textContent, LOST);
+  assert.deepEqual(stateful(socket), before);
+  assert.match(registry.get("status-message").textContent, REPLACED);
 });
 
 test("a substitution already chosen is refused before the run is cut", async () => {
-  const { context, socket } = await cutOffSmol();
+  const run = await runOn(SMOL, "b0a7:1");
+  const { context, socket } = run;
+  context.handleFrame(appendFrame(1, " Yeast", opening(SMOL)));
+  context.handleFrame(appendFrame(2, " eats"));
+  context.handleDone({
+    type: "done",
+    final_text: " Yeast eats",
+    run_token: "a3f9c1:1",
+  });
+  context.generatorEdit.enterWhatIf();
   const frames = context.generatorRun.frameCount();
-  context.runPhase.mode = "substitute";
-  context.runPhase.substituting = true;
+  const before = stateful(socket);
+  context.generatorRun.adoptResidentWorker("b0a7:2");
 
-  context.doSubstitute(0, 7, null);
+  context.generatorEdit.substitute({
+    position: 0,
+    tokenId: 7,
+    typedText: null,
+  });
 
   assert.equal(context.generatorRun.frameCount(), frames);
-  assert.deepEqual(stateful(socket), []);
+  assert.deepEqual(stateful(socket), before);
 });
 
 test("nor is a probe or a rewind sent once the page reconnects", async () => {
@@ -336,7 +353,7 @@ test("nor is a probe or a rewind sent once the page reconnects", async () => {
   context.generatorCandidatesRequestProbe({
     position: 0, tokenId: 7, requestId: 1,
   });
-  context.rewindWorkerRun();
+  context.generatorEdit.enterWhatIf();
 
   assert.deepEqual(stateful(reconnected), []);
 });
@@ -387,10 +404,13 @@ test("reconnecting to the same worker leaves the run editable", async () => {
   const { context, registry, socket } = await finishedLlada("b0a7:1");
 
   context.handleResident(resident(LLADA, "b0a7:1"));
-  context.enterRemaskMode();
+  context.generatorEdit.enterFrames();
 
   assert.equal(isLocked(registry.get("btn-edit-frames")), false);
-  assert.equal(context.runPhase.mode, "select");
+  assert.equal(
+    context.generatorEdit.phaseState().mode,
+    "select"
+  );
   assert.deepEqual(stateful(socket), ["rewind"]);
 });
 
@@ -400,12 +420,12 @@ test("a locked run sends nothing to the worker that replaced it", async () => {
   const { context, socket } = await finishedLlada("b0a7:1");
   context.handleResident(resident(LLADA, "b0a7:2"));
 
-  context.enterRemaskMode();
+  context.generatorEdit.enterFrames();
   context.generatorCandidatesRequestProbe({
     position: 0, tokenId: 7, requestId: 1,
   });
 
-  assert.equal(context.runPhase.mode, null);
+  assert.equal(context.generatorEdit.phaseState().mode, null);
   assert.deepEqual(stateful(socket), []);
 });
 
@@ -415,7 +435,8 @@ test("a locked run sends nothing to the worker that replaced it", async () => {
 function returnFromAnalytics(run) {
   const button = run.registry.get("btn-edit-frames");
   run.context.generatorRun.reset();
-  run.context.setButtonUnlocked(button, "");
+  button.classList.remove("is-locked");
+  button.removeAttribute("aria-disabled");
   assert.equal(run.context.restoreSessionState(), true);
   return button;
 }
@@ -442,12 +463,15 @@ test("and stays editable when the socket names the same one", async () => {
 test("an open frame selection closes when its worker goes", async () => {
   // Nothing in it can be saved yet, and nothing in it can run now.
   const { context, registry } = await finishedLlada("b0a7:1");
-  context.enterRemaskMode();
-  assert.equal(context.runPhase.mode, "select");
+  context.generatorEdit.enterFrames();
+  assert.equal(
+    context.generatorEdit.phaseState().mode,
+    "select"
+  );
 
   context.handleResident(resident(LLADA, "b0a7:2"));
 
-  assert.equal(context.runPhase.mode, null);
+  assert.equal(context.generatorEdit.phaseState().mode, null);
   assert.equal(isLocked(registry.get("btn-edit-frames")), true);
 });
 
@@ -456,17 +480,36 @@ test("a branch awaiting Confirm is kept, and Retry locks", async () => {
   // stays saveable. Retry would start the edit again on a worker
   // that does not hold the run.
   const { context, registry, socket } = await finishedLlada("b0a7:1");
-  context.runPhase.mode = "review";
+  context.generatorEdit.enterFrames();
+  context.generatorEdit.navigate(1);
+  context.generatorEdit.selectFrame();
+  context.generatorEdit.togglePosition(0);
+  context.generatorEdit.lockSelection();
+  context.generatorEdit.resumeToEnd();
+  context.handleFrame(snapshotFrame(0, "xb"));
+  context.handleDone({
+    type: "done",
+    final_text: "xb",
+    run_token: "a3f9c1:1",
+  });
+  assert.equal(
+    context.generatorEdit.phaseState().mode,
+    "review"
+  );
   const retry = registry.get("btn-retry-edit");
+  const before = stateful(socket);
 
   context.handleResident(resident(LLADA, "b0a7:2"));
-  context.retryGuidedEdit();
+  context.generatorEdit.retry();
 
-  assert.equal(context.runPhase.mode, "review");
+  assert.equal(
+    context.generatorEdit.phaseState().mode,
+    "review"
+  );
   assert.equal(isLocked(retry), true);
   assert.match(retry.title, REPLACED);
   assert.equal(isLocked(registry.get("btn-confirm-edit")), false);
-  assert.deepEqual(stateful(socket), []);
+  assert.deepEqual(stateful(socket), before);
 });
 
 test("a supervisor that names no worker changes nothing", async () => {

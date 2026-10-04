@@ -1,9 +1,9 @@
 """The generator reaches its frame arrays only through their owner.
 
-Strategy: read `generator_run.js`, the shipped `app.js` and
-`index.html`. The operations themselves are unit-tested in
-`tests/web/static/run_frames.test.js`, which drives the module in a
-`vm`; `generator_run.test.js` drives their active-run owner. What
+Strategy: read `generator_run.js`, `generator_edit.js`, the shipped
+`app.js` and `index.html`. The operations themselves are unit-tested
+in `tests/web/static/run_frames.test.js`, which drives the module in
+a `vm`; `generator_run.test.js` drives their active-run owner. What
 neither can check is whether the page still goes around that owner.
 A family one call site can take apart is not a family.
 
@@ -28,6 +28,7 @@ APP_JS = STATIC / "app.js"
 INDEX_HTML = STATIC / "index.html"
 MODULE_JS = STATIC / "run_frames.js"
 RUN_JS = STATIC / "generator_run.js"
+EDIT_JS = STATIC / "generator_edit.js"
 SNAPSHOT_JS = STATIC / "run_snapshot.js"
 
 # What the two families used to be called as free variables. The
@@ -149,8 +150,8 @@ def test_an_edit_snapshot_is_taken_by_the_module() -> None:
     region = _region(RUN_JS, "function captureCheckpoint()", 700)
 
     assert "runFramesSnapshot(frames)" in region
-    assert "generatorRun.captureCheckpoint()" in _region(
-        APP_JS, "function captureEditSnapshot()", 400
+    assert "run.captureCheckpoint()" in _region(
+        EDIT_JS, "function capturePreEditCheckpoint()", 500
     )
 
 
@@ -158,8 +159,8 @@ def test_an_edit_rollback_goes_back_through_it() -> None:
     region = _region(RUN_JS, "function restoreCheckpoint(", 700)
 
     assert "runFramesRestore(frames" in region
-    assert "generatorRun.restoreCheckpoint(" in _region(
-        APP_JS, "function restoreEditSnapshot()", 500
+    assert "run.restoreCheckpoint(" in _region(
+        EDIT_JS, "function restorePreEditCheckpoint()", 600
     )
 
 
@@ -169,8 +170,8 @@ def test_a_resume_truncates_through_it() -> None:
     assert "runFramesTruncate(frames, offset)" in _region(
         RUN_JS, "function truncate(offset)", 700
     )
-    assert "generatorRun.truncate(offset)" in _region(
-        APP_JS, "function truncateRunArraysAt(offset)", 300
+    assert "run.truncate(frameIndex)" in _region(
+        EDIT_JS, "function resumeGuided(action)", 1800
     )
 
 

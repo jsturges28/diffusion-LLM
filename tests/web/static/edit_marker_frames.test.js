@@ -61,7 +61,9 @@ function generatorPage(edits) {
   for (let index = 1; index <= WORDS.length; index++) {
     context.handleFrame(snapshotFrame(index, WORDS));
   }
-  context.remaskEdits = edits;
+  context.generatorEdit.restoreArtifacts({
+    remaskEdits: edits,
+  });
   return context;
 }
 

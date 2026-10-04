@@ -252,7 +252,7 @@ test("its profile reads the final commit through its draft", () => {
 
 test("a draft reads its own values, unlabeled", () => {
   const { context } = dgemmaRun();
-  context.navigateToFrame(1);
+  context.generatorEdit.navigate(1);
 
   const layers = context.generatorCanvas.entropyProfile();
 
@@ -279,7 +279,7 @@ test("the Entropy overlay colors a commit from its draft", () => {
   const output = registry.get("output-area");
   output.children = [];
 
-  context.navigateToFrame(4);
+  context.generatorEdit.navigate(4);
 
   const colors = drawnSpans(output).map((span) => span.style.color);
   assert.deepEqual(
@@ -309,10 +309,11 @@ test("an edited run's two layers each borrow their own draft", () => {
     diffusionFrame(1, 0, false),
     diffusionFrame(2, 0, true),
   ]);
-  context.remaskEdits = [{ frame_index: 1, token_positions: [2] }];
-  context.truncateRunArraysAt(1);
+  context.generatorEdit.restoreArtifacts({
+    remaskEdits: [{ frame_index: 1, token_positions: [2] }],
+  });
+  context.generatorRun.truncate(1);
   context.generatorCanvas.invalidate();
-  context.isResuming = true;
   context.handleFrame(diffusionFrame(7, 0, false));
   context.handleFrame(diffusionFrame(8, 0, true));
   context.handleDone({ type: "done", final_text: "done" });
@@ -335,9 +336,9 @@ test("a LLaDA profile follows the scrub, nothing faded", () => {
     diffusionFrame(2, 0, false),
   ]);
 
-  context.navigateToFrame(0);
+  context.generatorEdit.navigate(0);
   const early = context.generatorCanvas.entropyProfile();
-  context.navigateToFrame(2);
+  context.generatorEdit.navigate(2);
   const late = context.generatorCanvas.entropyProfile();
 
   assert.deepEqual(host(early.values), draftValues(0));
@@ -355,7 +356,7 @@ test("an autoregressive run's profile is what it was", () => {
   const { context } = finishedRun(
     AUTOREGRESSIVE, [1, 2, 3, 4].map(appendFrame)
   );
-  context.navigateToFrame(1);
+  context.generatorEdit.navigate(1);
 
   const layers = context.generatorCanvas.entropyProfile();
 

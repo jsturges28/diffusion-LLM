@@ -100,23 +100,32 @@ function finishedRun(canvases) {
   return context;
 }
 
-test("a single-canvas run offers Edit Frames once it finishes", () => {
+test("a single-canvas run offers Edit Frames", () => {
   const context = finishedRun([0, 0, 0, 0]);
 
-  assert.equal(context.runIsMultiCanvas(), false);
-  assert.equal(context.btnEditFrames.hidden, false);
+  assert.equal(context.generatorEdit.runIsMultiCanvas(), false);
+  assert.equal(
+    context.document.getElementById("btn-edit-frames").hidden,
+    false
+  );
 });
 
 test("a run that reaches a second canvas does not", () => {
   const context = finishedRun([0, 0, 1, 1]);
 
-  assert.equal(context.runIsMultiCanvas(), true);
-  assert.equal(context.btnEditFrames.hidden, true);
+  assert.equal(context.generatorEdit.runIsMultiCanvas(), true);
+  assert.equal(
+    context.document.getElementById("btn-edit-frames").hidden,
+    true
+  );
 });
 
 test("one frame on a later canvas is enough to withhold it", () => {
   const context = finishedRun([0, 0, 0, 1]);
 
-  assert.equal(context.runIsMultiCanvas(), true);
-  assert.equal(context.btnEditFrames.hidden, true);
+  assert.equal(context.generatorEdit.runIsMultiCanvas(), true);
+  assert.equal(
+    context.document.getElementById("btn-edit-frames").hidden,
+    true
+  );
 });

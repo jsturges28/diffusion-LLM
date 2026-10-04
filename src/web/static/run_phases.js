@@ -1,10 +1,10 @@
 // Which editing phase a run is in, and which phase may follow it.
 //
-// Loaded as a classic global script before app.js, like the other
-// extracted modules, and like them it touches no DOM. It decides
-// whether a move is legal; app.js decides what the screen looks like
-// afterwards. That split is why the rules can be tested without a
-// browser, and it is the one the report asks for.
+// Loaded as a classic global script before generator_edit.js, like
+// the other extracted modules, and like them it touches no DOM. It
+// decides whether a move is legal; the edit controller decides what
+// the screen looks like afterwards. That split is why the rules can
+// be tested without a browser.
 //
 // The problem it solves. Editing a run walks through eight phases
 // held in a string, with four companion values that describe an

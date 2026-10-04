@@ -56,6 +56,7 @@ INDEX_HTML = STATIC / "index.html"
 APP_JS = STATIC / "app.js"
 CANVAS_JS = STATIC / "generator_canvas.js"
 READOUTS_JS = STATIC / "generator_readouts.js"
+EDIT_JS = STATIC / "generator_edit.js"
 
 
 def _overlay_tag() -> str:
@@ -211,7 +212,7 @@ def test_idle_means_invisible_not_absent() -> None:
 def test_one_helper_owns_the_scrubber_s_visibility() -> None:
     """Four call sites toggled it directly before this, which is how
     one of them ends up using a mechanism the others do not."""
-    source = APP_JS.read_text(encoding="utf-8")
+    source = EDIT_JS.read_text(encoding="utf-8")
 
     assert "function setScrubberVisible(visible)" in source
     assert "scrubberSection.hidden" not in source

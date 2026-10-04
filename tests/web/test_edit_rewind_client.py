@@ -1,8 +1,7 @@
 """The browser tells the worker when an edit session opens.
 
-Strategy: source inspection of `app.js`, the approach this repo uses
-for its classic-script pages until `ORG-02` gives them a testable
-seam. The worker's half is exercised properly in
+Strategy: source inspection of `generator_edit.js` and its app
+transport adapter. The worker's half is exercised properly in
 `tests/backends/test_llada_resume_state.py`.
 
 A resume replaces the worker's retained history with the branch it
@@ -23,24 +22,26 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-APP_JS = (
+STATIC = (
     Path(__file__).resolve().parents[2]
     / "src"
     / "web"
     / "static"
-    / "app.js"
 )
+APP_JS = STATIC / "app.js"
+EDIT_JS = STATIC / "generator_edit.js"
 
 
 def _source() -> str:
-    return APP_JS.read_text(encoding="utf-8")
+    return EDIT_JS.read_text(encoding="utf-8")
 
 
 def _region(anchor: str, chars: int) -> str:
     source = _source()
     start = source.find(anchor)
     assert start != -1, (
-        f"anchor {anchor!r} is gone from app.js; update this test"
+        f"anchor {anchor!r} is gone from generator_edit.js;"
+        " update this test"
         " rather than deleting it"
     )
     return source[start : start + chars]
@@ -50,7 +51,7 @@ def _region(anchor: str, chars: int) -> str:
 
 
 def test_opening_a_session_rewinds_the_worker() -> None:
-    region = _region("function captureEditSnapshot()", 600)
+    region = _region("function capturePreEditCheckpoint()", 500)
 
     assert "rewindWorkerRun()" in region
 
@@ -60,11 +61,11 @@ def test_both_session_kinds_go_through_that_one_call() -> None:
     neither needs its own send. The substitution path is a no-op at
     the worker, which is correct: it never adopts its branch."""
     for anchor in (
-        "function beginEditSession()",
-        "function beginSubstitutionSession()",
+        "function beginFrameSession()",
+        "function beginWhatIfSession()",
     ):
         region = _region(anchor, 400)
-        assert "captureEditSnapshot()" in region, anchor
+        assert "capturePreEditCheckpoint()" in region, anchor
 
 
 def test_it_is_sent_once_and_only_from_there() -> None:
@@ -82,7 +83,7 @@ def test_the_chained_path_does_not_reopen_a_session() -> None:
     send at session start safe for a multi-frame edit."""
     region = _region("function handleGuidedDone()", 1200)
 
-    assert "captureEditSnapshot" not in region
+    assert "capturePreEditCheckpoint" not in region
     assert "RUN_PHASE_EDIT" in region
 
 
@@ -92,8 +93,11 @@ def test_the_chained_path_does_not_reopen_a_session() -> None:
 def test_the_message_names_the_run() -> None:
     region = _region("function rewindWorkerRun()", 700)
 
-    assert 'type: "rewind"' in region
-    assert "run_token: generatorRun.runToken()" in region
+    assert "requestRewind({ runToken: token })" in region
+
+    app = APP_JS.read_text(encoding="utf-8")
+    assert 'type: "rewind"' in app
+    assert "run_token: intent.runToken" in app
 
 
 def test_it_is_skipped_without_a_run_to_name() -> None:
@@ -101,11 +105,14 @@ def test_it_is_skipped_without_a_run_to_name() -> None:
     retained run to rewind either."""
     region = _region("function rewindWorkerRun()", 700)
 
-    assert "if (!generatorRun.runToken())" in region
+    assert "var token = run.runToken()" in region
+    assert "if (!token" in region
 
 
 def test_it_is_skipped_on_a_closed_socket() -> None:
-    region = _region("function rewindWorkerRun()", 700)
+    source = APP_JS.read_text(encoding="utf-8")
+    start = source.index("function generatorEditRequestRewind(")
+    region = source[start : start + 400]
 
     assert "if (!generatorSocket.isReady())" in region
 
@@ -118,8 +125,8 @@ def test_the_exit_paths_do_not_send_their_own() -> None:
     would look more direct and would miss the run-scoped error
     unwind, a reload, and a closed tab."""
     for anchor in (
-        "function retryGuidedEdit()",
-        "function exitRemaskMode()",
+        "function retry()",
+        "function exit()",
     ):
         region = _region(anchor, 400)
         assert "rewindWorkerRun" not in region, anchor

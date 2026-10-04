@@ -37,6 +37,7 @@ PAGE_SCRIPTS = (
     "generator_model_panel.js",
     "generator_chrome.js",
     "generator_canvas.js",
+    "generator_edit.js",
     "menu.js",
     "analytics.js",
     "settings.js",
@@ -110,9 +111,11 @@ def test_the_renoise_note_reads_a_capability() -> None:
     """The decision that used to name DiffusionGemma. Kept as its own
     test because the rule above only proves the id is gone, not that
     what replaced it asks the right question."""
-    region = _region("app.js", "function renoiseNote()", 400)
+    region = _region(
+        "generator_edit.js", "function renoiseNote()", 400
+    )
 
-    assert "capabilities.remask_renoises" in region
+    assert "capabilities().remask_renoises" in region
 
 
 # -- each decision reads its own axis --

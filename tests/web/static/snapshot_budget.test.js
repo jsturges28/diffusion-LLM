@@ -221,11 +221,12 @@ function generate(context) {
 
 // Remask at EDIT_FRAME and resume to the end, as Edit Frames does.
 function edit(context) {
-  context.remaskEdits = [
-    { frame_index: EDIT_FRAME, token_positions: [1, 2, 3] },
-  ];
-  context.truncateRunArraysAt(EDIT_FRAME);
-  context.isResuming = true;
+  context.generatorEdit.restoreArtifacts({
+    remaskEdits: [
+      { frame_index: EDIT_FRAME, token_positions: [1, 2, 3] },
+    ],
+  });
+  context.generatorRun.truncate(EDIT_FRAME);
   for (let index = EDIT_FRAME; index <= STEPS; index += 1) {
     context.handleFrame(frameAt(index, 1));
   }

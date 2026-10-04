@@ -169,12 +169,13 @@ function words(page) {
 // the live view, as it does when the real resume starts generating.
 function resumeAt(context, frameIndex) {
   context.handleDone({ type: "done", final_text: "done" });
-  context.remaskEdits = [
-    { frame_index: frameIndex, token_positions: [1] },
-  ];
-  context.truncateRunArraysAt(frameIndex);
+  context.generatorEdit.restoreArtifacts({
+    remaskEdits: [
+      { frame_index: frameIndex, token_positions: [1] },
+    ],
+  });
+  context.generatorRun.truncate(frameIndex);
   context.generatorCanvas.invalidate();
-  context.isResuming = true;
   context.setGenerating(true);
 }
 
@@ -216,10 +217,10 @@ test("scrubbing reads the frame on screen", () => {
   page.context.handleFrame(frameOf(draft(3.1, 4), 4, 1));
   page.context.handleDone({ type: "done", final_text: "done" });
 
-  page.context.navigateToFrame(3);
+  page.context.generatorEdit.navigate(3);
   assert.equal(words(page), "Canvas 1 stopped after 3 steps");
 
-  page.context.navigateToFrame(1);
+  page.context.generatorEdit.navigate(1);
   assert.equal(words(page), "entropy 0.010 of 0.005, 1 changing");
 });
 

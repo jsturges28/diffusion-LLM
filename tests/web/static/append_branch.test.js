@@ -54,18 +54,19 @@ function branchedRun() {
   }
   context.handleDone({ type: "done", final_text: WORDS.join("") });
   // What a substitution does before its stream arrives.
-  context.remaskEdits.push({
-    frame_index: EDITED_POSITION,
-    token_positions: [EDITED_POSITION],
+  context.generatorEdit.restoreArtifacts({
+    remaskEdits: [{
+      frame_index: EDITED_POSITION,
+      token_positions: [EDITED_POSITION],
+    }],
   });
-  context.truncateRunArraysAt(EDITED_POSITION);
-  context.isResuming = true;
+  context.generatorRun.truncate(EDITED_POSITION);
   const first = EDITED_POSITION + 1;
   for (let index = first; index <= BRANCH.length; index++) {
     context.handleFrame(appendFrame(index, BRANCH));
   }
   context.handleDone({ type: "done", final_text: BRANCH.join("") });
-  context.activateScrubber();
+  context.generatorEdit.activate();
   return page;
 }
 
@@ -97,13 +98,14 @@ test("the crossfade is offered once the branch exists", () => {
 });
 
 test("both runs are drawn as layers, the original in full", () => {
-  const { context } = branchedRun();
+  const { context, registry } = branchedRun();
   const last = WORDS.length - 1;
-  context.outputArea.children = [];
+  const output = registry.get("output-area");
+  output.children = [];
 
   context.generatorCanvas.renderFrame(last);
 
-  const layers = descendants(context.outputArea).filter(
+  const layers = descendants(output).filter(
     (node) => node.classes.has("token-layer")
   );
   const original = layers.find(
@@ -118,13 +120,14 @@ test("both runs are drawn as layers, the original in full", () => {
 });
 
 test("the diff overlay draws the original layer too", () => {
-  const { context } = branchedRun();
+  const { context, registry } = branchedRun();
   context.generatorCanvas.setOverlayMode("diff");
-  context.outputArea.children = [];
+  const output = registry.get("output-area");
+  output.children = [];
 
   context.generatorCanvas.renderFrame(WORDS.length - 1);
 
-  const spans = descendants(context.outputArea).filter(
+  const spans = descendants(output).filter(
     (node) => node.classes.has("token-span")
   );
   assert.equal(spans.length, WORDS.length + BRANCH.length);
@@ -132,7 +135,7 @@ test("the diff overlay draws the original layer too", () => {
 
 test("hovering the original layer reads the baseline", () => {
   const { context } = branchedRun();
-  context.navigateToFrame(WORDS.length - 1);
+  context.generatorEdit.navigate(WORDS.length - 1);
 
   const tokens = context.generatorCanvas.drawnTokens(true);
 

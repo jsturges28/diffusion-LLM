@@ -10,8 +10,6 @@ var btnGenerateLabel =
   document.getElementById("btn-generate-label");
 var btnSave =
   document.getElementById("btn-save");
-var outputArea =
-  document.getElementById("output-area");
 var generatorComposer = generatorComposerCreate({
   onSubmit: submitComposer,
   onDraftChanged: composerDraftChanged,
@@ -49,6 +47,7 @@ var generatorChrome = generatorChromeCreate({
   revealText: denoiseReveal,
   cancelReveal: cancelDenoise,
 });
+var generatorEdit = null;
 var generatorRun = generatorRunCreate({
   readModel: generatorRunReadModel,
   readComposer: generatorRunReadComposer,
@@ -104,6 +103,36 @@ generatorCandidates = generatorCandidatesCreate({
   requestProbe: generatorCandidatesRequestProbe,
   requestSubstitute: generatorCandidatesRequestSubstitute,
 });
+generatorEdit = generatorEditCreate({
+  run: generatorRun,
+  canvas: generatorCanvas,
+  readouts: generatorReadouts,
+  candidates: generatorCandidates,
+  readCapabilities: function () {
+    return generatorModelPanel.capabilities();
+  },
+  readGenerating: function () {
+    return isGenerating;
+  },
+  readDiffusionEffect: diffusionEffectActive,
+  revealText: denoiseReveal,
+  dissolveText: denoiseDissolve,
+  renderFrameReadout: generatorEditRenderFrameReadout,
+  setStatus: function (message) {
+    generatorChrome.setMessage(message);
+  },
+  setGenerating: setGenerating,
+  setSaveAvailable: setSaveAvailable,
+  resetStatus: resetStatus,
+  startRunStatus: generatorChrome.startRunStatus,
+  primaryStateChanged: updateGenerateButton,
+  requestSave: function () {
+    return generatorRun.save();
+  },
+  requestRewind: generatorEditRequestRewind,
+  requestResume: generatorEditRequestResume,
+  requestSubstitute: generatorEditRequestSubstitute,
+});
 var generatorSocket = generatorSocketCreate({
   onOpen: generatorSocketOpened,
   onClose: generatorSocketClosed,
@@ -112,114 +141,15 @@ var generatorSocket = generatorSocketCreate({
   onFatal: generatorSocketFatal,
 });
 
-// Scrubber DOM refs.
-var scrubberSection =
-  document.getElementById("scrubber-section");
-var scrubberControls =
-  document.getElementById("scrubber-controls");
-var scrubberSlider =
-  document.getElementById("scrubber-slider");
-var scrubberLabel =
-  document.getElementById("scrubber-label");
-var btnScrubStart =
-  document.getElementById("btn-scrub-start");
-var btnScrubPrev =
-  document.getElementById("btn-scrub-prev");
-var btnScrubNext =
-  document.getElementById("btn-scrub-next");
-var btnScrubEnd =
-  document.getElementById("btn-scrub-end");
-var btnEditFrames =
-  document.getElementById("btn-edit-frames");
-var btnWhatIf =
-  document.getElementById("btn-what-if");
-
-// Guided edit mode DOM refs.
-var guidedEditControls =
-  document.getElementById("guided-edit-controls");
-var guidedEditStatus =
-  document.getElementById("guided-edit-status");
-var btnSelectFrame =
-  document.getElementById("btn-select-frame");
-var btnBackFrame =
-  document.getElementById("btn-back-frame");
-var btnLockIn =
-  document.getElementById("btn-lock-in");
-var btnClearGuided =
-  document.getElementById("btn-clear-guided");
-var btnEditAnother =
-  document.getElementById("btn-edit-another");
-var btnRunToHere =
-  document.getElementById("btn-run-to-here");
-var btnResumeEnd =
-  document.getElementById("btn-resume-end");
-var btnConfirmEdit =
-  document.getElementById("btn-confirm-edit");
-var btnRetryEdit =
-  document.getElementById("btn-retry-edit");
-// The markup's own tooltip, put back when a lock on Retry lifts.
-var RETRY_EDIT_TITLE = btnRetryEdit.title;
-var btnContinueEdit =
-  document.getElementById("btn-continue-edit");
-var CONTINUE_EDIT_TITLE = btnContinueEdit.title;
-var btnExitEdit =
-  document.getElementById("btn-exit-edit");
-var remaskRandomizeRow =
-  document.getElementById("remask-randomize-row");
-var remaskRandomSlider =
-  document.getElementById("remask-random-slider");
-var remaskRandomCount =
-  document.getElementById("remask-random-count");
-var remaskRandomTotal =
-  document.getElementById("remask-random-total");
-var btnRemaskShuffle =
-  document.getElementById("btn-remask-shuffle");
-var shuffleLabel =
-  document.getElementById("btn-remask-shuffle-label");
-
 // ---- State ----
 
 var isGenerating = false;
 var saveCheckTimer = null;
 var modelReady = false;
 
-// generator_run.js owns every mutable fact and store about the run
-// on screen. generator_socket.js owns transport, and
-// generator_candidates.js owns candidate view state. This file keeps
-// the remaining page view state and edit phases.
-
-// Scrubber and remasking state.
-var scrubberActive = false;
-var currentScrubFrame = 0;
-var remaskedPositions = {};
-var perFrameRemasked = {};
-var remaskEdits = [];
-
-// Guided multi-frame edit mode state.
-// null | "select" | "edit" | "choice"
-//      | "select_target" | "generating" | "review"
-// Which editing phase the run is in, plus the values describing
-// an edit in progress. Held as one thing so a move between
-// phases can be checked against the ones that are reachable
-// from where it started; see run_phases.js, which owns the
-// table. Never reassigned.
-var runPhase = runPhasesCreate();
-// Snapshot of the complete run taken when Edit Frames is entered.
-// Partial resumes ("Run to Here") truncate the live run mid-way, so
-// exiting restores this to avoid stranding the user on an
-// incomplete run.
-var preEditSnapshot = null;
-var scrubberMinFrame = 0;
-// What a resume in flight cut, and where it was sent from, kept
-// until it ends. See captureResumeCut.
-var pendingResume = null;
-var RESUME_STOPPED_BEFORE_FRAME =
-  "Stopped before the edit produced a frame. The run is unchanged.";
-
-// Whether the edit phase is currently receiving a resumed stream.
-// The run controller owns the corresponding frame and elapsed
-// offsets; this boolean stays with the page's edit-phase state.
-var isResuming = false;
+// Every controller keeps its mutable state in its factory closure.
+// This composition root retains only page-wide generation and boot
+// lifecycle flags.
 
 // ---- Background floating characters ----
 
@@ -519,25 +449,16 @@ function handleResident(data) {
 // and form, so nothing reloads. Only the run on screen goes stale,
 // held by no live worker, and it locks in place, still savable.
 //
-// An open session closes the way Exit does, since nothing in it can
-// run now, unless it holds a branch the page can still save
-// (runPhasesKeepsWork): Confirm needs no worker.
+// The edit controller closes an open session unless it holds a
+// branch the page can still save. Confirm needs no worker.
 function adoptResidentWorker(worker) {
   if (typeof worker !== "string" || worker === "") {
     return;
   }
-  var wasBlocked = runEditBlock() !== "";
-  generatorRun.adoptResidentWorker(worker);
-  var blocked = runEditBlock();
-  if (!blocked || wasBlocked) {
-    updateEditFramesLock();
-    return;
+  var message = generatorEdit.adoptResidentWorker(worker);
+  if (message) {
+    generatorChrome.setMessage(message);
   }
-  if (runPhasesEditing(runPhase) && !runPhasesKeepsWork(runPhase)) {
-    exitRemaskMode();
-  }
-  updateEditFramesLock();
-  generatorChrome.setMessage(blocked);
 }
 
 // How long to let a rescue save finish before reloading anyway. The
@@ -675,7 +596,7 @@ function updateLiveFrameStatus(data) {
     typeof data.total_steps === "number"
       ? data.total_steps
       : null;
-  if (!isResuming) {
+  if (!generatorEdit.resuming()) {
     generatorRun.setTotalSteps(frameSteps);
   }
   generatorChrome.setStep(
@@ -683,7 +604,7 @@ function updateLiveFrameStatus(data) {
       data.index,
       data.canvas_index,
       frameSteps,
-      isResuming ? "Resuming " : "Step "
+      generatorEdit.resuming() ? "Resuming " : "Step "
     )
   );
   updateRunRateFooter();
@@ -708,8 +629,8 @@ function reportRunDesync(error) {
 // Rebuild the step reading for a frame the user scrubbed to. The
 // scrubber counts the whole run, so the array index is the step,
 // which is the same number the "Frame N / M" label beside it shows.
-function renderScrubStepReadout(index) {
-  var total = generatorRun.totalSteps();
+function generatorEditRenderFrameReadout(state) {
+  var total = state.totalSteps;
   if (
     total === null
     && generatorRun.frameCanvasSeries().length === 0
@@ -718,8 +639,8 @@ function renderScrubStepReadout(index) {
   }
   generatorChrome.setStep(
     stepReadout(
-      index,
-      generatorRun.frameCanvas(index),
+      state.frame,
+      state.canvasIndex,
       total,
       "Step "
     )
@@ -769,11 +690,10 @@ function toggleTpsMode() {
 // handleDone, which has the run's own text and token to record too.
 function enterInterruptedState() {
   setGenerating(false);
-  isResuming = false;
-  pendingResume = null;
+  generatorEdit.interruptStream();
   generatorChrome.endRunStatus();
   var hasFrames = generatorRun.interruptConnection();
-  updateEditFramesLock();
+  generatorEdit.refreshLocks();
   generatorChrome.setMessage(
     "Stopped: lost the connection mid-run."
   );
@@ -782,26 +702,22 @@ function enterInterruptedState() {
   // is claim it finished.
   if (hasFrames) {
     setSaveAvailable(true);
-    activateScrubber();
+    generatorEdit.activate();
     // Kept the way a finished run is, so leaving for Analytics
     // before saving does not lose it (skip while mid guided-edit).
-    if (runPhase.mode === null) {
+    if (generatorEdit.shouldPersistRun()) {
       generatorRun.saveSession();
     }
   }
 }
 
 function handleDone(data) {
-  var resumed = pendingResume;
-  pendingResume = null;
   setGenerating(false);
-  isResuming = false;
   generatorChrome.endRunStatus();
   // A resume that sent nothing changed nothing, on either side. The
   // rest of this is skipped on purpose: the thinking panel is what
   // Save reads, and this frame's empty thinking would clear it.
-  if (resumeStoppedBeforeAFrame(resumed, data)) {
-    landBeforeResume(resumed);
+  if (generatorEdit.finishStream(data)) {
     return;
   }
   // A stopped run is still a run: it keeps its frames, its scrubber
@@ -826,15 +742,11 @@ function handleDone(data) {
   }
   setSaveAvailable(true);
 
-  if (runPhase.mode === "generating") {
-    handleGuidedDone();
-  } else {
-    activateScrubber();
-  }
+  generatorEdit.completeStream();
 
   // Persist the completed run so it survives navigating to
   // Analytics and back (skip while mid guided-edit).
-  if (runPhase.mode === null) {
+  if (generatorEdit.shouldPersistRun()) {
     generatorRun.saveSession();
   }
 }
@@ -847,15 +759,8 @@ function handleError(data) {
   var routed = wireErrorsRoute(data);
   if (routed.unwindsRun) {
     setGenerating(false);
-    isResuming = false;
     generatorChrome.endRunStatus();
-    if (runPhasesEditing(runPhase)) {
-      // A resume or substitution truncates the run before the worker
-      // answers, so a rejected request would otherwise strand the
-      // user with a half-run. Roll back to the pre-session snapshot.
-      restoreEditSnapshot();
-      resetGuidedMode();
-    }
+    generatorEdit.unwindRunError();
   }
   generatorChrome.setMessage(
     "Error: " + routed.message,
@@ -867,7 +772,7 @@ function handleError(data) {
   // Said either way: an auxiliary failure is still worth reading, and
   // the change here is what gets undone, not what gets shown.
   if (routed.unwindsRun && generatorRun.frameCount() > 1) {
-    activateScrubber();
+    generatorEdit.activate();
   }
 }
 
@@ -949,113 +854,9 @@ function applySettings() {
   generatorModelPanel.refreshSelector();
 }
 
-// ---- Scrubber ----
-
-// True when the current run spans more than one canvas.
-// DiffusionGemma resume re-enters a single 256-token canvas, so
-// multi-canvas runs cannot be resumed in this version; the editing
-// UI stays hidden for them.
-function runIsMultiCanvas() {
-  return generatorRun.frameIsMultiCanvas();
-}
-
-// Reflect the "already saved an edit" lock on the Edit Frames button:
-// greyed out and non-interactive until the next Generate clears the
-// lock. Either way the button carries a tooltip, explaining the lock
-// when locked and what the mode does when not, matching What If.
-function updateEditFramesLock() {
-  // A run the worker cannot answer for is locked whatever else holds,
-  // and with its own reason, since that is the one that applies.
-  // Retry and Continue lock too: each would run on that worker.
-  var blocked = runEditBlock();
-  if (blocked) {
-    setButtonLocked(btnEditFrames, blocked);
-    if (btnWhatIf) {
-      setButtonLocked(btnWhatIf, blocked);
-    }
-    setButtonLocked(btnRetryEdit, blocked);
-    setButtonLocked(btnContinueEdit, blocked);
-    return;
-  }
-  setButtonUnlocked(btnRetryEdit, RETRY_EDIT_TITLE);
-  setButtonUnlocked(btnContinueEdit, CONTINUE_EDIT_TITLE);
-  // An edited save in flight locks too, not just a completed one:
-  // confirmGuidedEdit fires the save and re-shows the buttons before
-  // its async handler can set the edited-save flag, which otherwise
-  // leave a live window where a second edit could be started.
-  var locked = generatorRun.editedSaved()
-    || (generatorRun.saving() && remaskEdits.length > 0);
-  if (locked) {
-    setButtonLocked(
-      btnEditFrames,
-      "This run already has a saved edit."
-      + " Generate again to edit a new run."
-    );
-  } else {
-    setButtonUnlocked(
-      btnEditFrames,
-      "Remask tokens at any frame, then resume the run"
-      + " from there"
-    );
-  }
-  if (!btnWhatIf) {
-    return;
-  }
-  // What If writes the same single saved edit per generation, so it
-  // locks on the same condition as Edit Frames.
-  if (locked) {
-    setButtonLocked(
-      btnWhatIf,
-      "This run already has a saved edit."
-      + " Generate again to try another branch."
-    );
-  } else {
-    setButtonUnlocked(
-      btnWhatIf,
-      "Replace a token with one the model nearly"
-      + " chose, then regenerate"
-    );
-  }
-}
-
-// Why the run on screen cannot be edited at all, or "" when it can.
-function runEditBlock() {
-  return runPhasesEditBlock(generatorRun.editIdentity());
-}
-
-// Whether a request about the run on screen must not be sent, saying
-// why when it must not. The edit buttons lock as well; this is for a
-// session already open when the run stopped being editable, and is
-// asked before anything is cut from the run for a branch.
-function editRequestRefused() {
-  var blocked = runEditBlock();
-  if (!blocked) {
-    return false;
-  }
-  generatorChrome.setMessage(blocked);
-  return true;
-}
-
-// The lock is both visual and behavioural: pointer-events is off in
-// CSS, aria-disabled announces it, and the callers keep their own
-// is-locked guard so a programmatic click still cannot slip through.
-function setButtonLocked(button, title) {
-  button.classList.add("is-locked");
-  button.setAttribute("aria-disabled", "true");
-  button.title = title;
-}
-
-function setButtonUnlocked(button, title) {
-  button.classList.remove("is-locked");
-  button.removeAttribute("aria-disabled");
-  button.title = title;
-}
-
-// The primary button has three jobs, in priority order. While a run
-// is in flight it is "Stop", because that is the only thing worth
-// doing then and the slot was otherwise greyed out for the whole
-// run. Once an edited run has been saved it is "New Run". Otherwise
-// it is "Generate". Same slot and size throughout.
+// The primary button has three jobs, in priority order: Stop while a
+// run is in flight, New Run after an edited save, and Generate at
+// rest.
 function currentGenerateLabel() {
   if (isGenerating) {
     return "Stop";
@@ -1069,13 +870,10 @@ function updateGenerateButton() {
   if (isGenerating) {
     btnGenerate.classList.remove("is-new-run");
     btnGenerate.classList.add("is-stop");
-    // Live precisely when the old code greyed it out: a run in
-    // flight is the one moment Stop means anything.
     btnGenerate.disabled = false;
   } else if (generatorRun.editedSaved()) {
     btnGenerate.classList.remove("is-stop");
     btnGenerate.classList.add("is-new-run");
-    // New Run is client-side; only a completing save should hold it.
     btnGenerate.disabled = generatorRun.saving();
   } else {
     btnGenerate.classList.remove("is-new-run");
@@ -1087,19 +885,12 @@ function updateGenerateButton() {
         && generatorModelPanel.validation().valid
       );
   }
-  // The label text is owned by the idle-effect controller (it either
-  // sets the static label or drives the looping diffusion reveal).
   updateGenerateIdleEffect();
 }
 
-// ---- Generate button idle diffusion cycle ----
-
-// One-time discovery nudge: the Generate button always idles with the
-// diffusion cycle before the user's first-ever fresh run, then follows
-// the "Render diffusion-style text" setting. Persisted per browser.
+// One-time discovery nudge: Generate idles with the diffusion cycle
+// before the first fresh run, then follows the visual-effect setting.
 var GENERATE_TEASED_KEY = "diffusion_generate_teased";
-// The button holds its resolved text longer than the status bar so the
-// primary CTA reads calmly rather than flickering.
 var GENERATE_CYCLE_HOLD_MS = 2000;
 var generateCycleTimer = null;
 var generateCycleActive = false;
@@ -1108,20 +899,15 @@ var generateCycleLabel = "";
 function generateTeaserActive() {
   try {
     return localStorage.getItem(GENERATE_TEASED_KEY) !== "1";
-  } catch (_e) {
+  } catch (_error) {
     return false;
   }
 }
 
 function markGenerateTeased() {
-  // Write-through to the server (see persistSet) so the one-time teaser
-  // does not replay every restart on a fresh window origin.
   persistSet(GENERATE_TEASED_KEY, "1");
 }
 
-// The button idles with the diffusion cycle while it is clickable:
-// always before the first fresh run, and thereafter only when the
-// effect setting is on. Reduced motion disables it entirely.
 function generateIdleActive() {
   if (!btnGenerateLabel || prefersReducedMotion()) {
     return false;
@@ -1167,8 +953,6 @@ function stopGenerateCycle() {
 
 function updateGenerateIdleEffect() {
   if (generateIdleActive()) {
-    // Restart if the label changed (e.g. Generate -> New Run) so the
-    // cycle animates the correct word without a lag.
     if (
       generateCycleActive
       && generateCycleLabel !== currentGenerateLabel()
@@ -1181,1064 +965,6 @@ function updateGenerateIdleEffect() {
   }
 }
 
-function activateScrubber() {
-  if (generatorRun.frameCount() < 2) {
-    return;
-  }
-  scrubberActive = true;
-  currentScrubFrame = generatorRun.frameCount() - 1;
-
-  scrubberSlider.min = "0";
-  scrubberSlider.max =
-    String(generatorRun.frameCount() - 1);
-  scrubberSlider.value =
-    String(currentScrubFrame);
-  scrubberSlider.disabled = false;
-  updateScrubberLabel();
-
-  setScrubberVisible(true);
-  var capabilities = generatorModelPanel.capabilities();
-  btnEditFrames.hidden = !(
-    capabilities.supports_resume
-    && !runIsMultiCanvas()
-  );
-  // What If needs captured candidates to substitute from, so it stays
-  // hidden when the run was generated with Alternatives off.
-  if (btnWhatIf) {
-    btnWhatIf.hidden = !(
-      supportsSubstitution()
-      && generatorCandidates.alternativesAvailable()
-    );
-  }
-  updateEditFramesLock();
-  generatorCanvas.activate();
-  guidedEditControls.hidden = true;
-  clearRemaskedPositions();
-  unlockScrubberNav();
-
-  navigateToFrame(currentScrubFrame);
-  generatorReadouts.updateProfile();
-}
-
-// Show or hide the scrubber without moving anything around it. It
-// keeps its height either way, so the output canvas above it is the
-// same size before and after a run: see the `is-idle` note in
-// index.html for why that matters on a page that restores a run
-// after its first paint.
-function setScrubberVisible(visible) {
-  scrubberSection.classList.toggle("is-idle", !visible);
-}
-
-function deactivateScrubber() {
-  scrubberActive = false;
-  setScrubberVisible(false);
-  guidedEditControls.hidden = true;
-  generatorCanvas.deactivate();
-  generatorReadouts.deactivate();
-  generatorCandidates.hidePopover();
-  clearRemaskedPositions();
-}
-
-function updateScrubberLabel() {
-  var maxLabel = (
-    runPhase.mode === "select_target"
-    && generatorRun.originalCaptured()
-  ) ? generatorRun.originalTotalFrames() - 1
-    : generatorRun.frameCount() - 1;
-  scrubberLabel.textContent =
-    "Frame " + currentScrubFrame
-    + " / " + maxLabel;
-}
-
-function renderTargetFrame(frameIndex) {
-  var editedFrames = [];
-  for (
-    var index = 0;
-    index < runPhase.lockedEdits.length;
-    index++
-  ) {
-    editedFrames.push(
-      runPhase.lockedEdits[index].frame_index
-    );
-  }
-  generatorCanvas.renderTargetPlaceholder({
-    frameIndex: frameIndex,
-    editedFrames: editedFrames,
-    minimumFrame: scrubberMinFrame,
-  });
-}
-
-function navigateToFrame(index) {
-  saveFrameSelections(currentScrubFrame);
-
-  var minFrame = (
-    runPhase.mode === "select"
-    || runPhase.mode === "select_target"
-  ) ? scrubberMinFrame : 0;
-  var maxFrame = (
-    runPhase.mode === "select_target"
-    && generatorRun.originalCaptured()
-  ) ? generatorRun.originalTotalFrames() - 1
-    : generatorRun.frameCount() - 1;
-  index = Math.max(
-    minFrame,
-    Math.min(index, maxFrame)
-  );
-  currentScrubFrame = index;
-  scrubberSlider.value = String(index);
-  updateScrubberLabel();
-  renderScrubStepReadout(index);
-
-  restoreFrameSelections(index);
-
-  if (runPhase.mode === "select_target") {
-    renderTargetFrame(index);
-  } else if (index < generatorRun.frameCount()) {
-    generatorCanvas.renderFrame(index);
-  } else {
-    renderTargetFrame(index);
-  }
-  generatorReadouts.refreshStop();
-  if (scrubberActive) {
-    generatorReadouts.updateProfile();
-  }
-  updateGuidedUI();
-}
-
-function clearRemaskedPositions() {
-  remaskedPositions = {};
-  perFrameRemasked = {};
-  updateGuidedUI();
-}
-
-function saveFrameSelections(frameIndex) {
-  if (Object.keys(remaskedPositions).length > 0) {
-    perFrameRemasked[frameIndex] =
-      Object.assign({}, remaskedPositions);
-  } else {
-    delete perFrameRemasked[frameIndex];
-  }
-}
-
-function restoreFrameSelections(frameIndex) {
-  if (perFrameRemasked[frameIndex]) {
-    remaskedPositions = Object.assign(
-      {}, perFrameRemasked[frameIndex]
-    );
-  } else {
-    remaskedPositions = {};
-  }
-}
-
-function countEditedFrames(excludeFrame) {
-  var count = 0;
-  var keys = Object.keys(perFrameRemasked);
-  for (var i = 0; i < keys.length; i++) {
-    if (Number(keys[i]) !== excludeFrame) {
-      count++;
-    }
-  }
-  return count;
-}
-
-function toggleRemaskPosition(pos) {
-  if (remaskedPositions[pos]) {
-    delete remaskedPositions[pos];
-  } else {
-    remaskedPositions[pos] = true;
-  }
-  saveFrameSelections(currentScrubFrame);
-  generatorCanvas.renderFrame(currentScrubFrame);
-  updateGuidedUI();
-}
-
-// ---- Randomize remasks (Edit Frames) ----
-
-// Frame the randomize row was last seeded for, so the target count is
-// re-initialized from the selection only when the frame changes (not
-// on every re-render, which would fight the user's slider input).
-var randomizeInitFrame = null;
-
-function clampInt(value, low, high) {
-  if (value < low) {
-    return low;
-  }
-  if (value > high) {
-    return high;
-  }
-  return value;
-}
-
-// Frame-array indices of resolved (non-mask) tokens: the candidates
-// that can be remasked. Masked positions are never remaskable.
-function resolvedPositions(frameIndex) {
-  var tokens = generatorRun.frameTokens(frameIndex);
-  var out = [];
-  if (!tokens) {
-    return out;
-  }
-  for (var i = 0; i < tokens.length; i++) {
-    if (tokens[i] && !tokens[i].m) {
-      out.push(i);
-    }
-  }
-  return out;
-}
-
-// Sync the randomize row to the current edit frame: total resolved
-// count, slider/input bounds, and (on a frame change) seed the target
-// N from the frame's existing selection.
-function updateRandomizeRow() {
-  if (!remaskRandomizeRow) {
-    return;
-  }
-  var total = resolvedPositions(currentScrubFrame).length;
-  // Remasking 0 tokens is a no-op, so the target floor is 1 (whenever
-  // there is at least one resolved token to pick from).
-  var floor = total > 0 ? 1 : 0;
-  if (randomizeInitFrame !== currentScrubFrame) {
-    randomizeInitFrame = currentScrubFrame;
-    var selected = Object.keys(remaskedPositions).length;
-    remaskRandomSlider.value = String(
-      clampInt(selected, floor, total)
-    );
-  }
-  var target = clampInt(
-    parseInt(remaskRandomSlider.value, 10) || floor, floor, total
-  );
-  remaskRandomTotal.textContent = String(total);
-  remaskRandomSlider.min = String(floor);
-  remaskRandomSlider.max = String(total);
-  remaskRandomSlider.value = String(target);
-  remaskRandomCount.min = String(floor);
-  remaskRandomCount.max = String(total);
-  remaskRandomCount.value = String(target);
-  var disabled = total === 0;
-  remaskRandomSlider.disabled = disabled;
-  remaskRandomCount.disabled = disabled;
-  btnRemaskShuffle.disabled = disabled;
-}
-
-// Replace the current selection with N random resolved positions on
-// the current frame (partial Fisher-Yates), then re-render so they
-// show as remasked and Lock In can proceed as usual.
-function shuffleRemasks() {
-  var candidates = resolvedPositions(currentScrubFrame);
-  var total = candidates.length;
-  if (total === 0) {
-    return;
-  }
-  var n = clampInt(
-    parseInt(remaskRandomSlider.value, 10) || 0, 0, total
-  );
-  for (var i = 0; i < n; i++) {
-    var j = i + Math.floor(
-      Math.random() * (total - i)
-    );
-    var swap = candidates[i];
-    candidates[i] = candidates[j];
-    candidates[j] = swap;
-  }
-  remaskedPositions = {};
-  for (var k = 0; k < n; k++) {
-    remaskedPositions[candidates[k]] = true;
-  }
-  saveFrameSelections(currentScrubFrame);
-  generatorCanvas.renderFrame(currentScrubFrame);
-  updateGuidedUI();
-}
-
-// Cosmetic press feedback: run the diffusion reveal on the Shuffle
-// label with a glow that lingers on the way out (the CSS transition
-// handles the lag). Gated on the same effect setting as the status bar.
-function playShuffleDiffusion() {
-  if (!btnRemaskShuffle || !shuffleLabel) {
-    return;
-  }
-  if (!diffusionEffectActive()) {
-    return;
-  }
-  btnRemaskShuffle.classList.add("is-diffusing");
-  denoiseReveal(shuffleLabel, "Shuffle", function () {
-    btnRemaskShuffle.classList.remove("is-diffusing");
-  });
-}
-
-// ---- Guided multi-frame edit mode ----
-
-function resetGuidedMode() {
-  runPhasesReset(runPhase);
-  generatorCandidates.hidePopover();
-  preEditSnapshot = null;
-  pendingResume = null;
-  randomizeInitFrame = null;
-  guidedEditControls.hidden = true;
-  scrubberSlider.disabled = false;
-  scrubberSlider.min = "0";
-  unlockScrubberNav();
-}
-
-// Snapshot the current complete run before an edit session begins.
-function captureEditSnapshot() {
-  preEditSnapshot = {
-    run: generatorRun.captureCheckpoint(),
-    remaskEditsLen: remaskEdits.length,
-  };
-  rewindWorkerRun();
-}
-
-// Tell the worker to discard any branch a previous session left it
-// holding, so it re-enters this session from the run on screen.
-//
-// Sent when a session opens rather than when one is abandoned,
-// because abandoning has too many doors. Retry and Exit both restore
-// the snapshot above and send nothing; so does a run-scoped error;
-// and a reload or a closed tab cannot send anything at all, since
-// preEditSnapshot lives only in memory and the session snapshot is
-// deliberately not written while an edit is in progress. Opening a
-// session is the one moment the browser is known to be showing the
-// un-edited run, so one message here covers every one of those.
-//
-// Harmless when there is nothing to undo: rewinding a run that has
-// committed no branch restores what the worker already holds.
-function rewindWorkerRun() {
-  if (!generatorSocket.isReady()) {
-    return;
-  }
-  if (!generatorRun.runToken()) {
-    return;
-  }
-  // Silently: a rewind is housekeeping nobody asked for by name.
-  if (runEditBlock()) {
-    return;
-  }
-  generatorSocket.send({
-    type: "rewind",
-    run_token: generatorRun.runToken(),
-  });
-}
-
-// Restore the pre-edit run, discarding any partial/uncommitted
-// resumes made during the session (used when the user exits).
-function restoreEditSnapshot() {
-  if (!preEditSnapshot) {
-    return;
-  }
-  generatorRun.restoreCheckpoint(preEditSnapshot.run);
-  // Drop any edits committed during this (now-cancelled) session.
-  remaskEdits.length = Math.min(
-    remaskEdits.length, preEditSnapshot.remaskEditsLen
-  );
-  preEditSnapshot = null;
-}
-
-// Cut the run back to `offset` frames so the branch about to be
-// generated appends cleanly at that index. The elapsed value at the
-// last kept frame carries forward, because the worker restarts its
-// clock for the new segment.
-//
-// Which arrays get cut is no longer a decision made here. It used to
-// be, and leaving one out made the saved timing array longer than the
-// frame arrays, which knocked the Timing chart's x axis out of step
-// with every other chart.
-function truncateRunArraysAt(offset) {
-  generatorRun.truncate(offset);
-}
-
-function unlockScrubberNav() {
-  btnScrubStart.disabled = false;
-  btnScrubPrev.disabled = false;
-  btnScrubNext.disabled = false;
-  btnScrubEnd.disabled = false;
-}
-
-function lockScrubberNav() {
-  btnScrubStart.disabled = true;
-  btnScrubPrev.disabled = true;
-  btnScrubNext.disabled = true;
-  btnScrubEnd.disabled = true;
-  scrubberSlider.disabled = true;
-}
-
-// Freeze scrubber navigation and every guided-edit action while a save
-// is in flight, so neither save path, Confirm or the standalone Save
-// button, leaves interactive controls that could race the snapshot. The subsequent updateGuidedUI() re-derives each
-// button's per-phase state once the save settles.
-function setSavingControls(saving) {
-  var disabled = !!saving;
-  scrubberSlider.disabled = disabled;
-  btnScrubStart.disabled = disabled;
-  btnScrubPrev.disabled = disabled;
-  btnScrubNext.disabled = disabled;
-  btnScrubEnd.disabled = disabled;
-  btnSelectFrame.disabled = disabled;
-  btnEditFrames.disabled = disabled;
-  // Guided-edit action buttons (visible only mid edit session) freeze
-  // too, so the dimmed slider matches the Confirm-checkmark behavior.
-  btnBackFrame.disabled = disabled;
-  btnLockIn.disabled = disabled;
-  btnClearGuided.disabled = disabled;
-  btnEditAnother.disabled = disabled;
-  btnRunToHere.disabled = disabled;
-  btnResumeEnd.disabled = disabled;
-  btnConfirmEdit.disabled = disabled;
-  btnRetryEdit.disabled = disabled;
-  btnContinueEdit.disabled = disabled;
-  btnExitEdit.disabled = disabled;
-  // Dim the whole scrubber row and surface a tooltip on hover. The
-  // title lives on the (non-disabled) container because native
-  // tooltips do not fire on disabled controls.
-  if (scrubberControls) {
-    scrubberControls.classList.toggle("is-saving", disabled);
-    if (disabled) {
-      scrubberControls.title = "Saving in progress\u2026";
-    } else {
-      scrubberControls.removeAttribute("title");
-    }
-  }
-  // Reflect the saving state on the primary button too (so Generate is
-  // greyed out during a save, then becomes New Run once finalized).
-  updateGenerateButton();
-}
-
-// ---- What If: top-k substitution (autoregressive) ----
-
-function supportsSubstitution() {
-  var capabilities = generatorModelPanel.capabilities();
-  return !!capabilities.supports_substitution;
-}
-
-// Arm substitution on the completed run. Mirrors Edit Frames,
-// including in writing nothing: the current run becomes the
-// "original" in memory, and the branch that replaces it carries the
-// original with it when it is saved.
-function enterSubstitutionMode() {
-  if (btnWhatIf && btnWhatIf.classList.contains("is-locked")) {
-    return;
-  }
-  beginSubstitutionSession();
-}
-
-// Frame index and token position are the same choice for a
-// left-to-right model, so there is no frame-selection phase: the run
-// opens at its final frame and every captured position is clickable.
-function beginSubstitutionSession() {
-  captureEditSnapshot();
-  runPhasesEnter(runPhase, RUN_PHASE_SUBSTITUTE);
-  runPhase.substituting = true;
-  scrubberMinFrame = 0;
-  runPhase.lockedEdits = [];
-  runPhase.guidedAction = null;
-  clearRemaskedPositions();
-
-  scrubberSlider.min = "0";
-  scrubberSlider.max =
-    String(generatorRun.frameCount() - 1);
-  btnEditFrames.hidden = true;
-  if (btnWhatIf) {
-    btnWhatIf.hidden = true;
-  }
-  guidedEditControls.hidden = false;
-  generatorCanvas.deactivate();
-
-  navigateToFrame(generatorRun.frameCount() - 1);
-  updateGuidedUI();
-}
-
-// Commit a substitution: truncate the run at the position, then let
-// the worker regenerate from the forced token. Reuses the diffusion
-// controller's resume splice path, so handleFrame
-// appends the branch onto the truncation unchanged.
-// ``typedText`` is the raw string for a token the user typed, or
-// null for one the model actually offered. The worker validates the
-// two differently on purpose, so the distinction has to survive the
-// trip rather than being inferred from the id.
-function doSubstitute(position, tokenId, typedText) {
-  if (!runPhase.substituting || runPhase.mode !== "substitute") {
-    return false;
-  }
-  if (position < 0 || position >= generatorRun.frameCount()) {
-    return false;
-  }
-  if (editRequestRefused()) {
-    return false;
-  }
-  runPhase.substituting = false;
-
-  // Recorded as an ordinary remask edit so the analytics Edited
-  // column, the durable diff, and the saved metadata all work with
-  // no schema change. For a left-to-right model the edited frame and
-  // the edited position are the same index.
-  remaskEdits.push({
-    frame_index: position,
-    token_positions: [position],
-  });
-
-  perFrameRemasked = {};
-  remaskedPositions = {};
-
-  truncateRunArraysAt(position);
-  // Positions from the substituted one onward are about to be
-  // resampled, so their captured candidates no longer apply.
-  generatorRun.truncateAlternatives(position);
-  isResuming = true;
-
-  runPhasesEnter(runPhase, RUN_PHASE_GENERATING);
-  updateGuidedUI();
-
-  setSaveAvailable(false);
-  resetStatus();
-  setGenerating(true);
-  // A substitution always resamples to the end of the run.
-  generatorChrome.startRunStatus(
-    editRunLabel(position, null)
-  );
-
-  var request = {
-    type: "substitute",
-    position: position,
-    token_id: tokenId,
-    run_token: generatorRun.runToken(),
-  };
-  if (typedText) {
-    request.typed = true;
-    request.typed_text = typedText;
-  }
-  generatorSocket.send(request);
-  return true;
-}
-
-// Edit Frames entry point. The current run is the "original": if it
-// has not been saved yet, save it now so an unsaved original is never
-// lost once the edited run is saved. Editing an original implies you
-// want to keep it, so this makes the save implicit.
-function enterRemaskMode() {
-  // Gated once an edited run has been saved for this generation.
-  if (btnEditFrames.classList.contains("is-locked")) {
-    return;
-  }
-  // Opening the editor writes nothing. Selecting a frame and
-  // remasking tokens are reversible and entirely local; the run is
-  // only destroyed by the resume, and Confirm is itself a save. So
-  // nothing here is worth writing to disk on the user's behalf, and
-  // this used to do exactly that: a full save fired on merely
-  // opening the panel, which on a long run is megabytes, and which
-  // raced any navigation that followed it.
-  beginEditSession();
-}
-
-// Start a fresh edit session on the current run. Shared by Edit
-// Frames and by Retry, which restores the pre-edit run first.
-function beginEditSession() {
-  captureEditSnapshot();
-  runPhasesEnter(runPhase, RUN_PHASE_SELECT);
-  // Start at frame 1: frame 0 is the fully-masked canvas with nothing
-  // to remask, so it is never a useful selection. (Guarded for the
-  // degenerate single-frame case.)
-  var startFrame = generatorRun.frameCount() > 1 ? 1 : 0;
-  scrubberMinFrame = startFrame;
-  runPhase.lockedEdits = [];
-  runPhase.guidedAction = null;
-  clearRemaskedPositions();
-
-  scrubberSlider.min = String(startFrame);
-  scrubberSlider.max =
-    String(generatorRun.frameCount() - 1);
-  btnEditFrames.hidden = true;
-  guidedEditControls.hidden = false;
-  generatorCanvas.deactivate();
-
-  navigateToFrame(startFrame);
-  updateGuidedUI();
-}
-
-// Leaving edit mode cancels the session: any partial resumes made
-// during it are discarded by restoring the pre-edit run, then
-// activateScrubber returns to the clean scrubber state (overlay
-// drawer + Edit Frames shown, guided controls hidden, final frame).
-function exitRemaskMode() {
-  restoreEditSnapshot();
-  resetGuidedMode();
-  activateScrubber();
-}
-
-// Some models resume by renoising remasked positions rather than
-// hard-masking them, so committed neighbours may also shift. Surface
-// that difference while editing.
-//
-// Read from the declared capability rather than from the model id,
-// which is what this used to do: the note would have gone missing for
-// the next renoising model to arrive under a different id.
-function renoiseNote() {
-  var capabilities = generatorModelPanel.capabilities();
-  if (capabilities.remask_renoises) {
-    return " Remasked tokens are renoised, so nearby"
-      + " tokens may also change on resume.";
-  }
-  return "";
-}
-
-function updateGuidedUI() {
-  // The two blend rows share the scrubber area with the guided
-  // controls, so keep them hidden whenever a run is being edited
-  // (runPhase.mode !== null); both updates restore the right one on exit
-  // once runPhase.mode is null again.
-  generatorCanvas.refreshControls();
-
-  // Reset every phase button first so no stale state can survive a
-  // transition (including the exit back to runPhase.mode === null). Only
-  // the buttons relevant to the current phase are then revealed; the
-  // status text sits on the left (flex:1) and the action cluster is
-  // right-anchored, so the text never shifts as buttons change.
-  btnSelectFrame.hidden = true;
-  btnSelectFrame.disabled = false;
-  btnBackFrame.hidden = true;
-  btnLockIn.hidden = true;
-  btnClearGuided.hidden = true;
-  btnEditAnother.hidden = true;
-  btnRunToHere.hidden = true;
-  btnResumeEnd.hidden = true;
-  btnConfirmEdit.hidden = true;
-  btnRetryEdit.hidden = true;
-  btnContinueEdit.hidden = true;
-  if (remaskRandomizeRow) {
-    remaskRandomizeRow.hidden = true;
-  }
-
-  if (runPhase.mode === null) {
-    guidedEditControls.hidden = true;
-    return;
-  }
-
-  guidedEditControls.hidden = false;
-  // Confirm owns saving during an edit session. Disable the
-  // standalone Save so it can never race or double-fire with it.
-  btnSave.disabled = true;
-
-  var count =
-    Object.keys(remaskedPositions).length;
-  var plural = count !== 1 ? "s" : "";
-
-  switch (runPhase.mode) {
-    case "select":
-      guidedEditStatus.textContent =
-        "Navigate to a frame, then select it"
-        + " for editing.";
-      btnSelectFrame.hidden = false;
-      scrubberSlider.disabled = false;
-      scrubberSlider.min =
-        String(scrubberMinFrame);
-      unlockScrubberNav();
-      break;
-
-    case "edit":
-      guidedEditStatus.textContent =
-        "Frame " + currentScrubFrame
-        + ": click tokens to remask ("
-        + count + " selected)." + renoiseNote();
-      btnBackFrame.hidden = false;
-      btnLockIn.hidden = false;
-      btnLockIn.disabled = count === 0;
-      btnClearGuided.hidden = false;
-      btnClearGuided.disabled = count === 0;
-      if (remaskRandomizeRow) {
-        remaskRandomizeRow.hidden = false;
-        updateRandomizeRow();
-      }
-      lockScrubberNav();
-      break;
-
-    case "choice":
-      guidedEditStatus.textContent =
-        count + " token" + plural
-        + " locked on Frame "
-        + currentScrubFrame + ".";
-      btnEditAnother.hidden = false;
-      btnResumeEnd.hidden = false;
-      lockScrubberNav();
-      break;
-
-    case "select_target":
-      guidedEditStatus.textContent =
-        "Navigate to the target frame,"
-        + " then run to it.";
-      btnRunToHere.hidden = false;
-      scrubberSlider.disabled = false;
-      scrubberSlider.min =
-        String(scrubberMinFrame);
-      scrubberSlider.max = String(
-        generatorRun.originalCaptured()
-          ? generatorRun.originalTotalFrames() - 1
-          : generatorRun.frameCount() - 1
-      );
-      unlockScrubberNav();
-      break;
-
-    case "substitute":
-      guidedEditStatus.textContent =
-        "Hover a token to see what the model nearly"
-        + " chose, then click a candidate to"
-        + " regenerate from it.";
-      btnClearGuided.hidden = true;
-      lockScrubberNav();
-      break;
-
-    case "generating":
-      guidedEditStatus.textContent =
-        "Generating\u2026";
-      lockScrubberNav();
-      break;
-
-    case "review":
-      scrubberSlider.disabled = false;
-      scrubberSlider.min = "0";
-      scrubberSlider.max =
-        String(generatorRun.frameCount() - 1);
-      unlockScrubberNav();
-      // Both actions stay reachable from any frame. Neither reads the
-      // scrubber: Confirm saves the whole run and then jumps to the
-      // last frame itself, and Retry restores the pre-edit arrays and
-      // goes back to the first editable frame. Hiding them mid-review
-      // only made scrubbing back look like it had cancelled the edit.
-      btnConfirmEdit.hidden = false;
-      btnRetryEdit.hidden = false;
-      btnContinueEdit.hidden = !reviewCanContinue();
-      if (
-        currentScrubFrame === generatorRun.frameCount() - 1
-      ) {
-        guidedEditStatus.textContent =
-          reviewEndText(currentScrubFrame);
-      } else {
-        guidedEditStatus.textContent =
-          "Reviewing frame " + currentScrubFrame + " of the "
-          + (generatorRun.interrupted()
-            ? "stopped edit"
-            : "edited run")
-          + ". " + reviewChoices();
-      }
-      break;
-  }
-
-  // A save in flight overrides the per-mode state: freeze
-  // navigation until it completes.
-  if (generatorRun.saving()) {
-    lockScrubberNav();
-    btnSelectFrame.disabled = true;
-  }
-}
-
-function selectCurrentFrame() {
-  runPhasesEnter(runPhase, RUN_PHASE_EDIT);
-  generatorCanvas.renderFrame(currentScrubFrame);
-  updateGuidedUI();
-}
-
-// Back from choosing tokens to choosing a frame. Nothing on this
-// frame was locked in, so its selection goes, as Clear would drop
-// it; the session's earlier steps and its forward-only floor stay.
-function backToFrameSelection() {
-  remaskedPositions = {};
-  delete perFrameRemasked[currentScrubFrame];
-  runPhasesEnter(runPhase, RUN_PHASE_SELECT);
-  navigateToFrame(currentScrubFrame);
-}
-
-function lockInEdits() {
-  var positions =
-    Object.keys(remaskedPositions).map(Number);
-  if (positions.length === 0) {
-    return;
-  }
-  runPhase.lockedEdits.push({
-    frame_index: currentScrubFrame,
-    token_positions: positions.slice(),
-  });
-  runPhasesEnter(runPhase, RUN_PHASE_CHOICE);
-  updateGuidedUI();
-}
-
-function doGuidedResume(action) {
-  // Guard against a stale click with no locked edits (should be
-  // unreachable now that the buttons hide correctly).
-  if (runPhase.lockedEdits.length === 0) {
-    return;
-  }
-  if (editRequestRefused()) {
-    return;
-  }
-  runPhase.guidedAction = action;
-
-  var lastEdit =
-    runPhase.lockedEdits[runPhase.lockedEdits.length - 1];
-  var positions = lastEdit.token_positions;
-  var frameIndex = lastEdit.frame_index;
-
-  pendingResume = captureResumeCut(frameIndex);
-  remaskEdits.push({
-    frame_index: frameIndex,
-    token_positions: positions.slice(),
-  });
-
-  perFrameRemasked = {};
-  remaskedPositions = {};
-
-  truncateRunArraysAt(frameIndex);
-  isResuming = true;
-
-  runPhasesEnter(runPhase, RUN_PHASE_GENERATING);
-  updateGuidedUI();
-
-  // One source for where the branch stops, so the message on screen
-  // and the request on the wire cannot drift apart. Null means run to
-  // the end, which is both the "resume to end" action and the
-  // fallback when no target frame was captured.
-  var resumeTarget = (
-    action === "another" && runPhase.targetFrame !== null
-  ) ? runPhase.targetFrame : null;
-
-  setSaveAvailable(false);
-  resetStatus();
-  setGenerating(true);
-  generatorChrome.startRunStatus(
-    editRunLabel(frameIndex, resumeTarget)
-  );
-
-  var message = {
-    type: "resume",
-    frame_index: frameIndex,
-    remask_positions: positions,
-    run_token: generatorRun.runToken(),
-  };
-
-  if (resumeTarget !== null) {
-    message.max_frames = resumeTarget - frameIndex + 1;
-  }
-
-  generatorSocket.send(message);
-}
-
-// What a resume is about to cut, and where it is being sent from.
-// A resume stopped before it sends a frame has changed nothing on
-// the worker, which keeps the run it had, so the page puts this
-// back and returns there (landBeforeResume) rather than staying cut
-// back to the edited frame, where Confirm would save the run that
-// way. Only a Stop is answered this way: a connection lost before
-// the first frame is still handled by enterInterruptedState, which
-// drops the copy. Review sends one too, for Continue.
-function captureResumeCut(cutAt) {
-  var mode = runPhase.mode;
-  var sender = mode === RUN_PHASE_CHOICE
-    || mode === RUN_PHASE_SELECT_TARGET
-    || mode === RUN_PHASE_REVIEW;
-  if (!sender) {
-    throw new Error("a resume is sent from choice, target or review");
-  }
-  var perFrame = {};
-  var keys = Object.keys(perFrameRemasked);
-  for (var i = 0; i < keys.length; i++) {
-    perFrame[keys[i]] = Object.assign({}, perFrameRemasked[keys[i]]);
-  }
-  return {
-    cutAt: cutAt,
-    run: generatorRun.captureCheckpoint(),
-    remaskEditsLen: remaskEdits.length,
-    mode: mode,
-    frame: currentScrubFrame,
-    minFrame: scrubberMinFrame,
-    remasked: Object.assign({}, remaskedPositions),
-    perFrame: perFrame,
-  };
-}
-
-// Whether the resume that just ended sent nothing before its Stop:
-// cancelled, with the run still at the length it was cut to.
-function resumeStoppedBeforeAFrame(resumed, data) {
-  if (resumed === null) {
-    return false;
-  }
-  if (data.cancelled !== true) {
-    return false;
-  }
-  return generatorRun.frameCount() === resumed.cutAt;
-}
-
-// Put back what the resume cut and return to where it was sent from:
-// the run whole, the locked edit and its selection in place, ready to
-// resume again or exit.
-function landBeforeResume(saved) {
-  generatorRun.restoreCheckpoint(saved.run);
-  remaskEdits.length = saved.remaskEditsLen;
-
-  runPhase.guidedAction = null;
-  runPhase.targetFrame = null;
-  if (saved.mode === RUN_PHASE_CHOICE) {
-    runPhasesEnter(runPhase, RUN_PHASE_CHOICE);
-  } else if (saved.mode === RUN_PHASE_SELECT_TARGET) {
-    runPhasesEnter(runPhase, RUN_PHASE_SELECT_TARGET);
-  } else {
-    runPhasesEnter(runPhase, RUN_PHASE_REVIEW);
-  }
-  scrubberMinFrame = saved.minFrame;
-  remaskedPositions = saved.remasked;
-  perFrameRemasked = saved.perFrame;
-  scrubberActive = true;
-  setScrubberVisible(true);
-  navigateToFrame(saved.frame);
-  generatorChrome.setMessage(RESUME_STOPPED_BEFORE_FRAME);
-}
-
-function handleGuidedDone() {
-  if (runPhase.guidedAction === "another") {
-    var target = Math.min(
-      runPhase.targetFrame,
-      generatorRun.frameCount() - 1
-    );
-
-    scrubberActive = true;
-    setScrubberVisible(true);
-    guidedEditControls.hidden = false;
-    btnEditFrames.hidden = true;
-    generatorCanvas.deactivate();
-
-    scrubberSlider.min = String(target);
-    scrubberSlider.max =
-      String(generatorRun.frameCount() - 1);
-    scrubberSlider.value = String(target);
-
-    currentScrubFrame = target;
-    runPhase.guidedAction = null;
-    runPhase.targetFrame = null;
-    runPhasesEnter(runPhase, RUN_PHASE_EDIT);
-    remaskedPositions = {};
-    perFrameRemasked = {};
-
-    updateScrubberLabel();
-    generatorCanvas.renderFrame(target);
-    updateGuidedUI();
-  } else {
-    enterReviewMode();
-  }
-}
-
-// Resume-to-End finished: rather than dropping straight back to the
-// plain scrubber, stay in guided editing at the final frame so the
-// user must explicitly Confirm (save) or Retry (redo). Navigation
-// stays enabled so the result can be inspected; only the final frame
-// exposes the Confirm/Retry actions.
-function enterReviewMode() {
-  runPhase.guidedAction = null;
-  runPhase.targetFrame = null;
-  remaskedPositions = {};
-  perFrameRemasked = {};
-  runPhasesEnter(runPhase, RUN_PHASE_REVIEW);
-  scrubberActive = true;
-  setScrubberVisible(true);
-  guidedEditControls.hidden = false;
-  btnEditFrames.hidden = true;
-  generatorCanvas.deactivate();
-  currentScrubFrame = generatorRun.frameCount() - 1;
-  scrubberSlider.min = "0";
-  scrubberSlider.max =
-    String(generatorRun.frameCount() - 1);
-  scrubberSlider.value = String(currentScrubFrame);
-  scrubberSlider.disabled = false;
-  unlockScrubberNav();
-  updateScrubberLabel();
-  generatorCanvas.renderFrame(currentScrubFrame);
-  updateGuidedUI();
-}
-
-// Confirm the reviewed edit: trigger a save (as the Save button
-// would), then leave guided editing. The save-success handler locks
-// Edit Frames so the run cannot accrue a second, conflicting edit.
-function confirmGuidedEdit() {
-  generatorRun.save();
-  resetGuidedMode();
-  activateScrubber();
-}
-
-// Retry: discard this session's edits and restart editing from the
-// beginning. Writes nothing, like every other way of entering an
-// edit session. Autoregressive runs re-enter substitution, whose
-// session has no frame-selection phase to restart into.
-function retryGuidedEdit() {
-  if (editRequestRefused()) {
-    return;
-  }
-  var wasSubstitution = supportsSubstitution();
-  restoreEditSnapshot();
-  resetGuidedMode();
-  if (wasSubstitution) {
-    beginSubstitutionSession();
-  } else {
-    beginEditSession();
-  }
-}
-
-// Whether review offers Continue: only on a branch that stopped, of
-// a model whose worker keeps the frames the page received and can
-// resume from them. A stopped What If branch is not one, since its
-// worker keeps no branch, and a finished branch has nothing left.
-function reviewCanContinue() {
-  var capabilities = generatorModelPanel.capabilities();
-  return generatorRun.interrupted()
-    && !!capabilities.supports_resume;
-}
-
-// Review's status line at the branch's last frame: where it stopped,
-// or that it finished.
-function reviewEndText(frame) {
-  if (generatorRun.interrupted()) {
-    return "Stopped at frame " + frame + ". " + reviewChoices();
-  }
-  return "Edit complete. " + reviewChoices();
-}
-
-// What review offers, in the words of its status line.
-function reviewChoices() {
-  if (reviewCanContinue()) {
-    return "Continue, confirm to save it as it is, or retry"
-      + " from the start.";
-  }
-  if (generatorRun.interrupted()) {
-    return "Confirm to save it as it is, or retry from the start.";
-  }
-  return "Confirm to save, or retry from the start.";
-}
-
-// Carry a stopped branch on from its last frame. No edit is
-// recorded: the request remasks nothing, flagged as a continue
-// (RESUME_CONTINUE in protocol.py), and the worker re-enters that
-// frame as it was. It ends in review, as Resume to End does.
-function continueGuidedEdit() {
-  if (!reviewCanContinue()) {
-    return;
-  }
-  if (editRequestRefused()) {
-    return;
-  }
-  var from = generatorRun.frameCount() - 1;
-  pendingResume = captureResumeCut(from);
-  truncateRunArraysAt(from);
-  isResuming = true;
-  runPhase.guidedAction = "end";
-  runPhasesEnter(runPhase, RUN_PHASE_GENERATING);
-  updateGuidedUI();
-
-  setSaveAvailable(false);
-  resetStatus();
-  setGenerating(true);
-  generatorChrome.startRunStatus(editRunLabel(from, null));
-
-  generatorSocket.send({
-    type: "resume",
-    frame_index: from,
-    remask_positions: [],
-    "continue": true,
-    run_token: generatorRun.runToken(),
-  });
-}
-
 // ---- UI state helpers ----
 
 function setGenerating(active) {
@@ -2249,10 +975,7 @@ function setGenerating(active) {
   updateGenerateButton();
   generatorComposer.setDisabled(active);
   generatorModelPanel.setDisabled(active);
-
-  if (active) {
-    deactivateScrubber();
-  }
+  generatorEdit.generationChanged(active);
 }
 
 // Block glyphs for the optional "diffusion-style text" reveal.
@@ -2365,18 +1088,6 @@ function denoiseDissolve(el, onDone) {
   el._denoiseTimer = setInterval(render, 40);
 }
 
-// Names the stretch a resume is about to regenerate. "Resuming" said
-// only that something had restarted, which reads as ambiguous next to
-// a plain run; the frame range says which part of the output is being
-// replaced, and that is what you are waiting to watch change. A null
-// target means the branch runs to the end, which is always the case
-// for a left-to-right substitution.
-function editRunLabel(fromFrame, toFrame) {
-  var target = toFrame === null ? "end" : String(toFrame);
-  return "Running edit from frame " + fromFrame
-    + " to " + target;
-}
-
 function setSaveAvailable(available) {
   // Always visible; greyed out when there is nothing to save.
   btnSave.disabled = !(
@@ -2384,11 +1095,10 @@ function setSaveAvailable(available) {
   );
 }
 
-// Clears the footer readouts only, never the stack. doSubstitute and
-// doGuidedResume both call this immediately before starting a resume,
-// which is a moment a save the user started by hand may still be in
-// flight; clearing the chips here would put back the overwriting this
-// stack exists to fix.
+// Clears the footer readouts only, never the stack. The edit
+// controller calls this before a branch starts, which can overlap a
+// save the user started by hand; clearing the chips here would put
+// back the overwriting this stack exists to fix.
 function resetStatus() {
   generatorChrome.resetStatus(appSettings.tpsMode);
   generatorReadouts.clearMetrics();
@@ -2399,18 +1109,11 @@ function resetStatus() {
 // Clear all live-run state (frames, edits, overlays, gates) back to a
 // pre-run baseline. Shared by Generate (fresh run) and New Run.
 function resetRunState() {
-  resetGuidedMode();
-  remaskedPositions = {};
-  perFrameRemasked = {};
+  generatorEdit.reset();
   generatorRun.reset();
-  remaskEdits = [];
   generatorCanvas.reset();
-  generatorCanvas.deactivate();
   generatorReadouts.reset();
-  generatorCandidates.hidePopover();
-  isResuming = false;
-  pendingResume = null;
-  updateEditFramesLock();
+  generatorEdit.refreshLocks();
   updateGenerateButton();
   setSaveAvailable(false);
 }
@@ -2420,7 +1123,6 @@ function resetRunState() {
 // prompt box (revealing its placeholder), but keeps prompt history.
 function startNewRun() {
   resetRunState();
-  deactivateScrubber();
   generatorComposer.clear();
   if (thinkingPanel) {
     thinkingPanel.hidden = true;
@@ -2521,26 +1223,18 @@ function generatorCanvasReadSettings() {
 }
 
 function generatorCanvasReadEdit() {
-  return {
-    remaskEdits: remaskEdits,
-    remaskedPositions: remaskedPositions,
-    mode: runPhase.mode,
-    substituting: runPhase.substituting,
-    generating: isGenerating,
-  };
+  return generatorEdit.canvasState();
 }
 
 function generatorCandidatesReadState() {
   var tokenizer = generatorModelPanel.activeTokenizer();
-  return {
-    frame: currentScrubFrame,
-    scrubberActive: scrubberActive,
-    editing: runPhasesEditing(runPhase),
-    substituting: runPhase.substituting,
-    remaskEdits: remaskEdits,
-    tokenizer: tokenizer,
-    vocabSize: tokenizer.model_vocab_size || null,
-  };
+  return Object.assign(
+    generatorEdit.candidatesState(),
+    {
+      tokenizer: tokenizer,
+      vocabSize: tokenizer.model_vocab_size || null,
+    }
+  );
 }
 
 function generatorCandidatesRequestTokenize(intent) {
@@ -2559,7 +1253,7 @@ function generatorCandidatesRequestProbe(intent) {
   if (!generatorSocket.isReady()) {
     return false;
   }
-  if (editRequestRefused()) {
+  if (!generatorEdit.requestAllowed()) {
     return false;
   }
   generatorSocket.send({
@@ -2573,11 +1267,48 @@ function generatorCandidatesRequestProbe(intent) {
 }
 
 function generatorCandidatesRequestSubstitute(intent) {
-  return doSubstitute(
-    intent.position,
-    intent.tokenId,
-    intent.typedText
-  );
+  return generatorEdit.substitute(intent);
+}
+
+function generatorEditRequestRewind(intent) {
+  if (!generatorSocket.isReady()) {
+    return false;
+  }
+  return generatorSocket.send({
+    type: "rewind",
+    run_token: intent.runToken,
+  });
+}
+
+function generatorEditRequestResume(intent) {
+  var message = {
+    type: "resume",
+    frame_index: intent.frameIndex,
+    remask_positions: intent.remaskPositions,
+    run_token: intent.runToken,
+  };
+  if (intent.targetFrame !== null) {
+    message.max_frames =
+      intent.targetFrame - intent.frameIndex + 1;
+  }
+  if (intent.continueRun) {
+    message["continue"] = true;
+  }
+  return generatorSocket.send(message);
+}
+
+function generatorEditRequestSubstitute(intent) {
+  var message = {
+    type: "substitute",
+    position: intent.position,
+    token_id: intent.tokenId,
+    run_token: intent.runToken,
+  };
+  if (intent.typedText) {
+    message.typed = true;
+    message.typed_text = intent.typedText;
+  }
+  return generatorSocket.send(message);
 }
 
 function generatorCanvasWriteHighlight(value) {
@@ -2613,20 +1344,11 @@ function generatorReadoutsReadModel() {
 }
 
 function generatorReadoutsReadSettings() {
-  return {
-    remaskedPositions: remaskedPositions,
-    segmentStarts: remaskEdits.map(function (edit) {
-      return edit.frame_index;
-    }),
-  };
+  return generatorEdit.readoutsSettings();
 }
 
 function generatorReadoutsReadScrubber() {
-  return {
-    active: scrubberActive,
-    frame: currentScrubFrame,
-    selectingTarget: runPhase.mode === "select_target",
-  };
+  return generatorEdit.scrubberState();
 }
 
 function generatorRunReadModel() {
@@ -2678,23 +1400,23 @@ function generatorRunRestoreChrome(state) {
 }
 
 function generatorRunReadEditArtifacts() {
-  return { remaskEdits: remaskEdits };
+  return generatorEdit.readArtifacts();
 }
 
 function generatorRunRestoreEditArtifacts(state) {
-  remaskEdits = state.remaskEdits;
+  generatorEdit.restoreArtifacts(state);
 }
 
 function generatorRunSessionRestored() {
   updateGenerateButton();
   setSaveAvailable(!generatorRun.saved());
-  activateScrubber();
+  generatorEdit.activate();
 }
 
 function generatorRunSaveStart(info) {
   btnSave.disabled = true;
-  setSavingControls(true);
-  updateEditFramesLock();
+  generatorEdit.setSavingControls(true);
+  generatorEdit.refreshLocks();
   if (saveCheckTimer !== null) {
     clearTimeout(saveCheckTimer);
     saveCheckTimer = null;
@@ -2708,9 +1430,8 @@ function generatorRunSaveStart(info) {
 
 function generatorRunSaveSettled() {
   btnSave.classList.remove("is-saving");
-  setSavingControls(false);
-  updateGuidedUI();
-  updateEditFramesLock();
+  generatorEdit.setSavingControls(false);
+  generatorEdit.refreshLocks();
 }
 
 function generatorRunSaveSuccess(info) {
@@ -2720,7 +1441,7 @@ function generatorRunSaveSuccess(info) {
     btnSave.classList.remove("is-saved");
     saveCheckTimer = null;
   }, 500);
-  updateEditFramesLock();
+  generatorEdit.refreshLocks();
   updateGenerateButton();
   generatorChrome.showAnalyticsCue(info.runId || "");
   generatorChrome.retireStatus(info.status);
@@ -2771,253 +1492,8 @@ generatorChrome.wire();
 generatorCanvas.wire();
 generatorReadouts.wire();
 generatorCandidates.wire();
+generatorEdit.wire();
 
-// Scrubber event listeners.
-//
-// Dragging goes through navigateToFrame, the same path the arrow
-// buttons and the keyboard take. It used to have its own copy of that
-// body, which drifted: the copy never hid the candidate popover and
-// never repainted the entropy profile, so a drag left the profile
-// showing the frame the arrows had last selected.
-scrubberSlider.addEventListener(
-  "input",
-  function () {
-    navigateToFrame(parseInt(scrubberSlider.value, 10));
-  }
-);
-
-btnScrubStart.addEventListener(
-  "click",
-  function () {
-    navigateToFrame(0);
-  }
-);
-
-btnScrubPrev.addEventListener(
-  "click",
-  function () {
-    navigateToFrame(currentScrubFrame - 1);
-  }
-);
-
-btnScrubNext.addEventListener(
-  "click",
-  function () {
-    navigateToFrame(currentScrubFrame + 1);
-  }
-);
-
-btnScrubEnd.addEventListener(
-  "click",
-  function () {
-    var endFrame = (
-      runPhase.mode === "select_target"
-      && generatorRun.originalCaptured()
-    ) ? generatorRun.originalTotalFrames() - 1
-      : generatorRun.frameCount() - 1;
-    navigateToFrame(endFrame);
-  }
-);
-
-// Guided edit mode event listeners.
-btnEditFrames.addEventListener(
-  "click", enterRemaskMode
-);
-
-if (btnWhatIf) {
-  btnWhatIf.addEventListener(
-    "click", enterSubstitutionMode
-  );
-}
-
-btnSelectFrame.addEventListener(
-  "click", selectCurrentFrame
-);
-
-btnBackFrame.addEventListener(
-  "click", backToFrameSelection
-);
-
-btnLockIn.addEventListener("click", function () {
-  if (!diffusionEffectActive()) {
-    lockInEdits();
-    return;
-  }
-  // Dissolve the label (letters + lock emoji) into 0-confidence mask
-  // glyphs, then commit (which hides the button). Restore the label
-  // afterward so it reads correctly the next time it appears.
-  var label = btnLockIn.textContent;
-  denoiseDissolve(btnLockIn, function () {
-    lockInEdits();
-    btnLockIn.textContent = label;
-  });
-});
-
-btnClearGuided.addEventListener(
-  "click",
-  function () {
-    remaskedPositions = {};
-    delete perFrameRemasked[currentScrubFrame];
-    generatorCanvas.renderFrame(currentScrubFrame);
-    updateGuidedUI();
-  }
-);
-
-// Randomize-remask controls: the slider and number input mirror one
-// target count; Shuffle applies it. They only set the target, so they
-// never render until Shuffle is pressed.
-if (remaskRandomSlider) {
-  remaskRandomSlider.addEventListener("input", function () {
-    remaskRandomCount.value = remaskRandomSlider.value;
-  });
-}
-if (remaskRandomCount) {
-  remaskRandomCount.addEventListener("input", function () {
-    var total = resolvedPositions(currentScrubFrame).length;
-    var floor = total > 0 ? 1 : 0;
-    var n = clampInt(
-      parseInt(remaskRandomCount.value, 10) || floor, floor, total
-    );
-    remaskRandomCount.value = String(n);
-    remaskRandomSlider.value = String(n);
-  });
-}
-if (btnRemaskShuffle) {
-  btnRemaskShuffle.addEventListener("click", function () {
-    shuffleRemasks();
-    playShuffleDiffusion();
-  });
-}
-
-btnEditAnother.addEventListener(
-  "click",
-  function () {
-    if (runPhase.lockedEdits.length === 0) {
-      return;
-    }
-    var lastEdit = runPhase.lockedEdits[
-      runPhase.lockedEdits.length - 1
-    ];
-    scrubberMinFrame =
-      lastEdit.frame_index + 1;
-    runPhasesEnter(runPhase, RUN_PHASE_SELECT_TARGET);
-    var maxFrame = generatorRun.originalCaptured()
-      ? generatorRun.originalTotalFrames() - 1
-      : generatorRun.frameCount() - 1;
-    scrubberSlider.min =
-      String(scrubberMinFrame);
-    scrubberSlider.max = String(maxFrame);
-    scrubberSlider.disabled = false;
-    unlockScrubberNav();
-    navigateToFrame(scrubberMinFrame);
-    updateGuidedUI();
-  }
-);
-
-btnRunToHere.addEventListener(
-  "click",
-  function () {
-    runPhase.targetFrame = currentScrubFrame;
-    doGuidedResume("another");
-  }
-);
-
-btnResumeEnd.addEventListener(
-  "click",
-  function () {
-    doGuidedResume("end");
-  }
-);
-
-btnConfirmEdit.addEventListener(
-  "click", confirmGuidedEdit
-);
-
-btnRetryEdit.addEventListener(
-  "click", retryGuidedEdit
-);
-
-btnContinueEdit.addEventListener(
-  "click", continueGuidedEdit
-);
-
-btnExitEdit.addEventListener(
-  "click", exitRemaskMode
-);
-
-// Token click delegation on the output area.
-outputArea.addEventListener(
-  "click",
-  function (e) {
-    if (!scrubberActive) {
-      return;
-    }
-    if (runPhase.mode !== "edit") {
-      return;
-    }
-    var target = e.target;
-    if (
-      !target.classList.contains("token-clickable")
-      && !target.classList.contains("token-remasked")
-    ) {
-      return;
-    }
-    var pos = target.getAttribute("data-pos");
-    if (pos === null) {
-      return;
-    }
-    toggleRemaskPosition(parseInt(pos, 10));
-  }
-);
-
-// Keyboard shortcuts for scrubber navigation.
-document.addEventListener(
-  "keydown",
-  function (e) {
-    if (
-      !scrubberActive
-      || isGenerating
-      || generatorRun.saving()
-    ) {
-      return;
-    }
-    if (
-      runPhase.mode === "edit"
-      || runPhase.mode === "choice"
-      || runPhase.mode === "generating"
-      || runPhase.mode === "substitute"
-    ) {
-      return;
-    }
-    // "select" and "select_target" allow navigation.
-    var tag = document.activeElement.tagName;
-    if (
-      tag === "INPUT"
-      || tag === "TEXTAREA"
-      || tag === "SELECT"
-    ) {
-      return;
-    }
-    if (e.key === "ArrowLeft") {
-      e.preventDefault();
-      navigateToFrame(currentScrubFrame - 1);
-    } else if (e.key === "ArrowRight") {
-      e.preventDefault();
-      navigateToFrame(currentScrubFrame + 1);
-    } else if (e.key === "Home") {
-      e.preventDefault();
-      navigateToFrame(0);
-    } else if (e.key === "End") {
-      e.preventDefault();
-      var endFrame = (
-        runPhase.mode === "select_target"
-        && generatorRun.originalCaptured()
-      ) ? generatorRun.originalTotalFrames() - 1
-        : generatorRun.frameCount() - 1;
-      navigateToFrame(endFrame);
-    }
-  }
-);
 
 // ---- Modal logic (About / Help / Settings) ----
 

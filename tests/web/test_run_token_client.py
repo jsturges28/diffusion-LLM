@@ -30,6 +30,7 @@ APP_JS = (
 )
 SNAPSHOT_JS = APP_JS.with_name("run_snapshot.js")
 RUN_JS = APP_JS.with_name("generator_run.js")
+EDIT_JS = APP_JS.with_name("generator_edit.js")
 
 
 def _source(path: Path = APP_JS) -> str:
@@ -78,9 +79,12 @@ def test_every_stateful_request_quotes_it() -> None:
     Rewind joined them when abandoning an edit session turned out to
     leave the worker holding the branch the browser had discarded.
     """
-    source = _source()
+    app = _source()
+    edit = _source(EDIT_JS)
 
-    assert source.count("run_token: generatorRun.runToken()") == 5
+    assert edit.count("run.runToken()") == 4
+    assert app.count("run_token: generatorRun.runToken()") == 1
+    assert app.count("run_token: intent.runToken") == 3
 
 
 def test_the_five_are_the_ones_we_think() -> None:
@@ -90,7 +94,7 @@ def test_the_five_are_the_ones_we_think() -> None:
     requests = {
         '"probe"': 1,
         '"substitute"': 1,
-        '"resume"': 2,
+        '"resume"': 1,
         '"rewind"': 1,
     }
     for request, count in requests.items():
@@ -103,9 +107,17 @@ def test_the_five_are_the_ones_we_think() -> None:
         assert len(starts) == count, request
         for start in starts:
             sent = source[start : start + 400]
-            assert (
-                "run_token: generatorRun.runToken()" in sent
-            ), request
+            token = (
+                "run_token: generatorRun.runToken()"
+                if request == '"probe"'
+                else "run_token: intent.runToken"
+            )
+            assert token in sent, request
+
+    edit = _source(EDIT_JS)
+    assert edit.count("requestResume({") == 2
+    assert edit.count("requestSubstitute({") == 1
+    assert "requestRewind({ runToken: token })" in edit
 
 
 # -- where it survives --

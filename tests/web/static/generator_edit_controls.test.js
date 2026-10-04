@@ -210,11 +210,11 @@ async function finishedRun(worker) {
 // Edit Frames on `frame`, with one token selected and not locked in.
 function selectingAt(run, frame) {
   const { context } = run;
-  context.enterRemaskMode();
-  context.navigateToFrame(frame);
-  context.selectCurrentFrame();
-  context.toggleRemaskPosition(1);
-  assert.equal(context.runPhase.mode, "edit");
+  context.generatorEdit.enterFrames();
+  context.generatorEdit.navigate(frame);
+  context.generatorEdit.selectFrame();
+  context.generatorEdit.togglePosition(1);
+  assert.equal(context.generatorEdit.phaseState().mode, "edit");
 }
 
 function press(run, id) {
@@ -244,7 +244,7 @@ function continueHidden(run) {
 // first frame is on screen: review, with three frames.
 function stoppedBranch(run) {
   selectingAt(run, 2);
-  run.context.lockInEdits();
+  run.context.generatorEdit.lockSelection();
   press(run, "btn-resume-end");
   run.context.handleFrame(snapshotFrame(0, "a" + MASK + "c"));
   run.context.handleDone({
@@ -255,7 +255,10 @@ function stoppedBranch(run) {
     cancelled: true,
     run_token: TOKEN,
   });
-  assert.equal(run.context.runPhase.mode, "review");
+  assert.equal(
+    run.context.generatorEdit.phaseState().mode,
+    "review"
+  );
 }
 
 function finishedDone(text) {
@@ -276,8 +279,17 @@ test("Back returns to choosing a frame", async () => {
 
   press(run, "btn-back-frame");
 
-  assert.equal(run.context.runPhase.mode, "select");
-  assert.deepEqual(host(run.context.remaskedPositions), {});
+  assert.equal(
+    run.context.generatorEdit.phaseState().mode,
+    "select"
+  );
+  assert.deepEqual(
+    host(
+      run.context.generatorEdit
+        .readoutsSettings().remaskedPositions
+    ),
+    {}
+  );
   assert.equal(run.registry.get("btn-scrub-prev").disabled, false);
   assert.equal(
     run.registry.get("guided-edit-status").textContent,
@@ -290,22 +302,25 @@ test("and the frame chosen next is the one locked in", async () => {
   selectingAt(run, 2);
   press(run, "btn-back-frame");
 
-  run.context.navigateToFrame(3);
-  run.context.selectCurrentFrame();
-  run.context.toggleRemaskPosition(0);
-  run.context.lockInEdits();
+  run.context.generatorEdit.navigate(3);
+  run.context.generatorEdit.selectFrame();
+  run.context.generatorEdit.togglePosition(0);
+  run.context.generatorEdit.lockSelection();
 
-  assert.deepEqual(host(run.context.runPhase.lockedEdits), [
+  assert.deepEqual(
+    host(run.context.generatorEdit.phaseState().lockedEdits),
+    [
     { frame_index: 3, token_positions: [0] },
-  ]);
+    ]
+  );
 });
 
 test("Back after Run to Here keeps the edit before it", async () => {
   const run = await finishedRun();
   selectingAt(run, 1);
-  run.context.lockInEdits();
+  run.context.generatorEdit.lockSelection();
   press(run, "btn-edit-another");
-  run.context.navigateToFrame(3);
+  run.context.generatorEdit.navigate(3);
   press(run, "btn-run-to-here");
   // The branch, from the edited frame up to the target.
   run.context.handleFrame(snapshotFrame(0, "a" + MASK + MASK));
@@ -318,16 +333,25 @@ test("Back after Run to Here keeps the edit before it", async () => {
     prompt_len: 12,
     run_token: TOKEN,
   });
-  assert.equal(run.context.runPhase.mode, "edit");
-  assert.equal(run.context.currentScrubFrame, 3);
+  assert.equal(
+    run.context.generatorEdit.phaseState().mode,
+    "edit"
+  );
+  assert.equal(run.context.generatorEdit.currentFrame(), 3);
 
   press(run, "btn-back-frame");
-  run.context.navigateToFrame(0);
+  run.context.generatorEdit.navigate(0);
 
-  assert.equal(run.context.runPhase.mode, "select");
+  assert.equal(
+    run.context.generatorEdit.phaseState().mode,
+    "select"
+  );
   // The floor the earlier edit set: the frame after it.
-  assert.equal(run.context.currentScrubFrame, 2);
-  assert.equal(run.context.remaskEdits.length, 1);
+  assert.equal(run.context.generatorEdit.currentFrame(), 2);
+  assert.equal(
+    run.context.generatorEdit.readArtifacts().remaskEdits.length,
+    1
+  );
 });
 
 // -- Continue --
@@ -348,14 +372,17 @@ test("a stopped Resume to End offers Continue", async () => {
 test("a finished one offers only Confirm and Retry", async () => {
   const run = await finishedRun();
   selectingAt(run, 2);
-  run.context.lockInEdits();
+  run.context.generatorEdit.lockSelection();
   press(run, "btn-resume-end");
   run.context.handleFrame(snapshotFrame(0, "a" + MASK + "c"));
   run.context.handleFrame(snapshotFrame(1, "abc"));
 
   run.context.handleDone(finishedDone("abc"));
 
-  assert.equal(run.context.runPhase.mode, "review");
+  assert.equal(
+    run.context.generatorEdit.phaseState().mode,
+    "review"
+  );
   assert.equal(continueHidden(run), true);
   assert.equal(
     guidedStatus(run),
@@ -378,8 +405,14 @@ test("Continue carries the branch on without an edit", async () => {
     continue: true,
     run_token: TOKEN,
   });
-  assert.equal(run.context.remaskEdits.length, 1);
-  assert.equal(run.context.runPhase.mode, "generating");
+  assert.equal(
+    run.context.generatorEdit.readArtifacts().remaskEdits.length,
+    1
+  );
+  assert.equal(
+    run.context.generatorEdit.phaseState().mode,
+    "generating"
+  );
   assert.equal(run.context.generatorRun.frameCount(), 2);
 });
 
@@ -393,9 +426,15 @@ test("and the branch it carries on lands in review", async () => {
 
   run.context.handleDone(finishedDone("abc"));
 
-  assert.equal(run.context.runPhase.mode, "review");
+  assert.equal(
+    run.context.generatorEdit.phaseState().mode,
+    "review"
+  );
   assert.equal(run.context.generatorRun.frameCount(), 4);
-  assert.equal(run.context.remaskEdits.length, 1);
+  assert.equal(
+    run.context.generatorEdit.readArtifacts().remaskEdits.length,
+    1
+  );
   assert.equal(continueHidden(run), true);
 });
 
@@ -413,7 +452,10 @@ test("a Continue stopped at once changes nothing", async () => {
     run_token: TOKEN,
   });
 
-  assert.equal(run.context.runPhase.mode, "review");
+  assert.equal(
+    run.context.generatorEdit.phaseState().mode,
+    "review"
+  );
   assert.equal(run.context.generatorRun.frameCount(), 3);
   assert.equal(continueHidden(run), false);
   assert.equal(
@@ -431,7 +473,10 @@ test("Continue locks once the run's worker is replaced", async () => {
 
   assert.equal(button.classList.contains("is-locked"), true);
   assert.equal(resumesSent(run.socket).length, 1);
-  assert.equal(run.context.runPhase.mode, "review");
+  assert.equal(
+    run.context.generatorEdit.phaseState().mode,
+    "review"
+  );
 });
 
 test("a stopped What If branch offers no Continue", async () => {
@@ -442,9 +487,12 @@ test("a stopped What If branch offers no Continue", async () => {
   context.handleFrame(appendFrame(2, " eats"));
   context.handleFrame(appendFrame(3, " sugar"));
   context.handleDone(finishedDone(" Yeast eats sugar"));
-  context.runPhase.mode = "substitute";
-  context.runPhase.substituting = true;
-  context.doSubstitute(1, 7, null);
+  context.generatorEdit.enterWhatIf();
+  context.generatorEdit.substitute({
+    position: 1,
+    tokenId: 7,
+    typedText: null,
+  });
   context.handleFrame(appendFrame(2, " ale"));
 
   context.handleDone({
@@ -456,7 +504,10 @@ test("a stopped What If branch offers no Continue", async () => {
     run_token: TOKEN,
   });
 
-  assert.equal(context.runPhase.mode, "review");
+  assert.equal(
+    context.generatorEdit.phaseState().mode,
+    "review"
+  );
   assert.equal(continueHidden(run), true);
   assert.equal(
     guidedStatus(run),

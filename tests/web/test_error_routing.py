@@ -66,8 +66,7 @@ def test_the_teardown_is_behind_the_scope_check() -> None:
     guard = body.find("if (routed.unwindsRun)")
 
     assert guard != -1
-    assert body.find("restoreEditSnapshot()") > guard
-    assert body.find("resetGuidedMode()") > guard
+    assert body.find("generatorEdit.unwindRunError()") > guard
 
 
 def test_the_run_indicators_are_behind_it_too() -> None:

@@ -246,7 +246,7 @@ function colorsDrawnBy(registry, render) {
 
 test("tokens are tinted by their count at the scrubbed frame", () => {
   const { context, registry } = finishedRun(REVISING);
-  context.navigateToFrame(6);
+  context.generatorEdit.navigate(6);
 
   const colors = colorsDrawnBy(registry, () => {
     context.generatorCanvas.setOverlayMode("revisions");
@@ -262,7 +262,7 @@ test("scrubbing back counts only what had happened by then", () => {
   context.generatorCanvas.setOverlayMode("revisions");
 
   const colors = colorsDrawnBy(registry, () => {
-    context.navigateToFrame(4);
+    context.generatorEdit.navigate(4);
   });
 
   assert.deepEqual(colors, [context.revisionColor(1), "", "", ""]);
@@ -270,7 +270,7 @@ test("scrubbing back counts only what had happened by then", () => {
 
 test("the strip reads the count while the overlay is on", () => {
   const { context } = finishedRun(REVISING);
-  context.navigateToFrame(6);
+  context.generatorEdit.navigate(6);
   const token = context.generatorRun.frameTokens(6)[0];
 
   context.generatorCanvas.setOverlayMode("revisions");
@@ -317,7 +317,7 @@ test("nothing is counted while a run streams", () => {
   // which belongs to the run being replaced, so a hover there must
   // not read a count from it.
   const { context } = finishedRun(REVISING);
-  context.navigateToFrame(6);
+  context.generatorEdit.navigate(6);
   context.generatorCanvas.setOverlayMode("revisions");
   assert.equal(context.generatorCanvas.revisionCount(0, false), 2);
 
@@ -361,10 +361,11 @@ const BRANCH = [
 function editedRun() {
   const page = finishedRun(REVISING);
   const { context } = page;
-  context.remaskEdits = [{ frame_index: 4, token_positions: [2] }];
-  context.truncateRunArraysAt(4);
+  context.generatorEdit.restoreArtifacts({
+    remaskEdits: [{ frame_index: 4, token_positions: [2] }],
+  });
+  context.generatorRun.truncate(4);
   context.generatorCanvas.invalidate();
-  context.isResuming = true;
   BRANCH.forEach((spec, at) => {
     context.handleFrame(frameOf(spec, at, BRANCH.length));
   });
@@ -382,7 +383,7 @@ function countsAt(context, isOriginal) {
 
 test("the branch counts its own run, the edit starting over", () => {
   const { context } = editedRun();
-  context.navigateToFrame(6);
+  context.generatorEdit.navigate(6);
 
   // Position 0's change at frame 3 is shared history; position 2's
   // new token is the edit's, and position 3's is the model's own.
@@ -391,7 +392,7 @@ test("the branch counts its own run, the edit starting over", () => {
 
 test("the original layer counts the run it came from", () => {
   const { context } = editedRun();
-  context.navigateToFrame(6);
+  context.generatorEdit.navigate(6);
 
   assert.deepEqual(countsAt(context, true), [2, 1, 0, 0]);
 });
@@ -400,7 +401,7 @@ test("the original layer holds its last frame past its end", () => {
   // The branch outran the original by a frame. The crossfade draws
   // the original's last frame there, so that is what it counts.
   const { context } = editedRun();
-  context.navigateToFrame(7);
+  context.generatorEdit.navigate(7);
 
   assert.deepEqual(countsAt(context, true), [2, 1, 0, 0]);
   assert.deepEqual(countsAt(context, false), [1, 0, 0, 1]);
@@ -408,7 +409,7 @@ test("the original layer holds its last frame past its end", () => {
 
 test("each crossfade layer is painted from its own counts", () => {
   const { context, registry } = editedRun();
-  context.navigateToFrame(6);
+  context.generatorEdit.navigate(6);
   context.generatorCanvas.setOverlayMode("revisions");
   registry.get("output-area").children = [];
   context.generatorCanvas.renderFrame(6);
@@ -567,10 +568,11 @@ test("a flash that ends leaves the queue", () => {
 test("a resume's remasked position is born live, not revised", () => {
   const page = finishedRun(REVISING);
   const { context } = page;
-  context.remaskEdits = [{ frame_index: 4, token_positions: [2] }];
-  context.truncateRunArraysAt(4);
+  context.generatorEdit.restoreArtifacts({
+    remaskEdits: [{ frame_index: 4, token_positions: [2] }],
+  });
+  context.generatorRun.truncate(4);
   context.generatorCanvas.invalidate();
-  context.isResuming = true;
 
   context.handleFrame(frameOf(BRANCH[0], 0, BRANCH.length));
   context.handleFrame(frameOf(BRANCH[1], 1, BRANCH.length));
@@ -603,8 +605,10 @@ test("a rebuilt fold still starts a remasked position over", () => {
   // Position 2 is remasked at frame 4 and has not settled again when
   // the fold is dropped, so the rebuild has to apply the edit itself.
   const { context } = finishedRun(REVISING);
-  context.remaskEdits = [{ frame_index: 4, token_positions: [2] }];
-  context.truncateRunArraysAt(4);
+  context.generatorEdit.restoreArtifacts({
+    remaskEdits: [{ frame_index: 4, token_positions: [2] }],
+  });
+  context.generatorRun.truncate(4);
   context.generatorCanvas.invalidate();
   context.handleFrame(frameOf(BRANCH[0], 0, BRANCH.length));
 

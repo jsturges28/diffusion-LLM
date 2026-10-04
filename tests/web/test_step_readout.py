@@ -38,6 +38,7 @@ STATIC = (
     Path(__file__).resolve().parents[2] / "src" / "web" / "static"
 )
 APP_JS = STATIC / "app.js"
+EDIT_JS = STATIC / "generator_edit.js"
 SNAPSHOT_JS = STATIC / "run_snapshot.js"
 RUN_JS = STATIC / "generator_run.js"
 
@@ -63,6 +64,16 @@ def _region(anchor: str, chars: int) -> str:
     assert start != -1, (
         f"anchor {anchor!r} is gone from app.js; update this test"
         " rather than deleting it"
+    )
+    return source[start : start + chars]
+
+
+def _edit_region(anchor: str, chars: int) -> str:
+    source = EDIT_JS.read_text(encoding="utf-8")
+    start = source.find(anchor)
+    assert start != -1, (
+        f"anchor {anchor!r} is gone from generator_edit.js;"
+        " update this test rather than deleting it"
     )
     return source[start : start + chars]
 
@@ -112,18 +123,20 @@ def test_both_frame_shapes_reach_the_live_path() -> None:
 
 
 def test_the_scrubber_uses_it() -> None:
-    body = _region("function renderScrubStepReadout(index)", 700)
+    body = _region(
+        "function generatorEditRenderFrameReadout(state)", 700
+    )
 
     assert "generatorChrome.setStep(" in body
     assert "stepReadout(" in body
-    assert "generatorRun.frameCanvas(index)" in body
+    assert "state.canvasIndex" in body
 
 
 def test_navigating_repaints_the_readout() -> None:
     """The whole bug: this call did not exist."""
-    body = _region("function navigateToFrame(index)", 900)
+    body = _edit_region("function navigate(index)", 1200)
 
-    assert "renderScrubStepReadout(index)" in body
+    assert "renderFrameReadout({" in body
 
 
 def test_nothing_else_formats_the_reading() -> None:
@@ -163,7 +176,7 @@ def test_a_resume_does_not_claim_the_run_total() -> None:
     scrubber counting the whole run.
     """
     body = _region("function updateLiveFrameStatus(data)", 900)
-    guarded = body.find("if (!isResuming) {")
+    guarded = body.find("if (!generatorEdit.resuming()) {")
     written = body.find("generatorRun.setTotalSteps(frameSteps);")
 
     assert guarded != -1, "the run total is written unguarded"
@@ -184,9 +197,9 @@ def test_the_live_line_reads_the_frame_not_the_run() -> None:
 
 
 def test_the_scrubber_reads_the_run_not_the_frame() -> None:
-    body = _region("function renderScrubStepReadout(index)", 700)
+    body = _edit_region("function navigate(index)", 1200)
 
-    assert "generatorRun.totalSteps()" in body
+    assert "totalSteps: run.totalSteps()" in body
     assert "frameSteps" not in body
 
 
@@ -195,7 +208,7 @@ def test_substitution_counts_as_a_resume() -> None:
     not claim the run total either. For an autoregressive run the
     two numbers coincide, which would make this right by accident
     rather than on purpose."""
-    body = _region("function doSubstitute(", 1400)
+    body = _edit_region("function substitute(intent)", 1800)
 
     assert "isResuming = true;" in body
 

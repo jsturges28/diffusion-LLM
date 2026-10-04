@@ -63,6 +63,7 @@ const GENERATOR_SCRIPTS = [
   "generator_canvas.js",
   "generator_readouts.js",
   "generator_candidates.js",
+  "generator_edit.js",
   "app.js",
 ];
 

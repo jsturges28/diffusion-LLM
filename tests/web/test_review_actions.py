@@ -1,9 +1,9 @@
 """Confirm and Retry, and Continue on a branch that stopped, stay
 reachable while an edit is reviewed.
 
-Strategy: source inspection of `app.js`, the approach this repo uses
-for its classic-script pages, plus a reading of the two handlers to
-show that neither depends on where the scrubber is.
+Strategy: source inspection of `generator_edit.js`, plus a reading
+of the two handlers to show that neither depends on where the
+scrubber is.
 
 The behavior this replaced: the review phase revealed both buttons
 only on the last frame, and hid them again the moment you scrubbed
@@ -24,34 +24,35 @@ from __future__ import annotations
 
 from pathlib import Path
 
-APP_JS = (
+EDIT_JS = (
     Path(__file__).resolve().parents[2]
     / "src"
     / "web"
     / "static"
-    / "app.js"
+    / "generator_edit.js"
 )
 
 
 def _source() -> str:
-    return APP_JS.read_text(encoding="utf-8")
+    return EDIT_JS.read_text(encoding="utf-8")
 
 
 def _region(anchor: str, chars: int) -> str:
     source = _source()
     start = source.find(anchor)
     assert start != -1, (
-        f"anchor {anchor!r} is gone from app.js; update this test"
+        f"anchor {anchor!r} is gone from generator_edit.js;"
+        " update this test"
         " rather than deleting it"
     )
     return source[start : start + chars]
 
 
 def _review_case() -> str:
-    """The review branch of updateGuidedUI's phase switch."""
-    body = _region('case "review":', 1500)
-    end = body.find("break;")
-    assert end != -1, "the review case lost its break"
+    """The controller's review renderer."""
+    body = _region("function renderReviewPhase()", 1400)
+    end = body.find("function selectFrame()")
+    assert end != -1, "the review renderer lost its boundary"
     return body[:end]
 
 
@@ -71,7 +72,7 @@ def test_neither_reveal_is_behind_the_frame_check() -> None:
     position is the only thing that distinguishes them."""
     body = _review_case()
     gate = body.find(
-        "currentScrubFrame === generatorRun.frameCount()"
+        "currentFrame === run.frameCount()"
     )
     confirm = body.find("btnConfirmEdit.hidden = false")
     retry = body.find("btnRetryEdit.hidden = false")
@@ -87,7 +88,7 @@ def test_continue_is_not_behind_the_frame_check_either() -> None:
     stopped branch only."""
     body = _review_case()
     gate = body.find(
-        "currentScrubFrame === generatorRun.frameCount()"
+        "currentFrame === run.frameCount()"
     )
     reveal = body.find(
         "btnContinueEdit.hidden = !reviewCanContinue()"
@@ -102,7 +103,7 @@ def test_the_status_line_still_names_the_frame() -> None:
     the text has to say where you are instead."""
     body = _review_case()
 
-    assert "currentScrubFrame" in body
+    assert "currentFrame" in body
     assert "Return to the last" not in body
 
 
@@ -112,11 +113,11 @@ def test_the_status_line_still_names_the_frame() -> None:
 def test_confirm_does_not_read_the_scrubber() -> None:
     """It saves the whole run and then moves the scrubber itself, so
     the frame you are looking at cannot change what is written."""
-    body = _region("function confirmGuidedEdit()", 200)
+    body = _region("function confirm()", 200)
 
-    assert "generatorRun.save()" in body
-    assert "activateScrubber()" in body
-    assert "currentScrubFrame" not in body
+    assert "requestSave()" in body
+    assert "activate()" in body
+    assert "currentFrame" not in body
 
 
 def test_confirm_lands_on_the_last_frame_by_itself() -> None:
@@ -124,17 +125,15 @@ def test_confirm_lands_on_the_last_frame_by_itself() -> None:
     confirming from frame 12 would leave the scrubber at 12 over a
     saved run, which is the failure mode a snap-first workaround was
     going to defend against."""
-    body = _region("function activateScrubber()", 300)
+    body = _region("function activate()", 500)
 
-    assert (
-        "currentScrubFrame = generatorRun.frameCount() - 1" in body
-    )
+    assert "currentFrame = run.frameCount() - 1" in body
 
 
 def test_retry_does_not_read_the_scrubber() -> None:
     """It restores the pre-edit arrays wholesale and re-enters the
     session, which navigates to the first editable frame."""
-    body = _region("function retryGuidedEdit()", 300)
+    body = _region("function retry()", 500)
 
-    assert "restoreEditSnapshot()" in body
-    assert "currentScrubFrame" not in body
+    assert "restorePreEditCheckpoint()" in body
+    assert "currentFrame" not in body

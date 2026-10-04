@@ -1,7 +1,7 @@
 """Nothing is written to disk unless the user asked for it.
 
-Strategy: source inspection of `app.js`, the approach this repo uses
-for its classic-script pages. What a save *does* is covered in
+Strategy: source inspection of `app.js` and `generator_edit.js`.
+What a save *does* is covered in
 `test_save_idempotence.py` and `test_run_store.py`; what cannot be
 checked there is how many places start one.
 
@@ -29,6 +29,7 @@ STATIC = (
     Path(__file__).resolve().parents[2] / "src" / "web" / "static"
 )
 APP_JS = STATIC / "app.js"
+EDIT_JS = STATIC / "generator_edit.js"
 RUN_JS = STATIC / "generator_run.js"
 INDEX_HTML = STATIC / "index.html"
 
@@ -43,6 +44,16 @@ def _region(anchor: str, chars: int) -> str:
     assert start != -1, (
         f"anchor {anchor!r} is gone from app.js; update this test"
         " rather than deleting it"
+    )
+    return source[start : start + chars]
+
+
+def _edit_region(anchor: str, chars: int) -> str:
+    source = EDIT_JS.read_text(encoding="utf-8")
+    start = source.find(anchor)
+    assert start != -1, (
+        f"anchor {anchor!r} is gone from generator_edit.js;"
+        " update this test rather than deleting it"
     )
     return source[start : start + chars]
 
@@ -75,8 +86,8 @@ def test_the_save_button_is_one_of_them() -> None:
 
 def test_confirming_an_edit_is_one_of_them() -> None:
     """Confirm is itself a save, so it is not an implicit one."""
-    assert "generatorRun.save()" in _region(
-        "function confirmGuidedEdit()", 400
+    assert "requestSave()" in _edit_region(
+        "function confirm()", 300
     )
 
 
@@ -92,23 +103,23 @@ def test_the_rescue_is_the_third() -> None:
 
 
 def test_opening_the_frame_editor_writes_nothing() -> None:
-    region = _region("function enterRemaskMode()", 900)
+    region = _edit_region("function enterFrames()", 700)
 
-    assert "saveRun" not in region
+    assert "requestSave" not in region
 
 
 def test_opening_what_if_writes_nothing() -> None:
-    region = _region("function enterSubstitutionMode()", 700)
+    region = _edit_region("function enterWhatIf()", 700)
 
-    assert "saveRun" not in region
+    assert "requestSave" not in region
 
 
 def test_retrying_an_edit_writes_nothing() -> None:
     """Retry restores the pre-edit run and starts again, which is
     entering a session, not finishing one."""
-    region = _region("function retryGuidedEdit()", 600)
+    region = _edit_region("function retry()", 600)
 
-    assert "saveRun" not in region
+    assert "requestSave" not in region
 
 
 def test_no_save_is_gated_on_the_run_being_unsaved() -> None:
