@@ -338,3 +338,85 @@ test("per-token values are looked for on the final frame", () => {
     assert.equal(api.overlaySeriesHasTokenValue(series, "f"), false);
   }
 });
+
+// -- what a run carries per token --
+
+test("a frame's entropy reads per position, with its tokens", () => {
+  const api = load();
+  const series = api.overlaySeriesOf(fixture(EDITED), false);
+
+  const early = api.overlaySeriesEntropyValues(series, 0);
+  const late = api.overlaySeriesEntropyValues(series, 3);
+
+  same(early.values, [0.2, 0.21, 0.22]);
+  same(late.values, [1.3, 1.31, 1.32]);
+  same(late.texts, ["\u00b7Yeast", "\u00b7ate", "\u00b7sugar"]);
+});
+
+test("with no frame named, entropy is read at the final one", () => {
+  const api = load();
+  const series = api.overlaySeriesOf(fixture(APPEND), false);
+
+  const values = api.overlaySeriesEntropyValues(series).values;
+
+  same(values, [1.2, 1.3, 1.4]);
+});
+
+test("a token without entropy reads as a gap", () => {
+  const api = load();
+  const data = varied(APPEND, (payload) => {
+    delete payload.positions[1].e;
+  });
+
+  const values = api.overlaySeriesEntropyValues(
+    api.overlaySeriesOf(data, false)
+  ).values;
+
+  same(values, [1.2, null, 1.4]);
+});
+
+test("a run carries entropy while any of its tokens does", () => {
+  const api = load();
+  const none = varied(APPEND, (payload) => {
+    for (const token of payload.positions) {
+      delete token.e;
+    }
+  });
+
+  assert.equal(
+    api.overlaySeriesCarriesEntropy(fixture(EDITED)), true
+  );
+  assert.equal(api.overlaySeriesCarriesEntropy(none), false);
+});
+
+// Forgetting as Mamba-3 records it: one value per position.
+function forgetting(payload) {
+  payload.positions.forEach((token, i) => {
+    token.f = 0.1 * (i + 1);
+  });
+}
+
+test("forgetting is carried only once tokens hold a value", () => {
+  const api = load();
+  const recorded = varied(APPEND, forgetting);
+
+  assert.equal(
+    api.overlaySeriesCarriesForgetting(fixture(APPEND)), false
+  );
+  assert.equal(api.overlaySeriesCarriesForgetting(recorded), true);
+});
+
+test("forgetting declared over frames is not carried", () => {
+  // One value per position is the only shape this page can draw, so
+  // a run declaring another has a channel nothing here reads.
+  const api = load();
+  const trajectory = varied(APPEND, (payload) => {
+    forgetting(payload);
+    payload.signals.push({
+      name: "forgetting", key: "f", location: "token_record",
+      axes: ["frame", "position"],
+    });
+  });
+
+  assert.equal(api.overlaySeriesCarriesForgetting(trajectory), false);
+});

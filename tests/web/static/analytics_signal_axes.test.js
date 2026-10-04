@@ -134,8 +134,8 @@ test("the values follow the frame, not just the index", () => {
   const data = run(["frame", "position"]);
   const series = context.overlaySeriesOf(data, false);
 
-  const early = context.entropySeriesFrom(series, 0);
-  const late = context.entropySeriesFrom(series, 2);
+  const early = context.overlaySeriesEntropyValues(series, 0);
+  const late = context.overlaySeriesEntropyValues(series, 2);
 
   assert.deepEqual(host(early.values), [0, 0]);
   assert.deepEqual(host(late.values), [2, 2]);
@@ -588,7 +588,7 @@ test("a DiffusionGemma run's entropy is found past commits", () => {
   assert.equal(
     context.overlaySeriesEntropyAvailability(payload), "ok"
   );
-  assert.equal(context.overlayEntropyAvailable(payload), true);
+  assert.equal(context.overlaySeriesCarriesEntropy(payload), true);
 });
 
 test("the picker offers its Entropy overlay", () => {

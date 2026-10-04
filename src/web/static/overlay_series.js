@@ -1,16 +1,16 @@
 // A saved run's frames and its signal manifest, read the same way
 // whichever shape the server sent them in.
 //
-// Loaded as a classic global script after overlays.js, whose commit
-// and entropy helpers it reads, and before analytics.js, and like the
-// other extracted modules it reaches for no page and no storage.
-// Everything here answers a question about a series or a payload it
-// is handed: how long a run is, what a frame holds, where it ends,
-// when each position settled, what the stopping track reads, which
-// frame a channel is read at, and whether entropy can be drawn. The
-// viewer state those questions are asked from, the open run, the
-// scrubbed frame and the memoized revisions, stays in analytics.js,
-// which passes in what is needed.
+// Loaded as a classic global script after overlays.js, whose
+// commit, entropy and token-display helpers it reads, and before
+// analytics.js, and like the other extracted modules it reaches for
+// no page and no storage. Everything here answers a question about a
+// series or a payload it is handed: how long a run is, what a frame
+// holds, where it ends, when each position settled, what the stopping
+// track reads, which frame a channel is read at, and whether entropy
+// or forgetting can be drawn. The viewer state those questions are
+// asked from, the open run, the scrubbed frame and the memoized
+// revisions, stays in analytics.js, which passes in what is needed.
 //
 // Its tests read payloads the frames endpoint really produced, kept
 // in tests/web/static/fixtures/, so a field the server stops sending
@@ -262,6 +262,11 @@ function overlaySeriesHasEntropy(series) {
   ) >= 0;
 }
 
+// Whether the saved run carries per-token entropy.
+function overlaySeriesCarriesEntropy(data) {
+  return overlaySeriesHasEntropy(overlaySeriesOf(data, false));
+}
+
 // The frame whose entropy describes frame `index` of a series, or -1
 // (see overlaysEntropyFrame), read through the series as the page
 // holds it.
@@ -274,6 +279,34 @@ function overlaySeriesEntropyFrame(series, index, canvasOf) {
     index,
     !!series.positions
   );
+}
+
+// Per-position entropy for one frame series, read off its final
+// frame: every position is sampled once in an autoregressive run, so
+// its entropy never changes after the frame that introduced it.
+// Mirrors the generator's entropyProfileValues. Runs over both the
+// open run and its pre-edit snapshot, which is why it takes frames
+// rather than the payload.
+// The values at one frame. `at` is which frame to read, which the
+// caller takes from the channel's declared axes: the final frame for
+// a per-position channel, the scrubbed one for a trajectory.
+function overlaySeriesEntropyValues(series, at) {
+  var index = typeof at === "number"
+    ? at
+    : overlaySeriesFinalIndex(series);
+  var final = overlaySeriesAt(series, index) || [];
+  var values = [];
+  var texts = [];
+  for (var i = 0; i < final.length; i++) {
+    var tok = final[i] || {};
+    values.push(
+      typeof tok.e === "number" ? +tok.e.toFixed(3) : null
+    );
+    texts.push(
+      typeof tok.t === "string" ? overlaysAltDisplay(tok.t) : ""
+    );
+  }
+  return { values: values, texts: texts };
 }
 
 // Whether any token in the series' final frame carries a number under
@@ -289,6 +322,21 @@ function overlaySeriesHasTokenValue(series, key) {
     }
   }
   return false;
+}
+
+// Whether the saved run carries per-token forgetting to colour by.
+// The run's own manifest decides the shape when it has one, as it
+// does for entropy: forgetting is one value per position, and a run
+// declaring it any other way has a channel this page cannot draw. A
+// run saved without a manifest falls back to the data.
+function overlaySeriesCarriesForgetting(data) {
+  var channel = overlaySeriesChannel(data, "forgetting");
+  if (channel && overlaySeriesChannelShape(channel) !== "position") {
+    return false;
+  }
+  return overlaySeriesHasTokenValue(
+    overlaySeriesOf(data, false), "f"
+  );
 }
 
 // One canvas for the whole run, which is how the adapter asks

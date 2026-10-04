@@ -12,8 +12,8 @@ Passing proves the adapter loads after `overlays.js`, which it reads,
 and before the page that calls it; that it names no page, no page
 state and no storage, so a reader is handed everything it reads; and
 that `analytics.js` defines nothing that moved while no browser test
-or page line uses a former name of the manifest helpers or the stop
-source.
+or page line uses a former name of the manifest helpers, the stop
+source or the per-token readers.
 """
 
 from __future__ import annotations
@@ -56,17 +56,20 @@ MOVED = (
     "overlaySeriesRevisions",
     "overlaySeriesStopSource",
     "overlaySeriesEntropyFrame",
+    "overlaySeriesEntropyValues",
     "overlaySeriesChannelShape",
     "overlaySeriesChannel",
     "overlaySeriesChannelFrame",
     "overlaySeriesEntropyAvailability",
     "overlaySeriesHasEntropy",
+    "overlaySeriesCarriesEntropy",
     "overlaySeriesHasTokenValue",
+    "overlaySeriesCarriesForgetting",
     "overlaySeriesSingleCanvas",
 )
 
-# What the manifest helpers and the stop source were called before
-# they took the adapter's prefix.
+# What the manifest helpers, the stop source and the per-token
+# readers were called before they took the adapter's prefix.
 FORMER_NAMES = (
     "ENTROPY_SHAPES",
     "channelShape",
@@ -76,6 +79,9 @@ FORMER_NAMES = (
     "framesHaveEntropy",
     "framesHaveTokenValue",
     "stopSourceOf",
+    "entropySeriesFrom",
+    "overlayEntropyAvailable",
+    "overlayForgettingAvailable",
 )
 
 

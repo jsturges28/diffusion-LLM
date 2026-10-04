@@ -87,7 +87,7 @@ function readAll(context, payload) {
     finalIndex: context.overlaySeriesFinalIndex(series),
     final: context.overlaySeriesFinal(series),
     hasEntropy: context.overlaySeriesHasEntropy(series),
-    entropy: context.entropySeriesFrom(series),
+    entropy: context.overlaySeriesEntropyValues(series),
     commitSteps: context.overlaySeriesCommitSteps(series),
   };
 }

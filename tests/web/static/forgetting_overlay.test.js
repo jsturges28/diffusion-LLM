@@ -377,7 +377,9 @@ test("Analytics offers it for a run that declared it", () => {
   const context = analytics();
 
   assert.equal(
-    context.overlayForgettingAvailable(savedRun([FORGETTING], true)),
+    context.overlaySeriesCarriesForgetting(
+      savedRun([FORGETTING], true)
+    ),
     true
   );
 });
@@ -386,7 +388,9 @@ test("Analytics offers nothing for a run without the value", () => {
   const context = analytics();
 
   assert.equal(
-    context.overlayForgettingAvailable(savedRun([FORGETTING], false)),
+    context.overlaySeriesCarriesForgetting(
+      savedRun([FORGETTING], false)
+    ),
     false
   );
 });
@@ -396,7 +400,7 @@ test("Analytics refuses a declaration it cannot draw", () => {
   const canvas = Object.assign({}, FORGETTING, { axes: ["canvas"] });
 
   assert.equal(
-    context.overlayForgettingAvailable(savedRun([canvas], true)),
+    context.overlaySeriesCarriesForgetting(savedRun([canvas], true)),
     false
   );
 });
@@ -407,7 +411,7 @@ test("Analytics reads a run saved without a manifest by its data", () => {
   const context = analytics();
 
   assert.equal(
-    context.overlayForgettingAvailable(savedRun(undefined, true)),
+    context.overlaySeriesCarriesForgetting(savedRun(undefined, true)),
     true
   );
 });

@@ -2734,26 +2734,6 @@ function overlayRevisionsAvailable() {
   return overlaysHasRevisions(overlayRevisionsFor(false));
 }
 
-// Whether the saved run carries per-token entropy.
-function overlayEntropyAvailable(data) {
-  return overlaySeriesHasEntropy(overlaySeriesOf(data, false));
-}
-
-// Whether the saved run carries per-token forgetting to colour by.
-// The run's own manifest decides the shape when it has one, as it
-// does for entropy: forgetting is one value per position, and a run
-// declaring it any other way has a channel this page cannot draw. A
-// run saved without a manifest falls back to the data.
-function overlayForgettingAvailable(data) {
-  var channel = overlaySeriesChannel(data, "forgetting");
-  if (channel && overlaySeriesChannelShape(channel) !== "position") {
-    return false;
-  }
-  return overlaySeriesHasTokenValue(
-    overlaySeriesOf(data, false), "f"
-  );
-}
-
 // Per-position candidate sets for the open run, or an empty list.
 function overlayAlternatives() {
   if (!overlayData || !overlayData.alternatives) {
@@ -3288,12 +3268,12 @@ function buildOverlaySelect(data) {
   // Entropy is gated on the saved data, not the model type: it shows
   // how undecided the model was over the whole vocabulary, which is a
   // different question than the confidence Heatmap answers.
-  if (overlayEntropyAvailable(data)) {
+  if (overlaySeriesCarriesEntropy(data)) {
     options.push({ value: "entropy", label: "Entropy" });
   }
   // What reading each token erased from a state-space model's state,
   // for the runs that recorded it.
-  if (overlayForgettingAvailable(data)) {
+  if (overlaySeriesCarriesForgetting(data)) {
     options.push({ value: "forgetting", label: "Forgetting" });
   }
   // Commit Order tints by resolution step, which a left-to-right run
@@ -4259,34 +4239,6 @@ function showEntropyUnavailable(data) {
   notice.hidden = false;
 }
 
-// Per-position entropy for one frame series, read off its final
-// frame: every position is sampled once in an autoregressive run, so
-// its entropy never changes after the frame that introduced it.
-// Mirrors the generator's entropyProfileValues. Runs over both the
-// open run and its pre-edit snapshot, which is why it takes frames
-// rather than the payload.
-// The values at one frame. `at` is which frame to read, which the
-// caller takes from the channel's declared axes: the final frame for a
-// per-position channel, the scrubbed one for a trajectory.
-function entropySeriesFrom(series, at) {
-  var index = typeof at === "number"
-    ? at
-    : overlaySeriesFinalIndex(series);
-  var final = overlaySeriesAt(series, index) || [];
-  var values = [];
-  var texts = [];
-  for (var i = 0; i < final.length; i++) {
-    var tok = final[i] || {};
-    values.push(
-      typeof tok.e === "number" ? +tok.e.toFixed(3) : null
-    );
-    texts.push(
-      typeof tok.t === "string" ? overlaysAltDisplay(tok.t) : ""
-    );
-  }
-  return { values: values, texts: texts };
-}
-
 // Every position touched by a saved edit. For an autoregressive What
 // If branch that is the single substituted position; for a diffusion
 // run it is the remasked set, so the marker generalizes.
@@ -4488,7 +4440,9 @@ function entropyLayerAt(series, channel, canvasOf) {
     channel, series, overlayFrameIndex
   );
   var source = overlaySeriesEntropyFrame(series, at, canvasOf);
-  var layer = entropySeriesFrom(series, source < 0 ? at : source);
+  var layer = overlaySeriesEntropyValues(
+    series, source < 0 ? at : source
+  );
   layer.asOfStep = source >= 0 && source !== at ? source : null;
   return layer;
 }
