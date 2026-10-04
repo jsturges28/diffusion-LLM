@@ -242,6 +242,8 @@ var guidedEditStatus =
   document.getElementById("guided-edit-status");
 var btnSelectFrame =
   document.getElementById("btn-select-frame");
+var btnBackFrame =
+  document.getElementById("btn-back-frame");
 var btnLockIn =
   document.getElementById("btn-lock-in");
 var btnClearGuided =
@@ -7045,6 +7047,7 @@ function setSavingControls(saving) {
   btnEditFrames.disabled = disabled;
   // Guided-edit action buttons (visible only mid edit session) freeze
   // too, so the dimmed slider matches the Confirm-checkmark behavior.
+  btnBackFrame.disabled = disabled;
   btnLockIn.disabled = disabled;
   btnClearGuided.disabled = disabled;
   btnEditAnother.disabled = disabled;
@@ -7268,6 +7271,7 @@ function updateGuidedUI() {
   // right-anchored, so the text never shifts as buttons change.
   btnSelectFrame.hidden = true;
   btnSelectFrame.disabled = false;
+  btnBackFrame.hidden = true;
   btnLockIn.hidden = true;
   btnClearGuided.hidden = true;
   btnEditAnother.hidden = true;
@@ -7310,6 +7314,7 @@ function updateGuidedUI() {
         "Frame " + currentScrubFrame
         + ": click tokens to remask ("
         + count + " selected)." + renoiseNote();
+      btnBackFrame.hidden = false;
       btnLockIn.hidden = false;
       btnLockIn.disabled = count === 0;
       btnClearGuided.hidden = false;
@@ -7400,6 +7405,16 @@ function selectCurrentFrame() {
   runPhasesEnter(runPhase, RUN_PHASE_EDIT);
   renderFrameWithTokens(currentScrubFrame);
   updateGuidedUI();
+}
+
+// Back from choosing tokens to choosing a frame. Nothing on this
+// frame was locked in, so its selection goes, as Clear would drop
+// it; the session's earlier steps and its forward-only floor stay.
+function backToFrameSelection() {
+  remaskedPositions = {};
+  delete perFrameRemasked[currentScrubFrame];
+  runPhasesEnter(runPhase, RUN_PHASE_SELECT);
+  navigateToFrame(currentScrubFrame);
 }
 
 function lockInEdits() {
@@ -9108,6 +9123,10 @@ if (btnWhatIf) {
 
 btnSelectFrame.addEventListener(
   "click", selectCurrentFrame
+);
+
+btnBackFrame.addEventListener(
+  "click", backToFrameSelection
 );
 
 btnLockIn.addEventListener("click", function () {

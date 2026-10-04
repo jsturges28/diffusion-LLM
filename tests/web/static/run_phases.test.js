@@ -92,6 +92,17 @@ test("editing another frame loops back to edit", () => {
   assert.equal(phase.mode, "edit");
 });
 
+test("Back from the tokens returns to choosing a frame", () => {
+  // Select a frame, think better of it, choose another and lock that
+  // one in. Nothing is lost, because nothing was locked in yet.
+  const api = load();
+  const phase = api.runPhasesCreate();
+
+  walk(api, phase, ["select", "edit", "select", "edit", "choice"]);
+
+  assert.equal(phase.mode, "choice");
+});
+
 test("a resume stopped before a frame goes back to choice", () => {
   // Resume to End, stopped before the branch sent anything. The
   // worker keeps the run it had, so the page goes back to where the

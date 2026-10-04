@@ -50,7 +50,8 @@ var RUN_PHASE_REVIEW = "review";
 var RUN_PHASE_TRANSITIONS = {
   "": [RUN_PHASE_SELECT, RUN_PHASE_SUBSTITUTE],
   select: [RUN_PHASE_EDIT],
-  edit: [RUN_PHASE_CHOICE],
+  // Lock In, or Back to choose a different frame.
+  edit: [RUN_PHASE_CHOICE, RUN_PHASE_SELECT],
   choice: [RUN_PHASE_SELECT_TARGET, RUN_PHASE_GENERATING],
   select_target: [RUN_PHASE_GENERATING],
   substitute: [RUN_PHASE_GENERATING],
