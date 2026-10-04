@@ -9,10 +9,10 @@ which had no test at all and is where the token can quietly go wrong.
 
 What passing proves is that one variable stays in step with the run it
 names, across the four things that can move it: a terminal frame
-brings a new one, four stateful requests must quote it, a reload must
-carry it, and a fresh run must retire it. Miss the last and a token
-outlives the state it describes, which is the exact shape of the bug
-`ORG-02` exists to prevent and which this file was written after
+brings a new one, the five stateful requests must quote it, a reload
+must carry it, and a fresh run must retire it. Miss the last and a
+token outlives the state it describes, which is the exact shape of the
+bug `ORG-02` exists to prevent and which this file was written after
 finding.
 """
 
@@ -68,8 +68,9 @@ def test_only_a_string_is_adopted() -> None:
 
 
 def test_every_stateful_request_quotes_it() -> None:
-    """Resume, substitution, probe and rewind are the four the worker
-    checks before it reads or writes retained state. A fifth arriving
+    """Resume, substitution, probe and rewind are the kinds the worker
+    checks before it reads or writes retained state, and a resume is
+    sent twice, as an edit and as a Continue. A request arriving
     without this is the regression to catch.
 
     Rewind joined them when abandoning an edit session turned out to
@@ -77,24 +78,30 @@ def test_every_stateful_request_quotes_it() -> None:
     """
     source = _source()
 
-    assert source.count("run_token: activeRunToken") == 4
+    assert source.count("run_token: activeRunToken") == 5
 
 
-def test_the_four_are_the_ones_we_think() -> None:
+def test_the_five_are_the_ones_we_think() -> None:
     """Counting alone would pass if one moved to the wrong request."""
     source = _source()
 
-    requests = (
-        '"probe"',
-        '"substitute"',
-        '"resume"',
-        '"rewind"',
-    )
-    for request in requests:
-        start = source.find("type: " + request)
-        assert start != -1, request
-        sent = source[start : start + 400]
-        assert "run_token: activeRunToken" in sent, request
+    requests = {
+        '"probe"': 1,
+        '"substitute"': 1,
+        '"resume"': 2,
+        '"rewind"': 1,
+    }
+    for request, count in requests.items():
+        starts = [
+            match.start()
+            for match in re.finditer(
+                re.escape("type: " + request), source
+            )
+        ]
+        assert len(starts) == count, request
+        for start in starts:
+            sent = source[start : start + 400]
+            assert "run_token: activeRunToken" in sent, request
 
 
 # -- where it survives --

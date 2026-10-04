@@ -65,9 +65,10 @@ var RUN_PHASE_TRANSITIONS = {
     RUN_PHASE_CHOICE,
     RUN_PHASE_SELECT_TARGET,
   ],
-  // Only by reset, which Confirm does after saving and Retry does
-  // before starting the session again.
-  review: [],
+  // Back to generating only for Continue, on a branch that stopped.
+  // Otherwise only by reset, which Confirm does after saving and
+  // Retry does before starting the session again.
+  review: [RUN_PHASE_GENERATING],
 };
 
 // `null` is the idle phase and cannot be an object key, so the table

@@ -260,6 +260,9 @@ var btnRetryEdit =
   document.getElementById("btn-retry-edit");
 // The markup's own tooltip, put back when a lock on Retry lifts.
 var RETRY_EDIT_TITLE = btnRetryEdit.title;
+var btnContinueEdit =
+  document.getElementById("btn-continue-edit");
+var CONTINUE_EDIT_TITLE = btnContinueEdit.title;
 var btnExitEdit =
   document.getElementById("btn-exit-edit");
 var remaskRandomizeRow =
@@ -6414,7 +6417,7 @@ function runIsMultiCanvas() {
 function updateEditFramesLock() {
   // A run the worker cannot answer for is locked whatever else holds,
   // and with its own reason, since that is the one that applies.
-  // Retry locks too: it would start the edit again on that worker.
+  // Retry and Continue lock too: each would run on that worker.
   var blocked = runEditBlock();
   if (blocked) {
     setButtonLocked(btnEditFrames, blocked);
@@ -6422,9 +6425,11 @@ function updateEditFramesLock() {
       setButtonLocked(btnWhatIf, blocked);
     }
     setButtonLocked(btnRetryEdit, blocked);
+    setButtonLocked(btnContinueEdit, blocked);
     return;
   }
   setButtonUnlocked(btnRetryEdit, RETRY_EDIT_TITLE);
+  setButtonUnlocked(btnContinueEdit, CONTINUE_EDIT_TITLE);
   // An edited save in flight locks too, not just a completed one:
   // confirmGuidedEdit fires the save and re-shows the buttons before
   // its async handler can set editedRunSaved, which would otherwise
@@ -7055,6 +7060,7 @@ function setSavingControls(saving) {
   btnResumeEnd.disabled = disabled;
   btnConfirmEdit.disabled = disabled;
   btnRetryEdit.disabled = disabled;
+  btnContinueEdit.disabled = disabled;
   btnExitEdit.disabled = disabled;
   // Dim the whole scrubber row and surface a tooltip on hover. The
   // title lives on the (non-disabled) container because native
@@ -7279,6 +7285,7 @@ function updateGuidedUI() {
   btnResumeEnd.hidden = true;
   btnConfirmEdit.hidden = true;
   btnRetryEdit.hidden = true;
+  btnContinueEdit.hidden = true;
   if (remaskRandomizeRow) {
     remaskRandomizeRow.hidden = true;
   }
@@ -7380,15 +7387,15 @@ function updateGuidedUI() {
       // only made scrubbing back look like it had cancelled the edit.
       btnConfirmEdit.hidden = false;
       btnRetryEdit.hidden = false;
+      btnContinueEdit.hidden = !reviewCanContinue();
       if (currentScrubFrame === runFramesLength(runFrames) - 1) {
         guidedEditStatus.textContent =
-          "Edit complete. Confirm to save, or"
-          + " retry from the start.";
+          reviewEndText(currentScrubFrame);
       } else {
         guidedEditStatus.textContent =
-          "Reviewing frame " + currentScrubFrame
-          + " of the edited run. Confirm to save, or"
-          + " retry from the start.";
+          "Reviewing frame " + currentScrubFrame + " of the "
+          + (runInterrupted ? "stopped edit" : "edited run")
+          + ". " + reviewChoices();
       }
       break;
   }
@@ -7497,11 +7504,14 @@ function doGuidedResume(action) {
 // back to the edited frame, where Confirm would save the run that
 // way. Only a Stop is answered this way: a connection lost before
 // the first frame is still handled by enterInterruptedState, which
-// drops the copy.
+// drops the copy. Review sends one too, for Continue.
 function captureResumeCut(cutAt) {
   var mode = runPhase.mode;
-  if (mode !== RUN_PHASE_CHOICE && mode !== RUN_PHASE_SELECT_TARGET) {
-    throw new Error("a resume is sent from choice or a target");
+  var sender = mode === RUN_PHASE_CHOICE
+    || mode === RUN_PHASE_SELECT_TARGET
+    || mode === RUN_PHASE_REVIEW;
+  if (!sender) {
+    throw new Error("a resume is sent from choice, target or review");
   }
   var perFrame = {};
   var keys = Object.keys(perFrameRemasked);
@@ -7554,8 +7564,10 @@ function landBeforeResume(saved) {
   runPhase.targetFrame = null;
   if (saved.mode === RUN_PHASE_CHOICE) {
     runPhasesEnter(runPhase, RUN_PHASE_CHOICE);
-  } else {
+  } else if (saved.mode === RUN_PHASE_SELECT_TARGET) {
     runPhasesEnter(runPhase, RUN_PHASE_SELECT_TARGET);
+  } else {
+    runPhasesEnter(runPhase, RUN_PHASE_REVIEW);
   }
   scrubberMinFrame = saved.minFrame;
   remaskedPositions = saved.remasked;
@@ -7657,6 +7669,73 @@ function retryGuidedEdit() {
   } else {
     beginEditSession();
   }
+}
+
+// Whether review offers Continue: only on a branch that stopped, of
+// a model whose worker keeps the frames the page received and can
+// resume from them. A stopped What If branch is not one, since its
+// worker keeps no branch, and a finished branch has nothing left.
+function reviewCanContinue() {
+  return runInterrupted && !!(
+    activeModel
+    && activeModel.capabilities
+    && activeModel.capabilities.supports_resume
+  );
+}
+
+// Review's status line at the branch's last frame: where it stopped,
+// or that it finished.
+function reviewEndText(frame) {
+  if (runInterrupted) {
+    return "Stopped at frame " + frame + ". " + reviewChoices();
+  }
+  return "Edit complete. " + reviewChoices();
+}
+
+// What review offers, in the words of its status line.
+function reviewChoices() {
+  if (reviewCanContinue()) {
+    return "Continue, confirm to save it as it is, or retry"
+      + " from the start.";
+  }
+  if (runInterrupted) {
+    return "Confirm to save it as it is, or retry from the start.";
+  }
+  return "Confirm to save, or retry from the start.";
+}
+
+// Carry a stopped branch on from its last frame. No edit is
+// recorded: the request remasks nothing, flagged as a continue
+// (RESUME_CONTINUE in protocol.py), and the worker re-enters that
+// frame as it was. It ends in review, as Resume to End does.
+function continueGuidedEdit() {
+  if (!reviewCanContinue()) {
+    return;
+  }
+  if (editRequestRefused()) {
+    return;
+  }
+  var from = runFramesLength(runFrames) - 1;
+  pendingResume = captureResumeCut(from);
+  truncateRunArraysAt(from);
+  invalidateRunMemos();
+  isResuming = true;
+  runPhase.guidedAction = "end";
+  runPhasesEnter(runPhase, RUN_PHASE_GENERATING);
+  updateGuidedUI();
+
+  setSaveAvailable(false);
+  resetStatus();
+  setGenerating(true);
+  startRunStatus(editRunLabel(from, null));
+
+  ws.send(JSON.stringify({
+    type: "resume",
+    frame_index: from,
+    remask_positions: [],
+    "continue": true,
+    run_token: activeRunToken,
+  }));
 }
 
 // ---- UI state helpers ----
@@ -9226,6 +9305,10 @@ btnConfirmEdit.addEventListener(
 
 btnRetryEdit.addEventListener(
   "click", retryGuidedEdit
+);
+
+btnContinueEdit.addEventListener(
+  "click", continueGuidedEdit
 );
 
 btnExitEdit.addEventListener(

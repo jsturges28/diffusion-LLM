@@ -158,6 +158,23 @@ test("retry leaves review and starts the session again", () => {
   assert.equal(phase.mode, "substitute");
 });
 
+test("Continue takes a stopped review back to generating", () => {
+  // A Resume to End the user stopped, carried on from its last
+  // frame, and landing in review again when it ends.
+  const api = load();
+  const phase = api.runPhasesCreate();
+  walk(api, phase, ["select", "edit", "choice", "generating"]);
+  phase.guidedAction = null;
+  api.runPhasesEnter(phase, "review");
+
+  phase.guidedAction = "end";
+  api.runPhasesEnter(phase, "generating");
+  phase.guidedAction = null;
+  api.runPhasesEnter(phase, "review");
+
+  assert.equal(phase.mode, "review");
+});
+
 test("confirm leaves review for idle", () => {
   const api = load();
   const phase = api.runPhasesCreate();
@@ -209,15 +226,19 @@ test("review cannot be reached from a locked edit", () => {
   );
 });
 
-test("review is a dead end without a reset", () => {
+test("review leads only to generating", () => {
+  // For Continue. Everything else leaves review by a reset.
   const api = load();
   const phase = api.runPhasesCreate();
   walk(api, phase, ["substitute", "generating", "review"]);
 
-  assert.throws(
-    () => api.runPhasesEnter(phase, "select"),
-    /review -> select/
-  );
+  for (const next of ["select", "edit", "choice", "substitute"]) {
+    assert.throws(
+      () => api.runPhasesEnter(phase, next),
+      new RegExp("review -> " + next),
+      next
+    );
+  }
 });
 
 test("a diffusion session cannot become a substitution", () => {

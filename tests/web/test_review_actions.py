@@ -1,4 +1,5 @@
-"""Confirm and Retry stay reachable while an edit is reviewed.
+"""Confirm and Retry, and Continue on a branch that stopped, stay
+reachable while an edit is reviewed.
 
 Strategy: source inspection of `app.js`, the approach this repo uses
 for its classic-script pages, plus a reading of the two handlers to
@@ -13,9 +14,10 @@ is the point of the review phase, and it looked like it had cancelled
 the edit.
 
 Passing proves both buttons are revealed unconditionally in review,
-that the status line still tells you which frame you are on, and that
-the two actions are genuinely independent of the scrubber, which is
-what makes revealing them safe rather than merely convenient.
+and Continue on a stopped branch from any frame too, that the status
+line still tells you which frame you are on, and that the two
+actions are genuinely independent of the scrubber, which is what
+makes revealing them safe rather than merely convenient.
 """
 
 from __future__ import annotations
@@ -75,6 +77,20 @@ def test_neither_reveal_is_behind_the_frame_check() -> None:
     assert gate != -1, "the status line still needs the frame check"
     assert confirm < gate
     assert retry < gate
+
+
+def test_continue_is_not_behind_the_frame_check_either() -> None:
+    """Continue carries the branch on from its last frame whatever
+    frame is on screen, so it is revealed with the other two, for a
+    stopped branch only."""
+    body = _review_case()
+    gate = body.find("currentScrubFrame === runFramesLength(")
+    reveal = body.find(
+        "btnContinueEdit.hidden = !reviewCanContinue()"
+    )
+
+    assert reveal != -1, "review no longer reveals Continue"
+    assert reveal < gate
 
 
 def test_the_status_line_still_names_the_frame() -> None:

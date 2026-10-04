@@ -71,9 +71,9 @@ def test_every_move_names_a_constant() -> None:
     source = _app()
     calls = re.findall(r"runPhasesEnter\(runPhase, ([^)]+)\)", source)
 
-    # Two of them put a resume stopped before its first frame back
-    # in the phase it was sent from, and one is Back.
-    assert len(calls) == 12
+    # Three put a resume stopped before its first frame back in the
+    # phase it was sent from, one is Back and one is Continue.
+    assert len(calls) == 14
     for target in calls:
         assert target.startswith("RUN_PHASE_"), target
 

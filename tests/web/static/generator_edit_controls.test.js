@@ -1,4 +1,4 @@
-// The edit session's Back control.
+// The edit session's Back and Continue controls.
 //
 // Strategy: load the generator page into the DOM stub with the socket
 // the page opens for itself, finish a DiffusionGemma-shaped run of
@@ -14,6 +14,15 @@
 // selection dropped and the scrubber free, that the next frame chosen
 // is the one locked in, and that after a Run to Here it keeps the
 // edit before it and the forward-only floor that edit set.
+//
+// Continue sits in review beside Confirm and Retry when the branch
+// was stopped, which used to leave only saving it short or throwing
+// it away. Passing proves it is offered for a stopped diffusion
+// branch and nowhere else, that review says the branch stopped, that
+// it asks the worker to carry the branch on from its last frame
+// without recording an edit, that the carried-on branch lands in
+// review, that one stopped before its first frame changes nothing,
+// and that it locks with Retry once the run's worker is gone.
 //
 // Run with: node --test tests/web/static/
 
@@ -57,7 +66,26 @@ const MODELS = {
   gpu_name: "NVIDIA GeForce RTX 4090",
 };
 
+const SMOL = {
+  id: "smollm3",
+  display_name: "SmolLM3-3B",
+  min_vram_gib: 6,
+  capabilities: {
+    family: "autoregressive",
+    generation_shape: "append_only",
+    input_mode: "chat",
+    supports_resume: false,
+    supports_substitution: true,
+    supported_devices: ["cuda", "cpu"],
+  },
+  param_specs: [],
+  status: "active",
+};
+
 const TOKEN = "a3f9c1:1";
+
+const UNCHANGED =
+  "Stopped before the edit produced a frame. The run is unchanged.";
 
 // The run's four frames, settling one position at a time.
 const TEXTS = [
@@ -67,10 +95,19 @@ const TEXTS = [
   "abc",
 ];
 
-function quietFetch() {
+function modelsFor(model) {
+  return Object.assign({}, MODELS, {
+    models: [model],
+    active: model.id,
+    active_tokenizer: { name: model.id },
+    default: model.id,
+  });
+}
+
+function quietFetch(models) {
   return function (url) {
     const path = String(url).split("?")[0];
-    const body = path.startsWith("/api/models") ? MODELS : {};
+    const body = path.startsWith("/api/models") ? models : {};
     return Promise.resolve({
       ok: true,
       status: 200,
@@ -103,22 +140,59 @@ function snapshotFrame(index, text) {
   };
 }
 
-// A page holding a finished four-frame run, and the socket it opened.
-// Two ticks, as in the other socket tests: the first drains connects
-// still pending from pages built earlier.
-async function finishedRun() {
+function appendFrame(index, word) {
+  return {
+    type: "frame",
+    shape: "append",
+    index: index,
+    total_steps: 4,
+    canvas_index: 0,
+    mean_conf: 0.5,
+    token: { t: word, m: false, id: 200 + index, c: 0.5 },
+    revealed: [index - 1],
+    elapsed: +(index * 0.1).toFixed(2),
+  };
+}
+
+// The frame a socket opens with, naming the worker it reaches.
+function resident(model, worker) {
+  return {
+    type: "resident",
+    model: model.id,
+    device: "cuda",
+    operation: 1,
+    worker: worker,
+  };
+}
+
+// A page running `model` with a generation under way, and the socket
+// it opened. Two ticks, as in the other socket tests: the first
+// drains connects still pending from pages built earlier. With
+// `worker`, the socket first says which worker it reaches.
+async function generating(model, worker) {
   await tick();
   const mark = FakeSocket.opened.length;
+  const models = modelsFor(model);
   const page = loadPage({
     WebSocket: OpenSocket,
-    fetchImpl: quietFetch(),
-    bootState: { ui_state: {}, models: MODELS },
+    fetchImpl: quietFetch(models),
+    bootState: { ui_state: {}, models: models },
   });
   await tick();
   assert.equal(FakeSocket.opened.length, mark + 1);
   const { context, registry } = page;
+  if (worker !== undefined) {
+    context.handleResident(resident(model, worker));
+  }
   registry.get("prompt-input").value = "explain yeast";
   context.startGeneration();
+  return { context, registry, socket: FakeSocket.opened[mark] };
+}
+
+// A page holding a finished four-frame run.
+async function finishedRun(worker) {
+  const run = await generating(DGEMMA, worker);
+  const { context } = run;
   for (let index = 0; index < TEXTS.length; index++) {
     context.handleFrame(snapshotFrame(index, TEXTS[index]));
   }
@@ -130,7 +204,7 @@ async function finishedRun() {
     run_token: TOKEN,
   });
   assert.equal(context.runFramesLength(context.runFrames), 4);
-  return { context, registry, socket: FakeSocket.opened[mark] };
+  return run;
 }
 
 // Edit Frames on `frame`, with one token selected and not locked in.
@@ -150,6 +224,48 @@ function press(run, id) {
 // A copy out of the page's realm, so it compares by value here.
 function host(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function resumesSent(socket) {
+  return socket.sent
+    .map((raw) => JSON.parse(raw))
+    .filter((message) => message.type === "resume");
+}
+
+function guidedStatus(run) {
+  return run.registry.get("guided-edit-status").textContent;
+}
+
+function continueHidden(run) {
+  return run.registry.get("btn-continue-edit").hidden;
+}
+
+// Resume to End from an edit on frame 2, stopped once the branch's
+// first frame is on screen: review, with three frames.
+function stoppedBranch(run) {
+  selectingAt(run, 2);
+  run.context.lockInEdits();
+  press(run, "btn-resume-end");
+  run.context.handleFrame(snapshotFrame(0, "a" + MASK + "c"));
+  run.context.handleDone({
+    type: "done",
+    final_text: "a" + MASK + "c",
+    thinking: "",
+    prompt_len: 12,
+    cancelled: true,
+    run_token: TOKEN,
+  });
+  assert.equal(run.context.runPhase.mode, "review");
+}
+
+function finishedDone(text) {
+  return {
+    type: "done",
+    final_text: text,
+    thinking: "",
+    prompt_len: 12,
+    run_token: TOKEN,
+  };
 }
 
 // -- Back --
@@ -212,4 +328,139 @@ test("Back after Run to Here keeps the edit before it", async () => {
   // The floor the earlier edit set: the frame after it.
   assert.equal(run.context.currentScrubFrame, 2);
   assert.equal(run.context.remaskEdits.length, 1);
+});
+
+// -- Continue --
+
+test("a stopped Resume to End offers Continue", async () => {
+  const run = await finishedRun();
+
+  stoppedBranch(run);
+
+  assert.equal(continueHidden(run), false);
+  assert.equal(
+    guidedStatus(run),
+    "Stopped at frame 2. Continue, confirm to save it as it is,"
+      + " or retry from the start."
+  );
+});
+
+test("a finished one offers only Confirm and Retry", async () => {
+  const run = await finishedRun();
+  selectingAt(run, 2);
+  run.context.lockInEdits();
+  press(run, "btn-resume-end");
+  run.context.handleFrame(snapshotFrame(0, "a" + MASK + "c"));
+  run.context.handleFrame(snapshotFrame(1, "abc"));
+
+  run.context.handleDone(finishedDone("abc"));
+
+  assert.equal(run.context.runPhase.mode, "review");
+  assert.equal(continueHidden(run), true);
+  assert.equal(
+    guidedStatus(run),
+    "Edit complete. Confirm to save, or retry from the start."
+  );
+});
+
+test("Continue carries the branch on without an edit", async () => {
+  const run = await finishedRun();
+  stoppedBranch(run);
+
+  press(run, "btn-continue-edit");
+
+  const sent = resumesSent(run.socket);
+  assert.equal(sent.length, 2);
+  assert.deepEqual(sent[1], {
+    type: "resume",
+    frame_index: 2,
+    remask_positions: [],
+    continue: true,
+    run_token: TOKEN,
+  });
+  assert.equal(run.context.remaskEdits.length, 1);
+  assert.equal(run.context.runPhase.mode, "generating");
+  assert.equal(run.context.runFramesLength(run.context.runFrames), 2);
+});
+
+test("and the branch it carries on lands in review", async () => {
+  const run = await finishedRun();
+  stoppedBranch(run);
+  press(run, "btn-continue-edit");
+  // The frame it continued from, as it was, then the rest.
+  run.context.handleFrame(snapshotFrame(0, "a" + MASK + "c"));
+  run.context.handleFrame(snapshotFrame(1, "abc"));
+
+  run.context.handleDone(finishedDone("abc"));
+
+  assert.equal(run.context.runPhase.mode, "review");
+  assert.equal(run.context.runFramesLength(run.context.runFrames), 4);
+  assert.equal(run.context.remaskEdits.length, 1);
+  assert.equal(continueHidden(run), true);
+});
+
+test("a Continue stopped at once changes nothing", async () => {
+  const run = await finishedRun();
+  stoppedBranch(run);
+  press(run, "btn-continue-edit");
+
+  run.context.handleDone({
+    type: "done",
+    final_text: "",
+    thinking: "",
+    prompt_len: 12,
+    cancelled: true,
+    run_token: TOKEN,
+  });
+
+  assert.equal(run.context.runPhase.mode, "review");
+  assert.equal(run.context.runFramesLength(run.context.runFrames), 3);
+  assert.equal(continueHidden(run), false);
+  assert.equal(
+    run.registry.get("status-message").textContent, UNCHANGED
+  );
+});
+
+test("Continue locks once the run's worker is replaced", async () => {
+  const run = await finishedRun("b0a7:1");
+  stoppedBranch(run);
+  const button = run.registry.get("btn-continue-edit");
+
+  run.context.handleResident(resident(DGEMMA, "b0a7:2"));
+  press(run, "btn-continue-edit");
+
+  assert.equal(button.classList.contains("is-locked"), true);
+  assert.equal(resumesSent(run.socket).length, 1);
+  assert.equal(run.context.runPhase.mode, "review");
+});
+
+test("a stopped What If branch offers no Continue", async () => {
+  // Its worker keeps no branch, so there is nothing to carry on.
+  const run = await generating(SMOL);
+  const { context } = run;
+  context.handleFrame(appendFrame(1, " Yeast"));
+  context.handleFrame(appendFrame(2, " eats"));
+  context.handleFrame(appendFrame(3, " sugar"));
+  context.handleDone(finishedDone(" Yeast eats sugar"));
+  context.runPhase.mode = "substitute";
+  context.runPhase.substituting = true;
+  context.doSubstitute(1, 7, null);
+  context.handleFrame(appendFrame(2, " ale"));
+
+  context.handleDone({
+    type: "done",
+    final_text: " Yeast ale",
+    thinking: "",
+    prompt_len: 12,
+    cancelled: true,
+    run_token: TOKEN,
+  });
+
+  assert.equal(context.runPhase.mode, "review");
+  assert.equal(continueHidden(run), true);
+  assert.equal(
+    guidedStatus(run),
+    "Stopped at frame 1. Confirm to save it as it is, or retry"
+      + " from the start."
+  );
 });

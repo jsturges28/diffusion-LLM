@@ -2556,8 +2556,9 @@ button {
   border-color: rgba(255, 159, 28, 0.5);
 }
 
-/* Confirm (green check) / Retry (blue counter-clockwise) shown at the
-   final frame after Resume to End. */
+/* Confirm (green check) / Retry (blue counter-clockwise) shown in
+   review after Resume to End, with Continue (amber play) beside them
+   when the branch was stopped. */
 .btn-guided-icon {
   font-size: 15px;
   line-height: 1;
@@ -2589,6 +2590,17 @@ button {
 .btn-retry-edit:hover {
   background: rgba(79, 195, 247, 0.28);
   border-color: rgba(79, 195, 247, 0.55);
+}
+
+.btn-continue-edit {
+  background: rgba(255, 159, 28, 0.16);
+  color: var(--warn);
+  border: 1px solid rgba(255, 159, 28, 0.35);
+}
+
+.btn-continue-edit:hover {
+  background: rgba(255, 159, 28, 0.28);
+  border-color: rgba(255, 159, 28, 0.55);
 }
 
 /* Edit Frames locked after an edited run is saved (until next run).
