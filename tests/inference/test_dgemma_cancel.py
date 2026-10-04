@@ -15,8 +15,10 @@ every denoising step.
 Passing proves a cancelled run unwinds ``generate`` within one
 denoising step rather than running to completion invisibly, that
 the unwinding is reported as a cancellation rather than an error,
-and that the run still reports the text it managed to produce
-instead of claiming it produced none.
+and that a stopped run reports the text the page received: every
+canvas it was sent, and nothing the generate thread drafted after
+the Stop. A run nobody stopped still reads its text off the
+sequences ``generate`` returned.
 """
 
 from __future__ import annotations
@@ -97,6 +99,40 @@ class _StubModel:
         return _canvas([1, 2, 3])
 
 
+def _settled(step: int) -> List[int]:
+    """A draft whose positions up to ``step`` hold still."""
+    ids: List[int] = []
+    for position in range(CANVAS_LENGTH):
+        if position <= step:
+            ids.append(10 + position)
+        else:
+            ids.append(50 + step)
+    return ids
+
+
+class _SettlingModel(_StubModel):
+    """A generate whose drafts settle one position at a time.
+
+    A position reads as decided once it holds still for a draft, so
+    each of the first frames reads differently, and a text taken
+    from the wrong frame cannot match the right one by luck.
+    """
+
+    def generate(
+        self,
+        *,
+        streamer: Any,
+        **kwargs: Any,
+    ) -> Any:
+        streamer.put(_canvas([0] * CANVAS_LENGTH))
+        for step in range(self.steps):
+            self.steps_run += 1
+            streamer.put_draft(value=_canvas(_settled(step)))
+        streamer.put(_canvas(_settled(CANVAS_LENGTH)))
+        streamer.end()
+        return _canvas([1, 2, 3])
+
+
 def test_the_streamer_raises_once_the_run_is_cancelled() -> None:
     out_queue = frame_queue_create()
     stop = threading.Event()
@@ -142,32 +178,6 @@ def test_a_streamer_without_a_stop_event_never_cancels() -> None:
     assert out_queue.qsize() == 1
 
 
-def test_the_streamer_keeps_the_text_it_last_built() -> None:
-    """A cancelled generate returns nothing, so this is the text."""
-    out_queue = frame_queue_create()
-    streamer = FrameQueueStreamer(
-        _StubTokenizer(),
-        DGEMMA_TEXT, out_queue
-    )
-    assert streamer.last_text == ""
-
-    # The first put is the prompt and is deliberately skipped, so
-    # it emits nothing and leaves the text empty.
-    streamer.put(_canvas([0] * CANVAS_LENGTH))
-    assert streamer.last_text == ""
-
-    streamer.put_draft(
-        value=_canvas([0, 1] + [0] * (CANVAS_LENGTH - 2))
-    )
-    first = streamer.last_text
-    assert first != ""
-
-    streamer.put_draft(
-        value=_canvas([2, 3] + [0] * (CANVAS_LENGTH - 2))
-    )
-    assert streamer.last_text != first
-
-
 def _drive(
     model: _StubModel,
     stop: Optional[threading.Event],
@@ -206,6 +216,15 @@ def _drive(
     return frames
 
 
+def _sent(frames: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The frames among what a run yielded, its terminal left out."""
+    found: List[Dict[str, Any]] = []
+    for frame in frames:
+        if frame["type"] == "frame":
+            found.append(frame)
+    return found
+
+
 def test_an_uncancelled_run_streams_every_step() -> None:
     model = _StubModel(steps=5)
     frames = _drive(model, threading.Event())
@@ -227,13 +246,62 @@ def test_a_cancel_stops_generate_rather_than_only_the_yield(
 
 def test_a_cancelled_run_reports_text_rather_than_an_error(
 ) -> None:
-    model = _StubModel(steps=200)
+    model = _SettlingModel(steps=200)
     frames = _drive(model, threading.Event(), cancel_after=2)
     terminal = frames[-1]
+    sent = _sent(frames)
+
     assert terminal["type"] == "done"
-    # generate returned nothing, so this came off the last canvas
-    # the streamer built rather than from decoded sequences.
+    assert terminal["cancelled"] is True
+    # The text of the last frame the page received. The generate
+    # thread had drafted past it before the Stop reached the queue,
+    # and what it drafted there the page never saw.
+    assert len(sent) == 2
+    assert terminal["final_text"] == sent[-1]["text"]
     assert terminal["final_text"] != ""
+
+
+def test_a_run_stopped_before_its_first_frame_reports_no_text(
+) -> None:
+    """Nothing reached the page, so there is no text to report. The
+    frame the thread built as the Stop landed was refused by the
+    queue, and reporting its text claimed a frame nobody saw."""
+    stop = threading.Event()
+    stop.set()
+    frames = _drive(_SettlingModel(steps=5), stop)
+    terminal = frames[-1]
+
+    assert _sent(frames) == []
+    assert terminal["cancelled"] is True
+    assert terminal["final_text"] == ""
+
+
+def test_a_stopped_run_keeps_every_canvas_it_sent() -> None:
+    """Each canvas's last frame, in order: the first canvas's
+    commit, then the second's draft as far as the page saw it. A
+    stop in the second canvas used to report that canvas alone."""
+    model = _StubModel(steps=2, canvases=3)
+    frames = _drive(model, threading.Event(), cancel_after=4)
+    sent = _sent(frames)
+
+    canvases = [frame["canvas_index"] for frame in sent]
+    assert canvases == [0, 0, 0, 1]
+    assert frames[-1]["final_text"] == (
+        sent[2]["text"] + sent[3]["text"]
+    )
+
+
+def test_a_finished_run_reports_its_decoded_output() -> None:
+    """The other half: a run nobody stopped reads its text off the
+    sequences generate returned, split into channels, as before."""
+    frames = _drive(_StubModel(steps=2), threading.Event())
+    terminal = frames[-1]
+    _, answer = DGEMMA_TEXT.split_channels(
+        _StubTokenizer().decode([1, 2, 3])
+    )
+
+    assert "cancelled" not in terminal
+    assert terminal["final_text"] == answer
 
 
 def test_a_genuine_failure_is_still_raised() -> None:

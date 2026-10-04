@@ -139,11 +139,6 @@ class FrameQueueStreamer(BaseStreamer):
         # never claimed cannot accumulate them.
         self._budget = budget
         self._checkpoints: Dict[int, FrameCheckpoint] = {}
-        # The most recent canvas as text, kept so a cancelled run
-        # can still report what it produced: ``generate`` returns
-        # nothing when it is unwound, and the alternative is a
-        # terminal frame claiming the run produced no text at all.
-        self.last_text = ""
         self._prev: Optional[List[int]] = None
         # Positions already reported as born on this canvas. Unlike
         # LLaDA, a draft token here can settle, change again, and
@@ -348,7 +343,6 @@ class FrameQueueStreamer(BaseStreamer):
         self._seen_revealed.update(born)
         self._prev = ids
         text = "".join(text_parts)
-        self.last_text = text
         # Recorded before the hand-off, never after. The consumer
         # runs on the event loop and can dequeue a frame the instant
         # it lands, so recording afterwards is a race the producer
@@ -546,6 +540,9 @@ async def _run_streamed(
     which is what a resume passes.
     """
     result: Dict[str, Any] = {}
+    # The text of the newest frame forwarded on each canvas, which
+    # is what a stopped run reports (see ``_terminal_frame``).
+    forwarded: Dict[int, str] = {}
 
     def run() -> None:
         try:
@@ -583,6 +580,7 @@ async def _run_streamed(
                     streamer.take_checkpoint(item["index"])
                 )
             streamer.offer_forwarded(item)
+            _note_forwarded(forwarded, item)
             yield item
     finally:
         await frame_queue_drain_until_done(out_queue, task)
@@ -601,7 +599,37 @@ async def _run_streamed(
         streamer=streamer,
         result=result,
         cancel_event=cancel_event,
+        forwarded=forwarded,
     )
+
+
+def _note_forwarded(
+    forwarded: Dict[int, str], frame: Dict[str, Any]
+) -> None:
+    """Hold ``frame``'s text as the newest its canvas has sent.
+
+    Everything on the queue is a frame: ``_emit`` is its only
+    producer, and closing it puts the sentinel the loop stops on.
+    """
+    assert frame.get("type") == "frame", frame.get("type")
+    canvas = frame["canvas_index"]
+    text = frame["text"]
+    assert isinstance(canvas, int), "a frame names its canvas"
+    assert isinstance(text, str), "a frame's text is a string"
+    if forwarded:
+        assert canvas >= max(forwarded), (
+            "frames never go back to an earlier canvas"
+        )
+    forwarded[canvas] = text
+
+
+def _forwarded_text(forwarded: Dict[int, str]) -> str:
+    """Each canvas's newest forwarded frame, joined in order, which
+    is how the page reads a run's text off the frames it holds."""
+    parts: List[str] = []
+    for canvas in sorted(forwarded):
+        parts.append(forwarded[canvas])
+    return "".join(parts)
 
 
 def _terminal_frame(
@@ -611,17 +639,25 @@ def _terminal_frame(
     streamer: "FrameQueueStreamer",
     result: Dict[str, Any],
     cancel_event: Optional[threading.Event],
+    forwarded: Dict[int, str],
 ) -> Dict[str, Any]:
     """The one ``done`` a run ends with, finished or stopped."""
+    # Either the streamer unwound generate, or the consumer stopped
+    # forwarding first; both mean the user stopped this run.
+    stopped = result.get("cancelled", False) or (
+        cancel_event is not None and cancel_event.is_set()
+    )
     output = result.get("out")
-    final_text = ""
     thinking_text = ""
-    if output is None:
-        # A stopped run never returns sequences, so the text comes
-        # off the last canvas the streamer built rather than being
-        # reported as nothing produced.
-        final_text = streamer.last_text
+    if stopped:
+        # The frames the page received, every canvas of them. Not
+        # the canvas the generate thread built last, which runs
+        # ahead of the page by up to the queue's depth and holds
+        # only the canvas in progress; and not generate's own
+        # sequences, which it can finish producing after the Stop.
+        final_text = _forwarded_text(forwarded)
     else:
+        assert output is not None, "a finished run returns sequences"
         sequences = getattr(output, "sequences", output)
         raw = tokenizer.decode(
             sequences[0][prompt_len:],
@@ -641,11 +677,6 @@ def _terminal_frame(
         # run records a measurement rather than the client's estimate.
         "prompt_len": prompt_len,
     }
-    # Either the streamer unwound generate, or the consumer stopped
-    # forwarding first; both mean the user stopped this run.
-    stopped = result.get("cancelled", False) or (
-        cancel_event is not None and cancel_event.is_set()
-    )
     if stopped:
         done[TERMINAL_CANCELLED] = True
     return done
