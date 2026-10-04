@@ -323,6 +323,8 @@ kept when these were written:
 - **412**: confirmed on 2026-10-03: a stopped run keeping what the page
   received, from two items raised during the 2026-10 remediation:
   DiffusionGemma's stopped text, and a resume stopped before its first frame.
+- **413**: **outstanding**: an edit session's Back after Select Frame, and
+  Continue in review on a stopped Resume to End, on LLaDA and DiffusionGemma.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -4900,3 +4902,36 @@ step.
     - Load LLaDA, Edit Frames, Resume to End, and press Stop after a few
       frames. The status line reads "Stopped.", the partial branch is kept,
       and review opens, as before.
+
+## Back and Continue in an edit session
+
+From 2026-10-03 an edit session has two more controls. **Back**, beside Lock
+In, Clear and Exit once a frame is selected, returns to choosing a frame
+without losing the session's earlier steps. **Continue**, an amber play arrow
+in review beside Confirm and Retry, appears when a Resume to End was stopped,
+and carries the branch on from its last frame through a resume flagged as a
+continue, which remasks nothing. Both are tested without a GPU, in
+`tests/web/static/generator_edit_controls.test.js` and the two workers' resume
+suites; this is the same against real models.
+
+413. **Back and Continue behave on both diffusion models.** In the browser
+    launcher, with LLaDA and then with DiffusionGemma at 256 tokens:
+    - Generate a run. Click Edit Frames, select a frame, remask a token,
+      and press Back. You are choosing a frame again with nothing
+      selected. Select a different frame, remask, Lock In and Resume to
+      End; review opens.
+    - Retry, then edit a frame, Lock In, click Edit Another Frame, and Run
+      to Here. In the edit step that follows, press Back: the scrubber
+      will not go earlier than the frame after your first edit.
+    - Retry again, edit a frame and Resume to End, and press Stop after a
+      few frames. Review shows the play arrow as a plain glyph, not an
+      emoji, and the status line reads "Stopped at frame N. Continue,
+      confirm to save it as it is, or retry from the start."
+    - Press Continue. The branch runs on to the end, review reads "Edit
+      complete.", and Confirm saves a run whose edit list holds one edit.
+    - Edit, Resume to End and stop again, then press Continue and stop it
+      too. Review offers Continue again.
+    - DiffusionGemma only: press Continue and then Stop at once, before a
+      new frame appears. Review is back as it was, and the status line
+      reads "Stopped before the edit produced a frame. The run is
+      unchanged."
