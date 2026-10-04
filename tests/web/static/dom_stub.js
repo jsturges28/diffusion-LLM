@@ -61,6 +61,7 @@ const GENERATOR_SCRIPTS = [
   "generator_model_panel.js",
   "generator_chrome.js",
   "generator_canvas.js",
+  "generator_readouts.js",
   "app.js",
 ];
 

@@ -133,9 +133,8 @@ test("the diff overlay draws the original layer too", () => {
 test("hovering the original layer reads the baseline", () => {
   const { context } = branchedRun();
   context.navigateToFrame(WORDS.length - 1);
-  context.metricsHoverOriginal = true;
 
-  const tokens = context.metricsFrameTokens();
+  const tokens = context.generatorCanvas.drawnTokens(true);
 
   assert.ok(tokens, "the strip read nothing from the baseline");
   assert.equal(tokens[EDITED_POSITION].t, WORDS[EDITED_POSITION]);
@@ -157,7 +156,7 @@ test("the metrics strip reads a streaming append run", () => {
     context.handleFrame(appendFrame(index, WORDS));
   }
 
-  const tokens = context.metricsFrameTokens();
+  const tokens = context.generatorCanvas.drawnTokens(false);
 
   assert.ok(tokens, "the strip read nothing");
   assert.equal(tokens.length, 3);

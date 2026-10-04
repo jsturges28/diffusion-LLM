@@ -274,10 +274,19 @@ test("the strip reads the count while the overlay is on", () => {
   const token = context.generatorRun.frameTokens(6)[0];
 
   context.generatorCanvas.setOverlayMode("revisions");
-  assert.equal(context.metricsExtra(0, token), "Revisions: 2");
-  assert.equal(context.metricsExtra(2, token), "");
+  assert.equal(
+    context.generatorCanvas.tokenExtra(0, token, false),
+    "Revisions: 2"
+  );
+  assert.equal(
+    context.generatorCanvas.tokenExtra(2, token, false),
+    ""
+  );
   context.generatorCanvas.setOverlayMode("conf");
-  assert.equal(context.metricsExtra(0, token), "");
+  assert.equal(
+    context.generatorCanvas.tokenExtra(0, token, false),
+    ""
+  );
 });
 
 test("the legend shows only while Revisions is selected", () => {

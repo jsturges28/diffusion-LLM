@@ -2,12 +2,11 @@
 //
 // Strategy: build real token spans through the shared span builder,
 // then light a position and read the classes left behind. The
-// generator is asked directly; Analytics opens a run of the same
-// tokens and is pointed at its entropy chart's bar, which is how it
-// lights a position. A newline token has to come away with the extra
-// class that CSS turns into a standing marker; a token with glyphs
-// must not, because that marker would sit on top of its first
-// character.
+// generator profile is pointed at a real run; Analytics opens a run
+// of the same tokens and is pointed at its entropy chart's bar. A
+// newline token has to come away with the extra class that CSS turns
+// into a standing marker; a token with glyphs must not, because that
+// marker would sit on top of its first character.
 //
 // The bug being pinned: the cross-highlight is a background plus a
 // box-shadow on an inline span. A newline occupies no horizontal
@@ -62,6 +61,7 @@ function bootFetch() {
 // markup rather than off hand-made stand-ins.
 function fillWithTokens(context, container) {
   container.textContent = "";
+  container.children = [];
   const options = {
     colorFor: () => null,
     classFor: () => "",
@@ -74,6 +74,32 @@ function fillWithTokens(context, container) {
       context.overlaysBuildTokenSpan(at, frame[at], "\u2591", options)
     );
   }
+}
+
+function generatorProfile(page) {
+  const frame = tokens();
+  page.context.generatorRun.appendFrame({
+    text: frame.map((item) => item.t).join(""),
+    tokens: frame,
+    canvas_index: 0,
+    mean_conf: 0.9,
+    elapsed: 0,
+    revealed: [],
+  });
+  page.context.scrubberActive = true;
+  page.context.currentScrubFrame = 0;
+  page.context.generatorCanvas.renderFrame(0);
+  page.context.generatorReadouts.updateProfile();
+  const profile = page.registry.get("entropy-profile");
+  profile.clientWidth = WORDS.length * 100;
+  profile.clientHeight = 34;
+  return profile;
+}
+
+function pointGeneratorProfile(profile, position) {
+  profile.dispatch("mousemove", {
+    clientX: position * 100 + 50,
+  });
 }
 
 function classesAt(container, position) {
@@ -130,10 +156,12 @@ test("a missing text is not zero-width", () => {
 // -- the generator --
 
 test("the generator marks a lit newline", () => {
-  const { context } = loadPage({});
+  const page = loadPage({});
+  const { context } = page;
+  const profile = generatorProfile(page);
   fillWithTokens(context, context.outputArea);
 
-  context.setTokenHighlight(2);
+  pointGeneratorProfile(profile, 2);
 
   const classes = classesAt(context.outputArea, 2);
   assert.equal(classes.has("token-cross-highlight"), true);
@@ -141,10 +169,12 @@ test("the generator marks a lit newline", () => {
 });
 
 test("the generator leaves a lit word unmarked", () => {
-  const { context } = loadPage({});
+  const page = loadPage({});
+  const { context } = page;
+  const profile = generatorProfile(page);
   fillWithTokens(context, context.outputArea);
 
-  context.setTokenHighlight(1);
+  pointGeneratorProfile(profile, 1);
 
   const classes = classesAt(context.outputArea, 1);
   assert.equal(classes.has("token-cross-highlight"), true);
@@ -155,11 +185,13 @@ test("clearing takes the marker with it", () => {
   // Both classes are added together and have to leave together: a
   // stranded token-zero-width would stand a marker on a token the
   // pointer had already left.
-  const { context } = loadPage({});
+  const page = loadPage({});
+  const { context } = page;
+  const profile = generatorProfile(page);
   fillWithTokens(context, context.outputArea);
-  context.setTokenHighlight(2);
+  pointGeneratorProfile(profile, 2);
 
-  context.clearTokenHighlight();
+  profile.dispatch("mouseleave");
 
   const classes = classesAt(context.outputArea, 2);
   assert.equal(classes.has("token-cross-highlight"), false);
@@ -170,11 +202,13 @@ test("moving the highlight moves the marker", () => {
   // The sweep. Going from the newline to the word beside it must not
   // leave the marker behind, and the guard that skips a repeated
   // position must not skip this.
-  const { context } = loadPage({});
+  const page = loadPage({});
+  const { context } = page;
+  const profile = generatorProfile(page);
   fillWithTokens(context, context.outputArea);
-  context.setTokenHighlight(2);
+  pointGeneratorProfile(profile, 2);
 
-  context.setTokenHighlight(3);
+  pointGeneratorProfile(profile, 3);
 
   assert.equal(
     classesAt(context.outputArea, 2).has("token-zero-width"), false

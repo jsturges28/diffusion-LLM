@@ -236,13 +236,13 @@ test("a finished DiffusionGemma run is offered its entropy", () => {
 
   assert.equal(context.generatorCanvas.entropyAvailable(), true);
   assert.ok(pickerValues(context).includes("entropy"));
-  assert.equal(context.entropyProfileShowing(), true);
+  assert.equal(context.generatorReadouts.profileShowing(), true);
 });
 
 test("its profile reads the final commit through its draft", () => {
   const { context } = dgemmaRun();
 
-  const layers = context.entropyProfileLayers();
+  const layers = context.generatorCanvas.entropyProfile();
 
   assert.deepEqual(host(layers.values), draftValues(3));
   assert.equal(layers.asOfStep, 3);
@@ -254,19 +254,19 @@ test("a draft reads its own values, unlabeled", () => {
   const { context } = dgemmaRun();
   context.navigateToFrame(1);
 
-  const layers = context.entropyProfileLayers();
+  const layers = context.generatorCanvas.entropyProfile();
 
   assert.deepEqual(host(layers.values), draftValues(1));
   assert.equal(layers.asOfStep, null);
 });
 
 test("the readout says when the profile borrowed", () => {
-  const { context } = dgemmaRun();
+  const { context, registry } = dgemmaRun();
 
-  context.setEntropyHoverPosition(1);
+  context.generatorReadouts.setTokenHover(1, null);
 
   assert.equal(
-    context.entropyProfileReadout.textContent,
+    registry.get("entropy-profile-readout").textContent,
     "4.1 nats, as of step 3"
   );
 });
@@ -289,14 +289,15 @@ test("the Entropy overlay colors a commit from its draft", () => {
 });
 
 test("the metrics strip reads a commit through its draft", () => {
-  const { context } = dgemmaRun();
-  context.metricsHoverPos = 1;
-  context.metricsHoverOriginal = false;
+  const { context, registry } = dgemmaRun();
 
-  const reading = context.buildTokenMetricsReading();
+  context.generatorReadouts.setTokenHover(1, null);
+  const nodes = registry
+    .get("token-metrics")
+    .overlaysMetricNodes;
 
-  assert.equal(reading.entropy, draftValues(3)[1]);
-  assert.match(reading.extra, /entropy as of step 3/);
+  assert.equal(nodes.entropy.value.textContent, "4.100");
+  assert.match(nodes.extra.textContent, /entropy as of step 3/);
 });
 
 test("an edited run's two layers each borrow their own draft", () => {
@@ -316,7 +317,7 @@ test("an edited run's two layers each borrow their own draft", () => {
   context.handleFrame(diffusionFrame(8, 0, true));
   context.handleDone({ type: "done", final_text: "done" });
 
-  const layers = context.entropyProfileLayers();
+  const layers = context.generatorCanvas.entropyProfile();
 
   assert.equal(context.generatorCanvas.blendActive(), true);
   assert.deepEqual(host(layers.values), draftValues(7));
@@ -335,9 +336,9 @@ test("a LLaDA profile follows the scrub, nothing faded", () => {
   ]);
 
   context.navigateToFrame(0);
-  const early = context.entropyProfileLayers();
+  const early = context.generatorCanvas.entropyProfile();
   context.navigateToFrame(2);
-  const late = context.entropyProfileLayers();
+  const late = context.generatorCanvas.entropyProfile();
 
   assert.deepEqual(host(early.values), draftValues(0));
   assert.deepEqual(host(late.values), draftValues(2));
@@ -356,7 +357,7 @@ test("an autoregressive run's profile is what it was", () => {
   );
   context.navigateToFrame(1);
 
-  const layers = context.entropyProfileLayers();
+  const layers = context.generatorCanvas.entropyProfile();
 
   assert.deepEqual(host(layers.values), [0, 0.1, 0.2, 0.3]);
   assert.equal(layers.current, 1);
@@ -407,7 +408,7 @@ test("the row stays held through a diffusion run", () => {
   context.handleDone({ type: "done", final_text: "done" });
 
   assert.equal(entropyRow(registry).hidden, false);
-  assert.equal(context.entropyProfileShowing(), true);
+  assert.equal(context.generatorReadouts.profileShowing(), true);
 });
 
 test("a model declaring no entropy leaves the row out", () => {

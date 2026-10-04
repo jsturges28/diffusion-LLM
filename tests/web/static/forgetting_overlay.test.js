@@ -187,9 +187,15 @@ test("the strip reads the value while the overlay is on", () => {
   const token = context.generatorRun.framePositions()[1];
 
   context.generatorCanvas.setOverlayMode("forgetting");
-  assert.equal(context.metricsExtra(1, token), "Forgetting: 0.310");
+  assert.equal(
+    context.generatorCanvas.tokenExtra(1, token, false),
+    "Forgetting: 0.310"
+  );
   context.generatorCanvas.setOverlayMode("entropy");
-  assert.equal(context.metricsExtra(1, token), "");
+  assert.equal(
+    context.generatorCanvas.tokenExtra(1, token, false),
+    ""
+  );
 });
 
 test("a save keeps every token's value", () => {

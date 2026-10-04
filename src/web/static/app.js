@@ -83,6 +83,13 @@ var generatorCanvas = generatorCanvasCreate({
   onOverlayChanged: generatorCanvasOverlayChanged,
   onLayerChanged: generatorCanvasLayerChanged,
 });
+var generatorReadouts = generatorReadoutsCreate({
+  run: generatorRun,
+  canvas: generatorCanvas,
+  readModel: generatorReadoutsReadModel,
+  readSettings: generatorReadoutsReadSettings,
+  readScrubber: generatorReadoutsReadScrubber,
+});
 var generatorSocket = generatorSocketCreate({
   onOpen: generatorSocketOpened,
   onClose: generatorSocketClosed,
@@ -114,15 +121,6 @@ var btnWhatIf =
   document.getElementById("btn-what-if");
 var altsPopover =
   document.getElementById("token-alts-popover");
-var entropyProfileRow =
-  document.getElementById("entropy-profile-row");
-var entropyProfileCanvas =
-  document.getElementById("entropy-profile");
-var entropyProfileReadout =
-  document.getElementById("entropy-profile-readout");
-var tokenMetricsStrip =
-  document.getElementById("token-metrics");
-var stopReadout = document.getElementById("stop-readout");
 
 // Guided edit mode DOM refs.
 var guidedEditControls =
@@ -226,10 +224,6 @@ var typedEntryRequest = 0;
 // to invalidate the outstanding probe without disturbing the preview
 // sequence, which is still counting keystrokes.
 var typedProbeRequest = 0;
-// Token position under the pointer, or null. Drives the glowing
-// column in the entropy profile, so it is tracked for every token,
-// independent of whether that position captured alternatives.
-var entropyHoverPos = null;
 // True while "What If" substitution is armed: the popover's
 // candidates become clickable instead of read-only.
 
@@ -682,7 +676,7 @@ function handleFrame(data) {
   } else {
     generatorCanvas.renderTextFrame(appended.text);
   }
-  refreshStopReadout();
+  generatorReadouts.refreshStop();
 
   updateLiveFrameStatus(data);
 }
@@ -970,7 +964,7 @@ function hideAltsPopover() {
   // the mouseleave that would have cleared their readout. Needed here
   // too, because scroll and resize close the popover on their own
   // rather than through a pointer leaving it.
-  setCandidateMetricsHover(null);
+  generatorReadouts.setCandidateHover(null);
   // The popover is the draft's only home, so closing it discards
   // the draft. Callers that must not do that check altsPopoverPinned
   // first; the rest (a new run, a frame change, a mode reset) are
@@ -1017,7 +1011,10 @@ function buildAltsRows(alts, chosenId) {
   for (var i = 0; i < alts.length; i++) {
     fragment.appendChild(
       overlaysBuildAltRow(
-        alts[i], chosenId, setCandidateMetricsHover, i
+        alts[i],
+        chosenId,
+        generatorReadouts.setCandidateHover,
+        i
       )
     );
   }
@@ -1089,7 +1086,7 @@ function renderAltsPopover(pos, span) {
   // node never fires one, so a readout for a row that no longer
   // exists would sit in the strip until the next hover. Cleared here
   // rather than per caller, since every rebuild comes through here.
-  setCandidateMetricsHover(null);
+  generatorReadouts.setCandidateHover(null);
   altsPopover.textContent = "";
   altsPopover.appendChild(
     overlaysBuildAltHeading(pos, altsPopoverPage, setAltsPage)
@@ -1132,7 +1129,7 @@ function renderCandidatesPopover(pos, span) {
   var other = page === null
     ? null
     : candidatesReading(otherAltsPage(page), pos);
-  setCandidateMetricsHover(null);
+  generatorReadouts.setCandidateHover(null);
   altsPopover.textContent = "";
   altsPopover.appendChild(
     overlaysBuildStepHeading(
@@ -1545,10 +1542,12 @@ function buildTypedSolidified() {
   // read at hover time, because the probe can land after the row is
   // drawn and would otherwise never reach the strip.
   row.addEventListener("mouseenter", function () {
-    setCandidateMetricsHover(typedCandidateReading());
+    generatorReadouts.setCandidateHover(
+      typedCandidateReading()
+    );
   });
   row.addEventListener("mouseleave", function () {
-    setCandidateMetricsHover(null);
+    generatorReadouts.setCandidateHover(null);
   });
   return row;
 }
@@ -1822,8 +1821,7 @@ function cancelTypedEntry() {
     renderAltsPopover(pos, null);
     return;
   }
-  setEntropyHoverPosition(null);
-  clearTokenMetrics();
+  generatorReadouts.clearTokenHover();
   hideAltsPopover();
 }
 
@@ -1836,735 +1834,6 @@ function redrawTypedEntry() {
     return;
   }
   renderAltsPopover(altsPopoverPos, null);
-}
-
-// ---- Per-position entropy profile ----
-
-// The canvas owns which frame and comparison layer supply entropy.
-// This page owns only the chart geometry and hover readout.
-function entropyProfileLayers() {
-  return generatorCanvas.entropyProfile();
-}
-
-// How many columns the strip spans: the longer of the two runs, so
-// the drawing and the pointer-to-position inverse agree on the step
-// even when a branch outran the original.
-function entropyProfileColumns() {
-  return entropyProfileColumnsOf(entropyProfileLayers());
-}
-
-function entropyProfileColumnsOf(layers) {
-  return Math.max(layers.values.length, layers.original.length);
-}
-
-// Every position an edit touched, mapped to the frame the edit was
-// made at. Sequential What If rounds each push their own entry, so a
-// branch can carry more than one, and a diffusion remask contributes
-// a whole group at once. Sibling to editDivergencePosition, which
-// reduces the same records to their minimum for the popover's pager.
-//
-// The frame is the value rather than a bare true because the markers
-// colour themselves by it, on the same ramp as Commit Order. A
-// position remasked in two different frames keeps the later one,
-// which falls out of the loop order: the log is appended
-// chronologically, so a later entry overwrites an earlier one. That
-// is the reading we want (the marker names the most recent
-// intervention) and it is written down here because it is a property
-// of the log, not of this function.
-//
-function editedPositionMarks() {
-  return generatorCanvas.editedPositionMarks();
-}
-
-// Whether a position was touched by an edit. A separate predicate
-// because frame 0 is a real answer and a falsy one, so asking the map
-// directly would silently drop an edit made at the very first frame.
-function positionWasEdited(marks, position) {
-  return typeof marks[position] === "number";
-}
-
-// The same positions as a list, for the profile's dashed markers.
-function editedProfilePositions() {
-  var marks = editedPositionMarks();
-  var positions = [];
-  for (var key in marks) {
-    if (positionWasEdited(marks, key)) {
-      positions.push(Number(key));
-    }
-  }
-  return positions;
-}
-
-// Draw the profile: one column per position, height proportional to
-// normalized entropy, colored by the same ramp as the overlay. What
-// it reads, and how the scrubbed frame shows, is for
-// entropyProfileLayers to say. On an edited run the pre-edit profile
-// is drawn underneath and the two are mixed by the run crossfade,
-// exactly as the token layers above them are.
-function drawEntropyProfile() {
-  if (!entropyProfileCanvas || !entropyProfileRow) {
-    return;
-  }
-  var layers = entropyProfileLayers();
-  var values = layers.values;
-  if (values.length === 0) {
-    setEntropyProfileVisible(false);
-    return;
-  }
-  setEntropyProfileVisible(true);
-
-  // Match the backing store to the CSS box so columns stay crisp on
-  // HiDPI displays and after a window resize.
-  var ratio = window.devicePixelRatio || 1;
-  var cssWidth = entropyProfileCanvas.clientWidth || 1;
-  var cssHeight = entropyProfileCanvas.clientHeight || 34;
-  entropyProfileCanvas.width = Math.round(cssWidth * ratio);
-  entropyProfileCanvas.height = Math.round(
-    cssHeight * ratio
-  );
-  var ctx = entropyProfileCanvas.getContext("2d");
-  if (!ctx) {
-    return;
-  }
-  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-  ctx.clearRect(0, 0, cssWidth, cssHeight);
-
-  // On an autoregressive run frame index maps straight onto
-  // position: the worker emits no leading empty canvas
-  // (ar_sampler._build_frame runs after the pick is appended), so
-  // Frame k holds k+1 tokens and is the frame that introduced
-  // position k. A diffusion run has no such
-  // mapping, and entropyProfileLayers gives it no current column.
-  //
-  // The scrubber's position is carried by the bar's own opacity
-  // rather than a drawn marker. A standing neutral guide reads as an
-  // artifact at rest, and drawEntropyProfileGlow already owns that
-  // visual language for the column under the pointer. The orange
-  // edit marker below is a different statement: it names a position
-  // the run was intervened at, which is true whether or not the
-  // pointer is anywhere near it.
-  var current = layers.current;
-  var original = layers.original;
-  // Stepped off the longer run so the two profiles stay
-  // position-aligned when a branch outran or fell short of the
-  // original.
-  var step = cssWidth / entropyProfileColumnsOf(layers);
-  var layout = {
-    step: step,
-    barWidth: Math.max(1, step - 0.5),
-    cssHeight: cssHeight,
-  };
-
-  // Tint under the bars, dashed guide over them, hover glow last:
-  // the same stacking the Analytics entropy chart gets from its
-  // plugin order, so the pointer's guide lays over the edit tint
-  // rather than under it.
-  var edits = editedProfilePositions();
-  var editColors = editMarkerColors(edits);
-  drawEntropyProfileEditTint(ctx, layout, edits, editColors);
-
-  var paired = original.length > 0;
-  if (paired) {
-    drawEntropyProfileSeries(ctx, layout, {
-      values: original,
-      alpha: 1 - generatorCanvas.blend(),
-      // The scrubber indexes the branch, so the pre-edit run gets no
-      // current-position emphasis of its own. It shares the branch's
-      // filled boundary, though: the positions align, so a column
-      // dimmed in one run and lit in the other would read as a
-      // difference between them rather than as a scrub.
-      current: -1,
-      filled: layers.filled,
-    });
-  }
-  drawEntropyProfileSeries(ctx, layout, {
-    values: values,
-    alpha: paired ? generatorCanvas.blend() : 1,
-    current: current,
-    filled: layers.filled,
-  });
-  drawEntropyProfileEditLines(ctx, layout, edits, editColors);
-
-  // The glow and the readout speak for one run, so they follow
-  // whichever the crossfade is favoring.
-  var readsOriginal =
-    paired && generatorCanvas.blendFavorsOriginal();
-  layout.values = readsOriginal ? original : values;
-  drawEntropyProfileGlow(ctx, layout);
-  updateEntropyReadout(
-    layout.values,
-    entropyHoverPos === null ? current : entropyHoverPos,
-    readsOriginal ? layers.originalAsOfStep : layers.asOfStep
-  );
-}
-
-// The frame each marker speaks for, and the last frame index to
-// normalize it against. Computed once per draw rather than per
-// marker, so the two passes below stay loops over geometry.
-function editMarkerColors(positions) {
-  var marks = editedPositionMarks();
-  // Asked of the run rather than of its token array, which an
-  // append-shaped run leaves empty. A What If substitution puts an
-  // edit on an autoregressive run, so this path is not diffusion-only
-  // the way Commit Order is.
-  var maxFrame = generatorRun.frameCount() - 1;
-  var colors = [];
-  for (var i = 0; i < positions.length; i++) {
-    colors.push(overlaysEditColor(marks[positions[i]], maxFrame));
-  }
-  return colors;
-}
-
-// A faint column behind each edited position, in the hue of the frame
-// the edit was made at. Floored at 2px like the hover guide: at a few
-// hundred tokens a bar-width tint is too thin to notice.
-function drawEntropyProfileEditTint(ctx, layout, positions, colors) {
-  if (positions.length === 0) {
-    return;
-  }
-  ctx.save();
-  ctx.globalAlpha = OVERLAYS_EDIT_TINT_ALPHA;
-  for (var i = 0; i < positions.length; i++) {
-    ctx.fillStyle = colors[i];
-    ctx.fillRect(
-      positions[i] * layout.step,
-      0,
-      Math.max(2, layout.barWidth),
-      layout.cssHeight
-    );
-  }
-  ctx.restore();
-}
-
-// The dashed guide, drawn over the bars and centered on the column
-// it marks so it reads as belonging to that position rather than to
-// the gap beside it. Mirrors substitutionMarkerPlugin in
-// analytics.js, down to the dash pattern.
-function drawEntropyProfileEditLines(ctx, layout, positions, colors) {
-  if (positions.length === 0) {
-    return;
-  }
-  ctx.save();
-  ctx.globalAlpha = OVERLAYS_EDIT_LINE_ALPHA;
-  ctx.lineWidth = 1;
-  ctx.setLineDash([4, 4]);
-  for (var i = 0; i < positions.length; i++) {
-    ctx.strokeStyle = colors[i];
-    var x = positions[i] * layout.step
-      + layout.barWidth / 2;
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, layout.cssHeight);
-    ctx.stroke();
-  }
-  ctx.restore();
-}
-
-// One profile's columns, at a shared alpha for the crossfade times
-// each bar's own emphasis. ``current`` is the position the scrubber
-// sits on, or -1 for a series the scrubber does not index.
-//
-// ``filled`` is the last position the scrubbed frame has reached.
-// Past it the bars fade back, so the profile says the same thing the
-// canvas above it does: those tokens do not exist yet at this frame.
-// A separate field from ``current`` because the pre-edit series takes
-// no bright column but does share the boundary.
-function drawEntropyProfileSeries(ctx, layout, series) {
-  if (series.alpha <= 0.01) {
-    return;
-  }
-  for (var i = 0; i < series.values.length; i++) {
-    var value = series.values[i];
-    var frac = overlaysEntropyFraction(value);
-    var height = Math.max(1, frac * (layout.cssHeight - 2));
-    var emphasis = entropyProfileEmphasis(series, i);
-    ctx.globalAlpha = emphasis * series.alpha;
-    ctx.fillStyle = entropyColor(value);
-    ctx.fillRect(
-      i * layout.step,
-      layout.cssHeight - height,
-      layout.barWidth,
-      height
-    );
-  }
-  ctx.globalAlpha = 1;
-}
-
-// Three tiers: the scrubber's own column, the positions the frame has
-// reached, and the ones it has not. Kept low enough to still read as
-// a bar, since the shape of the tail is the useful part of scrubbing
-// back through a run.
-var ENTROPY_PROFILE_CURRENT = 1;
-var ENTROPY_PROFILE_FILLED = 0.68;
-var ENTROPY_PROFILE_UNFILLED = 0.2;
-
-function entropyProfileEmphasis(series, index) {
-  if (index === series.current) {
-    return ENTROPY_PROFILE_CURRENT;
-  }
-  // A series without a boundary is fully filled, which is what the
-  // profile looks like while a run is still streaming.
-  if (typeof series.filled !== "number" || series.filled < 0) {
-    return ENTROPY_PROFILE_FILLED;
-  }
-  if (index <= series.filled) {
-    return ENTROPY_PROFILE_FILLED;
-  }
-  return ENTROPY_PROFILE_UNFILLED;
-}
-
-// Light up the column for the token under the pointer: a faint
-// full-height guide so a column a few pixels wide is findable at a
-// glance, then the bar redrawn brighter with a halo of its own hue.
-function drawEntropyProfileGlow(ctx, layout) {
-  var pos = entropyHoverPos;
-  if (pos === null || pos < 0 || pos >= layout.values.length) {
-    return;
-  }
-  var value = layout.values[pos];
-  var left = pos * layout.step;
-  ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
-  ctx.fillRect(
-    left, 0, Math.max(2, layout.barWidth), layout.cssHeight
-  );
-
-  var frac = overlaysEntropyFraction(value);
-  var height = Math.max(2, frac * (layout.cssHeight - 2));
-  var top = layout.cssHeight - height;
-  ctx.shadowColor = entropyColor(value);
-  ctx.shadowBlur = 8;
-  ctx.fillStyle = entropyGlowColor(value);
-  // Twice, so the halo builds to something visible against the
-  // neighboring columns without washing the bar itself out.
-  ctx.fillRect(left, top, layout.barWidth, height);
-  ctx.fillRect(left, top, layout.barWidth, height);
-  ctx.shadowBlur = 0;
-  ctx.shadowColor = "transparent";
-}
-
-// The value beside the profile. `asOfStep` names the earlier draft a
-// commit's values were borrowed from, or is null.
-function updateEntropyReadout(values, index, asOfStep) {
-  if (!entropyProfileReadout) {
-    return;
-  }
-  if (index < 0 || index >= values.length) {
-    entropyProfileReadout.textContent = "";
-    return;
-  }
-  var text = String(+values[index].toFixed(2)) + " nats";
-  if (typeof asOfStep === "number") {
-    text += ", " + overlaysEntropyAsOf(asOfStep);
-  }
-  entropyProfileReadout.textContent = text;
-}
-
-// Track the hovered token and repaint the profile when it changes.
-// Cheap: the profile is one canvas of a few hundred rects, and the
-// early return keeps mouseover from redrawing on every pixel of
-// movement within a single token.
-function setEntropyHoverPosition(pos) {
-  // Hover state only exists while the profile is on screen, so a
-  // token hovered mid-generation cannot leave a stale column lit when
-  // the scrubber later appears.
-  var visible = entropyProfileShowing();
-  var next = visible ? pos : null;
-  if (entropyHoverPos === next) {
-    return;
-  }
-  entropyHoverPos = next;
-  if (visible) {
-    drawEntropyProfile();
-  }
-}
-
-// ---- Cross-highlighting: entropy profile -> token view ----
-//
-// The token -> column direction already exists (the output area's
-// mouseover feeds setEntropyHoverPosition). These close the loop, so
-// a tall warm column can be read back to the word behind it.
-
-// Position currently lit from the profile, so sweeping the pointer
-// across one column does not re-query the DOM on every pixel. Reset
-// by the render paths below, which drop the class with the spans.
-var tokenHighlightPos = null;
-
-// Light the token(s) at a position. There are two while the diff
-// overlay is stacked, and lighting both keeps the mark visible
-// whichever layer is on top. A token that renders to nothing, a line
-// break, gets the extra class that stands a marker in its place,
-// since the tint alone would have no box to fill.
-function setTokenHighlight(pos) {
-  if (tokenHighlightPos === pos) {
-    return;
-  }
-  clearTokenHighlight();
-  tokenHighlightPos = pos;
-  if (pos === null || !outputArea) {
-    return;
-  }
-  var spans = outputArea.querySelectorAll(
-    "[data-pos=\"" + pos + "\"]"
-  );
-  for (var i = 0; i < spans.length; i++) {
-    spans[i].classList.add("token-cross-highlight");
-    if (overlaysTokenIsZeroWidth(spans[i].textContent)) {
-      spans[i].classList.add("token-zero-width");
-    }
-  }
-}
-
-function clearTokenHighlight() {
-  tokenHighlightPos = null;
-  if (!outputArea) {
-    return;
-  }
-  var lit = outputArea.querySelectorAll(
-    ".token-cross-highlight"
-  );
-  for (var i = 0; i < lit.length; i++) {
-    lit[i].classList.remove("token-cross-highlight");
-    lit[i].classList.remove("token-zero-width");
-  }
-}
-
-// ---- Token metrics strip ----
-//
-// The readout above the canvas, fed by both hover sources. It carries
-// its own position rather than reusing entropyHoverPos, which
-// setEntropyHoverPosition deliberately forces to null whenever the
-// profile row is hidden. That is exactly the live-generation case,
-// where the strip has something to say. The two answer different
-// questions: which column is lit, versus which position is being
-// read.
-var metricsHoverPos = null;
-
-// Which stacked run that reading came from. Recorded at hover time
-// from the span's own layer, so the strip reports what is on screen
-// rather than re-deriving it and risking a different answer.
-var metricsHoverOriginal = false;
-
-// The candidate under the pointer in the popover, or null. A second,
-// independent hover source: the left group answers "what is at this
-// position" and this answers "what about the one I am reading".
-var metricsCandidate = null;
-
-function setTokenMetricsHover(pos, target) {
-  metricsHoverPos = pos;
-  metricsHoverOriginal =
-    pos === null ? false : metricsLayerIsOriginal(target);
-  refreshTokenMetrics();
-}
-
-// Fed by every candidate row, including the typed one. The reading
-// carries the rank, which is the row's own business, and the width it
-// is measured against comes from the page, which is the one thing a
-// row cannot know. A reading may still override the width when it has
-// a better source, which the probe does: its figure comes off the
-// very tensor that was ranked.
-function setCandidateMetricsHover(reading) {
-  metricsCandidate = reading === null ? null : {
-    text: reading.t,
-    probability: reading.p,
-    rank: reading.rank || null,
-    vocabSize: reading.vocab_size || metricsVocabSize(),
-  };
-  refreshTokenMetrics();
-}
-
-// The resident model's output width, deliberately not the tokenizer's
-// vocab_size beside it: a padded embedding makes those differ, and a
-// rank is a place among the tokens that could have been ranked.
-function metricsVocabSize() {
-  return generatorModelPanel.activeTokenizer().model_vocab_size
-    || null;
-}
-
-// Re-read the held position. Called from the render paths because
-// scrubbing, crossfading or switching overlays all change what a
-// stationary pointer is pointing at.
-function refreshTokenMetrics() {
-  overlaysRenderTokenMetrics(
-    tokenMetricsStrip, buildTokenMetricsReading()
-  );
-  // The strip's width changes with what it reads, the readout's
-  // words with nothing a hover does, so only the fit is redone.
-  overlaysFitStopReadout(tokenMetricsStrip, stopReadout);
-}
-
-function clearTokenMetrics() {
-  metricsHoverPos = null;
-  metricsHoverOriginal = false;
-  metricsCandidate = null;
-  overlaysRenderTokenMetrics(tokenMetricsStrip, null);
-  overlaysFitStopReadout(tokenMetricsStrip, stopReadout);
-}
-
-// A crossfade hands the pointer to the other layer at the midpoint.
-// A stationary reading has no new span to ask, so it re-derives from
-// ownership, which is what the next hover would report anyway.
-function refreshTokenMetricsLayer() {
-  if (metricsHoverPos !== null) {
-    metricsHoverOriginal = metricsLayerIsOriginal(null);
-  }
-  refreshTokenMetrics();
-  // The readout follows the same layer, so a crossfade past the
-  // midpoint moves it to the other run as well.
-  refreshStopReadout();
-}
-
-// Ask the hovered span which layer it belongs to. Chart hover has no
-// span, so it falls back to whichever layer takes the pointer, which
-// is the one the user could have hovered instead.
-function metricsLayerIsOriginal(target) {
-  return generatorCanvas.layerIsOriginal(target);
-}
-
-// Whether both runs are on the canvas together. The controller owns
-// the view mode as well as the comparison gate, so a live canvas is
-// never reported as layered.
-function metricsLayered() {
-  return generatorCanvas.layersActive();
-}
-
-// The tokens the canvas is currently drawing for the hovered layer:
-// the scrubbed frame when the scrubber owns the view, otherwise the
-// newest frame, which is what the live renderer put on screen. The
-// pre-edit run clamps to its own final frame, matching the ghost
-// layer buildCrossfadedLayers draws past its end.
-function metricsFrameTokens() {
-  return generatorCanvas.drawnTokens(metricsHoverOriginal);
-}
-
-// Assemble one reading, or null when the held position no longer
-// names a token (the frame changed, the run was cleared, or the view
-// is the target placeholder).
-function buildTokenMetricsReading() {
-  if (metricsHoverPos === null) {
-    return null;
-  }
-  if (scrubberActive && runPhase.mode === "select_target") {
-    return null;
-  }
-  var tokens = metricsFrameTokens();
-  if (!tokens || metricsHoverPos >= tokens.length) {
-    return null;
-  }
-  var index = metricsHoverPos;
-  var tok = tokens[index];
-  var remasked = remaskedPositions[index] === true;
-  var masked = !tok || !!tok.m || remasked;
-  var entropy = generatorCanvas.entropyReading(
-    index, tok, metricsHoverOriginal
-  );
-  return {
-    position: index,
-    total: tokens.length,
-    tokenText: tok ? tok.t : "",
-    masked: masked,
-    maskChar: generatorCanvas.maskChar(),
-    confidence: metricsConfidence(tok, masked, remasked),
-    entropy: entropy.value,
-    extra: overlaysEntropyNote(
-      metricsExtra(index, tok), entropy.asOfStep
-    ),
-    candidate: metricsCandidate,
-    runLabel: metricsRunLabel(),
-  };
-}
-
-// A resolved token from a run that never recorded confidence reads as
-// a dash, since it was not a confident token, just an unmeasured one.
-// A mask keeps the zero it has always reported: for a position queued
-// for remasking, whatever the old token scored says nothing about it.
-function metricsConfidence(tok, masked, remasked) {
-  if (remasked || !tok) {
-    return 0;
-  }
-  if (typeof tok.c === "number") {
-    return tok.c;
-  }
-  return masked ? 0 : null;
-}
-
-// The overlay-specific line, the one part of the reading that depends
-// on which coloring is active.
-function metricsExtra(index, tok) {
-  return generatorCanvas.tokenExtra(
-    index, tok, metricsHoverOriginal
-  );
-}
-
-// Named only while both runs are on the canvas together. With one run
-// drawn there is nothing to disambiguate, and the tag would read as a
-// claim about the run rather than about the layer.
-function metricsRunLabel() {
-  if (!metricsLayered()) {
-    return "";
-  }
-  return metricsHoverOriginal ? "Original" : "Edited";
-}
-
-// ---- The stopping readout ----
-//
-// How far the canvas on screen is from stopping, beside the metrics
-// strip; overlays.js holds the rule and how it is drawn. The strip
-// reads the hovered position and this reads the canvas, so it
-// follows the frame and the run on screen rather than the pointer:
-// the newest frame while a run streams, the scrubbed frame
-// otherwise, and whichever stacked layer takes the pointer, which is
-// the rule the strip names its run by.
-
-function refreshStopReadout() {
-  overlaysRenderStopReadout(stopReadout, stopReadoutReading());
-  overlaysFitStopReadout(tokenMetricsStrip, stopReadout);
-}
-
-// The whole run is walked on every call. A canvas is at most a few
-// dozen frames of 256 positions, and the walk is what lets a scrub,
-// an edit and a crossfade all be right without a cache to keep.
-function stopReadoutReading() {
-  var rule = stopReadoutRule();
-  if (rule === null) {
-    return null;
-  }
-  var original = metricsLayered() && metricsLayerIsOriginal(null);
-  var source = original
-    ? stopReadoutOriginalSource()
-    : stopReadoutRunSource();
-  if (source.count === 0) {
-    return null;
-  }
-  var index = scrubberActive
-    ? Math.min(currentScrubFrame, source.count - 1)
-    : source.count - 1;
-  return overlaysStopReadingAt(
-    overlaysStopTrack(source), index, rule
-  );
-}
-
-// The rule the run on screen stopped by: its own parameters, with
-// the model's defaults for any it did not record, which is a session
-// restored from before the rule was a parameter. Null for a model
-// that does not stop adaptively, which keeps the readout off its
-// runs entirely.
-function stopReadoutRule() {
-  var capabilities = generatorModelPanel.capabilities();
-  if (!capabilities.adaptive_stopping) {
-    return null;
-  }
-  var defaults = generatorModelPanel.parameterDefaults();
-  return overlaysStopRuleFrom(
-    generatorRun.parameters(), defaults
-  );
-}
-
-// The run as shown, with each resume's first frame: an edit's
-// frame_index, where the page truncated and the branch began.
-function stopReadoutRunSource() {
-  return {
-    count: generatorRun.frameCount(),
-    readFrame: function (f) {
-      return generatorRun.frameTokens(f);
-    },
-    canvasAt: runFrameCanvas,
-    segmentStarts: remaskEdits.map(function (edit) {
-      return edit.frame_index;
-    }),
-  };
-}
-
-// The run as first generated, which no edit touches. One canvas,
-// because DiffusionGemma resumes nothing longer, and no resumes of
-// its own.
-function stopReadoutOriginalSource() {
-  return {
-    count: generatorRun.originalTokenFrames(),
-    readFrame: function (f) {
-      return generatorRun.originalTokens(f);
-    },
-    canvasAt: function () {
-      return 0;
-    },
-    segmentStarts: [],
-  };
-}
-
-// Map a pointer x on the profile back to a token position by
-// inverting the layout drawEntropyProfile lays down. Columns are
-// contiguous at `step` (the half-pixel gap is taken out of the bar,
-// not the slot), so the floor of x/step names the column drawn there.
-// Uses clientWidth, the same measure the draw does.
-function entropyProfilePosition(event) {
-  if (!entropyProfileCanvas) {
-    return null;
-  }
-  var columns = entropyProfileColumns();
-  if (columns === 0) {
-    return null;
-  }
-  var cssWidth = entropyProfileCanvas.clientWidth || 1;
-  var step = cssWidth / columns;
-  var rect = entropyProfileCanvas.getBoundingClientRect();
-  var index = Math.floor((event.clientX - rect.left) / step);
-  if (index < 0 || index >= columns) {
-    return null;
-  }
-  return index;
-}
-
-// The entropy row has three states, not the scrubber's two, which is
-// why it does not simply reuse that pattern.
-//
-//   absent    this model declares no entropy the row could draw, so
-//             there is nothing to reserve. Holding a gap here would
-//             put a permanent empty strip under every run, which is a
-//             worse trade than the shift it would prevent.
-//   reserved  this model does record entropy, but no run has yet
-//             produced any. Held, so finishing a run does not shrink
-//             the canvas above it.
-//   shown
-//
-// Which models record it is read from what each one declares.
-// Autoregressive stood in for that until the diffusion models
-// recorded entropy too, and from then their profiles pushed the
-// canvas up as each run finished.
-function setEntropyProfileVisible(visible) {
-  if (!entropyProfileRow) {
-    return;
-  }
-  entropyProfileRow.hidden = !visible && !entropyDeclared();
-  entropyProfileRow.classList.toggle("is-empty", !visible);
-}
-
-// Whether the active model declares a per-position entropy, in a
-// shape the row can draw.
-function entropyDeclared() {
-  return generatorCanvas.entropyDeclared();
-}
-
-function entropyProfileShowing() {
-  return !!(
-    entropyProfileRow
-    && !entropyProfileRow.hidden
-    && !entropyProfileRow.classList.contains("is-empty")
-  );
-}
-
-// Show the profile only when the run carries entropy and the
-// scrubber is driving a token view.
-function updateEntropyProfileVisibility() {
-  if (!entropyProfileRow) {
-    return;
-  }
-  if (
-    !scrubberActive
-    || !generatorCanvas.entropyAvailable()
-  ) {
-    setEntropyProfileVisible(false);
-    return;
-  }
-  drawEntropyProfile();
 }
 
 // Prompt composition lives in generator_composer.js. The page passes
@@ -2912,7 +2181,7 @@ function activateScrubber() {
   unlockScrubberNav();
 
   navigateToFrame(currentScrubFrame);
-  updateEntropyProfileVisibility();
+  generatorReadouts.updateProfile();
 }
 
 // Show or hide the scrubber without moving anything around it. It
@@ -2929,10 +2198,7 @@ function deactivateScrubber() {
   setScrubberVisible(false);
   guidedEditControls.hidden = true;
   generatorCanvas.deactivate();
-  setEntropyProfileVisible(false);
-  entropyHoverPos = null;
-  clearTokenHighlight();
-  clearTokenMetrics();
+  generatorReadouts.deactivate();
   hideAltsPopover();
   clearRemaskedPositions();
 }
@@ -2996,12 +2262,12 @@ function navigateToFrame(index) {
   } else {
     renderTargetFrame(index);
   }
-  refreshStopReadout();
+  generatorReadouts.refreshStop();
   // The token spans were just replaced, so any open popover now
   // points at a detached element.
   hideAltsPopover();
   if (scrubberActive) {
-    updateEntropyProfileVisibility();
+    generatorReadouts.updateProfile();
   }
   updateGuidedUI();
 }
@@ -4092,7 +3358,7 @@ function setSaveAvailable(available) {
 // stack exists to fix.
 function resetStatus() {
   generatorChrome.resetStatus(appSettings.tpsMode);
-  clearTokenMetrics();
+  generatorReadouts.clearMetrics();
 }
 
 // ---- Actions ----
@@ -4107,16 +3373,13 @@ function resetRunState() {
   remaskEdits = [];
   generatorCanvas.reset();
   generatorCanvas.deactivate();
-  entropyHoverPos = null;
-  clearTokenHighlight();
-  clearTokenMetrics();
+  generatorReadouts.reset();
   hideAltsPopover();
   isResuming = false;
   pendingResume = null;
   updateEditFramesLock();
   updateGenerateButton();
   setSaveAvailable(false);
-  refreshStopReadout();
 }
 
 // "New Run": reset to a clean slate for a new prompt once a run is
@@ -4240,11 +3503,11 @@ function generatorCanvasWriteHighlight(value) {
 }
 
 function generatorCanvasOutputReset() {
-  tokenHighlightPos = null;
+  generatorReadouts.outputReset();
 }
 
 function generatorCanvasRendered() {
-  refreshTokenMetrics();
+  generatorReadouts.rendered();
 }
 
 function generatorCanvasOverlayChanged() {
@@ -4252,10 +3515,34 @@ function generatorCanvasOverlayChanged() {
 }
 
 function generatorCanvasLayerChanged(change) {
-  if (change.profile && scrubberActive) {
-    updateEntropyProfileVisibility();
-  }
-  refreshTokenMetricsLayer();
+  generatorReadouts.layerChanged(change);
+}
+
+function generatorReadoutsReadModel() {
+  var tokenizer = generatorModelPanel.activeTokenizer();
+  return {
+    capabilities: generatorModelPanel.capabilities(),
+    parameterDefaults:
+      generatorModelPanel.parameterDefaults(),
+    vocabSize: tokenizer.model_vocab_size || null,
+  };
+}
+
+function generatorReadoutsReadSettings() {
+  return {
+    remaskedPositions: remaskedPositions,
+    segmentStarts: remaskEdits.map(function (edit) {
+      return edit.frame_index;
+    }),
+  };
+}
+
+function generatorReadoutsReadScrubber() {
+  return {
+    active: scrubberActive,
+    frame: currentScrubFrame,
+    selectingTarget: runPhase.mode === "select_target",
+  };
 }
 
 function generatorRunReadModel() {
@@ -4398,6 +3685,7 @@ generatorComposer.wire();
 generatorModelPanel.wire();
 generatorChrome.wire();
 generatorCanvas.wire();
+generatorReadouts.wire();
 
 // Scrubber event listeners.
 //
@@ -4616,8 +3904,7 @@ outputArea.addEventListener(
     if (pos === null) {
       return;
     }
-    setEntropyHoverPosition(pos);
-    setTokenMetricsHover(pos, target);
+    generatorReadouts.setTokenHover(pos, target);
     if (!scrubberActive || !altsPopover) {
       return;
     }
@@ -4636,31 +3923,6 @@ outputArea.addEventListener(
     showAltsPopover(pos, target);
   }
 );
-
-// The profile's own hover, the mirror of the handler above: moving
-// along the columns lights both the column and the token it belongs
-// to. A direct token hover reaches the same look through CSS
-// (.token-hover-highlight), so the two directions match without
-// this having to touch the class the pointer already applies.
-if (entropyProfileCanvas) {
-  entropyProfileCanvas.addEventListener(
-    "mousemove",
-    function (e) {
-      var pos = entropyProfilePosition(e);
-      setEntropyHoverPosition(pos);
-      setTokenHighlight(pos);
-      setTokenMetricsHover(pos, null);
-    }
-  );
-  entropyProfileCanvas.addEventListener(
-    "mouseleave",
-    function () {
-      setEntropyHoverPosition(null);
-      setTokenHighlight(null);
-      clearTokenMetrics();
-    }
-  );
-}
 
 // The token position an event target represents, or null when the
 // pointer is over the output area's padding rather than a token.
@@ -4687,8 +3949,7 @@ outputArea.addEventListener(
     if (altsPopoverPinned()) {
       return;
     }
-    setEntropyHoverPosition(null);
-    clearTokenMetrics();
+    generatorReadouts.clearTokenHover();
     hideAltsPopover();
   }
 );
@@ -4698,8 +3959,7 @@ if (altsPopover) {
     if (altsPopoverPinned()) {
       return;
     }
-    setEntropyHoverPosition(null);
-    clearTokenMetrics();
+    generatorReadouts.clearTokenHover();
     hideAltsPopover();
   });
   // Picking a candidate commits the substitution. Only armed in What
@@ -4782,7 +4042,7 @@ window.addEventListener("resize", function () {
     hideAltsPopover();
   }
   if (scrubberActive) {
-    updateEntropyProfileVisibility();
+    generatorReadouts.updateProfile();
   }
 });
 
@@ -5034,7 +4294,7 @@ function applyModelInfo(info) {
   generatorCanvas.applyModel();
   // Same reason: whether the entropy row is reserved or absent
   // depends on the model, and the markup starts it absent.
-  setEntropyProfileVisible(false);
+  generatorReadouts.applyModel();
 }
 
 function finishBoot() {
@@ -5072,8 +4332,7 @@ function boot() {
   generatorComposer.boot();
   generatorChrome.boot();
   generatorCanvas.applySettings();
-  overlaysBuildTokenMetrics(tokenMetricsStrip);
-  overlaysBuildStopReadout(stopReadout);
+  generatorReadouts.boot();
   var inlined = bootModelInfo();
   if (inlined !== null) {
     applyModelInfo(inlined);

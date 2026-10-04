@@ -13,8 +13,8 @@
 // readers compared against `true`. Storing a frame there makes 0 a
 // legitimate value that is also falsy, so a reader written the
 // obvious way would drop the edit made at the very first frame and
-// nothing else would look wrong. positionWasEdited exists to stop
-// that, and this pins it.
+// nothing else would look wrong. The explicit numeric test below
+// stops that, and pins the boundary.
 //
 // Passing proves both surfaces colour a marker by its own edit's
 // frame, normalize against the run's frame count, agree with each
@@ -63,6 +63,18 @@ function generatorPage(edits) {
   }
   context.remaskEdits = edits;
   return context;
+}
+
+function generatorMarks(context) {
+  return context.generatorCanvas.editedPositionMarks();
+}
+
+function generatorMarkerColors(context, positionsToRead) {
+  const marks = generatorMarks(context);
+  const last = context.generatorRun.frameCount() - 1;
+  return positionsToRead.map((position) =>
+    context.overlaysEditColor(marks[position], last)
+  );
 }
 
 function bootFetch() {
@@ -152,7 +164,7 @@ test("a touched position remembers its edit's frame", () => {
     { frame_index: 4, token_positions: [3] },
   ]);
 
-  const marks = context.editedPositionMarks();
+  const marks = generatorMarks(context);
 
   assert.equal(marks[0], 1);
   assert.equal(marks[1], 1);
@@ -166,10 +178,10 @@ test("an untouched position has no frame", () => {
     { frame_index: 1, token_positions: [0] },
   ]);
 
-  const marks = context.editedPositionMarks();
+  const marks = generatorMarks(context);
 
-  assert.equal(context.positionWasEdited(marks, 2), false);
-  assert.equal(context.positionWasEdited(marks, 0), true);
+  assert.equal(typeof marks[2] === "number", false);
+  assert.equal(typeof marks[0] === "number", true);
 });
 
 test("a position edited twice reports the later frame", () => {
@@ -182,7 +194,7 @@ test("a position edited twice reports the later frame", () => {
     { frame_index: 5, token_positions: [5] },
   ]);
 
-  assert.equal(context.editedPositionMarks()[5], 5);
+  assert.equal(generatorMarks(context)[5], 5);
 });
 
 test("an edit at frame 0 is still an edit", () => {
@@ -192,13 +204,11 @@ test("an edit at frame 0 is still an edit", () => {
     { frame_index: 0, token_positions: [2] },
   ]);
 
-  const marks = context.editedPositionMarks();
+  const marks = generatorMarks(context);
 
-  assert.equal(context.positionWasEdited(marks, 2), true);
-  // Array.from because the page builds its arrays in the vm's realm,
-  // so a strict deep comparison would fail on the prototype alone.
+  assert.equal(typeof marks[2] === "number", true);
   assert.deepEqual(
-    Array.from(context.editedProfilePositions()), [2]
+    Object.keys(marks).map(Number), [2]
   );
 });
 
@@ -211,7 +221,7 @@ test("a marker takes the ramp at its own frame", () => {
   ]);
   const last = context.generatorRun.frameCount() - 1;
 
-  const colors = context.editMarkerColors([0, 3]);
+  const colors = generatorMarkerColors(context, [0, 3]);
 
   assert.equal(colors[0], context.commitColor(1, last));
   assert.equal(colors[1], context.commitColor(4, last));
@@ -225,7 +235,7 @@ test("an early and a late edit are different colours", () => {
     { frame_index: 5, token_positions: [3] },
   ]);
 
-  const colors = context.editMarkerColors([0, 3]);
+  const colors = generatorMarkerColors(context, [0, 3]);
 
   assert.notEqual(colors[0], colors[1]);
 });
@@ -237,7 +247,7 @@ test("an edit with no frame falls back to the flat colour", () => {
     { token_positions: [1] },
   ]);
 
-  const colors = context.editMarkerColors([1]);
+  const colors = generatorMarkerColors(context, [1]);
 
   assert.equal(colors[0], context.OVERLAYS_EDIT_COLOR);
 });
@@ -272,5 +282,8 @@ test("the two surfaces agree on one run", () => {
   const generator = generatorPage(edits);
   const { markers } = analyticsRun(edits);
 
-  assert.equal(generator.editMarkerColors([2])[0], markers[0].color);
+  assert.equal(
+    generatorMarkerColors(generator, [2])[0],
+    markers[0].color
+  );
 });
