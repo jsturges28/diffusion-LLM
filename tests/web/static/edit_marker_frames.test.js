@@ -78,17 +78,70 @@ function bootFetch() {
   };
 }
 
-// An Analytics page and a saved run payload carrying the same log.
-// Returned together because the page's resolver takes the payload
-// rather than reading module state.
+// The dashed markers an entropy chart's edit plugin draws, in drawing
+// order, read the way Chart.js has it draw them. The x scale here
+// puts position N at pixel N, so each marker's x is its position.
+function drawnMarkers(entropy) {
+  const plugin = entropy.config.plugins.find(
+    (each) => each.id === "substitutionMarkers"
+  );
+  const markers = [];
+  let stroke = null;
+  plugin.afterDatasetsDraw({
+    scales: {
+      x: { getPixelForValue: (value) => value },
+      y: { top: 0, bottom: 10 },
+    },
+    chartArea: { left: 0, top: 0, right: 100, bottom: 10 },
+    ctx: {
+      save() {}, restore() {}, beginPath() {}, rect() {}, clip() {},
+      setLineDash() {}, lineTo() {}, stroke() {},
+      set strokeStyle(value) {
+        stroke = value;
+      },
+      get strokeStyle() {
+        return stroke;
+      },
+      moveTo(x) {
+        markers.push({ position: x, color: stroke });
+      },
+    },
+  });
+  return markers;
+}
+
+// An Analytics page that has opened a saved run carrying the same
+// log, and the markers its entropy chart draws for it.
 function analyticsRun(edits) {
-  const { context } = loadPage({
+  const page = loadPage({
     scripts: ANALYTICS_SCRIPTS, fetchImpl: bootFetch(),
   });
+  const { context } = page;
+  let entropy = null;
+  context.Chart = function (ctx, config) {
+    const chart = {
+      config: config,
+      data: config.data,
+      options: config.options,
+      setActiveElements() {},
+      update() {},
+      destroy() {},
+      resize() {},
+    };
+    if (ctx.canvas.id === "chart-entropy") {
+      entropy = chart;
+    }
+    return chart;
+  };
   const canvas = positions(WORDS);
   const frames = WORDS.map((_, at) => canvas.slice(0, at + 1));
-  const data = { frames: frames, remask_edits: edits };
-  return { context, data };
+  context.renderRunOverlays({
+    frames: frames, remask_edits: edits, records_available: true,
+  });
+  assert.ok(entropy, "the entropy chart was not built");
+  return {
+    context, last: frames.length - 1, markers: drawnMarkers(entropy),
+  };
 }
 
 // -- the mapping itself --
@@ -192,28 +245,23 @@ test("an edit with no frame falls back to the flat colour", () => {
 // -- the same answers in Analytics --
 
 test("Analytics colours a marker by the same rule", () => {
-  const { context, data } = analyticsRun([
+  const { context, last, markers } = analyticsRun([
     { frame_index: 1, token_positions: [0] },
     { frame_index: 4, token_positions: [3] },
   ]);
-  const last = data.frames.length - 1;
 
-  const colors = context.editedPositionColors(data, [0, 3]);
-
-  assert.equal(colors[0], context.commitColor(1, last));
-  assert.equal(colors[1], context.commitColor(4, last));
+  assert.deepEqual(markers.map((marker) => marker.position), [0, 3]);
+  assert.equal(markers[0].color, context.commitColor(1, last));
+  assert.equal(markers[1].color, context.commitColor(4, last));
 });
 
 test("Analytics keeps an edit made at frame 0", () => {
-  const { context, data } = analyticsRun([
+  const { context, last, markers } = analyticsRun([
     { frame_index: 0, token_positions: [2] },
   ]);
 
-  assert.deepEqual(Array.from(context.editedPositions(data)), [2]);
-  assert.equal(
-    context.editedPositionColors(data, [2])[0],
-    context.commitColor(0, data.frames.length - 1)
-  );
+  assert.deepEqual(markers.map((marker) => marker.position), [2]);
+  assert.equal(markers[0].color, context.commitColor(0, last));
 });
 
 test("the two surfaces agree on one run", () => {
@@ -222,10 +270,7 @@ test("the two surfaces agree on one run", () => {
   // is that a marker must not mean different things on two pages.
   const edits = [{ frame_index: 3, token_positions: [2] }];
   const generator = generatorPage(edits);
-  const { context: analytics, data } = analyticsRun(edits);
+  const { markers } = analyticsRun(edits);
 
-  assert.equal(
-    generator.editMarkerColors([2])[0],
-    analytics.editedPositionColors(data, [2])[0]
-  );
+  assert.equal(generator.editMarkerColors([2])[0], markers[0].color);
 });

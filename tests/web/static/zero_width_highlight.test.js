@@ -1,10 +1,12 @@
 // A token that renders to nothing still shows where it is.
 //
 // Strategy: build real token spans through the shared span builder,
-// then ask each page's setTokenHighlight to light a position and read
-// the classes it left behind. A newline token has to come away with
-// the extra class that CSS turns into a standing marker; a token with
-// glyphs must not, because that marker would sit on top of its first
+// then light a position and read the classes left behind. The
+// generator is asked directly; Analytics opens a run of the same
+// tokens and is pointed at its entropy chart's bar, which is how it
+// lights a position. A newline token has to come away with the extra
+// class that CSS turns into a standing marker; a token with glyphs
+// must not, because that marker would sit on top of its first
 // character.
 //
 // The bug being pinned: the cross-highlight is a background plus a
@@ -184,30 +186,62 @@ test("moving the highlight moves the marker", () => {
 
 // -- Analytics --
 
-test("Analytics marks a lit newline too", () => {
-  // The same behaviour on the other surface, which keeps its own copy
-  // of setTokenHighlight over its own container.
-  const { context } = loadPage({
+// An Analytics page with a run of these tokens open, and the entropy
+// chart it built, as a recording Chart kept it.
+function analyticsOpened() {
+  const page = loadPage({
     scripts: ANALYTICS_SCRIPTS, fetchImpl: bootFetch(),
   });
-  fillWithTokens(context, context.overlayOutput);
+  let entropy = null;
+  page.context.Chart = function (ctx, config) {
+    const chart = {
+      config: config,
+      data: config.data,
+      options: config.options,
+      setActiveElements() {},
+      update() {},
+      destroy() {},
+      resize() {},
+    };
+    if (ctx.canvas.id === "chart-entropy") {
+      entropy = chart;
+    }
+    return chart;
+  };
+  page.context.renderRunOverlays({
+    frames: [tokens()], records_available: true,
+  });
+  assert.ok(entropy, "the entropy chart was not built");
+  return { page, entropy };
+}
 
-  context.setTokenHighlight(2);
+// The pointer over one bar of the entropy chart, as Chart.js tells
+// its plugins once it has worked out which bar is active.
+function pointAtBar(entropy, position) {
+  const link = entropy.config.plugins.find(
+    (plugin) => plugin.id === "tokenLink"
+  );
+  link.afterEvent({ getActiveElements: () => [{ index: position }] });
+}
 
-  const classes = classesAt(context.overlayOutput, 2);
+test("Analytics marks a lit newline too", () => {
+  // The same behaviour on the other surface, which keeps its own copy
+  // of the highlight over its own container, lit from its chart.
+  const { page, entropy } = analyticsOpened();
+
+  pointAtBar(entropy, 2);
+
+  const classes = classesAt(page.registry.get("overlay-output"), 2);
   assert.equal(classes.has("token-cross-highlight"), true);
   assert.equal(classes.has("token-zero-width"), true);
 });
 
 test("Analytics leaves a lit word unmarked", () => {
-  const { context } = loadPage({
-    scripts: ANALYTICS_SCRIPTS, fetchImpl: bootFetch(),
-  });
-  fillWithTokens(context, context.overlayOutput);
+  const { page, entropy } = analyticsOpened();
 
-  context.setTokenHighlight(0);
+  pointAtBar(entropy, 0);
 
-  const classes = classesAt(context.overlayOutput, 0);
+  const classes = classesAt(page.registry.get("overlay-output"), 0);
   assert.equal(classes.has("token-cross-highlight"), true);
   assert.equal(classes.has("token-zero-width"), false);
 });

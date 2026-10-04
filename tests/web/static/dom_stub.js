@@ -611,8 +611,10 @@ function unref(handle) {
   return handle;
 }
 
-function makeStorage() {
-  const store = new Map();
+// `initial` holds entries already stored when the page loads, keyed
+// as the page reads them.
+function makeStorage(initial) {
+  const store = new Map(Object.entries(initial || {}));
   return {
     getItem: (key) => (store.has(key) ? store.get(key) : null),
     setItem: (key, value) => { store.set(key, String(value)); },
@@ -631,6 +633,10 @@ function makeStorage() {
  * state. Omitting it is the meaningful other case, not merely the
  * default: it is what a page served without that state sees, and the
  * fetch fallback has to keep working for exactly that reason.
+ *
+ * `options.storage` seeds `localStorage` before any script runs, the
+ * way a browser that saved settings presents them to the next page.
+ * A page that reads a setting once at load sees it only this way.
  *
  * Returns the context plus the element registry, so a test can reach
  * an element by id and fire a listener the page registered on it.
@@ -666,7 +672,7 @@ function loadPage(options) {
     queueMicrotask,
     requestAnimationFrame: (fn) => unref(setTimeout(fn, 0)),
     cancelAnimationFrame: (handle) => clearTimeout(handle),
-    localStorage: makeStorage(),
+    localStorage: makeStorage(settings.storage),
     sessionStorage: makeStorage(),
     // Inert by default, for the same reason the socket is: a page
     // fetches during boot, and a default that rejected would fail

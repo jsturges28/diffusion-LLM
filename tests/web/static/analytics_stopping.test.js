@@ -72,25 +72,38 @@ function bootFetch() {
   };
 }
 
-// A page holding `data` the way renderRunOverlays leaves it, scrubbed
-// to `frame`, with Chart replaced by a recorder of what it was given.
+// A page that has opened `data` the way a run's frames landing does,
+// scrubbed to `frame`, with Chart replaced by a recorder of what it
+// was given.
 function pageWith(data, frame) {
   const page = loadPage({
     scripts: ANALYTICS_SCRIPTS, fetchImpl: bootFetch(),
   });
   const { context } = page;
-  data.records_available = true;
-  data.series = context.overlaySeriesOf(data, false);
-  data.baseline = context.overlaySeriesOf(data, true);
-  context.overlayData = data;
-  context.overlayIsAutoregressive = false;
-  context.overlayFrameIndex = frame;
   page.charts = [];
+  // A chart holds the data and options it was built with, as a
+  // Chart.js instance does; scrubbing reads them back.
   context.Chart = function (ctx, config) {
     page.charts.push(config);
-    return { destroy() {}, update() {}, resize() {} };
+    return {
+      data: config.data,
+      options: config.options,
+      destroy() {},
+      update() {},
+      resize() {},
+    };
   };
+  data.records_available = true;
+  context.renderRunOverlays(data);
+  context.setOverlayFrame(frame);
   return page;
+}
+
+// The crossfade's slider moved to `percent`, as dragging it does.
+function crossfade(page, percent) {
+  const slider = page.registry.get("run-blend");
+  slider.value = String(percent);
+  slider.dispatch("input");
 }
 
 // The readout's words, or null while it is hidden.
@@ -110,8 +123,6 @@ function words(page) {
 test("a run's frames landing build its Stopping chart", () => {
   const page = pageWith(twoCanvases(), 5);
 
-  page.context.renderRunOverlays(page.context.overlayData);
-
   const stopping = page.charts.filter((config) =>
     config.plugins.some((plugin) => plugin.id === "stopThreshold")
   );
@@ -123,7 +134,6 @@ test("a run's frames landing build its Stopping chart", () => {
 
 test("the readout reads the scrubbed frame", () => {
   const page = pageWith(twoCanvases(), 2);
-  page.context.refreshStopReadout();
   assert.equal(words(page), "entropy 0.0020 of 0.005, steady");
 
   page.context.setOverlayFrame(3);
@@ -137,8 +147,6 @@ test("the readout stays hidden for a run with no rule", () => {
   const data = twoCanvases();
   data.stop_rule = null;
   const page = pageWith(data, 2);
-
-  page.context.refreshStopReadout();
 
   assert.equal(words(page), null);
 });
@@ -154,11 +162,9 @@ test("the crossfade moves the readout to the original run", () => {
     stop_rule: Object.assign({}, RULE),
   };
   const page = pageWith(data, 2);
-  page.context.refreshStopReadout();
   assert.equal(words(page), "entropy 0.30 of 0.005, 1 changing");
 
-  page.context.compareBlend = 0;
-  page.context.refreshTokenMetricsLayer();
+  crossfade(page, 0);
 
   assert.equal(words(page), "entropy 0.0010 of 0.005, steady");
 });
@@ -177,7 +183,6 @@ test("an edit's first resumed frame is never steady", () => {
   };
   const page = pageWith(data, 2);
 
-  page.context.refreshStopReadout();
   assert.equal(words(page), "entropy 0.20 of 0.005, steady 0 of 1");
 
   page.context.setOverlayFrame(3);

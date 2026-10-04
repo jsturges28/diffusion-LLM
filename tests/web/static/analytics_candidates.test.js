@@ -93,15 +93,69 @@ function payload(overrides) {
   }, overrides || {});
 }
 
-function opened(data) {
+// The same, with the frames endpoint answering `data` for any run.
+function framesFetch(data) {
+  const boot = bootFetch();
+  return function (url) {
+    if (!String(url).endsWith("/frames")) {
+      return boot(url);
+    }
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve(data),
+    });
+  };
+}
+
+// Long enough for a fetched answer to work through its promises.
+function settle() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+// A chart that keeps what it was built with, as a Chart.js instance
+// does: scrubbing recolours its bars and a hover lights one.
+function keptChart(ctx, config) {
+  return {
+    data: config.data,
+    options: config.options,
+    setActiveElements() {},
+    update() {},
+    destroy() {},
+    resize() {},
+  };
+}
+
+// Settings as the Settings page stores them. The page reads them once
+// as it loads, so they are in storage before it does.
+function storedSettings(settings) {
+  if (!settings) {
+    return undefined;
+  }
+  return { diffusion_settings: JSON.stringify(settings) };
+}
+
+function loaded(fetchImpl, settings) {
   const page = loadPage({
-    scripts: ANALYTICS_SCRIPTS, fetchImpl: bootFetch(),
+    scripts: ANALYTICS_SCRIPTS,
+    fetchImpl: fetchImpl,
+    storage: storedSettings(settings),
   });
-  page.context.renderRunOverlays(data);
-  // The stub's Chart keeps no datasets for scrubbing to recolour,
-  // and the entropy chart is not what these tests are about.
-  page.context.chartEntropy = null;
+  page.context.Chart = keptChart;
   return page;
+}
+
+function opened(data, settings) {
+  const page = loaded(bootFetch(), settings);
+  page.context.renderRunOverlays(data);
+  return page;
+}
+
+// The crossfade's slider moved to `percent`, as dragging it does.
+function crossfade(page, percent) {
+  const slider = page.registry.get("run-blend");
+  slider.value = String(percent);
+  slider.dispatch("input");
 }
 
 function descendants(node) {
@@ -119,13 +173,32 @@ function withClass(node, name) {
   return descendants(node).filter((n) => n.classes.has(name));
 }
 
-// The popover as a hover opens it. The stub keeps children when text
-// is cleared, so it starts empty.
+// The spans of the newest render, in the edited layer of a stacked
+// run. The stub keeps every render's nodes, since clearing text
+// leaves children in place, so the newest is the last.
+function newestSpans(output) {
+  const layers = output.children.filter(
+    (child) => child.classList.contains("token-layer-edited")
+  );
+  const holder = layers.length > 0
+    ? layers[layers.length - 1]
+    : output;
+  const last = holder.children[holder.children.length - 1];
+  return last && last.tag === null ? last.children : holder.children;
+}
+
+// The popover as a hover over the position's span opens it. Either
+// layer of a stacked run would do, since the popover pages by the
+// crossfade rather than by the layer under the pointer. The stub
+// keeps children when text is cleared, so the popover starts empty.
 function popoverAt(page, frame, position) {
   const popover = page.registry.get("token-alts-popover");
+  const output = page.registry.get("overlay-output");
   page.context.setOverlayFrame(frame);
   popover.children = [];
-  page.context.showAltsPopover(position, null);
+  output.dispatch("mouseover", {
+    target: newestSpans(output)[position],
+  });
   return popover;
 }
 
@@ -216,12 +289,12 @@ function pagerTo(popover, label) {
 test("an edited run opens on the run the crossfade favours", () => {
   const page = opened(editedPayload());
 
-  page.context.compareBlend = 0.2;
+  crossfade(page, 20);
   const original = popoverAt(page, 3, 2);
   assert.equal(titleOf(original), "Position 3: Original");
   assert.deepEqual(rowIds(original), [302, 7]);
 
-  page.context.compareBlend = 0.8;
+  crossfade(page, 80);
   const edited = popoverAt(page, 3, 2);
   assert.equal(titleOf(edited), "Position 3: Edited");
   assert.deepEqual(rowIds(edited), [102, 7]);
@@ -229,7 +302,7 @@ test("an edited run opens on the run the crossfade favours", () => {
 
 test("the pager turns to the other run", () => {
   const page = opened(editedPayload());
-  page.context.compareBlend = 0.2;
+  crossfade(page, 20);
   const popover = popoverAt(page, 3, 2);
   const toEdited = pagerTo(popover, "Edited");
 
@@ -242,7 +315,7 @@ test("the pager turns to the other run", () => {
 
 test("before the edit there is one run, so no pager", () => {
   const page = opened(editedPayload());
-  page.context.compareBlend = 0.2;
+  crossfade(page, 20);
 
   const popover = popoverAt(page, 1, 2);
 
@@ -256,7 +329,7 @@ test("the runs part at the earliest edit, whatever the order", () => {
       { frame_index: 3, token_positions: [2] }, EDIT_AT_2,
     ],
   }));
-  page.context.compareBlend = 0.2;
+  crossfade(page, 20);
 
   const popover = popoverAt(page, 2, 2);
 
@@ -271,7 +344,7 @@ test("past its end, the Original page reads the original's last frame", () => {
     original_frames: [0, 1, 2, 3].map(frameTokens),
     original_candidates: candidatesAt([1, 3]),
   }));
-  page.context.compareBlend = 0.2;
+  crossfade(page, 20);
 
   const popover = popoverAt(page, 4, 2);
 
@@ -282,7 +355,7 @@ test("past its end, the Original page reads the original's last frame", () => {
 test("an edited run saved without its baseline has one page", () => {
   // With no original to crossfade to, one run is on screen.
   const page = opened(editedPayload({ original_frames: null }));
-  page.context.compareBlend = 0.2;
+  crossfade(page, 20);
 
   const popover = popoverAt(page, 3, 2);
 
@@ -292,7 +365,7 @@ test("an edited run saved without its baseline has one page", () => {
 
 test("where the favoured run has nothing, the popover stays closed", () => {
   const page = opened(editedPayload({ candidates: null }));
-  page.context.compareBlend = 0.8;
+  crossfade(page, 80);
 
   const popover = popoverAt(page, 3, 2);
 
@@ -304,10 +377,10 @@ test("a run saved without pre-edit candidates has only its edited page", () => {
   // tokens, and nothing to turn to from the edited run's.
   const page = opened(editedPayload({ original_candidates: null }));
 
-  page.context.compareBlend = 0.2;
+  crossfade(page, 20);
   assert.equal(popoverAt(page, 3, 2).hidden, true);
 
-  page.context.compareBlend = 0.8;
+  crossfade(page, 80);
   const edited = popoverAt(page, 3, 2);
   assert.equal(titleOf(edited), "Position 3: Edited");
   assert.equal(withClass(edited, "alt-pager").length, 0);
@@ -321,16 +394,23 @@ test("a run saved before candidates existed has no popover", () => {
   assert.equal(popover.hidden, true);
 });
 
-test("an autoregressive run keeps its per-position popover", () => {
+test("an autoregressive run keeps its own popover", async () => {
+  // Opened the way the panel opens any run, since whether a run is
+  // autoregressive is read off its catalog entry, not its frames.
   const alternatives = WORDS.map((_, position) => [
     { id: 1000 + position, t: " own", p: 0.7 },
   ]);
-  const page = opened(payload({
+  const page = loaded(framesFetch(payload({
     candidates: null,
     alternatives: alternatives,
     alternatives_available: true,
-  }));
-  page.context.overlayIsAutoregressive = true;
+  })));
+  const { context } = page;
+  const run = { run_id: "run", model_type: "autoregressive" };
+  context.loadRunOverlays(
+    run.run_id, run, context.detailRequests.begin(run.run_id)
+  );
+  await settle();
 
   const popover = popoverAt(page, 3, 2);
 
@@ -361,8 +441,7 @@ function relabelled(store, text) {
 
 test("a saved run's unsettled positions cycle", () => {
   // At frame 3 only position 3 is unsettled.
-  const page = opened(payload());
-  page.context.analyticsSettings.unsettledShows = "candidates";
+  const page = opened(payload(), { unsettledShows: "candidates" });
 
   const cycling = cyclingAt(page, 3);
 
@@ -371,8 +450,7 @@ test("a saved run's unsettled positions cycle", () => {
 });
 
 test("the guess keeps a saved run still", () => {
-  const page = opened(payload());
-  page.context.analyticsSettings.unsettledShows = "guess";
+  const page = opened(payload(), { unsettledShows: "guess" });
 
   assert.equal(cyclingAt(page, 3).length, 0);
 });
@@ -382,9 +460,8 @@ test("each saved crossfade layer cycles its own run's candidates", () => {
   const page = opened(editedPayload({
     original_candidates: relabelled(candidatesAt([1, 3, 4]), " before"),
     candidates: relabelled(edited.candidates, " after"),
-  }));
-  page.context.analyticsSettings.unsettledShows = "candidates";
-  page.context.compareBlend = 0.5;
+  }), { unsettledShows: "candidates" });
+  crossfade(page, 50);
 
   const cycling = cyclingAt(page, 3);
 

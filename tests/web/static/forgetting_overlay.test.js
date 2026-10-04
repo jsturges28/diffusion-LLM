@@ -357,6 +357,25 @@ function analytics() {
   }).context;
 }
 
+// An Analytics page that has opened `run` the way a run's frames
+// landing does.
+function analyticsOpened(run) {
+  const context = analytics();
+  run.records_available = true;
+  context.renderRunOverlays(run);
+  return context;
+}
+
+// The spans the newest render drew. The stub keeps each document
+// fragment as a node, and setting textContent leaves a node's
+// children in place where a browser removes them, so every render's
+// fragment stays behind and the newest is the last.
+function newestSpans(context) {
+  const output = context.document.getElementById("overlay-output");
+  const last = output.children[output.children.length - 1];
+  return last && last.tag === null ? last.children : output.children;
+}
+
 // A saved append run, as the flat positions Analytics reads it in.
 function savedRun(signals, withForgetting) {
   const positions = WORDS.map((word, at) => {
@@ -417,57 +436,38 @@ test("Analytics reads a run saved without a manifest by its data", () => {
 });
 
 test("Analytics reads the value in the strip", () => {
-  const context = analytics();
-  context.overlayMode = "forgetting";
+  const context = analyticsOpened(savedRun([FORGETTING], true));
+  context.setOverlayMode("forgetting");
+  const output = context.document.getElementById("overlay-output");
 
+  output.dispatch("mouseover", { target: newestSpans(context)[0] });
+
+  const strip = context.document.getElementById("token-metrics");
   assert.equal(
-    context.metricsExtra(0, { t: "a", f: 0.2 }), "Forgetting: 0.200"
+    strip.overlaysMetricNodes.extra.textContent, "Forgetting: 0.120"
   );
 });
 
 test("Analytics lists the option in its picker", () => {
-  const context = analytics();
-  const run = savedRun([FORGETTING], true);
-  run.records_available = true;
+  const context = analyticsOpened(savedRun([FORGETTING], true));
 
-  context.buildOverlaySelect(run);
-
-  const list = context.overlaySelect.children.find(
-    (child) => child.tag === "ul"
+  const mount = context.document.getElementById(
+    "overlay-select-mount"
   );
+  const select = mount.children[mount.children.length - 1];
+  const list = select.children.find((child) => child.tag === "ul");
   const values = list.children.map(
     (item) => item.getAttribute("data-value")
   );
   assert.ok(values.includes("forgetting"));
 });
 
-// Every token span the overlay drew, through the fragments the stub
-// keeps as children rather than flattening.
-function drawnSpans(element) {
-  const spans = [];
-  for (const child of element.children || []) {
-    if (child.tag === "span") {
-      spans.push(child);
-    } else {
-      spans.push(...drawnSpans(child));
-    }
-  }
-  return spans;
-}
-
 test("Analytics colours each token by its own value", () => {
-  const context = analytics();
-  const run = savedRun([FORGETTING], true);
-  run.series = context.overlaySeriesOf(run, false);
-  context.overlayData = run;
-  context.overlayFrameIndex = WORDS.length - 1;
-  context.overlayMode = "forgetting";
+  const context = analyticsOpened(savedRun([FORGETTING], true));
 
-  context.renderCurrentOverlay();
+  context.setOverlayMode("forgetting");
 
-  const colors = drawnSpans(context.overlayOutput).map(
-    (span) => span.style.color
-  );
+  const colors = newestSpans(context).map((span) => span.style.color);
   assert.deepEqual(
     colors, VALUES.map((value) => context.forgettingColor(value))
   );

@@ -4,9 +4,9 @@
 // file and hand it saved runs the way loading one does, with frames
 // shaped like DiffusionGemma's: a changed token reads as masked for a
 // frame before it settles again. One run revises, one never does, and
-// an edited run carries a pre-edit snapshot. The colour callbacks are
-// read off what the overlay hands the renderer, and once through the
-// real renderer to show it paints.
+// an edited run carries a pre-edit snapshot. Each colour is read off
+// the span the real renderer painted, one layer at a time for the
+// stacked run, and the strip off its own element under a hover.
 //
 // Passing proves the option is offered exactly for a diffusion run
 // that revised, that each token is tinted by its count at the
@@ -80,19 +80,39 @@ function copy(frames) {
   );
 }
 
-// A page holding `data` the way renderRunOverlays leaves it, scrubbed
-// to `frame`.
+// The same, with the frames endpoint answering `data` for any run.
+function framesFetch(data) {
+  const boot = bootFetch();
+  return function (url) {
+    if (!String(url).endsWith("/frames")) {
+      return boot(url);
+    }
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve(data),
+    });
+  };
+}
+
+// Long enough for a fetched answer to work through its promises.
+function settle() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function withRecords(data) {
+  data.records_available = true;
+  return data;
+}
+
+// A page that has opened `data` the way a run's frames landing does,
+// scrubbed to `frame`.
 function pageWith(data, frame) {
   const page = loadPage({
     scripts: ANALYTICS_SCRIPTS, fetchImpl: bootFetch(),
   });
-  const { context } = page;
-  data.records_available = true;
-  data.series = context.overlaySeriesOf(data, false);
-  data.baseline = context.overlaySeriesOf(data, true);
-  context.overlayData = data;
-  context.overlayIsAutoregressive = false;
-  context.overlayFrameIndex = frame;
+  page.context.renderRunOverlays(withRecords(data));
+  page.context.setOverlayFrame(frame);
   return page;
 }
 
@@ -104,36 +124,65 @@ function editedRun(frame) {
   }, frame);
 }
 
-// What the overlay hands the renderer, with the renderer replaced by
-// a recorder, so the colour callbacks can be asked directly.
-function capture(context) {
-  let seen = null;
-  context.renderOverlayTokens = function (opts) {
-    seen = opts;
-  };
-  context.renderRevisionsOverlay();
-  assert.notEqual(seen, null, "the overlay rendered nothing");
-  return seen;
+// The spans the newest render drew. The stub keeps each document
+// fragment as a node, and setting textContent leaves a node's
+// children in place where a browser removes them, so every render's
+// fragment stays behind and the newest is the last.
+function renderedSpans(element) {
+  const last = element.children[element.children.length - 1];
+  if (last && last.tag === null) {
+    return last.children;
+  }
+  return element.children;
 }
 
-function colorsOf(colorFor) {
-  return [0, 1, 2, 3].map((index) => colorFor(index, settled(99)));
-}
-
-function pickerValues(context, data) {
-  context.buildOverlaySelect(data);
-  const list = context.overlaySelect.children.find(
-    (child) => child.tag === "ul"
+// The spans one layer draws: the only layer of a run that stands
+// alone, or the named one of the two a pre-edit snapshot stacks.
+function layerSpans(page, layerClass) {
+  const output = page.registry.get("overlay-output");
+  if (!layerClass) {
+    return renderedSpans(output);
+  }
+  const layers = output.children.filter(
+    (child) => child.classList.contains(layerClass)
   );
+  assert.ok(layers.length > 0, "no " + layerClass + " layer");
+  return renderedSpans(layers[layers.length - 1]);
+}
+
+// What Revisions paints each position of a layer. An untinted token
+// carries no colour of its own.
+function revisionColors(page, layerClass) {
+  page.context.setOverlayMode("revisions");
+  return layerSpans(page, layerClass).map((span) => span.style.color);
+}
+
+// The values the overlay picker offers, read off the select the page
+// built under its mount when the run opened.
+function pickerValues(page) {
+  const mount = page.registry.get("overlay-select-mount");
+  const select = mount.children[mount.children.length - 1];
+  const list = select.children.find((child) => child.tag === "ul");
   return list.children.map((item) => item.getAttribute("data-value"));
+}
+
+// The pointer over a position's span in one layer, as the page's own
+// mouseover listener receives it, and the strip's reading of it.
+function hoverExtra(page, layerClass, position) {
+  const output = page.registry.get("overlay-output");
+  output.dispatch("mouseover", {
+    target: layerSpans(page, layerClass)[position],
+  });
+  const strip = page.registry.get("token-metrics");
+  return strip.overlaysMetricNodes.extra.textContent;
 }
 
 // -- when it is offered --
 
 test("a saved run that revised offers it, after Commit Order", () => {
-  const { context } = pageWith({ frames: copy(REVISING) }, 6);
+  const page = pageWith({ frames: copy(REVISING) }, 6);
 
-  const values = pickerValues(context, context.overlayData);
+  const values = pickerValues(page);
 
   assert.equal(
     values.indexOf("revisions"), values.indexOf("commit") + 1
@@ -141,40 +190,51 @@ test("a saved run that revised offers it, after Commit Order", () => {
 });
 
 test("a saved run that never revised is not offered it", () => {
-  const { context } = pageWith({ frames: copy(SETTLING) }, 2);
+  const page = pageWith({ frames: copy(SETTLING) }, 2);
 
-  assert.ok(
-    !pickerValues(context, context.overlayData).includes("revisions")
-  );
+  assert.ok(!pickerValues(page).includes("revisions"));
 });
 
-test("an autoregressive run is never offered it", () => {
-  const { context } = pageWith({ frames: copy(REVISING) }, 6);
-  context.overlayIsAutoregressive = true;
+test("an autoregressive run is never offered it", async () => {
+  // Opened the way the panel opens any run, since whether a run is
+  // autoregressive is read off its catalog entry, not its frames.
+  const data = withRecords({ frames: copy(REVISING) });
+  const page = loadPage({
+    scripts: ANALYTICS_SCRIPTS, fetchImpl: framesFetch(data),
+  });
+  const { context } = page;
+  const run = { run_id: "run-ar", model_type: "autoregressive" };
 
-  assert.equal(context.overlayRevisionsAvailable(), false);
+  context.loadRunOverlays(
+    run.run_id, run, context.detailRequests.begin(run.run_id)
+  );
+  await settle();
+
+  // Heatmap is offered for any run with records, so the run opened.
+  assert.ok(pickerValues(page).includes("heatmap"));
+  assert.ok(!pickerValues(page).includes("revisions"));
 });
 
 // -- what it paints --
 
 test("tokens are tinted by their count at the scrubbed frame", () => {
-  const { context } = pageWith({ frames: copy(REVISING) }, 6);
+  const page = pageWith({ frames: copy(REVISING) }, 6);
+  const { context } = page;
 
-  const colors = colorsOf(capture(context).colorFor);
+  const colors = revisionColors(page);
 
   assert.deepEqual(colors, [
-    context.revisionColor(2), context.revisionColor(1), null, null,
+    context.revisionColor(2), context.revisionColor(1), "", "",
   ]);
 });
 
 test("an earlier frame counts only what had happened by then", () => {
-  const { context } = pageWith({ frames: copy(REVISING) }, 4);
+  const page = pageWith({ frames: copy(REVISING) }, 4);
+  const { context } = page;
 
-  const colors = colorsOf(capture(context).colorFor);
+  const colors = revisionColors(page);
 
-  assert.deepEqual(
-    colors, [context.revisionColor(1), null, null, null]
-  );
+  assert.deepEqual(colors, [context.revisionColor(1), "", "", ""]);
 });
 
 test("each canvas counts on its own", () => {
@@ -184,110 +244,102 @@ test("each canvas counts on its own", () => {
     [settled(10)], [changing(20)], [settled(20)],
     [settled(30)], [settled(30)],
   ];
-  const { context } = pageWith({
+  const page = pageWith({
     frames: copy(frames), canvas_index: [0, 0, 0, 1, 1],
   }, 4);
 
+  assert.deepEqual(revisionColors(page), [""]);
+  page.context.setOverlayFrame(2);
   assert.deepEqual(
-    [...context.overlayRevisionCountsFor(false)], []
-  );
-  context.overlayFrameIndex = 2;
-  assert.deepEqual(
-    [...context.overlayRevisionCountsFor(false)], [1]
+    revisionColors(page), [page.context.revisionColor(1)]
   );
 });
 
 test("the edited layer starts a remasked position over", () => {
-  const { context } = editedRun(6);
+  const page = editedRun(6);
+  const { context } = page;
 
-  const colors = colorsOf(capture(context).colorFor);
+  const colors = revisionColors(page, "token-layer-edited");
 
   // Position 0's change at frame 3 is shared history; position 2's
   // new token is the edit's, position 3's the model's own.
   assert.deepEqual(colors, [
-    context.revisionColor(1), null, null, context.revisionColor(1),
+    context.revisionColor(1), "", "", context.revisionColor(1),
   ]);
 });
 
 test("the pre-edit layer counts the run it came from", () => {
-  const { context } = editedRun(6);
+  const page = editedRun(6);
+  const { context } = page;
 
-  const colors = colorsOf(capture(context).originalColorFor);
+  const colors = revisionColors(page, "token-layer-original");
 
-  assert.deepEqual(colors, [
-    context.revisionColor(2), context.revisionColor(1), null, null,
-  ]);
-});
-
-test("the pre-edit layer holds its last frame past its end", () => {
-  const { context } = editedRun(7);
-
-  const colors = colorsOf(capture(context).originalColorFor);
-
-  assert.deepEqual(colors, [
-    context.revisionColor(2), context.revisionColor(1), null, null,
-  ]);
-});
-
-test("the strip reads the hovered layer's count", () => {
-  const { context } = editedRun(6);
-  context.overlayMode = "revisions";
-
-  context.metricsHoverOriginal = false;
-  assert.equal(context.metricsExtra(3, settled(41)), "Revisions: 1");
-  assert.equal(context.metricsExtra(1, settled(11)), "");
-  context.metricsHoverOriginal = true;
-  assert.equal(context.metricsExtra(1, settled(21)), "Revisions: 1");
-  assert.equal(context.metricsExtra(0, settled(30)), "Revisions: 2");
-});
-
-// Every token span drawn into `element`, through the fragments the
-// stub keeps as children rather than flattening.
-function drawnSpans(element) {
-  const spans = [];
-  for (const child of element.children || []) {
-    if (child.tag === "span") {
-      spans.push(child);
-    } else {
-      spans.push(...drawnSpans(child));
-    }
-  }
-  return spans;
-}
-
-test("it paints through the real renderer", () => {
-  const { context } = pageWith({ frames: copy(REVISING) }, 6);
-  context.overlayMode = "revisions";
-
-  context.renderCurrentOverlay();
-
-  const colors = drawnSpans(context.overlayOutput).map(
-    (span) => span.style.color
-  );
   assert.deepEqual(colors, [
     context.revisionColor(2), context.revisionColor(1), "", "",
   ]);
 });
 
+test("the pre-edit layer holds its last frame past its end", () => {
+  const page = editedRun(7);
+  const { context } = page;
+
+  const colors = revisionColors(page, "token-layer-original");
+
+  assert.deepEqual(colors, [
+    context.revisionColor(2), context.revisionColor(1), "", "",
+  ]);
+});
+
+test("the strip reads the hovered layer's count", () => {
+  const page = editedRun(6);
+  page.context.setOverlayMode("revisions");
+
+  const edited = "token-layer-edited";
+  const original = "token-layer-original";
+  assert.equal(hoverExtra(page, edited, 3), "Revisions: 1");
+  assert.equal(hoverExtra(page, edited, 1), "");
+  assert.equal(hoverExtra(page, original, 1), "Revisions: 1");
+  assert.equal(hoverExtra(page, original, 0), "Revisions: 2");
+});
+
+test("every position gets a span, tinted or not", () => {
+  const page = pageWith({ frames: copy(REVISING) }, 6);
+
+  const colors = revisionColors(page);
+
+  assert.equal(colors.length, REVISING[6].length);
+  assert.deepEqual(colors.slice(2), ["", ""]);
+});
+
 test("the legend shows only while Revisions is selected", () => {
-  const { context } = pageWith({ frames: copy(REVISING) }, 6);
+  const page = pageWith({ frames: copy(REVISING) }, 6);
+  const revisions = page.registry.get("overlay-revision-legend");
+  const commit = page.registry.get("overlay-legend");
 
-  context.setOverlayMode("revisions");
-  assert.equal(context.overlayRevisionLegend.hidden, false);
-  assert.equal(context.overlayLegend.hidden, true);
+  page.context.setOverlayMode("revisions");
+  assert.equal(revisions.hidden, false);
+  assert.equal(commit.hidden, true);
 
-  context.setOverlayMode("commit");
-  assert.equal(context.overlayRevisionLegend.hidden, true);
-  assert.equal(context.overlayLegend.hidden, false);
+  page.context.setOverlayMode("commit");
+  assert.equal(revisions.hidden, true);
+  assert.equal(commit.hidden, false);
 });
 
 test("loading another run forgets the last one's revisions", () => {
-  const { context } = pageWith({ frames: copy(REVISING) }, 6);
-  assert.equal(context.overlayRevisionsAvailable(), true);
+  // Held revisions would tint a run that never revised with the
+  // previous run's counts, and keep offering their overlay.
+  const page = pageWith({ frames: copy(REVISING) }, 6);
+  assert.ok(pickerValues(page).includes("revisions"));
+  page.context.setOverlayMode("revisions");
 
-  context.clearOverlay();
+  page.context.clearOverlay();
+  assert.equal(
+    page.registry.get("overlay-revision-legend").hidden, true
+  );
+  page.context.renderRunOverlays(withRecords({
+    frames: copy(SETTLING),
+  }));
 
-  assert.equal(context.overlayRevisions, null);
-  assert.equal(context.overlayOriginalRevisions, null);
-  assert.equal(context.overlayRevisionLegend.hidden, true);
+  assert.ok(!pickerValues(page).includes("revisions"));
+  assert.deepEqual(revisionColors(page), ["", "", "", ""]);
 });

@@ -103,7 +103,7 @@ test("a per-position channel reads the final frame", () => {
   const at = context.overlaySeriesChannelFrame(
     context.overlaySeriesChannel(data, "entropy"),
     series,
-    context.overlayFrameIndex
+    0
   );
 
   assert.equal(at, 2);
@@ -115,12 +115,11 @@ test("a frame-by-position channel follows the scrub", () => {
   const { context } = page();
   const data = run(["frame", "position"]);
   const series = context.overlaySeriesOf(data, false);
-  context.overlayFrameIndex = 1;
 
   const at = context.overlaySeriesChannelFrame(
     context.overlaySeriesChannel(data, "entropy"),
     series,
-    context.overlayFrameIndex
+    1
   );
 
   assert.equal(at, 1);
@@ -147,12 +146,11 @@ test("a scrub past the last frame is clamped", () => {
   const { context } = page();
   const data = run(["frame", "position"]);
   const series = context.overlaySeriesOf(data, false);
-  context.overlayFrameIndex = 99;
 
   const at = context.overlaySeriesChannelFrame(
     context.overlaySeriesChannel(data, "entropy"),
     series,
-    context.overlayFrameIndex
+    99
   );
 
   assert.equal(at, 2);
@@ -217,7 +215,7 @@ test("an unmanifested run still reads the final frame", () => {
   const at = context.overlaySeriesChannelFrame(
     context.overlaySeriesChannel(data, "entropy"),
     series,
-    context.overlayFrameIndex
+    0
   );
 
   assert.equal(at, 2);
@@ -308,6 +306,9 @@ function appendPositions(count) {
   return positions;
 }
 
+// The entropy chart each opened page built, as the recorder kept it.
+const entropyCharts = new WeakMap();
+
 // The page with `payload` opened, Chart replaced by a recorder that
 // keeps the configuration it was given, so the scrub's edits to the
 // entropy chart can be read back.
@@ -315,7 +316,7 @@ function openedRun(payload) {
   const opened = page();
   const { context } = opened;
   context.Chart = function (ctx, config) {
-    return {
+    const chart = {
       data: config.data,
       options: config.options,
       setActiveElements() {},
@@ -323,15 +324,21 @@ function openedRun(payload) {
       destroy() {},
       resize() {},
     };
+    if (ctx.canvas.id === "chart-entropy") {
+      entropyCharts.set(context, chart);
+    }
+    return chart;
   };
   context.renderRunOverlays(payload);
-  assert.ok(context.chartEntropy, "the entropy chart was not built");
+  assert.ok(
+    entropyCharts.has(context), "the entropy chart was not built"
+  );
   return context;
 }
 
 // One layer of the open entropy chart, by its label.
 function layer(context, label) {
-  const sets = context.chartEntropy.data.datasets;
+  const sets = entropyCharts.get(context).data.datasets;
   const found = sets.find((set) => set.label === label);
   assert.ok(found, "the chart has no " + label + " layer");
   return found;
@@ -557,26 +564,25 @@ function committedPayload() {
   });
 }
 
-function pickerValues(context, data) {
-  context.buildOverlaySelect(data);
-  const list = context.overlaySelect.children.find(
-    (child) => child.tag === "ul"
+// The values the overlay picker offers, read off the select the page
+// built under its mount when the run opened.
+function pickerValues(context) {
+  const mount = context.document.getElementById(
+    "overlay-select-mount"
   );
+  const select = mount.children[mount.children.length - 1];
+  const list = select.children.find((child) => child.tag === "ul");
   return list.children.map((item) => item.getAttribute("data-value"));
 }
 
-// Every token span drawn into `element`, through the fragments the
-// stub keeps as children rather than flattening.
-function drawnSpans(element) {
-  const spans = [];
-  for (const child of element.children || []) {
-    if (child.tag === "span") {
-      spans.push(child);
-    } else {
-      spans.push(...drawnSpans(child));
-    }
-  }
-  return spans;
+// The spans the newest render drew. The stub keeps each document
+// fragment as a node, and setting textContent leaves a node's
+// children in place where a browser removes them, so every render's
+// fragment stays behind and the newest is the last.
+function newestSpans(context) {
+  const output = context.document.getElementById("overlay-output");
+  const last = output.children[output.children.length - 1];
+  return last && last.tag === null ? last.children : output.children;
 }
 
 test("a DiffusionGemma run's entropy is found past commits", () => {
@@ -594,9 +600,7 @@ test("a DiffusionGemma run's entropy is found past commits", () => {
 test("the picker offers its Entropy overlay", () => {
   const context = openedRun(committedPayload());
 
-  assert.ok(
-    pickerValues(context, context.overlayData).includes("entropy")
-  );
+  assert.ok(pickerValues(context).includes("entropy"));
 });
 
 test("opened on a commit, the bars borrow the last draft", () => {
@@ -605,12 +609,13 @@ test("opened on a commit, the bars borrow the last draft", () => {
 
   assert.deepEqual(host(edited.data), draftValues(3, 0));
   assert.equal(edited.asOfStep, 3);
-  const row = context.entropyTooltipLabel({
+  const tooltip = entropyCharts.get(context).options.plugins.tooltip;
+  const row = tooltip.callbacks.label({
     formattedValue: "4.1",
     dataIndex: 1,
     datasetIndex: 0,
     dataset: edited,
-  }, null);
+  });
   assert.match(row, /as of step 3$/);
 });
 
@@ -656,27 +661,24 @@ test("a pre-edit layer borrows from its own draft", () => {
 
 test("the metrics strip reads a commit through its draft", () => {
   const context = openedRun(committedPayload());
-  context.metricsHoverPos = 1;
-  context.metricsHoverOriginal = false;
+  const output = context.document.getElementById("overlay-output");
 
-  const reading = context.buildTokenMetricsReading();
+  output.dispatch("mouseover", { target: newestSpans(context)[1] });
 
-  assert.equal(reading.entropy, draftValues(3, 0)[1]);
-  assert.match(reading.extra, /entropy as of step 3/);
+  const strip = context.document.getElementById("token-metrics");
+  const nodes = strip.overlaysMetricNodes;
+  assert.equal(
+    nodes.entropy.value.textContent, draftValues(3, 0)[1].toFixed(3)
+  );
+  assert.match(nodes.extra.textContent, /entropy as of step 3/);
 });
 
 test("the Entropy overlay colors a commit from its draft", () => {
   const context = openedRun(committedPayload());
-  context.overlayMode = "entropy";
-  // The stub keeps children when text is cleared, so the spans the
-  // opening render drew are dropped by hand.
-  context.overlayOutput.children = [];
 
-  context.renderCurrentOverlay();
+  context.setOverlayMode("entropy");
 
-  const colors = drawnSpans(context.overlayOutput).map(
-    (span) => span.style.color
-  );
+  const colors = newestSpans(context).map((span) => span.style.color);
   assert.deepEqual(
     colors,
     draftValues(3, 0).map((value) => context.entropyColor(value))
