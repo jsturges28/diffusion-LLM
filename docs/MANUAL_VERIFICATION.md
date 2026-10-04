@@ -320,6 +320,9 @@ kept when these were written:
 - **411**: confirmed on 2026-10-03: Analytics' token viewer and entropy chart
   through their controller, after the 2026-10 audit's `A2-ORG-04` moved them
   into `token_viewer.js`.
+- **412**: **outstanding**: a stopped run keeping what the page received,
+  from two items raised during the 2026-10 remediation: DiffusionGemma's
+  stopped text, and a resume stopped before its first frame.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -4862,3 +4865,38 @@ with Chart.js drawing.
       left under the second's title.
     - With a run open, compare two runs. The compare panel draws both,
       and opening a run afterwards shows only that run's tokens.
+
+## A stopped run keeps what the page received
+
+From 2026-10-03 a stopped DiffusionGemma run reports the text of the frames
+the page received, every canvas of them, rather than the canvas the model had
+drafted last, which could be a frame the page never got or the whole
+finished output. And a resume stopped before its first frame puts the run and
+the locked edit back where they were, rather than leaving the run cut back to
+the edited frame. Both are tested without a GPU, in
+`tests/inference/test_dgemma_cancel.py` and
+`tests/web/static/generator_resume_stop.test.js`; this is the same on
+hardware, where DiffusionGemma's first resumed frame takes a real denoising
+step.
+
+412. **A stopped run reads what the page showed.** In the browser launcher:
+    - Load DiffusionGemma and set Max Tokens to 512, so the run spans two
+      canvases. Generate, and press Stop once the second canvas has begun.
+      Save, and open the run in Analytics: its text is the first canvas
+      followed by the second as far as the last frame you saw, matching the
+      last frame on the scrubber. Before this, only the second was saved.
+    - Generate a 256-token DiffusionGemma run and press Stop a few frames
+      in. Save. The saved text matches the last frame shown, not a later
+      one.
+    - Generate a 256-token run to the end. Click Edit Frames, select a
+      frame, remask a token, Lock In, then Resume to End, and press Stop at
+      once, before a new frame appears. The status line reads "Stopped
+      before the edit produced a frame. The run is unchanged.", the whole
+      run is on the scrubber, and the locked edit is still offered. Resume
+      to End again runs to review, and Confirm saves the edited run.
+    - Again, but click Edit Another Frame, choose a target frame, click Run
+      to Here, and press Stop at once. You are back choosing the target with
+      the whole run on screen, and Run to Here runs to it.
+    - Load LLaDA, Edit Frames, Resume to End, and press Stop after a few
+      frames. The status line reads "Stopped.", the partial branch is kept,
+      and review opens, as before.
