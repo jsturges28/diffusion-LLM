@@ -1,9 +1,8 @@
 // Driving the model picker with nothing but keys.
 //
-// Strategy: load the generator into the DOM stub with an inlined boot
-// state, then send keydown events at `#model-select` and read back
-// what moved. `requestSwitch` is replaced so a test can see what
-// would have been asked for without a worker anywhere.
+// Strategy: compose the extracted panel with a recording switch
+// callback, then send keydown events at `#model-select` and read back
+// what moved and what execution the confirmation handed to the page.
 //
 // This picker is not `createCustomSelect`. It is a second, hand-built
 // dropdown whose rows carry a name, a device control and a headroom
@@ -25,6 +24,12 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const { loadPage } = require("./dom_stub.js");
+
+const SCRIPTS = [
+  "custom_select.js",
+  "model_client.js",
+  "generator_model_panel.js",
+];
 
 const LLADA = {
   id: "llada",
@@ -91,18 +96,25 @@ function inertFetch() {
   });
 }
 
-// Load the page and hand back the picker plus a log of switches it
-// would have requested.
+// Drive the extracted panel directly, with the page's execution
+// policy represented by one recording callback.
 function picker(options) {
-  const page = loadPage({
-    bootState: bootState(options), fetchImpl: inertFetch(),
-  });
+  const page = loadPage({ scripts: SCRIPTS });
   const switches = [];
-  page.context.requestSwitch = (id, device) => {
-    switches.push({ id, device });
-  };
+  const panel = page.context.generatorModelPanelCreate({
+    onSwitchRequested(id, device) {
+      switches.push({ id, device });
+    },
+    onValidationChanged() {},
+    onParametersChanged() {},
+    readReducedMotion() { return false; },
+    readGpuTicker() { return false; },
+  });
+  panel.wire();
+  panel.configure(bootState(options).models);
   return {
     page,
+    panel,
     switches,
     select: page.registry.get("model-select"),
     list: page.registry.get("model-select-list"),
@@ -150,6 +162,14 @@ function pills(row) {
 function activeDeviceOf(row) {
   const on = pills(row).find((b) => b.classes.has("is-active"));
   return on ? on.getAttribute("data-device") : null;
+}
+
+function confirmSwitch(harness) {
+  const box = harness.select.querySelector(".switch-confirm");
+  assert.ok(box, "the confirm popover was not built");
+  box.querySelector(".switch-confirm-yes").dispatch("click", {
+    stopPropagation() {},
+  });
 }
 
 // -- moving between models --
@@ -265,6 +285,7 @@ test("Enter asks for the focused model", () => {
 
   key(h.select, "ArrowDown");
   key(h.select, "Enter");
+  confirmSwitch(h);
 
   assert.deepEqual(h.switches, [{ id: "llada", device: "cuda" }]);
 });
@@ -277,6 +298,7 @@ test("a CPU switch is reachable with keys alone", () => {
   focusRow(h, "smollm3");
   key(h.select, "ArrowRight");
   key(h.select, "Enter");
+  confirmSwitch(h);
 
   assert.deepEqual(h.switches, [{ id: "smollm3", device: "cpu" }]);
 });
@@ -338,8 +360,16 @@ test("reopening starts from the resident model again", () => {
 // alone and must not act on it.
 
 function openConfirm(h, id, device) {
-  h.page.context.openSwitchConfirm(id, device);
-  const box = h.page.context.switchConfirmEl;
+  focusRow(h, id);
+  const row = focusedRow(h);
+  for (let count = 0;
+    activeDeviceOf(row) !== device && count < 4;
+    count += 1
+  ) {
+    key(h.select, "ArrowRight");
+  }
+  key(h.select, "Enter");
+  const box = h.select.querySelector(".switch-confirm");
   assert.ok(box, "the confirm popover was not built");
   return box;
 }
@@ -392,7 +422,7 @@ test("Escape inside the confirm closes the confirm", () => {
   });
 
   assert.equal(
-    h.page.context.switchConfirmEl, null,
+    h.select.querySelector(".switch-confirm"), null,
     "the confirm popover survived Escape"
   );
 });
@@ -462,7 +492,7 @@ test("the headroom popover follows the keyboard", () => {
 
 test("a disabled picker ignores the keyboard", () => {
   const h = picker();
-  h.page.context.setModelSelectDisabled(true);
+  h.panel.setDisabled(true);
 
   key(h.select, "ArrowDown");
 

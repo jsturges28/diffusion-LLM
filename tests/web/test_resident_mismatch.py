@@ -64,7 +64,9 @@ def test_the_page_compares_both_model_and_device() -> None:
     it as a switch."""
     region = _region(APP_JS, "function handleResident(data)", 1500)
 
-    assert "data.model === activeModelId" in region
+    assert "generatorModelPanel.activeModelId()" in region
+    assert "generatorModelPanel.activeDevice()" in region
+    assert "data.model === activeId" in region
     assert "data.device === activeDevice" in region
 
 

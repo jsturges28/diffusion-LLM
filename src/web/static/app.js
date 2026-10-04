@@ -7,22 +7,7 @@ var MASK_CHAR = "\u2591"; // ░
 var RECONNECT_DELAY_MS = 2000;
 var MAX_RECONNECT_DELAY_MS = 16000;
 
-// ---- Model registry state (from /api/models) ----
-
-var models = {}; // id -> ModelInfo
-var activeModelId = null;
-var activeModel = null; // ModelInfo of the active model
-var activeDevice = null; // "cuda" | "cpu": the active model's device
-// describe_tokenizer's payload for the resident model. Captured at
-// boot beside activeDevice, which is sound because a model switch
-// reloads the page, so the two can never describe different models.
-var activeTokenizer = {};
-var gpuPresent = false; // whether a usable GPU was detected
 var suppressReconnect = false;
-
-// Dynamic parameter DOM, rebuilt per model from its schema.
-var paramInputs = {}; // name -> input/select element
-var paramTooltips = {}; // name -> tooltip span
 
 // ---- DOM refs ----
 
@@ -43,24 +28,6 @@ var generatorComposer = generatorComposerCreate({
   isCountReady: composerCountReady,
   sendCountPrompt: sendComposerCount,
 });
-var validationHint =
-  document.getElementById("validation-hint");
-var toggleExperimental =
-  document.getElementById("toggle-experimental");
-var btnParamDefaults =
-  document.getElementById("btn-param-defaults");
-
-var modelSelect =
-  document.getElementById("model-select");
-var modelSelectValue =
-  document.getElementById("model-select-value");
-var modelSelectList =
-  document.getElementById("model-select-list");
-var modelSelectDisabled = false;
-var paramFields =
-  document.getElementById("param-fields");
-var modeExtra =
-  document.getElementById("mode-extra");
 var thinkingPanel =
   document.getElementById("thinking-panel");
 var thinkingContent =
@@ -70,6 +37,15 @@ var thinkingContent =
 // defaults, and parsing live in overlays.js (SETTINGS_DEFAULTS /
 // parseSettings), shared with the Settings page which edits them.
 var appSettings = parseSettings(null);
+var generatorModelPanel = generatorModelPanelCreate({
+  onSwitchRequested: switchModel,
+  onValidationChanged: modelPanelValidationChanged,
+  onParametersChanged: modelPanelParametersChanged,
+  readReducedMotion: prefersReducedMotion,
+  readGpuTicker: function () {
+    return appSettings.gpuTicker;
+  },
+});
 var generatorChrome = generatorChromeCreate({
   onTpsToggle: toggleTpsMode,
   readReducedMotion: prefersReducedMotion,
@@ -227,7 +203,6 @@ var isGenerating = false;
 var isSaving = false;
 var saveCheckTimer = null;
 var modelReady = false;
-var paramsValid = true;
 var reconnectDelay = RECONNECT_DELAY_MS;
 var reconnectTimer = null;
 
@@ -475,13 +450,9 @@ spawnFloaters();
 // ---- Model + schema-driven parameter panel ----
 
 function setMaskChar() {
-  if (
-    activeModel
-    && activeModel.capabilities
-    && activeModel.capabilities.unresolved_char
-  ) {
-    MASK_CHAR =
-      activeModel.capabilities.unresolved_char;
+  var capabilities = generatorModelPanel.capabilities();
+  if (capabilities.unresolved_char) {
+    MASK_CHAR = capabilities.unresolved_char;
   }
 }
 
@@ -493,12 +464,8 @@ function setMaskChar() {
 // too, so gating on the family would offer it denoising controls it
 // has no masked positions for.
 function isAppendOnly() {
-  return !!(
-    activeModel
-    && activeModel.capabilities
-    && activeModel.capabilities.generation_shape
-      === "append_only"
-  );
+  var capabilities = generatorModelPanel.capabilities();
+  return capabilities.generation_shape === "append_only";
 }
 
 // The boot path raises the same overlay without going through
@@ -528,1033 +495,12 @@ function fetchModels() {
   return modelClientLoad();
 }
 
-// The placements a model declares, and the only authority on the
-// question. Inferring devices from the family is what used to offer a
-// 17 GiB diffusion model a CPU load nothing budgeted for. A payload
-// missing the field is treated as GPU-only, which is the conservative
-// reading rather than a guess at CPU capability.
-function supportedDevices(model) {
-  var declared =
-    model
-    && model.capabilities
-    && model.capabilities.supported_devices;
-  return declared && declared.length ? declared : ["cuda"];
-}
-
-var DEVICE_LABELS = { cuda: "GPU", cpu: "CPU" };
-
-function deviceLabel(device) {
-  return DEVICE_LABELS[device] || String(device).toUpperCase();
-}
-
-// The device a plain row-click (on the name) would target: the GPU
-// when the host has one and the model can use it, otherwise whatever
-// the model does support. A GPU-only model on a GPU-less host still
-// answers "cuda", so the activation is refused for the real reason
-// instead of silently becoming a CPU load.
-function defaultDeviceFor(model) {
-  var devices = supportedDevices(model);
-  if (gpuPresent && devices.indexOf("cuda") !== -1) {
-    return "cuda";
-  }
-  if (!gpuPresent && devices.indexOf("cpu") !== -1) {
-    return "cpu";
-  }
-  return devices[0];
-}
-
-// Full VRAM readout shown to the side of a dropdown option on hover
-// (the compact dropdown carries no headroom pill; the Main Menu does).
-// Returns null when there is nothing quantitative to show.
-function buildOptionInfo(model) {
-  var required = Math.round(model.min_vram_gib || 0);
-  var headroom = model.vram_headroom_gib;
-  var pop = document.createElement("div");
-  pop.className = "option-info";
-  if (typeof headroom === "number") {
-    var available = (
-      (model.min_vram_gib || 0) + headroom
-    ).toFixed(1);
-    var positive = headroom >= 0;
-    var sign = (positive ? "+" : "\u2212")
-      + Math.abs(headroom).toFixed(1);
-    // Body stays grey; only the trailing signed headroom is tinted
-    // (green when it fits, red when short), matching the border.
-    pop.appendChild(document.createTextNode(
-      "Required " + required
-      + " GiB \u00b7 Available " + available
-      + " GiB \u00b7 "
-    ));
-    var head = document.createElement("span");
-    head.className = "option-info-headroom "
-      + (positive ? "is-positive" : "is-negative");
-    head.textContent = sign;
-    pop.appendChild(head);
-    pop.classList.add(positive ? "is-positive" : "is-negative");
-    return pop;
-  }
-  if (required > 0) {
-    pop.textContent = "Requires ~" + required + " GiB VRAM";
-    return pop;
-  }
-  return null;
-}
-
-// A small green device pill (used both in the collapsed value and,
-// for AR models, as clickable GPU/CPU buttons in each option row).
-function buildDevicePill(label, active) {
-  var pill = document.createElement("span");
-  pill.className =
-    "device-pill" + (active ? " is-active" : "");
-  pill.textContent = label;
-  return pill;
-}
-
-// Interval id for the collapsed-slot device/headroom ticker.
-var collapsedTickerTimer = null;
-
-function stopCollapsedTicker() {
-  if (collapsedTickerTimer !== null) {
-    clearInterval(collapsedTickerTimer);
-    collapsedTickerTimer = null;
-  }
-}
-
-// Cycle the collapsed device pill between the device (GPU/CPU) and the
-// signed VRAM headroom (+Z / -Z, no unit), ~2s per side with a fade.
-// Static device label when the ticker Setting is off, reduced motion
-// is preferred, or there is no headroom to show.
-function startCollapsedTicker(pill, model, device) {
-  stopCollapsedTicker();
-  var deviceLabel = device === "cpu" ? "CPU" : "GPU";
-  // Move the label into an inner span so only the text fades; the
-  // pill's border and background stay static through the cycle.
-  var textEl = document.createElement("span");
-  textEl.className = "ticker-text";
-  textEl.textContent = deviceLabel;
-  pill.textContent = "";
-  pill.appendChild(textEl);
-  var headroom = model.vram_headroom_gib;
-  // Headroom is a GPU-VRAM figure, so it does not apply on CPU; there
-  // the pill stays a static "CPU" tag rather than cycling.
-  var canTick = appSettings.gpuTicker
-    && !prefersReducedMotion()
-    && device !== "cpu"
-    && typeof headroom === "number";
-  if (!canTick) {
-    return;
-  }
-  var headLabel = (headroom >= 0 ? "+" : "\u2212")
-    + Math.abs(headroom).toFixed(1);
-  var showingDevice = true;
-  collapsedTickerTimer = setInterval(function () {
-    textEl.classList.add("ticker-fade");
-    setTimeout(function () {
-      showingDevice = !showingDevice;
-      textEl.textContent = showingDevice ? deviceLabel : headLabel;
-      // Shrink the wider signed-headroom face so it fits the pill's
-      // fixed GPU/CPU width without stretching the border.
-      textEl.classList.toggle("is-headroom", !showingDevice);
-      textEl.classList.remove("ticker-fade");
-    }, 350);
-  }, 2000);
-}
-
-function setModelSelectValue(id) {
-  if (!modelSelectValue) {
-    return;
-  }
-  stopCollapsedTicker();
-  var m = models[id];
-  modelSelectValue.innerHTML = "";
-  var nameEl = document.createElement("span");
-  nameEl.className = "model-select-value-name";
-  nameEl.textContent = m ? m.display_name : (id || "-");
-  // Full name on hover, since a long name ellipsizes to the fixed width.
-  nameEl.title = m ? m.display_name : "";
-  modelSelectValue.appendChild(nameEl);
-  if (m) {
-    // The collapsed value shows the active model's current device.
-    var dev = id === activeModelId && activeDevice
-      ? activeDevice
-      : defaultDeviceFor(m);
-    var pill = buildDevicePill(
-      dev === "cpu" ? "CPU" : "GPU", false
-    );
-    pill.classList.add("device-pill-collapsed");
-    modelSelectValue.appendChild(pill);
-    startCollapsedTicker(pill, m, dev);
-  }
-}
-
-// Device control for one option row: a static pill when the model
-// declares a single placement, or a clickable toggle across the ones
-// it does declare. Each button routes through requestSwitch so any
-// change goes past the confirm.
-//
-// Built from the declaration rather than from a hardcoded GPU/CPU
-// pair, so a future family that supports one device, or a different
-// pair, needs no branch here.
-function buildOptionDevice(model, activeId) {
-  var wrap = document.createElement("span");
-  wrap.className = "option-device";
-  var supported = supportedDevices(model);
-  if (supported.length < 2) {
-    wrap.appendChild(
-      buildDevicePill(deviceLabel(supported[0]), true)
-    );
-    return wrap;
-  }
-  var isActiveModel = model.id === activeId;
-  var current = isActiveModel && activeDevice
-    ? activeDevice
-    : defaultDeviceFor(model);
-  var devices = [];
-  for (var d = 0; d < supported.length; d++) {
-    devices.push({
-      value: supported[d],
-      label: deviceLabel(supported[d]),
-    });
-  }
-  for (var i = 0; i < devices.length; i++) {
-    (function (dev) {
-      var btn = document.createElement("button");
-      btn.type = "button";
-      // Out of the tab order, and reachable with Left and Right on
-      // the row instead. As tab stops these were the only rows in
-      // the list a keyboard could reach at all, so SmolLM3 had two
-      // stops and every diffusion model had none, and Tab walked
-      // between devices rather than between models.
-      btn.tabIndex = -1;
-      btn.setAttribute("data-device", dev.value);
-      // The loaded model's current device is redundant to re-select, so
-      // it is locked (is-current); the other device stays switchable.
-      var isCurrent = isActiveModel && dev.value === activeDevice;
-      btn.className =
-        "device-pill device-pill-btn"
-        + (dev.value === current ? " is-active" : "")
-        + (isCurrent ? " is-current" : "");
-      btn.textContent = dev.label;
-      if (dev.value === "cuda" && !gpuPresent) {
-        btn.disabled = true;
-        btn.title = "No GPU detected";
-      }
-      if (isCurrent) {
-        btn.title = "Currently loaded";
-      }
-      btn.addEventListener("click", function (e) {
-        e.stopPropagation();
-        if (btn.disabled) {
-          return;
-        }
-        requestSwitch(model.id, dev.value);
-      });
-      wrap.appendChild(btn);
-    })(devices[i]);
-  }
-  return wrap;
-}
-
-function setModelSelectDisabled(disabled) {
-  modelSelectDisabled = disabled;
-  if (modelSelect) {
-    modelSelect.classList.toggle("disabled", disabled);
-  }
-  if (disabled) {
-    closeModelList();
-  }
-}
-
-// ---- Model picker keyboard traversal ----
-//
-// The same composite-widget shape `custom_select.js` uses, but the
-// rows are richer: each carries a name, a device control and a VRAM
-// popover, so Up and Down move between models while Left and Right
-// move between that model's devices. One tab stop for the whole
-// picker, which is what the device buttons leaving the tab order in
-// `buildOptionDevice` buys.
-//
-// Which row the keyboard is on lives here; which device is targeted
-// lives in the DOM, on the pill carrying `is-active`, because that is
-// where a mouse leaves it too and two copies would disagree.
-var MODEL_OPTION_ID_PREFIX = "model-select-option-";
-var modelActiveRow = -1;
-
-function modelRows() {
-  if (!modelSelectList) {
-    return [];
-  }
-  return Array.prototype.slice.call(modelSelectList.children);
-}
-
-// Only the pills that can actually be chosen: the GPU pill is
-// disabled outright on a host without one.
-function modelRowPills(row) {
-  var found = row.querySelectorAll(".device-pill-btn");
-  var usable = [];
-  for (var i = 0; i < found.length; i++) {
-    if (!found[i].disabled) {
-      usable.push(found[i]);
-    }
-  }
-  return usable;
-}
-
-function modelRowIndexOf(id) {
-  var rows = modelRows();
-  for (var i = 0; i < rows.length; i++) {
-    if (rows[i].getAttribute("data-id") === id) {
-      return i;
-    }
-  }
-  return -1;
-}
-
-function renderModelActive() {
-  var rows = modelRows();
-  for (var i = 0; i < rows.length; i++) {
-    var on = i === modelActiveRow;
-    rows[i].classList.toggle("is-focused", on);
-    // The headroom popover is otherwise mouse-only, which would
-    // leave a keyboard user choosing a model with no idea whether
-    // it fits.
-    var info = rows[i].querySelector(".option-info");
-    if (info) {
-      info.classList.toggle("is-visible", on);
-    }
-  }
-  if (modelActiveRow < 0 || modelSelectList.hidden) {
-    modelSelect.removeAttribute("aria-activedescendant");
-    selectCursorMove(modelSelectList, null);
-    return;
-  }
-  modelSelect.setAttribute(
-    "aria-activedescendant", rows[modelActiveRow].id
-  );
-  selectCursorMove(modelSelectList, rows[modelActiveRow]);
-}
-
-function moveModelActive(step) {
-  var rows = modelRows();
-  if (!rows.length) {
-    return;
-  }
-  // Start from the resident model, so the first Down goes to the one
-  // after it rather than back to the top of a list it is already in.
-  var from = modelActiveRow;
-  if (from < 0) {
-    from = modelRowIndexOf(activeModelId);
-  }
-  var next;
-  if (from < 0) {
-    next = step > 0 ? 0 : rows.length - 1;
-  } else {
-    next = from + step;
-    if (next < 0) {
-      next = rows.length - 1;
-    } else if (next >= rows.length) {
-      next = 0;
-    }
-  }
-  modelActiveRow = next;
-  renderModelActive();
-  if (rows[next].scrollIntoView) {
-    rows[next].scrollIntoView({ block: "nearest" });
-  }
-}
-
-// Move the targeted device within the focused row. Unlike a click on
-// a pill, which switches immediately, this only moves the target and
-// leaves Enter to commit, because a keyboard needs somewhere to stand
-// between choosing and doing.
-function moveModelDevice(step) {
-  var rows = modelRows();
-  if (modelActiveRow < 0 || !rows[modelActiveRow]) {
-    return;
-  }
-  var pills = modelRowPills(rows[modelActiveRow]);
-  if (pills.length < 2) {
-    return;
-  }
-  var at = 0;
-  for (var i = 0; i < pills.length; i++) {
-    if (pills[i].classList.contains("is-active")) {
-      at = i;
-    }
-  }
-  var next = at + step;
-  if (next < 0) {
-    next = pills.length - 1;
-  } else if (next >= pills.length) {
-    next = 0;
-  }
-  for (var j = 0; j < pills.length; j++) {
-    pills[j].classList.toggle("is-active", j === next);
-  }
-}
-
-function activateModelActive() {
-  var rows = modelRows();
-  if (modelActiveRow < 0 || !rows[modelActiveRow]) {
-    return false;
-  }
-  var row = rows[modelActiveRow];
-  var id = row.getAttribute("data-id");
-  if (!id) {
-    return false;
-  }
-  var device = null;
-  var pills = modelRowPills(row);
-  for (var i = 0; i < pills.length; i++) {
-    if (pills[i].classList.contains("is-active")) {
-      device = pills[i].getAttribute("data-device");
-    }
-  }
-  if (device === null) {
-    device = defaultDeviceFor(models[id]);
-  }
-  // Mirrors the mouse: re-selecting exactly what is loaded does
-  // nothing, but the same row at its other device is a real switch.
-  if (id === activeModelId && device === activeDevice) {
-    return false;
-  }
-  requestSwitch(id, device);
-  return true;
-}
-
-function openModelList() {
-  if (modelSelectDisabled || !modelSelectList) {
-    return;
-  }
-  closeSwitchConfirm();
-  modelSelectList.hidden = false;
-  modelSelect.classList.add("open");
-  modelSelect.setAttribute("aria-expanded", "true");
-  renderModelActive();
-}
-
-function closeModelList() {
-  if (!modelSelectList) {
-    return;
-  }
-  modelSelectList.hidden = true;
-  modelSelect.classList.remove("open");
-  modelSelect.setAttribute("aria-expanded", "false");
-  // Reopening starts from the resident model again rather than from
-  // wherever the last browse stopped.
-  modelActiveRow = -1;
-  renderModelActive();
-}
-
-function toggleModelList() {
-  if (modelSelectList && modelSelectList.hidden) {
-    openModelList();
-  } else {
-    closeModelList();
-  }
-}
-
-function renderModelSelector(list, activeId) {
-  if (!modelSelect || !modelSelectList) {
-    return;
-  }
-  modelSelectList.innerHTML = "";
-  for (var i = 0; i < list.length; i++) {
-    var m = list[i];
-    var li = document.createElement("li");
-    li.className =
-      "model-select-option"
-      + (m.id === activeId ? " is-active" : "");
-    li.id = MODEL_OPTION_ID_PREFIX + i;
-    li.setAttribute("role", "option");
-    li.setAttribute(
-      "aria-selected", m.id === activeId ? "true" : "false"
-    );
-    li.setAttribute("data-id", m.id);
-    var nameEl = document.createElement("span");
-    nameEl.className = "model-select-name";
-    nameEl.textContent = m.display_name;
-    nameEl.title = m.display_name;
-    li.appendChild(nameEl);
-    li.appendChild(buildOptionDevice(m, activeId));
-    // Full VRAM readout to the side of the row on hover (keeps the
-    // option compact; the pill/toggle alone stays in the row).
-    var info = buildOptionInfo(m);
-    if (info) {
-      li.appendChild(info);
-      // Capture this row's info element per iteration: a plain closure
-      // over the loop-scoped ``var info`` would leave every row toggling
-      // the last option's popover (SmolLM3's).
-      (function (infoEl) {
-        li.addEventListener("mouseenter", function () {
-          infoEl.classList.add("is-visible");
-        });
-        li.addEventListener("mouseleave", function () {
-          infoEl.classList.remove("is-visible");
-        });
-      })(info);
-    }
-    modelSelectList.appendChild(li);
-  }
-  setModelSelectValue(activeId);
-  sizeModelSelect(list);
-}
-
-// ---- Model / device switch confirmation ----
-
-var switchConfirmEl = null;
-
-function closeSwitchConfirm() {
-  if (switchConfirmEl && switchConfirmEl.parentNode) {
-    switchConfirmEl.parentNode.removeChild(switchConfirmEl);
-  }
-  switchConfirmEl = null;
-}
-
-// Any model or device change routes here: no-op if already active on
-// that device, otherwise open a small confirm popover on the dropdown.
-function requestSwitch(id, device) {
-  closeModelList();
-  var model = models[id];
-  if (!model) {
-    return;
-  }
-  if (id === activeModelId && device === activeDevice) {
-    return;
-  }
-  openSwitchConfirm(id, device);
-}
-
-function openSwitchConfirm(id, device) {
-  closeSwitchConfirm();
-  var model = models[id];
-  if (!model || !modelSelect) {
-    return;
-  }
-  var box = document.createElement("div");
-  box.className = "switch-confirm";
-  // Clicks inside the popover must not bubble to the dropdown's
-  // toggle handler (which would open/close the option list).
-  box.addEventListener("click", function (e) {
-    e.stopPropagation();
-  });
-  var currentName = activeModel
-    ? activeModel.display_name
-    : "the current model";
-  var msg = document.createElement("span");
-  msg.className = "switch-confirm-msg";
-  msg.textContent =
-    "Unload the current model " + currentName
-    + " and load " + model.display_name + " on "
-    + (device === "cpu" ? "CPU" : "GPU") + "?";
-  var actions = document.createElement("span");
-  actions.className = "switch-confirm-actions";
-  var yes = document.createElement("button");
-  yes.type = "button";
-  yes.className = "switch-confirm-yes";
-  yes.title = "Confirm switch";
-  yes.setAttribute("aria-label", "Confirm switch");
-  yes.textContent = "\u2713";
-  yes.addEventListener("click", function (e) {
-    e.stopPropagation();
-    closeSwitchConfirm();
-    switchModel(id, device);
-  });
-  var no = document.createElement("button");
-  no.type = "button";
-  no.className = "switch-confirm-no";
-  no.title = "Cancel";
-  no.setAttribute("aria-label", "Cancel switch");
-  no.textContent = "\u2717";
-  no.addEventListener("click", function (e) {
-    e.stopPropagation();
-    closeSwitchConfirm();
-  });
-  actions.appendChild(yes);
-  actions.appendChild(no);
-  box.appendChild(msg);
-  box.appendChild(actions);
-  modelSelect.appendChild(box);
-  switchConfirmEl = box;
-}
-
-function sizeModelSelect(list) {
-  if (!modelSelect || !list.length) {
-    return;
-  }
-  var names = [];
-  for (var i = 0; i < list.length; i++) {
-    names.push(list[i].display_name);
-  }
-  var width = measureTextWidth(
-    names, modelSelectValue || modelSelect
-  );
-  modelSelect.style.minWidth =
-    Math.ceil(width) + 48 + "px";
-}
-
-function numericSpecs() {
-  var out = [];
-  if (!activeModel) {
-    return out;
-  }
-  var specs = activeModel.param_specs;
-  for (var i = 0; i < specs.length; i++) {
-    if (
-      specs[i].type === "int"
-      || specs[i].type === "float"
-    ) {
-      out.push(specs[i]);
-    }
-  }
-  return out;
-}
-
-// Per-device override for a spec, if one applies to the active device.
-function specOverride(spec) {
-  if (
-    spec.overrides
-    && activeDevice
-    && spec.overrides[activeDevice]
-  ) {
-    return spec.overrides[activeDevice];
-  }
-  return null;
-}
-
-// Device-aware (low, high) bounds: an active-device override wins over
-// the base recommended/experimental bounds when present.
-function specBounds(spec, experimental) {
-  var override = specOverride(spec);
-  if (override) {
-    var ob = experimental
-      ? override.experimental
-      : override.recommended;
-    if (ob) {
-      return ob;
-    }
-  }
-  return experimental ? spec.experimental : spec.recommended;
-}
-
-// Device-aware default value for a spec.
-function specDefault(spec) {
-  var override = specOverride(spec);
-  if (
-    override
-    && override.default !== null
-    && override.default !== undefined
-  ) {
-    return override.default;
-  }
-  return spec.default;
-}
-
-function activeLimits() {
-  var experimental = toggleExperimental.checked;
-  var out = {};
-  if (!activeModel) {
-    return out;
-  }
-  var specs = activeModel.param_specs;
-  for (var i = 0; i < specs.length; i++) {
-    var s = specs[i];
-    var b = specBounds(s, experimental);
-    if (b) {
-      out[s.name] = { min: b[0], max: b[1] };
-    }
-  }
-  return out;
-}
-
-// Tiny "?" icon whose tooltip is filled by updateRangeLabels.
-function buildInfoIcon(spec) {
-  var info = document.createElement("span");
-  info.className = "info-icon info-icon-sm";
-  info.textContent = "?";
-  info.setAttribute("aria-label", spec.label + " info");
-  var tip = document.createElement("span");
-  tip.className = "tooltip";
-  info.appendChild(tip);
-  // Hover-only: clicking must not toggle/focus a bound control.
-  info.addEventListener("click", function (e) {
-    e.preventDefault();
-    e.stopPropagation();
-  });
-  paramTooltips[spec.name] = tip;
-  return info;
-}
-
-// Numeric / select params render in the hyperparameter row.
-function buildParamField(spec, input) {
-  var group = document.createElement("div");
-  group.className = "param-group";
-  var label = document.createElement("label");
-  label.setAttribute("for", "param-" + spec.name);
-  label.appendChild(document.createTextNode(spec.label));
-  label.appendChild(buildInfoIcon(spec));
-  group.appendChild(label);
-  group.appendChild(input);
-  paramFields.appendChild(group);
-}
-
-// Boolean params render as a toggle next to Experimental,
-// mirroring its layout (toggle -> label -> info icon).
-function buildModeToggle(spec, checkbox) {
-  if (!modeExtra) {
-    return;
-  }
-  var wrap = document.createElement("span");
-  wrap.className = "mode-toggle";
-  var toggle = document.createElement("label");
-  toggle.className = "toggle-switch";
-  var slider = document.createElement("span");
-  slider.className = "toggle-slider";
-  toggle.appendChild(checkbox);
-  toggle.appendChild(slider);
-  var name = document.createElement("span");
-  name.className = "toggle-label";
-  name.textContent = spec.label;
-  wrap.appendChild(toggle);
-  wrap.appendChild(name);
-  wrap.appendChild(buildInfoIcon(spec));
-  modeExtra.appendChild(wrap);
-}
-
-function buildParamPanel(model) {
-  paramInputs = {};
-  paramTooltips = {};
-  paramFields.innerHTML = "";
-  if (modeExtra) {
-    modeExtra.innerHTML = "";
-  }
-  var specs = model.param_specs;
-  for (var i = 0; i < specs.length; i++) {
-    var s = specs[i];
-    var input = buildParamInput(s);
-    paramInputs[s.name] = input;
-
-    if (s.type === "bool") {
-      buildModeToggle(s, input);
-    } else {
-      buildParamField(s, input);
-    }
-
-    if (s.type === "int" || s.type === "float") {
-      input.addEventListener("input", validateAllParams);
-      input.addEventListener("input", onParamFormChanged);
-    } else {
-      input.addEventListener("change", validateAllParams);
-      input.addEventListener("change", onParamFormChanged);
-    }
-  }
-  applyLimits();
-}
-
-function buildParamInput(spec) {
-  var input;
-  if (spec.type === "select") {
-    var options = (spec.options || []).map(function (v) {
-      return { value: v, label: prettifyOption(v) };
-    });
-    input = createCustomSelect(options, spec.default);
-  } else if (spec.type === "bool") {
-    input = document.createElement("input");
-    input.type = "checkbox";
-    input.checked = Boolean(specDefault(spec));
-  } else {
-    input = document.createElement("input");
-    input.type = "number";
-    if (spec.step !== null && spec.step !== undefined) {
-      input.step = String(spec.step);
-    }
-    input.value = String(specDefault(spec));
-  }
-  input.id = "param-" + spec.name;
-  return input;
-}
-
-function paramRangeText(spec, limits) {
-  if (spec.type === "select") {
-    return (spec.options || [])
-      .map(prettifyOption)
-      .join(" / ");
-  }
-  if (spec.type === "bool") {
-    return "on / off";
-  }
-  var b = limits[spec.name];
-  if (b) {
-    return "(" + b.min + "\u2013" + b.max + ")";
-  }
-  return "";
-}
-
-// Fills each hyperparameter's "?" tooltip: an italic "Range:"
-// line on top, a blank line, then the concise description.
-function updateRangeLabels() {
-  if (!activeModel) {
-    return;
-  }
-  var limits = activeLimits();
-  var specs = activeModel.param_specs;
-  for (var i = 0; i < specs.length; i++) {
-    var s = specs[i];
-    var tip = paramTooltips[s.name];
-    if (!tip) {
-      continue;
-    }
-    tip.innerHTML = "";
-    var rangeLine = document.createElement("div");
-    var em = document.createElement("em");
-    em.textContent = "Range:";
-    rangeLine.appendChild(em);
-    rangeLine.appendChild(
-      document.createTextNode(
-        " " + paramRangeText(s, limits)
-      )
-    );
-    tip.appendChild(rangeLine);
-    if (s.help) {
-      var desc = document.createElement("div");
-      desc.className = "tooltip-desc";
-      desc.textContent = s.help;
-      tip.appendChild(desc);
-    }
-  }
-}
-
-// Uniform width for every hyperparameter box, sized to the
-// widest label / select across ALL models so the row spacing is
-// consistent within and across model views.
-// Measure again once the webfont has actually loaded.
-//
-// Canvas measureText answers with whatever font the system can give
-// it now, so a measurement taken before JetBrains Mono arrives is the
-// fallback's. That was harmless while this ran inside the /api/models
-// callback, which a network round trip meant the font had always
-// beaten. Boot is synchronous now, so the measurement moved in front
-// of the font and started losing the race.
-//
-// It matters because --param-width decides where #param-row wraps.
-// A few pixels out moves one field onto a second line, and the whole
-// column below it with it, which is the shift that came back when
-// switching from a two-row model to a one-row one.
-//
-// A microtask, so when the font is already loaded (the common case,
-// given the preload) this lands before the browser paints. When it is
-// not, font-display: block means no text has been painted yet either.
-// Idempotent: if the metrics agree, nothing moves.
-function remeasureWhenFontReady(allModels) {
-  var fonts = document.fonts;
-  if (!fonts || !fonts.ready || !fonts.ready.then) {
-    return;
-  }
-  function remeasure() {
-    applyUniformParamWidth(allModels);
-    sizeModelSelect(allModels);
-  }
-  fonts.ready.then(remeasure).catch(remeasure);
-}
-
-function applyUniformParamWidth(allModels) {
-  var refLabel = paramFields.querySelector("label");
-  if (!refLabel) {
-    return;
-  }
-  var refControl =
-    paramFields.querySelector("input, .custom-select")
-    || refLabel;
-  // Canvas measureText ignores letter-spacing (0.08em at 10px),
-  // so add a per-character fudge for the uppercased labels.
-  var letterSpacing = 0.8;
-  var maxWidth = 90;
-  for (var mi = 0; mi < allModels.length; mi++) {
-    var specs = allModels[mi].param_specs || [];
-    for (var si = 0; si < specs.length; si++) {
-      var s = specs[si];
-      if (s.type === "bool") {
-        continue;
-      }
-      var upper = String(s.label).toUpperCase();
-      var labelWidth =
-        measureTextWidth([upper], refLabel)
-        + letterSpacing * Math.max(0, upper.length - 1)
-        + 26;
-      maxWidth = Math.max(maxWidth, labelWidth);
-      if (s.type === "select") {
-        var opts = (s.options || []).map(prettifyOption);
-        var optWidth =
-          measureTextWidth(opts, refControl) + 40;
-        maxWidth = Math.max(maxWidth, optWidth);
-      }
-    }
-  }
-  document.documentElement.style.setProperty(
-    "--param-width", Math.ceil(maxWidth) + "px"
-  );
-}
-
-function applyLimits() {
-  var limits = activeLimits();
-  var keys = Object.keys(limits);
-  for (var i = 0; i < keys.length; i++) {
-    var input = paramInputs[keys[i]];
-    if (!input || input.type !== "number") {
-      continue;
-    }
-    var b = limits[keys[i]];
-    input.min = b.min;
-    input.max = b.max;
-    var val = parseFloat(input.value);
-    if (!isNaN(val)) {
-      if (val < b.min) {
-        input.value = b.min;
-      } else if (val > b.max) {
-        input.value = b.max;
-      }
-    }
-  }
-  updateRangeLabels();
-  validateAllParams();
-}
-
-// ---- Comprehensive validation ----
-
-function validateAllParams() {
-  var limits = activeLimits();
-  var errors = [];
-  var specs = numericSpecs();
-
-  for (var i = 0; i < specs.length; i++) {
-    var inp = paramInputs[specs[i].name];
-    if (inp) {
-      inp.classList.remove("input-warn");
-    }
-  }
-
-  for (var j = 0; j < specs.length; j++) {
-    var s = specs[j];
-    var input = paramInputs[s.name];
-    if (!input) {
-      continue;
-    }
-    var bound = limits[s.name];
-    var raw = input.value.trim();
-    var val = parseFloat(raw);
-
-    if (raw === "" || isNaN(val)) {
-      input.classList.add("input-warn");
-      errors.push(s.label + " is empty or invalid.");
-      continue;
-    }
-    if (bound && val < bound.min) {
-      input.classList.add("input-warn");
-      errors.push(
-        val < 0
-          ? s.label + " cannot be negative."
-          : s.label + " must be at least "
-            + bound.min + "."
-      );
-      continue;
-    }
-    if (bound && val > bound.max) {
-      input.classList.add("input-warn");
-      errors.push(
-        s.label + " must be at most "
-        + bound.max + "."
-      );
-    }
-  }
-
-  validateDivisibility(errors);
-
-  if (errors.length > 0) {
-    validationHint.textContent = errors[0];
-    validationHint.hidden = false;
-    paramsValid = false;
-  } else {
-    validationHint.hidden = true;
-    validationHint.textContent = "";
-    paramsValid = true;
-  }
-  updateGenerateButton();
-}
-
-// LLaDA-style block divisibility, applied only when the
-// relevant params exist in the active model's schema.
-function validateDivisibility(errors) {
-  var g = paramInputs["gen_length"];
-  var b = paramInputs["block_length"];
-  var st = paramInputs["steps"];
-  if (!g || !b || !st) {
-    return;
-  }
-  var genLength = parseInt(g.value, 10);
-  var blockLength = parseInt(b.value, 10);
-  var steps = parseInt(st.value, 10);
-  var genOk = !g.classList.contains("input-warn");
-  var blkOk = !b.classList.contains("input-warn");
-  var stpOk = !st.classList.contains("input-warn");
-
-  if (
-    genOk && blkOk
-    && blockLength > 0
-    && genLength % blockLength !== 0
-  ) {
-    g.classList.add("input-warn");
-    b.classList.add("input-warn");
-    errors.push(
-      "Gen Length (" + genLength
-      + ") must be divisible by Block Length ("
-      + blockLength + ")."
-    );
-  } else if (
-    genOk && blkOk && stpOk
-    && blockLength > 0
-    && genLength % blockLength === 0
-  ) {
-    var numBlocks = genLength / blockLength;
-    if (numBlocks > 0 && steps % numBlocks !== 0) {
-      st.classList.add("input-warn");
-      errors.push(
-        "Steps (" + steps
-        + ") must be divisible by num_blocks ("
-        + numBlocks + ")."
-      );
-    }
-  }
-}
-
-function getParamValues() {
-  var out = {};
-  if (!activeModel) {
-    return out;
-  }
-  var specs = activeModel.param_specs;
-  for (var i = 0; i < specs.length; i++) {
-    var s = specs[i];
-    var input = paramInputs[s.name];
-    if (!input) {
-      continue;
-    }
-    if (s.type === "int") {
-      out[s.name] = parseInt(input.value, 10);
-    } else if (s.type === "float") {
-      out[s.name] = parseFloat(input.value);
-    } else if (s.type === "bool") {
-      out[s.name] = input.checked;
-    } else {
-      out[s.name] = input.value;
-    }
-  }
-  return out;
-}
-
 function switchModel(id, device) {
   // Same model on the same device is a no-op (requestSwitch also
   // guards this before showing the confirm).
-  if (id === activeModelId && (device || activeDevice) === activeDevice) {
+  var activeId = generatorModelPanel.activeModelId();
+  var activeDevice = generatorModelPanel.activeDevice();
+  if (id === activeId && (device || activeDevice) === activeDevice) {
     return;
   }
   suppressReconnect = true;
@@ -1565,7 +511,7 @@ function switchModel(id, device) {
       // ignore
     }
   }
-  var name = models[id] ? models[id].display_name : id;
+  var name = generatorModelPanel.modelDisplayName(id);
   generatorChrome.setLoadingText(
     "Loading " + name + "\u2026"
   );
@@ -1577,7 +523,7 @@ function switchModel(id, device) {
   stopLoadProgressPoll();
   generatorChrome.setLoadingProgress("starting", null);
   raiseLoadingOverlay();
-  setModelSelectDisabled(true);
+  generatorModelPanel.setDisabled(true);
 
   switchWatch = activationClientCreate({
     onProgress: function (state, progress) {
@@ -1610,8 +556,8 @@ function switchModel(id, device) {
 
 function switchFailed(err) {
   suppressReconnect = false;
-  setModelSelectDisabled(false);
-  setModelSelectValue(activeModelId);
+  generatorModelPanel.setDisabled(false);
+  generatorModelPanel.refreshSelector();
   stopLoadProgressPoll();
   if (switchWatch) {
     switchWatch.stop();
@@ -1749,9 +695,7 @@ function handleModelStatus(data) {
     modelReady = false;
     generatorChrome.setLoadingText(
       "Loading "
-      + (activeModel
-        ? activeModel.display_name
-        : "model")
+      + (generatorModelPanel.activeDisplayName() || "model")
       + "\u2026"
     );
     raiseLoadingOverlay();
@@ -1795,7 +739,9 @@ function handleResident(data) {
   if (!data || !data.model) {
     return;
   }
-  var sameModel = data.model === activeModelId;
+  var activeId = generatorModelPanel.activeModelId();
+  var activeDevice = generatorModelPanel.activeDevice();
+  var sameModel = data.model === activeId;
   var sameDevice =
     !data.device || !activeDevice || data.device === activeDevice;
   if (sameModel && sameDevice) {
@@ -1808,9 +754,7 @@ function handleResident(data) {
   modelReady = false;
   suppressReconnect = true;
   updateGenerateButton();
-  var name = models[data.model]
-    ? models[data.model].display_name
-    : data.model;
+  var name = generatorModelPanel.modelDisplayName(data.model);
   generatorChrome.setConnection("loading");
   generatorChrome.setLoadingText(
     "Model changed to " + name + "\u2026"
@@ -2426,10 +1370,8 @@ function applyTokenBirthGlow() {
   // Family, not generation shape: the glow pairs are per model class,
   // so a state-space model gets its own rather than borrowing the
   // autoregressive one because it happens to append.
-  var family =
-    activeModel
-    && activeModel.capabilities
-    && activeModel.capabilities.family;
+  var capabilities = generatorModelPanel.capabilities();
+  var family = capabilities.family;
   var glow = overlaysGlowFor(appSettings, family);
   overlaysApplyGlowVars(
     outputArea, glow.brightness, glow.fadeMs
@@ -3063,10 +2005,8 @@ var ENTROPY_SHAPES = ["position", "frame|position"];
 // offered or withheld before the first frame arrives, and provenance
 // turns up with that frame at the earliest.
 function declaredChannel(name) {
-  if (!activeModel || !activeModel.capabilities) {
-    return null;
-  }
-  var signals = activeModel.capabilities.signals || [];
+  var signals =
+    generatorModelPanel.capabilities().signals || [];
   for (var i = 0; i < signals.length; i++) {
     if (signals[i] && signals[i].name === name) {
       return signals[i];
@@ -3408,7 +2348,9 @@ function renderAltsPopover(pos, span) {
     hint.textContent = "Click a candidate to substitute";
     altsPopover.appendChild(hint);
   }
-  var tokenizer = overlaysBuildAltTokenizer(activeTokenizer);
+  var tokenizer = overlaysBuildAltTokenizer(
+    generatorModelPanel.activeTokenizer()
+  );
   if (tokenizer) {
     altsPopover.appendChild(tokenizer);
   }
@@ -3444,7 +2386,9 @@ function renderCandidatesPopover(pos, span) {
   altsPopover.appendChild(
     buildAltsRows(reading.set.c, reading.set.h)
   );
-  var tokenizer = overlaysBuildAltTokenizer(activeTokenizer);
+  var tokenizer = overlaysBuildAltTokenizer(
+    generatorModelPanel.activeTokenizer()
+  );
   if (tokenizer) {
     altsPopover.appendChild(tokenizer);
   }
@@ -4681,7 +3625,8 @@ function setCandidateMetricsHover(reading) {
 // vocab_size beside it: a padded embedding makes those differ, and a
 // rank is a place among the tokens that could have been ranked.
 function metricsVocabSize() {
-  return activeTokenizer.model_vocab_size || null;
+  return generatorModelPanel.activeTokenizer().model_vocab_size
+    || null;
 }
 
 // Re-read the held position. Called from the render paths because
@@ -4895,15 +3840,11 @@ function stopReadoutReading() {
 // that does not stop adaptively, which keeps the readout off its
 // runs entirely.
 function stopReadoutRule() {
-  var capabilities = activeModel ? activeModel.capabilities : null;
-  if (!capabilities || !capabilities.adaptive_stopping) {
+  var capabilities = generatorModelPanel.capabilities();
+  if (!capabilities.adaptive_stopping) {
     return null;
   }
-  var defaults = {};
-  var specs = activeModel.param_specs || [];
-  for (var i = 0; i < specs.length; i++) {
-    defaults[specs[i].name] = specDefault(specs[i]);
-  }
+  var defaults = generatorModelPanel.parameterDefaults();
   return overlaysStopRuleFrom(lastRunParams, defaults);
 }
 
@@ -5135,23 +4076,14 @@ function setPromptImportStatus(text, danger) {
 
 // ---- Context window readout ----
 
-// These are the composer's only reads into the schema-driven model
-// panel. Keeping the callbacks here leaves parameter ownership in the
-// page until the later model-panel controller slice.
+// The page mediates between the two form controllers. Each controller
+// writes only its members of the shared draft record.
 function composerThinking() {
-  return Boolean(getParamValues().thinking);
+  return generatorModelPanel.thinking();
 }
 
 function composerOutputBudget() {
-  var values = getParamValues();
-  var budget = values.gen_length;
-  if (typeof budget !== "number" || !isFinite(budget)) {
-    budget = values.max_new_tokens;
-  }
-  if (typeof budget !== "number" || !isFinite(budget)) {
-    return 0;
-  }
-  return Math.max(0, Math.round(budget));
+  return generatorModelPanel.outputBudget();
 }
 
 function composerCountReady() {
@@ -5177,10 +4109,16 @@ function submitComposer() {
 }
 
 function composerDraftChanged() {
-  // The controller has already stored the prompt member. Keep the
-  // parameter side of the shared form-state record in step with it.
-  saveParamState();
-  updateParamDefaultsButton();
+  generatorModelPanel.saveDraft();
+}
+
+function modelPanelValidationChanged() {
+  updateGenerateButton();
+}
+
+function modelPanelParametersChanged() {
+  generatorComposer.saveDraft();
+  generatorComposer.parametersChanged();
 }
 
 // ---- Persistent UI settings (localStorage) ----
@@ -5205,7 +4143,7 @@ function applySettings() {
   updateGenerateIdleEffect();
   // Restart the collapsed device ticker so the GPU-ticker toggle takes
   // effect immediately.
-  setModelSelectValue(activeModelId);
+  generatorModelPanel.refreshSelector();
   if (scrubberActive) {
     renderFrameWithTokens(currentScrubFrame);
   }
@@ -5706,7 +4644,10 @@ function updateGenerateButton() {
     btnGenerate.classList.remove("is-stop");
     btnGenerate.disabled =
       isSaving
-      || !(modelReady && paramsValid);
+      || !(
+        modelReady
+        && generatorModelPanel.validation().valid
+      );
   }
   // The label text is owned by the idle-effect controller (it either
   // sets the static label or drives the looping diffusion reveal).
@@ -5818,10 +4759,9 @@ function activateScrubber() {
   updateScrubberLabel();
 
   setScrubberVisible(true);
+  var capabilities = generatorModelPanel.capabilities();
   btnEditFrames.hidden = !(
-    activeModel
-    && activeModel.capabilities
-    && activeModel.capabilities.supports_resume
+    capabilities.supports_resume
     && !runIsMultiCanvas()
   );
   // What If needs captured candidates to substitute from, so it stays
@@ -6250,11 +5190,8 @@ function setSavingControls(saving) {
 // ---- What If: top-k substitution (autoregressive) ----
 
 function supportsSubstitution() {
-  return !!(
-    activeModel
-    && activeModel.capabilities
-    && activeModel.capabilities.supports_substitution
-  );
+  var capabilities = generatorModelPanel.capabilities();
+  return !!capabilities.supports_substitution;
 }
 
 // Arm substitution on the completed run. Mirrors Edit Frames,
@@ -6422,11 +5359,8 @@ function exitRemaskMode() {
 // which is what this used to do: the note would have gone missing for
 // the next renoising model to arrive under a different id.
 function renoiseNote() {
-  if (
-    activeModel
-    && activeModel.capabilities
-    && activeModel.capabilities.remask_renoises
-  ) {
+  var capabilities = generatorModelPanel.capabilities();
+  if (capabilities.remask_renoises) {
     return " Remasked tokens are renoised, so nearby"
       + " tokens may also change on resume.";
   }
@@ -6847,11 +5781,9 @@ function retryGuidedEdit() {
 // resume from them. A stopped What If branch is not one, since its
 // worker keeps no branch, and a finished branch has nothing left.
 function reviewCanContinue() {
-  return runInterrupted && !!(
-    activeModel
-    && activeModel.capabilities
-    && activeModel.capabilities.supports_resume
-  );
+  var capabilities = generatorModelPanel.capabilities();
+  return runInterrupted
+    && !!capabilities.supports_resume;
 }
 
 // Review's status line at the branch's last frame: where it stopped,
@@ -6918,13 +5850,7 @@ function setGenerating(active) {
   // save is completing) -- centralized in updateGenerateButton.
   updateGenerateButton();
   generatorComposer.setDisabled(active);
-  toggleExperimental.disabled = active;
-  setModelSelectDisabled(active);
-  var keys = Object.keys(paramInputs);
-  for (var i = 0; i < keys.length; i++) {
-    paramInputs[keys[i]].disabled = active;
-  }
-  updateParamDefaultsButton();
+  generatorModelPanel.setDisabled(active);
 
   if (active) {
     deactivateScrubber();
@@ -7135,7 +6061,7 @@ function startNewRun() {
   setGenerating(false);
   // Return to the pre-generation resting state.
   generatorChrome.showOutputPlaceholder(
-    activeModel ? activeModel.display_name : ""
+    generatorModelPanel.activeDisplayName()
   );
 }
 
@@ -7167,7 +6093,7 @@ function startGeneration() {
   if (isGenerating) {
     return;
   }
-  if (!paramsValid) {
+  if (!generatorModelPanel.validation().valid) {
     return;
   }
 
@@ -7185,7 +6111,7 @@ function startGeneration() {
   // previous run's state. Record the prompt in history first.
   generatorComposer.prepareGeneration(prompt);
   resetRunState();
-  var params = getParamValues();
+  var params = generatorModelPanel.parameterValues();
   lastRunPrompt = prompt;
   lastRunParams = params;
 
@@ -7201,7 +6127,7 @@ function startGeneration() {
   var payload = Object.assign({}, params);
   payload.type = "generate";
   payload.prompt = prompt;
-  payload.experimental = toggleExperimental.checked;
+  payload.experimental = generatorModelPanel.experimental();
   ws.send(JSON.stringify(payload));
 }
 
@@ -7451,9 +6377,10 @@ function saveRun() {
     : null;
 
   var payload = {
-    model: activeModelId,
+    model: generatorModelPanel.activeModelId(),
     prompt: runRecordPrompt(),
-    params: lastRunParams || getParamValues(),
+    params:
+      lastRunParams || generatorModelPanel.parameterValues(),
     final_text: lastFinalText,
     elapsed_seconds: totalElapsed,
     per_frame_elapsed: runFrames.elapsed.slice(),
@@ -7655,115 +6582,8 @@ btnGenerate.addEventListener(
 btnSave.addEventListener("click", saveRun);
 
 generatorComposer.wire();
+generatorModelPanel.wire();
 generatorChrome.wire();
-
-toggleExperimental.addEventListener(
-  "change", applyLimits
-);
-toggleExperimental.addEventListener(
-  "change", onParamFormChanged
-);
-
-if (btnParamDefaults) {
-  btnParamDefaults.addEventListener(
-    "click", resetParamsToDefaults
-  );
-}
-
-if (modelSelect && modelSelectList) {
-  // Start from a known state rather than trusting the markup to
-  // agree with it. The list ships `hidden` and the control ships
-  // `aria-expanded="false"`, and this makes the JS the one thing
-  // that decides, so the two cannot drift apart.
-  closeModelList();
-  modelSelect.addEventListener("click", function (e) {
-    if (e.target.closest(".model-select-option")) {
-      return;
-    }
-    if (modelSelectDisabled) {
-      return;
-    }
-    toggleModelList();
-  });
-  modelSelectList.addEventListener("click", function (e) {
-    // Per-model device buttons handle their own clicks
-    // (stopPropagation); a click on the row name targets the
-    // model's default device. Both route through the confirm.
-    var opt = e.target.closest(".model-select-option");
-    if (!opt) {
-      return;
-    }
-    var id = opt.getAttribute("data-id");
-    // The loaded model is inert here: re-selecting it is redundant, and
-    // any device change goes through its (still enabled) other-device
-    // button, so a name-area click on the active row does nothing.
-    if (!id || id === activeModelId) {
-      return;
-    }
-    requestSwitch(id, defaultDeviceFor(models[id]));
-  });
-  modelSelect.addEventListener("keydown", function (e) {
-    if (modelSelectDisabled) {
-      return;
-    }
-    // The confirm popover is a child of this element, so its keys
-    // bubble here. Answering them would be worse than useless: the
-    // Enter branch below calls preventDefault, which cancels the
-    // click the browser was about to synthesise on the focused
-    // Confirm or Cancel button, so the popover could be reached by
-    // Tab and then not operated at all.
-    if (switchConfirmEl && switchConfirmEl.contains(e.target)) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        closeSwitchConfirm();
-      }
-      return;
-    }
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      e.preventDefault();
-      if (modelSelectList.hidden) {
-        openModelList();
-      }
-      moveModelActive(e.key === "ArrowDown" ? 1 : -1);
-      return;
-    }
-    // Across a row rather than down the list: which device this
-    // model would load onto. Silent on a row offering only one.
-    if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
-      if (modelSelectList.hidden) {
-        return;
-      }
-      e.preventDefault();
-      moveModelDevice(e.key === "ArrowRight" ? 1 : -1);
-      return;
-    }
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      if (modelSelectList.hidden) {
-        openModelList();
-      } else if (!activateModelActive()) {
-        // Open with nothing traversed, or the resident model at the
-        // device it is already on: close rather than pick something
-        // the user did not point at.
-        closeModelList();
-      }
-      return;
-    }
-    if (e.key === "Escape") {
-      closeModelList();
-      return;
-    }
-    if (e.key === "Tab") {
-      closeModelList();
-    }
-  });
-  document.addEventListener("click", function (e) {
-    if (!modelSelect.contains(e.target)) {
-      closeModelList();
-      closeSwitchConfirm();
-    }
-  });
-}
 
 // Scrubber event listeners.
 //
@@ -8428,6 +7248,8 @@ var SESSION_KEY = PERSIST_LAST_RUN_KEY;
 // tier gives way first, are the codec's to decide.
 function saveSessionState() {
   var chromeStatus = generatorChrome.readStatus();
+  var activeModelId = generatorModelPanel.activeModelId();
+  var activeDevice = generatorModelPanel.activeDevice();
   sessionStoreFirstFitting(runSnapshotTiers({
     model: activeModelId,
     // Part of the snapshot's identity, not decoration. The same model
@@ -8502,9 +7324,11 @@ function clearSessionState() {
 }
 
 function restoreSessionState() {
+  var activeModelId = generatorModelPanel.activeModelId();
   if (!activeModelId) {
     return false;
   }
+  var activeDevice = generatorModelPanel.activeDevice();
   var stored = null;
   try {
     stored = sessionStorage.getItem(SESSION_KEY);
@@ -8581,228 +7405,6 @@ function restoreSessionStateApply(restored) {
   });
 }
 
-// ---- Session-scoped form state (params + prompt draft) ----
-//
-// Leaving the page and coming back used to reset every
-// hyperparameter, because boot() rebuilds the panel from specDefault
-// and nothing put the user's values back. This restores them for the
-// life of the app. generator_composer.js owns the prompt member in
-// this same compatibility record until the model panel moves too.
-//
-// It cannot ride in SESSION_KEY: saveSessionState bails unless a run
-// completed, and clearSessionState fires at the *start* of every
-// generate, so params would be wiped by Generate and lost entirely if
-// you navigated mid-run. This is form state, not a run artifact, and
-// it gets its own key with its own lifetime.
-//
-// Keyed by model id, because param_specs differ per model and a model
-// switch ends in a location.reload() that sessionStorage survives, so
-// each model keeps its own values. Deliberately not in PERSIST_KEYS:
-// it is meant to die with the app, since a fresh launch should start
-// from the recommended defaults.
-
-var PARAM_STATE_KEY = "diffusion_param_state";
-
-function readParamStateAll() {
-  var raw = null;
-  try {
-    raw = sessionStorage.getItem(PARAM_STATE_KEY);
-  } catch (_e) {
-    return {};
-  }
-  if (!raw) {
-    return {};
-  }
-  try {
-    var parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object") {
-      return parsed;
-    }
-  } catch (_e) {
-    // Corrupt storage: fall back to the defaults.
-  }
-  return {};
-}
-
-// Raw control values rather than getParamValues() output, so a
-// half-typed entry round-trips instead of being silently rewritten by
-// a parseFloat. validateAllParams does its usual job on the way back.
-function currentParamRawValues() {
-  var out = {};
-  var names = Object.keys(paramInputs);
-  for (var i = 0; i < names.length; i++) {
-    var input = paramInputs[names[i]];
-    if (input.type === "checkbox") {
-      out[names[i]] = input.checked;
-    } else {
-      out[names[i]] = input.value;
-    }
-  }
-  return out;
-}
-
-function saveParamState() {
-  if (!activeModelId) {
-    return;
-  }
-  var all = readParamStateAll();
-  var previous = all[activeModelId];
-  var state = {
-    experimental: toggleExperimental.checked,
-    params: currentParamRawValues(),
-  };
-  if (previous && typeof previous.prompt === "string") {
-    state.prompt = previous.prompt;
-  }
-  all[activeModelId] = state;
-  try {
-    sessionStorage.setItem(
-      PARAM_STATE_KEY, JSON.stringify(all)
-    );
-  } catch (_e) {
-    // Quota or private mode: the form simply will not persist.
-  }
-}
-
-// Every path that mutates the form funnels through here, so the
-// stored snapshot and the Reset button's enabled state cannot drift
-// apart.
-function onParamFormChanged() {
-  generatorComposer.saveDraft();
-  saveParamState();
-  updateParamDefaultsButton();
-  generatorComposer.parametersChanged();
-}
-
-function restoreParamState() {
-  if (!activeModelId) {
-    return;
-  }
-  var state = readParamStateAll()[activeModelId];
-  if (!state) {
-    return;
-  }
-  // Experimental goes first: specDefault and specBounds both read it,
-  // so the values have to land against the right set of bounds.
-  toggleExperimental.checked = !!state.experimental;
-  applyParamRawValues(state.params);
-  // Clamps the restored values, refreshes the range tooltips, and
-  // validates, all of which the new bounds require. This also covers
-  // the awkward case of the device changing between save and restore,
-  // where a stored value can fall outside the override's range.
-  applyLimits();
-}
-
-// Restore by spec name so a spec set that changed between sessions
-// degrades instead of breaking: stored names the model no longer has
-// are ignored, and specs with nothing stored keep the default that
-// buildParamPanel already applied.
-function applyParamRawValues(values) {
-  if (!values || !activeModel) {
-    return;
-  }
-  var specs = activeModel.param_specs;
-  for (var i = 0; i < specs.length; i++) {
-    var stored = values[specs[i].name];
-    if (stored !== undefined) {
-      applyParamRawValue(specs[i], stored);
-    }
-  }
-}
-
-// One control, one stored value. A select is checked against the
-// spec's current options, since an option removed since the value was
-// stored would otherwise be forwarded to the server verbatim.
-function applyParamRawValue(spec, stored) {
-  var input = paramInputs[spec.name];
-  if (!input) {
-    return;
-  }
-  if (spec.type === "bool") {
-    input.checked = !!stored;
-  } else if (spec.type === "select") {
-    if ((spec.options || []).indexOf(stored) >= 0) {
-      input.value = stored;
-    }
-  } else {
-    input.value = String(stored);
-  }
-}
-
-// ---- Reset to defaults ----
-
-// Whether every control already sits at its default, which is what
-// disables the Reset button. Experimental is part of the question,
-// since it moves the bounds the defaults are drawn from.
-function paramsAtDefaults() {
-  if (toggleExperimental.checked) {
-    return false;
-  }
-  if (!activeModel) {
-    return true;
-  }
-  var specs = activeModel.param_specs;
-  for (var i = 0; i < specs.length; i++) {
-    if (!paramAtDefault(specs[i])) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function paramAtDefault(spec) {
-  var input = paramInputs[spec.name];
-  if (!input) {
-    return true;
-  }
-  if (spec.type === "bool") {
-    return input.checked === Boolean(specDefault(spec));
-  }
-  if (spec.type === "select") {
-    return input.value === spec.default;
-  }
-  // String comparison against the same String() the builder used, so
-  // a retyped "0.30" reads as changed. Harmless: Reset just
-  // normalizes it.
-  return input.value === String(specDefault(spec));
-}
-
-function resetParamsToDefaults() {
-  if (!activeModel || isGenerating) {
-    return;
-  }
-  toggleExperimental.checked = false;
-  var specs = activeModel.param_specs;
-  for (var i = 0; i < specs.length; i++) {
-    resetParamToDefault(specs[i]);
-  }
-  applyLimits();
-  // Re-save rather than clearing the entry: the prompt draft lives in
-  // the same record and is not the button's business.
-  onParamFormChanged();
-}
-
-function resetParamToDefault(spec) {
-  var input = paramInputs[spec.name];
-  if (!input) {
-    return;
-  }
-  if (spec.type === "bool") {
-    input.checked = Boolean(specDefault(spec));
-  } else if (spec.type === "select") {
-    input.value = spec.default;
-  } else {
-    input.value = String(specDefault(spec));
-  }
-}
-
-function updateParamDefaultsButton() {
-  if (!btnParamDefaults) {
-    return;
-  }
-  btnParamDefaults.disabled = isGenerating || paramsAtDefaults();
-}
-
 // ---- Boot ----
 
 // The model snapshot the server inlined when it served this page, or
@@ -8826,38 +7428,13 @@ function bootModelInfo() {
 // model, the saved run is restored over the panel, and the glow and
 // mask character are tuned per model class.
 function applyModelInfo(info) {
-  var list = modelClientList(info);
-  for (var i = 0; i < list.length; i++) {
-    models[list[i].id] = list[i];
-  }
-  activeModelId =
-    modelClientActiveId(info)
-    || info.default
-    || (list[0] && list[0].id);
-  activeModel =
-    models[activeModelId] || list[0] || null;
-  activeDevice = modelClientActiveDevice(info);
-  activeTokenizer = info.active_tokenizer || {};
-  gpuPresent = modelClientGpuPresent(info);
-  renderModelSelector(list, activeModelId);
+  generatorModelPanel.configure(info);
+  var capabilities = generatorModelPanel.capabilities();
   generatorComposer.configure({
-    modelId: activeModelId,
-    inputMode: (
-      activeModel
-      && activeModel.capabilities
-      && activeModel.capabilities.input_mode
-    ),
-    contextLength: info.active_context_length,
+    modelId: generatorModelPanel.activeModelId(),
+    inputMode: capabilities.input_mode,
+    contextLength: generatorModelPanel.activeContext(),
   });
-  if (activeModel) {
-    buildParamPanel(activeModel);
-    applyUniformParamWidth(list);
-    remeasureWhenFontReady(list);
-    // Before restoreSessionState, so a completed run's prompt
-    // still overwrites the draft with no special casing.
-    restoreParamState();
-    updateParamDefaultsButton();
-  }
   // Needs the active model, since the glow is tuned per model
   // class. Outside the guard above because it falls back to the
   // diffusion pair, which is the right reading when the active
@@ -8878,7 +7455,7 @@ function finishBoot() {
   }
   if (!restored) {
     generatorChrome.showOutputPlaceholder(
-      activeModel ? activeModel.display_name : ""
+      generatorModelPanel.activeDisplayName()
     );
   }
   connect();
@@ -8891,11 +7468,7 @@ function finishBoot() {
 function refreshModelVram() {
   fetchModels()
     .then(function (info) {
-      var list = modelClientList(info);
-      for (var i = 0; i < list.length; i++) {
-        models[list[i].id] = list[i];
-      }
-      renderModelSelector(list, activeModelId);
+      generatorModelPanel.refresh(info);
     })
     .catch(function () {
       // The rows already drew without headroom, which is the same

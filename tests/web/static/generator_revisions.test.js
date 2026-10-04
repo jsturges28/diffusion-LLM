@@ -203,9 +203,19 @@ test("a run that only appends never paints it", () => {
   // appends: there is no canvas for a position to change on.
   const { context } = finishedRun(REVISING);
   context.overlayMode = "revisions";
-  context.activeModel = {
-    capabilities: { generation_shape: "append_only" },
-  };
+  context.generatorModelPanel.configure({
+    models: [{
+      id: "append",
+      display_name: "Append-only",
+      capabilities: {
+        generation_shape: "append_only",
+        supported_devices: ["cpu"],
+      },
+      param_specs: [],
+    }],
+    active: "append",
+    active_device: "cpu",
+  });
 
   assert.equal(context.effectiveColorMode(), "none");
   assert.equal(context.revisionsAvailable(), false);

@@ -50,12 +50,15 @@ function host(value) {
 function stateSpaceModel(signals) {
   return {
     id: "mamba3",
+    display_name: "Mamba-3",
     capabilities: {
       family: "state_space",
       generation_shape: "append_only",
       input_mode: "completion",
+      supported_devices: ["cpu"],
       signals: signals,
     },
+    param_specs: [],
   };
 }
 
@@ -89,7 +92,12 @@ function appendFrame(index, withForgetting) {
 // The generator after a whole run from a model declaring `signals`.
 function generator(signals, withForgetting) {
   const { context } = loadPage({});
-  context.activeModel = stateSpaceModel(signals);
+  const model = stateSpaceModel(signals);
+  context.generatorModelPanel.configure({
+    models: [model],
+    active: model.id,
+    active_device: "cpu",
+  });
   for (let index = 1; index <= WORDS.length; index++) {
     context.handleFrame(appendFrame(index, withForgetting));
   }

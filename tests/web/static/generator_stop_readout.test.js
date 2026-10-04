@@ -135,7 +135,10 @@ function streaming(frames, options) {
   context.ws = new OpenSocket("ws://test");
   registry.get("prompt-input").value = "explain yeast";
   for (const [name, value] of Object.entries(settings.params || {})) {
-    context.paramInputs[name].value = String(value);
+    registry
+      .get("param-fields")
+      .querySelector("#param-" + name)
+      .value = String(value);
   }
   context.startGeneration();
   frames.forEach((frame, index) => {

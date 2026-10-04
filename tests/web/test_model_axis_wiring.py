@@ -34,6 +34,7 @@ STATIC = (
 PAGE_SCRIPTS = (
     "app.js",
     "generator_composer.js",
+    "generator_model_panel.js",
     "generator_chrome.js",
     "menu.js",
     "analytics.js",
@@ -120,7 +121,9 @@ def test_the_device_decision_reads_the_declaration() -> None:
     """Devices were inferred from the family, which is how a 17 GiB
     diffusion model came to be offered a CPU load."""
     region = _region(
-        "app.js", "function defaultDeviceFor(model)", 400
+        "generator_model_panel.js",
+        "function defaultDeviceFor(model)",
+        400,
     )
 
     assert "supportedDevices(model)" in region

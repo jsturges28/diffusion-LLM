@@ -177,8 +177,11 @@ test("a prompt kept from the history is still not the run's", async () => {
 });
 
 test("a save records the parameters the run was generated from", async () => {
-  const { context, saved } = finishedRun();
-  context.paramInputs.temperature.value = "1.5";
+  const { context, registry, saved } = finishedRun();
+  registry
+    .get("param-fields")
+    .querySelector("#param-temperature")
+    .value = "1.5";
 
   await context.saveRun();
 
@@ -190,8 +193,11 @@ test("a resumed edit keeps the run's parameters", async () => {
   // terminal frame used to read the form back anyway, so a value
   // changed between the run and the edit was saved as if it had
   // produced both.
-  const { context, saved } = finishedRun();
-  context.paramInputs.temperature.value = "1.5";
+  const { context, registry, saved } = finishedRun();
+  registry
+    .get("param-fields")
+    .querySelector("#param-temperature")
+    .value = "1.5";
 
   context.handleDone({ type: "done", final_text: "Yeast eats." });
   await context.saveRun();

@@ -151,10 +151,11 @@ test("the resident model is known at first paint", () => {
     bootState: bootState(),
     fetchImpl: recordingFetch([]),
   });
+  const panel = page.sandbox.generatorModelPanel;
 
-  assert.equal(page.sandbox.activeModelId, "smollm3");
-  assert.equal(page.sandbox.activeDevice, "cuda");
-  assert.equal(page.sandbox.gpuPresent, true);
+  assert.equal(panel.activeModelId(), "smollm3");
+  assert.equal(panel.activeDevice(), "cuda");
+  assert.equal(panel.activeModel().display_name, "SmolLM3-3B");
 });
 
 test("the composed context readout uses the boot window",
@@ -231,9 +232,13 @@ test("VRAM headroom is fetched, but after the page is drawn", async () => {
 
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  const model = page.sandbox.models.smollm3;
+  const row = page.registry
+    .get("model-select-list")
+    .children[0];
+  const info = row.querySelector(".option-info");
+  assert.ok(info);
   assert.equal(
-    model.vram_headroom_gib, 5.2,
+    info.classList.contains("is-positive"), true,
     "the refresh landed but its answer was dropped"
   );
 });
@@ -256,7 +261,10 @@ test("the fallback reaches the same page", async () => {
   const page = loadPage({ fetchImpl: recordingFetch([]) });
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  assert.equal(page.sandbox.activeModelId, "smollm3");
+  assert.equal(
+    page.sandbox.generatorModelPanel.activeModelId(),
+    "smollm3"
+  );
   assert.ok(page.registry.get("param-fields").children.length > 0);
 });
 
@@ -515,7 +523,8 @@ for (const [label, value] of MALFORMED) {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     assert.equal(
-      page.sandbox.activeModelId, "smollm3",
+      page.sandbox.generatorModelPanel.activeModelId(),
+      "smollm3",
       `${label} models was adopted, leaving no resident model`
     );
     assert.ok(

@@ -303,10 +303,10 @@ function generatorComposerCreate(options) {
     btnPromptImport.disabled = disabled;
   }
 
-  // The form-state record is shared temporarily with app.js's
-  // parameter persistence. This controller is the sole writer of its
-  // `prompt` member; app.js preserves that member while writing the
-  // schema-driven fields that move in a later slice.
+  // The form-state record is shared with the model-panel controller.
+  // This controller is the sole writer of its `prompt` member; the
+  // panel preserves that member while writing Experimental and the
+  // schema-driven parameters.
   function readDraftStateAll() {
     var raw = null;
     try {
