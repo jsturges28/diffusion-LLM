@@ -47,6 +47,9 @@ var generatorChrome = generatorChromeCreate({
   revealText: denoiseReveal,
   cancelReveal: cancelDenoise,
 });
+var generatorModals = generatorModalsCreate({
+  initialHelpTab: "start",
+});
 var generatorEdit = null;
 var generatorRun = generatorRunCreate({
   readModel: generatorRunReadModel,
@@ -1493,72 +1496,7 @@ generatorCanvas.wire();
 generatorReadouts.wire();
 generatorCandidates.wire();
 generatorEdit.wire();
-
-
-// ---- Modal logic (About / Help / Settings) ----
-
-var linkAbout =
-  document.getElementById("link-about");
-var linkHelp =
-  document.getElementById("link-help");
-var modalAbout =
-  document.getElementById("modal-about");
-var modalHelp =
-  document.getElementById("modal-help");
-
-var allModals = [
-  modalAbout, modalHelp,
-];
-
-// ---- Help tabs ----
-//
-// Mirrors the Settings page's rail rather than inventing a second
-// idiom: same data attributes, same is-active class, same shape of
-// toggle. Duplicated here rather than extracted, because it is twenty
-// lines with two callers and a shared module would cost a third file
-// plus a load-order change on four pages.
-//
-// One thing this does that Settings does not: it sets aria-selected.
-// Settings declares role="tab" and then marks the active one with a
-// class alone, which is invisible to a screen reader.
-var helpTabs =
-  document.querySelectorAll(".help-tab");
-var helpPanels =
-  document.querySelectorAll(".help-panel");
-
-function selectHelpTab(name) {
-  for (var i = 0; i < helpTabs.length; i++) {
-    var active = helpTabs[i].getAttribute("data-help-tab") === name;
-    helpTabs[i].classList.toggle("is-active", active);
-    helpTabs[i].setAttribute("aria-selected", active ? "true" : "false");
-  }
-  for (var j = 0; j < helpPanels.length; j++) {
-    helpPanels[j].hidden =
-      helpPanels[j].getAttribute("data-help-panel") !== name;
-  }
-}
-
-function wireHelpTabs() {
-  for (var i = 0; i < helpTabs.length; i++) {
-    (function (tab) {
-      tab.addEventListener("click", function () {
-        selectHelpTab(tab.getAttribute("data-help-tab"));
-        // Back to the top of the new panel. The body is what scrolls,
-        // so without this a reader who was deep in one panel lands
-        // mid-way down the next one with no idea why.
-        var body = tab.closest(".help-layout");
-        if (body) {
-          var pane = body.querySelector(".help-body");
-          if (pane) {
-            pane.scrollTop = 0;
-          }
-        }
-      });
-    })(helpTabs[i]);
-  }
-}
-
-wireHelpTabs();
+generatorModals.wire();
 
 // Raising the loading curtain has to clear the modals first. They are
 // native dialogs now, so an open one is in the top layer, which sits
@@ -1567,77 +1505,10 @@ wireHelpTabs();
 // the curtain with About open, and the About box would float over it.
 // A swap invalidates the page underneath anyway, so the dialog goes.
 function raiseLoadingOverlay() {
-  for (var mi = 0; mi < allModals.length; mi++) {
-    closeModal(allModals[mi]);
-  }
+  generatorModals.closeAll();
   generatorComposer.closeImport();
   generatorChrome.showLoading();
 }
-
-function openModal(modal) {
-  // showModal, not show: it is the modal form that traps focus, makes
-  // the rest of the document inert, and answers Escape. Guarded
-  // because opening an already-open dialog throws.
-  if (!modal.open) {
-    modal.showModal();
-  }
-}
-
-function closeModal(modal) {
-  if (modal.open) {
-    modal.close();
-  }
-}
-
-linkAbout.addEventListener(
-  "click",
-  function (e) {
-    e.preventDefault();
-    openModal(modalAbout);
-  }
-);
-
-linkHelp.addEventListener(
-  "click",
-  function (e) {
-    e.preventDefault();
-    openModal(modalHelp);
-  }
-);
-
-var closeButtons =
-  document.querySelectorAll(".modal-close");
-for (var ci = 0; ci < closeButtons.length; ci++) {
-  (function (btn) {
-    btn.addEventListener("click", function () {
-      var overlay =
-        btn.closest(".modal-overlay");
-      if (overlay) {
-        closeModal(overlay);
-      }
-    });
-  })(closeButtons[ci]);
-}
-
-// The dialog fills the viewport and centres .modal-box inside it, so
-// a click landing on the dialog itself is a click beside the box.
-// The ::backdrop cannot be hit directly, which is why this tests the
-// element rather than the pseudo.
-allModals.forEach(function (modal) {
-  modal.addEventListener(
-    "click",
-    function (e) {
-      if (e.target === modal) {
-        closeModal(modal);
-      }
-    }
-  );
-});
-
-// Escape is the dialog's own now. The hand-rolled listener that used
-// to do this closed every open modal at once and, being on the
-// document, fired for any Escape anywhere; the native one closes the
-// topmost dialog and nothing else.
 
 // ---- Session persistence (survives Analytics navigation) ----
 

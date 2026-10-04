@@ -161,7 +161,8 @@ def test_raising_it_clears_the_modals_first() -> None:
     model raises the curtain, and About could be open over it."""
     region = _region("function raiseLoadingOverlay()", 500)
 
-    assert "closeModal(" in region
+    assert "generatorModals.closeAll()" in region
+    assert "generatorComposer.closeImport()" in region
     assert "generatorChrome.showLoading()" in region
 
 

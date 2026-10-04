@@ -1,11 +1,9 @@
 // Help's side tabs show one panel at a time.
 //
-// Strategy: the tab rail is selected by class, and the stub resolves
-// elements by id, so `helpTabs` is empty when app.js loads. The rail
-// is therefore built here and assigned over those two variables, then
-// the page's own selectHelpTab and wireHelpTabs run against it. That
-// keeps the function under test the shipped one, with only its input
-// supplied by the test.
+// Strategy: load the modal factory without app.js, build the same
+// rail and scrolling body as the page, then drive selection through
+// the buttons a reader uses. The controller discovers those nodes
+// once and keeps them private.
 //
 // Passing proves exactly one panel is ever visible, the rail agrees
 // with which one that is in both the class and the ARIA state, and
@@ -24,20 +22,23 @@ const test = require("node:test");
 const { loadPage, makeElement } = require("./dom_stub.js");
 
 const NAMES = ["start", "models", "running"];
+const SCRIPTS = ["generator_modals.js"];
 
 // A rail and its panels, wired into the page. Shaped like the real
 // markup: both live inside .help-layout, and the panels inside the
-// scrolling .help-body, because wireHelpTabs finds the scroller by
-// walking up from the tab that was clicked.
-function help() {
-  const { context } = loadPage({});
+// scrolling .help-body, because the controller resets that owned
+// scroller whenever a tab is clicked.
+function help(settings) {
+  const config = settings || {};
+  const page = loadPage({ scripts: SCRIPTS });
+  const modal = page.document.getElementById("modal-help");
 
   const layout = makeElement(null);
   layout.className = "help-layout";
+  modal.appendChild(layout);
   const body = makeElement(null);
   body.className = "modal-body help-body";
-  body.parent = layout;
-  layout.children.push(body);
+  layout.appendChild(body);
 
   const tabs = [];
   const panels = [];
@@ -45,32 +46,21 @@ function help() {
     const tab = makeElement(null);
     tab.className = "help-tab";
     tab.setAttribute("data-help-tab", name);
-    tab.parent = layout;
-    layout.children.push(tab);
+    layout.appendChild(tab);
     tabs.push(tab);
 
     const panel = makeElement(null);
     panel.className = "help-panel";
     panel.setAttribute("data-help-panel", name);
-    panel.parent = body;
-    body.children.push(panel);
+    body.appendChild(panel);
     panels.push(panel);
   }
 
-  // The opening state the markup ships: first tab active, the rest of
-  // the panels hidden.
-  tabs[0].classList.add("is-active");
-  tabs[0].setAttribute("aria-selected", "true");
-  for (let i = 1; i < NAMES.length; i++) {
-    tabs[i].setAttribute("aria-selected", "false");
-    panels[i].hidden = true;
-  }
-
-  context.helpTabs = tabs;
-  context.helpPanels = panels;
-  context.wireHelpTabs();
-
-  return { context, tabs, panels, body };
+  const controller = page.context.generatorModalsCreate({
+    initialHelpTab: config.initialHelpTab || "start",
+  });
+  controller.wire();
+  return { controller, tabs, panels, body };
 }
 
 function visible(panels) {
@@ -85,24 +75,26 @@ function active(tabs) {
     .map((tab) => tab.getAttribute("data-help-tab"));
 }
 
-test("one panel is visible to begin with", () => {
-  const { panels } = help();
+test("the initial tab and panel agree", () => {
+  const { tabs, panels } = help();
 
   assert.deepEqual(visible(panels), ["start"]);
+  assert.deepEqual(active(tabs), ["start"]);
+  assert.equal(tabs[0].getAttribute("aria-selected"), "true");
 });
 
 test("selecting a tab shows only its panel", () => {
-  const { context, panels } = help();
+  const { tabs, panels } = help();
 
-  context.selectHelpTab("models");
+  tabs[1].click();
 
   assert.deepEqual(visible(panels), ["models"]);
 });
 
 test("selecting a tab marks only it active", () => {
-  const { context, tabs } = help();
+  const { tabs } = help();
 
-  context.selectHelpTab("running");
+  tabs[2].click();
 
   assert.deepEqual(active(tabs), ["running"]);
 });
@@ -110,9 +102,9 @@ test("selecting a tab marks only it active", () => {
 test("the active tab is the one whose panel shows", () => {
   // The pair that matters: a rail highlighting one section while the
   // body shows another is worse than no highlight at all.
-  const { context, tabs, panels } = help();
+  const { tabs, panels } = help();
 
-  context.selectHelpTab("models");
+  tabs[1].click();
 
   assert.deepEqual(active(tabs), visible(panels));
 });
@@ -120,9 +112,9 @@ test("the active tab is the one whose panel shows", () => {
 test("aria-selected follows the class", () => {
   // Kept in step deliberately. Settings marks its active tab with a
   // class alone, which a screen reader cannot see.
-  const { context, tabs } = help();
+  const { tabs } = help();
 
-  context.selectHelpTab("running");
+  tabs[2].click();
 
   const marked = tabs
     .filter((tab) => tab.getAttribute("aria-selected") === "true")
@@ -134,9 +126,9 @@ test("every other tab is explicitly not selected", () => {
   // The negative space. Leaving the previous tab's aria-selected on
   // announces two active tabs, so this checks the count and not just
   // that the new one is set.
-  const { context, tabs } = help();
+  const { tabs } = help();
 
-  context.selectHelpTab("models");
+  tabs[1].click();
 
   const off = tabs.filter(
     (tab) => tab.getAttribute("aria-selected") === "false"
@@ -166,10 +158,10 @@ test("clicking returns to the top of the new panel", () => {
 test("reselecting the open tab leaves it open", () => {
   // Idempotent, because a reader clicking the tab they are already on
   // should not see anything change.
-  const { context, tabs, panels } = help();
-  context.selectHelpTab("models");
+  const { tabs, panels } = help();
+  tabs[1].click();
 
-  context.selectHelpTab("models");
+  tabs[1].click();
 
   assert.deepEqual(visible(panels), ["models"]);
   assert.deepEqual(active(tabs), ["models"]);
@@ -179,9 +171,9 @@ test("an unknown name hides everything rather than guessing", () => {
   // Negative space. Nothing should call this with a name that has no
   // panel, so the honest outcome is a blank body, which is visibly
   // wrong. Falling back to the first panel would hide the typo.
-  const { context, tabs, panels } = help();
-
-  context.selectHelpTab("nonexistent");
+  const { tabs, panels } = help({
+    initialHelpTab: "nonexistent",
+  });
 
   assert.deepEqual(visible(panels), []);
   assert.deepEqual(active(tabs), []);

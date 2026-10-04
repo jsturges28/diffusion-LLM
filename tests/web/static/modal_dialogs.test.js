@@ -1,9 +1,10 @@
 // The modals, driven as dialogs.
 //
-// Strategy: load the generator into the DOM stub, open and close its
-// modals through the same calls the page makes, and read back what
-// happened. `test_keyboard_reach.py` covers the markup and the CSS;
-// this covers the behaviour those cannot see.
+// Strategy: load the whole generator into the DOM stub, open its
+// dialogs through the shipped header links, and close them through
+// the modal controller or backdrop. `test_keyboard_reach.py` covers
+// the markup and CSS; this covers composition behavior they cannot
+// see. The factory itself is driven in generator_modals.test.js.
 //
 // The migration's real prize is that `close` is a single funnel.
 // Before it, each dismissal route did its own tidying: the close
@@ -58,10 +59,17 @@ function generator() {
   });
   return {
     page,
+    modals: page.context.generatorModals,
     about: page.registry.get("modal-about"),
     help: page.registry.get("modal-help"),
     imports: page.registry.get("modal-import"),
   };
+}
+
+function open(harness, name) {
+  harness.page.registry.get("link-" + name).dispatch("click", {
+    preventDefault() {},
+  });
 }
 
 // -- opening --
@@ -72,7 +80,7 @@ test("a modal opens as modal, not inline", () => {
   // put modals on screen and left Tab walking the page behind them.
   const h = generator();
 
-  h.page.context.openModal(h.about);
+  open(h, "about");
 
   assert.equal(h.about.open, true);
   assert.equal(
@@ -85,15 +93,15 @@ test("opening an open modal does not throw", () => {
   // `showModal` on an already-open dialog is a DOM exception, and
   // two paths can reach the same open.
   const h = generator();
-  h.page.context.openModal(h.about);
+  open(h, "about");
 
-  assert.doesNotThrow(() => h.page.context.openModal(h.about));
+  assert.doesNotThrow(() => open(h, "about"));
 });
 
 test("closing a closed modal is quiet too", () => {
   const h = generator();
 
-  assert.doesNotThrow(() => h.page.context.closeModal(h.about));
+  assert.doesNotThrow(() => h.modals.closeAll());
   assert.equal(h.about.open, false);
 });
 
@@ -105,7 +113,7 @@ test("a click beside the box closes it", () => {
   // pseudo-element cannot be hit directly, which is why this is
   // tested against the element.
   const h = generator();
-  h.page.context.openModal(h.about);
+  open(h, "about");
 
   h.about.dispatch("click", { target: h.about });
 
@@ -114,15 +122,14 @@ test("a click beside the box closes it", () => {
 
 test("a click on the box does not", () => {
   const h = generator();
-  h.page.context.openModal(h.about);
-  const box = h.about.children[0];
+  open(h, "about");
 
-  h.about.dispatch("click", { target: box });
+  h.about.dispatch("click", { target: {} });
 
   assert.equal(h.about.open, true);
 });
 
-test("the pending import is dropped on close, however it closed", () => {
+test("pending import is dropped however the dialog closed", () => {
   // The case the funnel exists for. Native Escape runs no page code,
   // so a cleanup hanging off the close button alone would leave the
   // file staged and a later import would act on it.
@@ -152,10 +159,10 @@ test("the pending import is dropped on close, however it closed", () => {
 
 test("closing one modal leaves another alone", () => {
   const h = generator();
-  h.page.context.openModal(h.about);
-  h.page.context.openModal(h.help);
+  open(h, "about");
+  open(h, "help");
 
-  h.page.context.closeModal(h.about);
+  h.about.dispatch("click", { target: h.about });
 
   assert.equal(h.help.open, true);
 });
@@ -166,7 +173,7 @@ test("raising the loading overlay closes the dialogs", () => {
   // A dialog is in the top layer, above every z-index, so the
   // overlay at 100 would otherwise have About floating over it.
   const h = generator();
-  h.page.context.openModal(h.about);
+  open(h, "about");
 
   h.page.context.raiseLoadingOverlay();
 
