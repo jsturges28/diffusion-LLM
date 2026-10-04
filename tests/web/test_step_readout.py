@@ -87,7 +87,8 @@ def test_both_shapes_live_in_the_formatter() -> None:
 def test_the_live_path_uses_it() -> None:
     body = _region("function updateLiveFrameStatus(data)", 900)
 
-    assert "statusStep.textContent = stepReadout(" in body
+    assert "generatorChrome.setStep(" in body
+    assert "stepReadout(" in body
     assert '"Resuming "' in body
 
 
@@ -108,7 +109,8 @@ def test_both_frame_shapes_reach_the_live_path() -> None:
 def test_the_scrubber_uses_it() -> None:
     body = _region("function renderScrubStepReadout(index)", 700)
 
-    assert "statusStep.textContent = stepReadout(" in body
+    assert "generatorChrome.setStep(" in body
+    assert "stepReadout(" in body
     assert "runFrames.canvasIndex[index]" in body
 
 
@@ -130,7 +132,7 @@ def test_nothing_else_formats_the_reading() -> None:
     # after a second delivery shape arrived.
     source = _app()
     built = re.findall(
-        r"statusStep\.textContent = stepReadout\(", source
+        r"generatorChrome\.setStep\(\s*stepReadout\(", source
     )
 
     assert len(built) == 2
@@ -171,7 +173,7 @@ def test_the_live_line_reads_the_frame_not_the_run() -> None:
     the generation's total and "Resuming 12/64" would read
     "Resuming 12/128"."""
     body = _region("function updateLiveFrameStatus(data)", 900)
-    start = body.find("statusStep.textContent = stepReadout(")
+    start = body.find("generatorChrome.setStep(")
     call = body[start : start + 220]
 
     assert "frameSteps" in call

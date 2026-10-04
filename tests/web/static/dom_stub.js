@@ -56,6 +56,7 @@ const GENERATOR_SCRIPTS = [
   "download_client.js",
   "download_toast.js",
   "generator_composer.js",
+  "generator_chrome.js",
   "app.js",
 ];
 
@@ -255,6 +256,9 @@ function makeElement(id) {
   Object.defineProperty(element, "lastChild", {
     get: () =>
       element.children[element.children.length - 1] || null,
+  });
+  Object.defineProperty(element, "parentNode", {
+    get: () => element.parent,
   });
 
   element.setAttribute = (key, value) => {

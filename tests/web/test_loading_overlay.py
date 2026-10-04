@@ -1,8 +1,9 @@
 """The generator waits for a model, and for nothing else.
 
-Strategy: read the shipped markup, CSS and `app.js`. Every property
-here is about which class an element carries at rest and which code
-paths take it off, so all of them are checkable without a browser.
+Strategy: read the shipped markup, CSS, composition root and chrome
+controller. Every property here is about which class an element
+carries at rest and which code paths take it off, so all of them are
+checkable without a browser.
 
 The overlay is down at boot, and this file has now asserted that
 twice for different reasons, which is worth being careful about.
@@ -148,7 +149,7 @@ def test_raising_it_clears_the_modals_first() -> None:
     region = _region("function raiseLoadingOverlay()", 500)
 
     assert "closeModal(" in region
-    assert 'loadingOverlay.classList.remove("hidden")' in region
+    assert "generatorChrome.showLoading()" in region
 
 
 # -- when it goes down --
@@ -157,7 +158,7 @@ def test_raising_it_clears_the_modals_first() -> None:
 def test_a_ready_worker_lowers_it() -> None:
     region = _region("function handleModelStatus(data)", 1400)
 
-    assert 'loadingOverlay.classList.add("hidden")' in region
+    assert "generatorChrome.hideLoading()" in region
 
 
 def test_a_failed_switch_lowers_it() -> None:
@@ -165,7 +166,7 @@ def test_a_failed_switch_lowers_it() -> None:
     describing a load that is not happening."""
     region = _region("function switchFailed(err)", 900)
 
-    assert 'loadingOverlay.classList.add("hidden")' in region
+    assert "generatorChrome.hideLoading()" in region
 
 
 # -- and nothing moves underneath it --
@@ -177,9 +178,7 @@ def test_the_scrubber_holds_its_place_when_idle() -> None:
     appears. Reserved rather than removed."""
     html = INDEX_HTML.read_text(encoding="utf-8")
 
-    match = re.search(
-        r'<section id="scrubber-section"[^>]*>', html
-    )
+    match = re.search(r'<section id="scrubber-section"[^>]*>', html)
     assert match is not None
     assert 'class="is-idle"' in match.group(0)
     assert "hidden" not in match.group(0)
@@ -292,7 +291,7 @@ def test_the_badge_s_slot_fits_two_digits() -> None:
 def test_neither_badge_is_toggled_by_the_hidden_attribute() -> None:
     """`hidden` implies `display: none`, which un-reserves the slot
     the rule above reserves."""
-    for name in ("app.js", "menu.js"):
+    for name in ("generator_chrome.js", "menu.js"):
         source = (STATIC / name).read_text(encoding="utf-8")
 
         assert ".hidden = true" not in _badge_body(source), name

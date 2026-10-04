@@ -34,24 +34,6 @@ var btnSave =
   document.getElementById("btn-save");
 var outputArea =
   document.getElementById("output-area");
-var connectionBadge =
-  document.getElementById("connection-badge");
-var statusStep =
-  document.getElementById("status-step");
-var statusElapsed =
-  document.getElementById("status-elapsed");
-var statusTps =
-  document.getElementById("status-tps");
-var statusResource =
-  document.getElementById("status-resource");
-var statusResourceLabel =
-  document.getElementById("status-resource-label");
-var statusResourceSpark =
-  document.getElementById("status-resource-spark");
-var statusResourceValue =
-  document.getElementById("status-resource-value");
-var statusMessage =
-  document.getElementById("status-message");
 var generatorComposer = generatorComposerCreate({
   onSubmit: submitComposer,
   onDraftChanged: composerDraftChanged,
@@ -61,10 +43,6 @@ var generatorComposer = generatorComposerCreate({
   isCountReady: composerCountReady,
   sendCountPrompt: sendComposerCount,
 });
-var statusStack =
-  document.getElementById("status-stack");
-var loadingOverlay =
-  document.getElementById("loading-overlay");
 var validationHint =
   document.getElementById("validation-hint");
 var toggleExperimental =
@@ -83,22 +61,25 @@ var paramFields =
   document.getElementById("param-fields");
 var modeExtra =
   document.getElementById("mode-extra");
-var loadingText =
-  document.getElementById("loading-text");
 var thinkingPanel =
   document.getElementById("thinking-panel");
 var thinkingContent =
   document.getElementById("thinking-content");
 
-// Header "new run saved" cue on the Analytics link.
-var linkAnalytics =
-  document.getElementById("link-analytics");
-var analyticsNewDot =
-  document.getElementById("analytics-new-dot");
 // Persistent UI preferences, applied live on the generator. The schema,
 // defaults, and parsing live in overlays.js (SETTINGS_DEFAULTS /
 // parseSettings), shared with the Settings page which edits them.
 var appSettings = parseSettings(null);
+var generatorChrome = generatorChromeCreate({
+  onTpsToggle: toggleTpsMode,
+  readReducedMotion: prefersReducedMotion,
+  readDiffusionEffect: diffusionEffectActive,
+  readDiffusionTextMode: function () {
+    return appSettings.diffusionTextMode;
+  },
+  revealText: denoiseReveal,
+  cancelReveal: cancelDenoise,
+});
 
 // Scrubber DOM refs.
 var scrubberSection =
@@ -457,28 +438,6 @@ var isResuming = false;
 var resumeFrameOffset = 0;
 var resumeElapsedOffset = 0;
 
-// ---- Output placeholder ----
-
-// The resting state of the output area before any generation and
-// after a New Run. (The former idle ASCII scene / donut animations
-// were removed.)
-//
-// Names the resident model rather than the modality, since the
-// playground hosts an autoregressive model too and "Diffusion output"
-// was simply wrong under it. The bare fallback matches what
-// index.html ships and covers boot's failure path, which paints the
-// placeholder with no model resolved.
-function showOutputPlaceholder() {
-  outputArea.textContent = "";
-  var placeholder = document.createElement("span");
-  placeholder.id = "output-placeholder";
-  var name = activeModel ? activeModel.display_name : "";
-  placeholder.textContent = name
-    ? name + " output will appear here..."
-    : "Output will appear here...";
-  outputArea.appendChild(placeholder);
-}
-
 // ---- Background floating characters ----
 
 function spawnFloaters() {
@@ -542,69 +501,6 @@ function isAppendOnly() {
   );
 }
 
-function setLoadingText(text) {
-  if (loadingText) {
-    loadingText.textContent = text;
-  }
-}
-
-// Draw the loading overlay's bar and phase line from one activation
-// poll. The headline stays on the model's name throughout, so the
-// only thing moving is the part that is actually changing.
-function setLoadingProgress(state, progress) {
-  var container = document.getElementById(
-    "load-progress-container"
-  );
-  var fill = document.getElementById("load-progress-fill");
-  var detail = document.getElementById("load-progress-detail");
-  if (!container || !fill || !detail) {
-    return;
-  }
-  var view = activationProgressView(state, progress);
-  var sweeping = view.mode === "sweep";
-  container.hidden = view.mode === "hidden";
-  fill.classList.toggle("is-sweep", sweeping);
-  // While sweeping, the width belongs to the class: the sweep is a
-  // short bar sliding across the track, so an inline width would
-  // fight it. Handing back on the way out is also what makes the
-  // switch to a real measurement one eased move rather than a jump.
-  if (sweeping) {
-    fill.style.removeProperty("width");
-  } else {
-    fill.style.width = view.percent + "%";
-  }
-  // The label always says which phase is running, which is the whole
-  // difference between a slow load and an apparently hung one. The
-  // percentage only joins it once there is a real one to show, and
-  // both go away with the track, since "hidden" means no activation
-  // is in flight and so there is no phase to name.
-  detail.hidden = view.mode === "hidden";
-  detail.textContent = sweeping
-    ? view.label + "\u2026"
-    : view.label + ", " + view.percent + "%";
-}
-
-// Fill the bar and let it be seen full before `done` navigates away.
-//
-// Every activation now ends here, because the track is on screen for
-// all of one: it sweeps through the phases that cannot be measured
-// and fills through the ones that can. That is a change from when an
-// unmeasurable checkpoint ran with no bar and this had to avoid
-// conjuring one for a fifth of a second at the end. A sweep resolving
-// into a full bar is the better close, so the `hidden` check below
-// now only guards against the overlay never having been raised.
-function finishLoadingProgress(done) {
-  var container = document.getElementById(
-    "load-progress-container"
-  );
-  if (!container || container.hidden) {
-    done();
-    return;
-  }
-  setLoadingProgress("ready", null);
-  setTimeout(done, ACTIVATION_PROGRESS_HOLD_MS);
-}
-
 // The boot path raises the same overlay without going through
 // switchModel, so until now nothing polled for progress there: the
 // first load of a session, reliably the slowest, was the one with no
@@ -612,7 +508,7 @@ function finishLoadingProgress(done) {
 // already coming up when this page opened; nothing here owns that
 // activation, so nothing here may cancel or navigate for it.
 var bootWatch = activationClientCreate({
-  onProgress: setLoadingProgress,
+  onProgress: generatorChrome.setLoadingProgress,
 });
 
 // The switch's own watch, made per switch so an abandoned one cannot
@@ -1670,21 +1566,25 @@ function switchModel(id, device) {
     }
   }
   var name = models[id] ? models[id].display_name : id;
-  setLoadingText("Loading " + name + "\u2026");
+  generatorChrome.setLoadingText(
+    "Loading " + name + "\u2026"
+  );
   // The switch's own watch drives the bar from here on; stop the
   // boot one so the two are never writing the same overlay. Seeding
   // with the same state the first poll will report keeps the opening
   // frame from saying "Loading" for a poll interval before
   // correcting itself to "Starting worker".
   stopLoadProgressPoll();
-  setLoadingProgress("starting", null);
+  generatorChrome.setLoadingProgress("starting", null);
   raiseLoadingOverlay();
   setModelSelectDisabled(true);
 
   switchWatch = activationClientCreate({
     onProgress: function (state, progress) {
-      setLoadingText("Loading " + name + "\u2026");
-      setLoadingProgress(state, progress);
+      generatorChrome.setLoadingText(
+        "Loading " + name + "\u2026"
+      );
+      generatorChrome.setLoadingProgress(state, progress);
     },
     onReady: function () {
       // Dropped here rather than before the request, which is where
@@ -1697,7 +1597,7 @@ function switchModel(id, device) {
       // switch that was refused, for a missing venv or a model that
       // could not fit, threw away the run on screen for nothing.
       clearSessionState();
-      finishLoadingProgress(function () {
+      generatorChrome.finishLoadingProgress(function () {
         location.reload();
       });
     },
@@ -1722,11 +1622,12 @@ function switchFailed(err) {
   // the layout, so a sweep left on it would keep animating unseen for
   // the rest of the session. "idle" is the reducer's way of saying no
   // activation is in flight, which is exactly the state after this.
-  setLoadingProgress("idle", null);
-  loadingOverlay.classList.add("hidden");
-  statusMessage.textContent =
-    "Model switch failed: " + err.message;
-  statusMessage.style.color = "var(--danger)";
+  generatorChrome.setLoadingProgress("idle", null);
+  generatorChrome.hideLoading();
+  generatorChrome.setMessage(
+    "Model switch failed: " + err.message,
+    { color: "var(--danger)" }
+  );
 }
 
 // ---- WebSocket connection ----
@@ -1751,15 +1652,15 @@ function connect() {
 
   ws.onopen = function () {
     reconnectDelay = RECONNECT_DELAY_MS;
-    setBadge("loading");
+    generatorChrome.setConnection("loading");
   };
 
   ws.onclose = function () {
-    setBadge("disconnected");
+    generatorChrome.setConnection("disconnected");
     modelReady = false;
     // Nothing is sampling this machine any more, so the meter must
     // stop claiming to. A switch between models comes through here.
-    clearResourceMeter();
+    generatorChrome.clearResourceMeter();
     // A run in flight when the socket drops has stopped: the worker
     // treats the disconnect as a cancel, so there is no terminal
     // frame coming and nothing left computing. Leaving the
@@ -1837,162 +1738,16 @@ function handleMessage(data) {
       generatorComposer.handleCountResult(data);
       break;
     case "resource_sample":
-      handleResourceSample(data);
+      generatorChrome.handleResourceSample(data);
       break;
-  }
-}
-
-// ---- Resource meter ----
-//
-// What the machine is doing, volunteered by the worker on a timer
-// rather than attached to frames. The timer is why it keeps moving
-// while a model loads and while nothing is running, which is when
-// VRAM moves most and when there are no frames to carry anything.
-//
-// One meter, not two. Its meaning follows where the model landed: on
-// a card that is VRAM, and on a CPU-placed model it is how hard the
-// worker is working, because there is no VRAM of its own to report.
-// Showing both always would leave one flat line in either case.
-
-// One minute of history at the worker's 2 Hz. Bounded because the
-// socket can stay open for hours and this is the only thing on the
-// page that grows purely with elapsed time.
-var RESOURCE_HISTORY_MAX = 120;
-
-// The kinds this build can draw. A sample naming anything else is
-// dropped rather than guessed at: the label and the value string are
-// both kind-specific, so a future kind would render as a mislabelled
-// number rather than as a gap.
-var RESOURCE_LABELS = {
-  vram: "VRAM",
-  cpu: "CPU",
-};
-
-// The app's accent green, as used for the live-run chip. A literal
-// because a canvas cannot read a CSS custom property without a
-// computed-style lookup on every draw.
-var RESOURCE_LINE_COLOR = "#00ff41";
-
-// Fractions in arrival order, oldest first. Values only: the
-// label and readout come from the newest sample, held beside it.
-var resourceHistory = [];
-var resourceLatest = null;
-
-function handleResourceSample(data) {
-  if (!statusResource) {
-    return;
-  }
-  var label = RESOURCE_LABELS[data.kind];
-  if (!label) {
-    return;
-  }
-  if (typeof data.fraction !== "number") {
-    return;
-  }
-  // A switch from one model to another can change what the meter
-  // measures, and a VRAM series joined to a CPU series would draw as
-  // one continuous line describing two different things. Dropping the
-  // history is the only honest response: there is nothing to convert.
-  if (resourceLatest !== null && resourceLatest.kind !== data.kind) {
-    resourceHistory = [];
-  }
-  resourceLatest = data;
-  resourceHistory.push(Math.max(0, Math.min(1, data.fraction)));
-  if (resourceHistory.length > RESOURCE_HISTORY_MAX) {
-    resourceHistory.shift();
-  }
-  statusResource.hidden = false;
-  statusResourceLabel.textContent = label;
-  statusResourceValue.textContent = resourceValueText(data);
-  drawResourceSpark();
-}
-
-// The figures behind the line, in the unit each kind is read in.
-// Bytes for a card, because "71%" of a card nobody remembers the size
-// of says less than the pair does; cores for CPU, because a fraction
-// of a machine says nothing without knowing how wide the machine is.
-function resourceValueText(sample) {
-  if (sample.kind === "cpu") {
-    return Math.round(sample.fraction * 100) + "% of "
-      + sample.total_cores + " cores";
-  }
-  return formatVramGib(sample.used_bytes)
-    + " / " + formatVramGib(sample.total_bytes);
-}
-
-function formatVramGib(bytes) {
-  if (typeof bytes !== "number") {
-    return "?";
-  }
-  return (bytes / (1024 * 1024 * 1024)).toFixed(1) + " GiB";
-}
-
-// One line, drawn on arrival rather than on a timer of its own: a
-// sample is the only thing that changes it, so anything else would be
-// a redraw with nothing to show.
-//
-// Both kinds are fractions of an available resource, so the full
-// height always means "all of it" and there is no per-kind scaling to
-// get wrong.
-function drawResourceSpark() {
-  if (!statusResourceSpark || resourceHistory.length === 0) {
-    return;
-  }
-  // Match the backing store to the CSS box, as the entropy profile
-  // does, so the line stays crisp on HiDPI displays.
-  var ratio = window.devicePixelRatio || 1;
-  var cssWidth = statusResourceSpark.clientWidth || 60;
-  var cssHeight = statusResourceSpark.clientHeight || 11;
-  statusResourceSpark.width = Math.round(cssWidth * ratio);
-  statusResourceSpark.height = Math.round(cssHeight * ratio);
-  var ctx = statusResourceSpark.getContext("2d");
-  if (!ctx) {
-    return;
-  }
-  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-  ctx.clearRect(0, 0, cssWidth, cssHeight);
-
-  // Stepped across the full width whatever the history holds, so a
-  // fresh meter fills out as samples arrive rather than starting as a
-  // dot in the corner. One sample is a flat line at its own level.
-  var span = Math.max(1, RESOURCE_HISTORY_MAX - 1);
-  var first = RESOURCE_HISTORY_MAX - resourceHistory.length;
-  ctx.beginPath();
-  for (var i = 0; i < resourceHistory.length; i++) {
-    var x = ((first + i) / span) * cssWidth;
-    var y = cssHeight - resourceHistory[i] * cssHeight;
-    if (i === 0) {
-      ctx.moveTo(x, y);
-    } else {
-      ctx.lineTo(x, y);
-    }
-  }
-  ctx.strokeStyle = RESOURCE_LINE_COLOR;
-  ctx.lineWidth = 1;
-  ctx.stroke();
-}
-
-// Put the meter away, and forget what it was showing.
-//
-// Called when the socket drops, which is what a model switch looks
-// like from here. Both halves matter. Leaving the row up would show
-// the last reading as current when nothing is being sampled any more,
-// and keeping the history would later splice a new model's samples
-// onto the old one's across a gap nothing was measured in, drawing a
-// continuous line through a period that has no data at all.
-function clearResourceMeter() {
-  resourceHistory = [];
-  resourceLatest = null;
-  if (statusResource) {
-    statusResource.hidden = true;
   }
 }
 
 function handleModelStatus(data) {
   if (data.status === "loading") {
-    setBadge("loading");
+    generatorChrome.setConnection("loading");
     modelReady = false;
-    setLoadingText(
+    generatorChrome.setLoadingText(
       "Loading "
       + (activeModel
         ? activeModel.display_name
@@ -2003,7 +1758,7 @@ function handleModelStatus(data) {
     startLoadProgressPoll();
     updateGenerateButton();
   } else if (data.status === "ready") {
-    setBadge("ready");
+    generatorChrome.setConnection("ready");
     modelReady = true;
     stopLoadProgressPoll();
     updateGenerateButton();
@@ -2016,9 +1771,9 @@ function handleModelStatus(data) {
     // cosmetic beat would be the wrong trade. Re-checking readiness
     // inside the hold keeps a status that flips back mid-beat from
     // pulling the overlay off a load that is starting again.
-    finishLoadingProgress(function () {
+    generatorChrome.finishLoadingProgress(function () {
       if (modelReady) {
-        loadingOverlay.classList.add("hidden");
+        generatorChrome.hideLoading();
       }
     });
   }
@@ -2056,12 +1811,15 @@ function handleResident(data) {
   var name = models[data.model]
     ? models[data.model].display_name
     : data.model;
-  setBadge("loading");
-  setLoadingText("Model changed to " + name + "\u2026");
-  setLoadingProgress("idle", null);
+  generatorChrome.setConnection("loading");
+  generatorChrome.setLoadingText(
+    "Model changed to " + name + "\u2026"
+  );
+  generatorChrome.setLoadingProgress("idle", null);
   raiseLoadingOverlay();
-  statusMessage.textContent =
-    "The model was changed to " + name + " in another window.";
+  generatorChrome.setMessage(
+    "The model was changed to " + name + " in another window."
+  );
   rescueRunThenReload();
 }
 
@@ -2089,9 +1847,7 @@ function adoptResidentWorker(worker) {
     exitRemaskMode();
   }
   updateEditFramesLock();
-  statusRowReflow(function () {
-    statusMessage.textContent = blocked;
-  });
+  generatorChrome.setMessage(blocked);
 }
 
 // How long to let a rescue save finish before reloading anyway. The
@@ -2123,7 +1879,9 @@ function rescueRunThenReload() {
     location.reload();
     return;
   }
-  startRunStatus("Saving run before reloading");
+  generatorChrome.startRunStatus(
+    "Saving run before reloading"
+  );
   var timeout = new Promise(function (resolve) {
     setTimeout(resolve, RESCUE_SAVE_TIMEOUT_MS);
   });
@@ -2307,11 +2065,13 @@ function updateLiveFrameStatus(data) {
   if (!isResuming) {
     lastRunTotalSteps = frameSteps;
   }
-  statusStep.textContent = stepReadout(
-    data.index,
-    data.canvas_index,
-    frameSteps,
-    isResuming ? "Resuming " : "Step "
+  generatorChrome.setStep(
+    stepReadout(
+      data.index,
+      data.canvas_index,
+      frameSteps,
+      isResuming ? "Resuming " : "Step "
+    )
   );
   updateRunRateFooter();
 }
@@ -2340,11 +2100,13 @@ function renderScrubStepReadout(index) {
     && runFrames.canvasIndex.length === 0) {
     return;
   }
-  statusStep.textContent = stepReadout(
-    index,
-    runFrames.canvasIndex[index],
-    lastRunTotalSteps,
-    "Step "
+  generatorChrome.setStep(
+    stepReadout(
+      index,
+      runFrames.canvasIndex[index],
+      lastRunTotalSteps,
+      "Step "
+    )
   );
 }
 
@@ -2361,69 +2123,11 @@ function updateRunRateFooter() {
   if (frames === 0) {
     return;
   }
-  elapsedStampSeconds = runFrames.elapsed[frames - 1];
-  elapsedStampAt = Date.now();
-  renderElapsed(elapsedStampSeconds);
-  elapsedTick();
-  renderTpsFooter(currentTokensPerSecond());
-}
-
-// How often the elapsed line moves on its own. Fast enough that the
-// tenth of a second it prints is honest, slow enough to be nothing
-// against the render each frame already costs.
-var ELAPSED_TICK_MS = 100;
-
-// The worker's own last measurement, and the local instant it landed.
-//
-// The readout advances between frames as well as on them, because a
-// frame-driven number cannot tell a wedged run from a merely slow one:
-// both simply stop. But it interpolates from this pair rather than
-// running a browser clock, because the value here is the worker's
-// (time.monotonic inside the run) and is the same figure that reaches
-// the saved run and the Analytics duration. A local clock would count
-// the socket hop and the render too, and drift above the record. Every
-// frame re-stamps, so the drift is bounded by one frame interval.
-var elapsedStampSeconds = null;
-var elapsedStampAt = 0;
-var elapsedTimer = null;
-
-function renderElapsed(seconds) {
-  statusElapsed.textContent =
-    "Elapsed: " + seconds.toFixed(1) + "s";
-}
-
-function elapsedTick() {
-  if (elapsedTimer !== null) {
-    return;
-  }
-  elapsedTimer = setInterval(function () {
-    if (elapsedStampSeconds === null) {
-      return;
-    }
-    var since = (Date.now() - elapsedStampAt) / 1000;
-    renderElapsed(elapsedStampSeconds + since);
-  }, ELAPSED_TICK_MS);
-}
-
-// Stop ticking and forget the stamp. The readout is about to be
-// cleared or rebuilt, so nothing may paint over what replaces it.
-function elapsedStop() {
-  if (elapsedTimer !== null) {
-    clearInterval(elapsedTimer);
-    elapsedTimer = null;
-  }
-  elapsedStampSeconds = null;
-}
-
-// The run ended: land on the worker's own last figure rather than on
-// whatever the final tick had extrapolated to. That figure is the one
-// the saved run carries, so the page must not come to rest showing a
-// different number from the record it just wrote.
-function elapsedSettle() {
-  if (elapsedStampSeconds !== null) {
-    renderElapsed(elapsedStampSeconds);
-  }
-  elapsedStop();
+  generatorChrome.updateRateFooter({
+    elapsedSeconds: runFrames.elapsed[frames - 1],
+    rate: currentTokensPerSecond(),
+    tpsMode: appSettings.tpsMode,
+  });
 }
 
 // null whenever the rate would be meaningless rather than merely
@@ -2455,29 +2159,13 @@ function currentTokensPerSecond() {
   return produced / total;
 }
 
-function renderTpsFooter(rate) {
-  var label = appSettings.tpsMode === "last"
-    ? "Last step"
-    : "Run average";
-  statusTps.title = "Tokens per second (" + label.toLowerCase()
-    + "). Click to switch.";
-  if (rate === null) {
-    statusTps.textContent = "T/s: -";
-    return;
-  }
-  // One decimal below 100, none above: past that the fraction is
-  // noise and the extra digit only makes the footer jitter.
-  var shown = rate < 100
-    ? rate.toFixed(1)
-    : String(Math.round(rate));
-  statusTps.textContent = "T/s: " + shown;
-}
-
 function toggleTpsMode() {
   appSettings.tpsMode =
     appSettings.tpsMode === "last" ? "total" : "last";
   overlaysWriteTpsMode(appSettings.tpsMode);
-  renderTpsFooter(currentTokensPerSecond());
+  generatorChrome.renderTpsFooter(
+    currentTokensPerSecond(), appSettings.tpsMode
+  );
 }
 
 // The run on screen stopped without a terminal frame to say so,
@@ -2489,14 +2177,13 @@ function enterInterruptedState() {
   setGenerating(false);
   isResuming = false;
   pendingResume = null;
-  endRunStatus();
+  generatorChrome.endRunStatus();
   runInterrupted = true;
   runLostConnection = true;
   updateEditFramesLock();
-  statusRowReflow(function () {
-    statusMessage.textContent =
-      "Stopped: lost the connection mid-run.";
-  });
+  generatorChrome.setMessage(
+    "Stopped: lost the connection mid-run."
+  );
   // The frames already on screen are real and worth keeping, so
   // the scrubber and Save stay available. What the run cannot do
   // is claim it finished.
@@ -2521,7 +2208,7 @@ function handleDone(data) {
   pendingResume = null;
   setGenerating(false);
   isResuming = false;
-  endRunStatus();
+  generatorChrome.endRunStatus();
   // A resume that sent nothing changed nothing, on either side. The
   // rest of this is skipped on purpose: the thinking panel is what
   // Save reads, and this frame's empty thinking would clear it.
@@ -2538,9 +2225,7 @@ function handleDone(data) {
   var terminalMessage = runInterrupted ? "Stopped." : "Done.";
   // The chip is still fading as the line fills in beneath it, so
   // ease the row's new shape instead of snapping the chip sideways.
-  statusRowReflow(function () {
-    statusMessage.textContent = terminalMessage;
-  });
+  generatorChrome.setMessage(terminalMessage);
   if (data.final_text) {
     lastFinalText = data.final_text;
   }
@@ -2599,7 +2284,7 @@ function handleError(data) {
   if (routed.unwindsRun) {
     setGenerating(false);
     isResuming = false;
-    endRunStatus();
+    generatorChrome.endRunStatus();
     if (runPhasesEditing(runPhase)) {
       // A resume or substitution truncates the run before the worker
       // answers, so a rejected request would otherwise strand the
@@ -2608,13 +2293,13 @@ function handleError(data) {
       resetGuidedMode();
     }
   }
-  statusRowReflow(function () {
-    statusMessage.textContent = "Error: " + routed.message;
-  });
-  statusMessage.style.color = "var(--danger)";
-  setTimeout(function () {
-    statusMessage.style.color = "";
-  }, 5000);
+  generatorChrome.setMessage(
+    "Error: " + routed.message,
+    {
+      color: "var(--danger)",
+      clearColorAfterMs: 5000,
+    }
+  );
   // Said either way: an auxiliary failure is still worth reading, and
   // the change here is what gets undone, not what gets shown.
   if (routed.unwindsRun && runFramesLength(runFrames) > 1) {
@@ -5442,18 +5127,10 @@ function buildOverlaySelect() {
 // results. An import is a one-off action with an outcome to report,
 // not ongoing work, so it belongs here rather than in a status chip.
 function setPromptImportStatus(text, danger) {
-  if (!statusMessage) {
-    return;
-  }
-  statusRowReflow(function () {
-    statusMessage.textContent = text;
+  generatorChrome.setMessage(text, {
+    color: danger ? "var(--danger)" : "",
+    clearColorAfterMs: danger ? 5000 : 0,
   });
-  statusMessage.style.color = danger ? "var(--danger)" : "";
-  if (danger) {
-    setTimeout(function () {
-      statusMessage.style.color = "";
-    }, 5000);
-  }
 }
 
 // ---- Context window readout ----
@@ -5981,9 +5658,7 @@ function editRequestRefused() {
   if (!blocked) {
     return false;
   }
-  statusRowReflow(function () {
-    statusMessage.textContent = blocked;
-  });
+  generatorChrome.setMessage(blocked);
   return true;
 }
 
@@ -6667,7 +6342,9 @@ function doSubstitute(position, tokenId, typedText) {
   resetStatus();
   setGenerating(true);
   // A substitution always resamples to the end of the run.
-  startRunStatus(editRunLabel(position, null));
+  generatorChrome.startRunStatus(
+    editRunLabel(position, null)
+  );
 
   var request = {
     type: "substitute",
@@ -6975,7 +6652,9 @@ function doGuidedResume(action) {
   setSaveAvailable(false);
   resetStatus();
   setGenerating(true);
-  startRunStatus(editRunLabel(frameIndex, resumeTarget));
+  generatorChrome.startRunStatus(
+    editRunLabel(frameIndex, resumeTarget)
+  );
 
   var message = {
     type: "resume",
@@ -7069,9 +6748,7 @@ function landBeforeResume(saved) {
   scrubberActive = true;
   setScrubberVisible(true);
   navigateToFrame(saved.frame);
-  statusRowReflow(function () {
-    statusMessage.textContent = RESUME_STOPPED_BEFORE_FRAME;
-  });
+  generatorChrome.setMessage(RESUME_STOPPED_BEFORE_FRAME);
 }
 
 function handleGuidedDone() {
@@ -7221,7 +6898,7 @@ function continueGuidedEdit() {
   setSaveAvailable(false);
   resetStatus();
   setGenerating(true);
-  startRunStatus(editRunLabel(from, null));
+  generatorChrome.startRunStatus(editRunLabel(from, null));
 
   ws.send(JSON.stringify({
     type: "resume",
@@ -7233,12 +6910,6 @@ function continueGuidedEdit() {
 }
 
 // ---- UI state helpers ----
-
-function setBadge(state) {
-  connectionBadge.className =
-    "badge badge-" + state;
-  connectionBadge.textContent = state;
-}
 
 function setGenerating(active) {
   isGenerating = active;
@@ -7370,257 +7041,6 @@ function denoiseDissolve(el, onDone) {
   el._denoiseTimer = setInterval(render, 40);
 }
 
-var STATUS_DOTS_MS = 400;
-
-// How long the resolved word rests before re-diffusing in cycle mode.
-// It no longer has to line up with the dots: they tick on their own
-// continuous timer, in their own span, so the two animations cannot
-// interfere however their periods fall.
-var STATUS_CYCLE_HOLD_MS = 700;
-
-// Diffuse the word into the chip, and in cycle mode keep re-diffusing
-// it on a loop. Touches only the word's span, never the ellipsis
-// beside it.
-//
-// Cycle mode used to suppress the dots entirely, on the grounds that
-// re-diffusing the word was indicator enough. That left the ellipsis
-// present on two text settings and absent on the third for no reason
-// a user could see, and routing both through one text node was what
-// forced the choice: rewriting the word meant rewriting the dots.
-function statusWordPass(el, base, cycle) {
-  denoiseReveal(el._textEl, base, function () {
-    if (!cycle) {
-      return;
-    }
-    el._cycleTimer = setTimeout(function () {
-      statusWordPass(el, base, true);
-    }, STATUS_CYCLE_HOLD_MS);
-  });
-}
-
-// Animated "<base>..." activity text: the word reveals (once, or
-// repeatedly in cycle mode) while the trailing dots run 3 -> 0 -> 1
-// -> 2 -> 3 beside it, independently and without pause.
-//
-// Every timer lives on the element rather than on the module, for the
-// same reason denoiseReveal's does: the status row runs one of these
-// per chip, and a save animating its dots must not cancel a run
-// animating its own.
-function startStatusDots(el, base) {
-  stopStatusDots(el);
-  el._dotsCount = 3;
-  var render = function () {
-    el._dotsEl.textContent = ".".repeat(el._dotsCount);
-    el._dotsCount = (el._dotsCount + 1) % 4;
-  };
-  render();
-  el._dotsTimer = setInterval(render, STATUS_DOTS_MS);
-  var cycle = diffusionEffectActive()
-    && appSettings.diffusionTextMode === "cycle";
-  statusWordPass(el, base, cycle);
-}
-
-function stopStatusDots(el) {
-  cancelDenoise(el._textEl);
-  if (el._dotsTimer) {
-    clearInterval(el._dotsTimer);
-    el._dotsTimer = null;
-  }
-  if (el._cycleTimer) {
-    clearTimeout(el._cycleTimer);
-    el._cycleTimer = null;
-  }
-}
-
-// ---- Status stack ----
-//
-// The footer message is a single slot, so two operations running at
-// once used to overwrite each other: auto-saving the pre-edit run and
-// then picking a What If candidate left only "Resuming" on screen,
-// with no sign the save was still in flight.
-//
-// The split that fixes it is by lifetime, not by category. A chip
-// says only what is *happening*; where the run *stands* (Done, Saved
-// to..., an error) belongs to the footer, which is also what
-// saveSessionState persists.
-//
-// Chips deliberately do not report their own outcome. Letting them
-// meant "Done" sat on top of "Done." and "Saved" on top of "Saved to
-// results/...", which read as stutter, and it was the only thing that
-// ever put a second line into an already crowded corner. A chip
-// leaving as the footer fills in is the handoff, so silence is the
-// success signal and the footer carries every word of the result.
-//
-// Chips are inserted directly before the resting message and so
-// extend leftward from it, newest nearest the footer line, oldest
-// furthest out. The row clips and fades at its left edge, against the
-// gutter the footer's own gap leaves before the readouts.
-
-// Two concurrent operations is the real ceiling (one run, and saveRun
-// guards itself with isSaving), so this bound is slack. It exists so
-// an unforeseen caller cannot push an unbounded run of chips out
-// under the fade, where they cost layout while being unreadable.
-var STATUS_STACK_MAX = 4;
-
-// Must match the .status-chip.is-leaving transition in style.css: the
-// chip is removed from the DOM only once its fade has finished.
-var STATUS_CHIP_FADE_MS = 150;
-
-// Chips currently owning a slot. A chip leaves this list the moment
-// it starts to dismiss, not when its node is finally removed, so a
-// late retire cannot bring a departing chip back.
-var statusChips = [];
-
-// Run `mutate`, then animate away the sideways jump it caused.
-//
-// Flex offers no transition for "the item beside me changed width",
-// so a chip arriving, a chip's node finally leaving, or the resting
-// message growing all snap their neighbours across instantly. This is
-// the standard first-last-invert-play: measure, mutate, hand each
-// moved chip its former position as a transform, then release it so
-// the CSS transition carries it home.
-//
-// The offset goes on `transform` while the chips' own entrances and
-// exits use the `translate` longhand, so a chip can be sliding
-// sideways and rising at the same time without either being lost.
-// Every status message carries its full text as a tooltip, and says so
-// with a cursor when there is more than the row can show.
-//
-// The row is one clipped line and some messages are not ours to
-// shorten: a CUDA out-of-memory report comes from torch and runs past
-// the window on its own. Shortening them one at a time is whack-a-mole
-// and loses the part that matters, which for that error is the numbers
-// at the end.
-//
-// An observer rather than a helper, because a helper is only as good
-// as the next call site remembering it, and fourteen places already
-// assign this element's text. Nothing can add a fifteenth that
-// arrives without its tooltip.
-function watchStatusMessage() {
-  if (!statusMessage || typeof MutationObserver !== "function") {
-    return;
-  }
-  var observer = new MutationObserver(applyStatusMessageTitle);
-  observer.observe(statusMessage, {
-    childList: true,
-    characterData: true,
-    subtree: true,
-  });
-  applyStatusMessageTitle();
-}
-
-function applyStatusMessageTitle() {
-  var text = statusMessage.textContent || "";
-  // Only when clipped: a permanent tooltip on a message already fully
-  // visible is a hover target that repeats what is on screen.
-  var clipped =
-    statusMessage.scrollWidth > statusMessage.clientWidth + 1;
-  statusMessage.title = clipped ? text : "";
-  statusMessage.classList.toggle("is-clipped", clipped);
-}
-
-function statusRowReflow(mutate) {
-  if (!statusStack || prefersReducedMotion()) {
-    mutate();
-    return;
-  }
-  // Read from the DOM rather than statusChips: a chip that is midway
-  // through its fade has already left that list but still holds row
-  // width, and it is the one most likely to be shoved, since the
-  // resting line usually fills in as it goes.
-  var moved = Array.prototype.slice.call(
-    statusStack.querySelectorAll(".status-chip")
-  );
-  var before = moved.map(function (chip) {
-    return chip.getBoundingClientRect().left;
-  });
-  mutate();
-  for (var i = 0; i < moved.length; i++) {
-    var chip = moved[i];
-    var delta =
-      before[i] - chip.getBoundingClientRect().left;
-    if (delta === 0) {
-      continue;
-    }
-    chip.style.transition = "none";
-    chip.style.transform =
-      "translateX(" + delta + "px)";
-    // Commit the inverted position before the transition returns,
-    // or the browser coalesces both into no visible movement.
-    void chip.offsetWidth;
-    chip.style.transition = "";
-    chip.style.transform = "";
-  }
-}
-
-// Raise a chip for an operation that has just started, and hand back
-// the handle its caller retires when the operation ends.
-function statusPush(text) {
-  if (!statusStack) {
-    return null;
-  }
-  var chip = document.createElement("span");
-  chip.className = "status-chip";
-  // The word and the ellipsis get separate spans so each can animate
-  // without rewriting the other, and so the dots occupy a slot sized
-  // in CSS instead of being padded out with spaces. The chip is then
-  // one fixed width for its whole life, which a right-anchored row
-  // needs: any width change here shoves every chip to its left.
-  chip._textEl = document.createElement("span");
-  chip._textEl.className = "status-chip-text";
-  chip._dotsEl = document.createElement("span");
-  chip._dotsEl.className = "status-chip-dots";
-  chip.appendChild(chip._textEl);
-  chip.appendChild(chip._dotsEl);
-  // Wrapped so the chips already up slide aside rather than jumping.
-  // The new chip is outside the snapshot either way (it is not in the
-  // DOM yet), which is right: it has its own entrance.
-  statusRowReflow(function () {
-    statusStack.insertBefore(chip, statusMessage);
-    statusChips.push(chip);
-  });
-  statusStackTrim();
-  startStatusDots(chip, text);
-  // Force a reflow so the browser has the hidden state to animate
-  // from; without it the chip is painted visible from the start.
-  void chip.offsetWidth;
-  chip.classList.add("is-visible");
-  return chip;
-}
-
-// Take a chip down, because its operation finished or was superseded.
-// A no-op for a handle that has already left, so a promise landing
-// after its chip was retired or trimmed does nothing.
-function statusRetire(chip) {
-  if (!chip) {
-    return;
-  }
-  if (statusChips.indexOf(chip) === -1) {
-    return;
-  }
-  statusChipDismiss(chip);
-}
-
-function statusStackTrim() {
-  while (statusChips.length > STATUS_STACK_MAX) {
-    statusChipDismiss(statusChips[0]);
-  }
-}
-
-// The run's chip. Generating, substituting, and guided resume are
-// mutually exclusive and all finish in handleDone or handleError,
-// which are socket handlers with no closure to carry a handle, so the
-// one in flight is tracked here instead. A save's handle is a local,
-// which is what lets the two coexist.
-var runStatusHandle = null;
-
-function startRunStatus(text) {
-  // A retry that never got a terminal message would otherwise leave
-  // its chip animating forever.
-  statusRetire(runStatusHandle);
-  runStatusHandle = statusPush(text);
-}
-
 // Names the stretch a resume is about to regenerate. "Resuming" said
 // only that something had restarted, which reads as ambiguous next to
 // a plain run; the frame range says which part of the output is being
@@ -7631,42 +7051,6 @@ function editRunLabel(fromFrame, toFrame) {
   var target = toFrame === null ? "end" : String(toFrame);
   return "Running edit from frame " + fromFrame
     + " to " + target;
-}
-
-// Called from handleDone and handleError alike: the chip says nothing
-// about the outcome, so both endings look the same here and the
-// footer is left to draw the distinction.
-function endRunStatus() {
-  // Every terminal path comes through here: a done frame, a cancelled
-  // one, a dropped connection, and a run-scoped error. So this is
-  // where the elapsed line stops moving, rather than at four of them.
-  elapsedSettle();
-  statusRetire(runStatusHandle);
-  runStatusHandle = null;
-}
-
-// Give up the slot now, release the node after the fade. Every timer
-// the chip owns is cleared here, so nothing can write to a node on
-// its way out of the document.
-function statusChipDismiss(chip) {
-  var at = statusChips.indexOf(chip);
-  if (at !== -1) {
-    statusChips.splice(at, 1);
-  }
-  stopStatusDots(chip);
-  // is-leaving rather than merely dropping is-visible: the two states
-  // need different offsets, and one rule cannot serve both without
-  // sending a departing chip back the way it came in.
-  chip.classList.remove("is-visible");
-  chip.classList.add("is-leaving");
-  chip._exitTimer = setTimeout(function () {
-    chip._exitTimer = null;
-    if (chip.parentNode) {
-      statusRowReflow(function () {
-        chip.parentNode.removeChild(chip);
-      });
-    }
-  }, STATUS_CHIP_FADE_MS);
 }
 
 function setSaveAvailable(available) {
@@ -7680,16 +7064,7 @@ function setSaveAvailable(available) {
 // flight; clearing the chips here would put back the overwriting this
 // stack exists to fix.
 function resetStatus() {
-  // Before the dash below, or a tick still in flight would paint a
-  // stale number back over it a fraction of a second later.
-  elapsedStop();
-  statusStep.textContent =
-    "Step -/-";
-  statusElapsed.textContent =
-    "Elapsed: -";
-  renderTpsFooter(null);
-  statusMessage.textContent = "";
-  statusMessage.style.color = "";
+  generatorChrome.resetStatus(appSettings.tpsMode);
   clearTokenMetrics();
 }
 
@@ -7759,7 +7134,9 @@ function startNewRun() {
   resetStatus();
   setGenerating(false);
   // Return to the pre-generation resting state.
-  showOutputPlaceholder();
+  generatorChrome.showOutputPlaceholder(
+    activeModel ? activeModel.display_name : ""
+  );
 }
 
 // Ask the worker to stop the run it is on.
@@ -7776,9 +7153,7 @@ function requestCancel() {
   if (!isGenerating) {
     return;
   }
-  statusRowReflow(function () {
-    statusMessage.textContent = "Stopping...";
-  });
+  generatorChrome.setMessage("Stopping...");
   ws.send(JSON.stringify({ type: "cancel" }));
 }
 
@@ -7798,8 +7173,7 @@ function startGeneration() {
 
   var prompt = generatorComposer.trimmedValue();
   if (!prompt) {
-    statusMessage.textContent =
-      "Prompt is empty.";
+    generatorChrome.setMessage("Prompt is empty.");
     return;
   }
 
@@ -7822,7 +7196,7 @@ function startGeneration() {
   clearSessionState();
   resetStatus();
   setGenerating(true);
-  startRunStatus("Running");
+  generatorChrome.startRunStatus("Running");
 
   var payload = Object.assign({}, params);
   payload.type = "generate";
@@ -7997,56 +7371,6 @@ function candidatesRecordFrom(store) {
   return runCandidatesToJson(thinned);
 }
 
-// ---- "New run saved" Analytics cue ----
-
-// The header badge shows how many saved runs have not yet been opened
-// in Analytics (the shared set lives in overlays.js). Cleared per run
-// when its detail is opened there, so the count stays in sync.
-function refreshAnalyticsCue() {
-  if (!analyticsNewDot) {
-    return;
-  }
-  var count = persistNewRunCount();
-  // Emptied rather than removed: the badge keeps its width so the
-  // header links beside it do not slide when the count arrives,
-  // which it does after a fetch on every page load.
-  analyticsNewDot.textContent = count > 0 ? String(count) : "";
-  analyticsNewDot.classList.toggle("is-empty", count === 0);
-}
-
-// One-shot "+1" that rises and fades above the Analytics link.
-function flashAnalyticsPlusOne() {
-  if (!linkAnalytics || prefersReducedMotion()) {
-    return;
-  }
-  var plus = document.createElement("span");
-  plus.className = "analytics-plus-one";
-  plus.textContent = "+1";
-  plus.setAttribute("aria-hidden", "true");
-  linkAnalytics.appendChild(plus);
-  plus.addEventListener("animationend", function () {
-    plus.remove();
-  });
-  // Fallback removal if animationend never fires.
-  setTimeout(function () {
-    if (plus.parentNode) {
-      plus.remove();
-    }
-  }, 1500);
-}
-
-// Register a freshly saved run as "new" and light up the header badge.
-// The "+1" flashes only when the run is genuinely new (not an in-place
-// update of a run already counted), so editing-and-resaving a run does
-// not double-count it.
-function showAnalyticsCue(runId) {
-  var added = persistAddNewRun(runId);
-  refreshAnalyticsCue();
-  if (added) {
-    flashAnalyticsPlusOne();
-  }
-}
-
 // The prompt a save records: the run's own. The box is only the
 // fallback for a run restored from a snapshot written before the run
 // carried its prompt, where the box text at that time is the best
@@ -8118,7 +7442,9 @@ function saveRun() {
   // A local, so this chip survives a run starting underneath it: a
   // save the user starts and then a resume begun before the POST
   // lands used to overwrite this with the resume's message.
-  var saveStatus = statusPush("Saving " + runLabel + " run");
+  var saveStatus = generatorChrome.pushStatus(
+    "Saving " + runLabel + " run"
+  );
 
   var totalElapsed = runFrames.elapsed.length > 0
     ? runFrames.elapsed[runFrames.elapsed.length - 1]
@@ -8264,18 +7590,15 @@ function saveRun() {
           typeof result.revision === "number"
             ? result.revision
             : null;
-        showAnalyticsCue(lastSavedRunId || "");
-        statusRetire(saveStatus);
+        generatorChrome.showAnalyticsCue(lastSavedRunId || "");
+        generatorChrome.retireStatus(saveStatus);
         // The longest line the row ever shows, arriving while the
         // save's chip is still on screen. Easing it is what keeps the
         // chip from being flung left in a single frame.
-        statusRowReflow(function () {
-          statusMessage.textContent =
-            "Saved " + runLabel + " run to "
-            + result.path;
-        });
-        statusMessage.style.color =
-          "var(--accent)";
+        generatorChrome.setMessage(
+          "Saved " + runLabel + " run to " + result.path,
+          { color: "var(--accent)" }
+        );
         // Persist LAST, so the session captures the final run id and
         // the "Saved ... to ..." line rather than a stale run id, and
         // survives a round-trip to Analytics. The in-flight text is
@@ -8283,14 +7606,11 @@ function saveRun() {
         saveSessionState();
       } else {
         btnSave.disabled = false;
-        statusRetire(saveStatus);
-        statusRowReflow(function () {
-          statusMessage.textContent =
-            "Save failed: "
-            + (result.message || "unknown");
-        });
-        statusMessage.style.color =
-          "var(--danger)";
+        generatorChrome.retireStatus(saveStatus);
+        generatorChrome.setMessage(
+          "Save failed: " + (result.message || "unknown"),
+          { color: "var(--danger)" }
+        );
       }
     })
     .catch(function (error) {
@@ -8300,23 +7620,20 @@ function saveRun() {
       updateGuidedUI();
       updateEditFramesLock();
       btnSave.disabled = false;
-      statusRetire(saveStatus);
-      statusRowReflow(function () {
-        statusMessage.textContent =
-          "Save failed: " + error.message;
-      });
-      statusMessage.style.color =
-        "var(--danger)";
+      generatorChrome.retireStatus(saveStatus);
+      generatorChrome.setMessage(
+        "Save failed: " + error.message,
+        { color: "var(--danger)" }
+      );
     });
 }
 
 // Why a save did not happen, on the line where a save's result always
 // goes and in the color a failed one takes.
 function saveRunRefused(message) {
-  statusRowReflow(function () {
-    statusMessage.textContent = message;
-  });
-  statusMessage.style.color = "var(--danger)";
+  generatorChrome.setMessage(
+    message, { color: "var(--danger)" }
+  );
 }
 
 // ---- Event listeners ----
@@ -8338,6 +7655,7 @@ btnGenerate.addEventListener(
 btnSave.addEventListener("click", saveRun);
 
 generatorComposer.wire();
+generatorChrome.wire();
 
 toggleExperimental.addEventListener(
   "change", applyLimits
@@ -8696,16 +8014,6 @@ outputArea.addEventListener(
   "animationend", onTokenGlowEnd
 );
 
-statusTps.addEventListener("click", toggleTpsMode);
-statusTps.addEventListener("keydown", function (e) {
-  // It is exposed as a button, so it owes the keyboard the two keys
-  // a real button answers to.
-  if (e.key === "Enter" || e.key === " ") {
-    e.preventDefault();
-    toggleTpsMode();
-  }
-});
-
 // Token click delegation on the output area.
 outputArea.addEventListener(
   "click",
@@ -9041,7 +8349,7 @@ function raiseLoadingOverlay() {
     closeModal(allModals[mi]);
   }
   generatorComposer.closeImport();
-  loadingOverlay.classList.remove("hidden");
+  generatorChrome.showLoading();
 }
 
 function openModal(modal) {
@@ -9119,6 +8427,7 @@ var SESSION_KEY = PERSIST_LAST_RUN_KEY;
 // what storage is offered. Whether the run is worth keeping, and which
 // tier gives way first, are the codec's to decide.
 function saveSessionState() {
+  var chromeStatus = generatorChrome.readStatus();
   sessionStoreFirstFitting(runSnapshotTiers({
     model: activeModelId,
     // Part of the snapshot's identity, not decoration. The same model
@@ -9159,12 +8468,12 @@ function saveSessionState() {
     runSaved: runSaved,
     lastSavedRunId: lastSavedRunId,
     lastSavedRevision: lastSavedRevision,
-    statusStep: statusStep.textContent,
+    statusStep: chromeStatus.step,
     // Carried alongside the rendered text because scrubbing after a
     // restore has to rebuild that text, and cannot without this.
     lastRunTotalSteps: lastRunTotalSteps,
-    statusElapsed: statusElapsed.textContent,
-    statusMessage: statusMessage.textContent,
+    statusElapsed: chromeStatus.elapsed,
+    statusMessage: chromeStatus.message,
     frames: runFrames,
     positionAlts: positionAlts,
     original: originalRun,
@@ -9260,19 +8569,16 @@ function restoreSessionStateApply(restored) {
   // Restore the footer readouts (Step / Elapsed / message) so the
   // status bar reflects the completed run rather than resetting.
   lastRunTotalSteps = restored.lastRunTotalSteps;
-  if (restored.statusStep) {
-    statusStep.textContent = restored.statusStep;
-  }
-  if (restored.statusElapsed) {
-    statusElapsed.textContent = restored.statusElapsed;
-  }
   // Recomputed rather than replayed from stored text, so it honors
   // the mode in effect now: the setting is global and may have been
   // switched on another page since this run finished.
-  renderTpsFooter(currentTokensPerSecond());
-  if (restored.statusMessage) {
-    statusMessage.textContent = restored.statusMessage;
-  }
+  generatorChrome.restoreStatus({
+    step: restored.statusStep,
+    elapsed: restored.statusElapsed,
+    message: restored.statusMessage,
+    rate: currentTokensPerSecond(),
+    tpsMode: appSettings.tpsMode,
+  });
 }
 
 // ---- Session-scoped form state (params + prompt draft) ----
@@ -9571,11 +8877,10 @@ function finishBoot() {
     restored = false;
   }
   if (!restored) {
-    showOutputPlaceholder();
+    generatorChrome.showOutputPlaceholder(
+      activeModel ? activeModel.display_name : ""
+    );
   }
-  // Before connect, so the first message the socket produces already
-  // carries its tooltip.
-  watchStatusMessage();
   connect();
 }
 
@@ -9601,10 +8906,10 @@ function refreshModelVram() {
 function boot() {
   loadSettings();
   generatorComposer.boot();
+  generatorChrome.boot();
   updateHoverHighlight();
   overlaysBuildTokenMetrics(tokenMetricsStrip);
   overlaysBuildStopReadout(stopReadout);
-  refreshAnalyticsCue();
   var inlined = bootModelInfo();
   if (inlined !== null) {
     applyModelInfo(inlined);
@@ -9618,7 +8923,7 @@ function boot() {
       finishBoot();
     })
     .catch(function () {
-      showOutputPlaceholder();
+      generatorChrome.showOutputPlaceholder("");
       connect();
     });
 }

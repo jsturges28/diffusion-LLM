@@ -34,6 +34,7 @@ STATIC = (
 PAGE_SCRIPTS = (
     "app.js",
     "generator_composer.js",
+    "generator_chrome.js",
     "menu.js",
     "analytics.js",
     "settings.js",
@@ -65,7 +66,7 @@ def _region(name: str, anchor: str, chars: int) -> str:
     source = _source(name)
     start = source.find(anchor)
     assert start != -1, f"{anchor!r} is gone from {name}"
-    return source[start:start + chars]
+    return source[start : start + chars]
 
 
 # -- the conflated value is gone --
@@ -100,9 +101,7 @@ def test_no_page_compares_against_a_model_id() -> None:
         code = _code(name)
         for model_id in REGISTRY:
             for quoted in (f'"{model_id}"', f"'{model_id}'"):
-                assert quoted not in code, (
-                    f"{name} names {model_id}"
-                )
+                assert quoted not in code, f"{name} names {model_id}"
 
 
 def test_the_renoise_note_reads_a_capability() -> None:
@@ -149,9 +148,7 @@ def test_the_canvas_affordances_read_the_shape() -> None:
 def test_the_glow_reads_the_family() -> None:
     """Family rather than shape: the glow pairs are per model class,
     so a state-space model wants its own even though it appends."""
-    region = _region(
-        "app.js", "function applyTokenBirthGlow()", 500
-    )
+    region = _region("app.js", "function applyTokenBirthGlow()", 500)
 
     assert "capabilities.family" in region
     assert "generation_shape" not in region
@@ -208,11 +205,17 @@ def test_a_clipped_status_message_carries_its_full_text() -> None:
     not ours to shorten: a CUDA out-of-memory report comes from torch
     and runs past the window on its own, and shortening ours one at a
     time loses whichever one is added next."""
-    region = _region("app.js", "function watchStatusMessage()", 700)
+    region = _region(
+        "generator_chrome.js",
+        "function watchStatusMessage()",
+        700,
+    )
 
     assert "MutationObserver" in region
     body = _region(
-        "app.js", "function applyStatusMessageTitle()", 600
+        "generator_chrome.js",
+        "function applyStatusMessageTitle()",
+        600,
     )
     assert "statusMessage.title" in body
     assert "scrollWidth" in body
@@ -222,11 +225,13 @@ def test_the_tooltip_cannot_be_bypassed_by_a_new_message() -> None:
     """An observer rather than a helper, and this is the reason: there
     are already more than ten places that assign the row's text, and a
     helper is only as good as the next one remembering it."""
-    code = _code("app.js")
-    writes = code.count("statusMessage.textContent =")
+    page = _code("app.js")
+    chrome = _code("generator_chrome.js")
+    writes = page.count("generatorChrome.setMessage(")
 
     assert writes > 5, writes
-    assert "observer.observe(statusMessage" in code
+    assert "statusMessage.textContent =" not in page
+    assert "observer.observe(statusMessage" in chrome
 
 
 def test_the_reasoning_panel_can_scroll() -> None:
@@ -235,11 +240,11 @@ def test_the_reasoning_panel_can_scroll() -> None:
     took its natural height and pushed the canvas past the clip
     while neither of them scrolled."""
     css = (STATIC / "style.css").read_text(encoding="utf-8")
-    panel = css[css.index("#thinking-content {"):][:400]
+    panel = css[css.index("#thinking-content {") :][:400]
 
     assert "overflow-y: auto" in panel
     assert "max-height" in panel
-    section = css[css.index("#output-section {"):][:400]
+    section = css[css.index("#output-section {") :][:400]
     assert "flex-direction: column" in section
 
 
@@ -250,7 +255,7 @@ def test_the_reasoning_details_is_not_a_flex_container() -> None:
     slot. The cap belongs on the content, in units that need no
     resolved parent height."""
     css = (STATIC / "style.css").read_text(encoding="utf-8")
-    panel = css[css.index("#thinking-panel {"):][:400]
+    panel = css[css.index("#thinking-panel {") :][:400]
 
     assert "display: flex" not in panel
     assert "max-height" not in panel
@@ -281,7 +286,7 @@ def test_the_family_glyph_is_keyed_by_family() -> None:
 def _table_keys(code: str, name: str) -> set[str]:
     """The keys of one `var NAME = { key: value, ... };` literal."""
     start = code.index(f"var {name} = {{")
-    body = code[start:code.index("};", start)]
+    body = code[start : code.index("};", start)]
     return set(re.findall(r"^\s+(\w+):", body, flags=re.MULTILINE))
 
 

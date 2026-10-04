@@ -26,6 +26,7 @@ const test = require("node:test");
 const { loadPage, FakeSocket } = require("./dom_stub.js");
 
 const GIB = 1024 * 1024 * 1024;
+const RESOURCE_HISTORY_MAX = 120;
 
 function vramSample(fraction) {
   return {
@@ -54,6 +55,30 @@ function feed(context, sample) {
   context.handleMessage(sample);
 }
 
+function recordResourceHistory(canvas) {
+  let latest = [];
+  let drawing = [];
+  canvas.clientWidth = RESOURCE_HISTORY_MAX - 1;
+  canvas.clientHeight = 100;
+  canvas.getContext = () => ({
+    setTransform() {},
+    clearRect() {},
+    beginPath() {
+      drawing = [];
+    },
+    moveTo(_x, y) {
+      drawing.push(Number((1 - y / 100).toFixed(6)));
+    },
+    lineTo(_x, y) {
+      drawing.push(Number((1 - y / 100).toFixed(6)));
+    },
+    stroke() {
+      latest = drawing.slice();
+    },
+  });
+  return () => latest;
+}
+
 function page() {
   const { context, registry } = loadPage({});
   const row = registry.get("status-resource");
@@ -68,6 +93,9 @@ function page() {
     row,
     label: registry.get("status-resource-label"),
     value: registry.get("status-resource-value"),
+    history: recordResourceHistory(
+      registry.get("status-resource-spark")
+    ),
   };
 }
 
@@ -125,65 +153,61 @@ test("the readout follows the newest sample", () => {
 // -- history --
 
 test("samples accumulate in arrival order", () => {
-  const { context } = page();
+  const { context, history } = page();
 
   feed(context, vramSample(0.1));
   feed(context, vramSample(0.2));
   feed(context, vramSample(0.3));
 
-  assert.deepEqual(
-    Array.from(context.resourceHistory), [0.1, 0.2, 0.3]
-  );
+  assert.deepEqual(history(), [0.1, 0.2, 0.3]);
 });
 
 test("the history is bounded", () => {
   // The leak this exists to prevent. At the worker's cadence it
   // is reached in a minute and then never exceeded.
-  const { context } = page();
-  const bound = context.RESOURCE_HISTORY_MAX;
+  const { context, history } = page();
 
-  for (let i = 0; i < bound + 50; i++) {
+  for (let i = 0; i < RESOURCE_HISTORY_MAX + 50; i++) {
     feed(context, vramSample(0.5));
   }
 
-  assert.equal(context.resourceHistory.length, bound);
+  assert.equal(history().length, RESOURCE_HISTORY_MAX);
 });
 
 test("the bound drops the oldest, not the newest", () => {
   // Which end is discarded is the whole point of a sparkline: keeping
   // the wrong end would freeze the line at startup.
-  const { context } = page();
-  const bound = context.RESOURCE_HISTORY_MAX;
+  const { context, history } = page();
 
-  for (let i = 0; i < bound; i++) {
+  for (let i = 0; i < RESOURCE_HISTORY_MAX; i++) {
     feed(context, vramSample(0));
   }
   feed(context, vramSample(1));
 
-  const history = context.resourceHistory;
-  assert.equal(history.length, bound);
-  assert.equal(history[history.length - 1], 1);
-  assert.equal(history[0], 0);
+  const samples = history();
+  assert.equal(samples.length, RESOURCE_HISTORY_MAX);
+  assert.equal(samples[samples.length - 1], 1);
+  assert.equal(samples[0], 0);
 });
 
 test("a change of kind starts a new series", () => {
   // Activating a CPU model after a GPU one changes what the meter
   // measures. Joining the two would draw one line describing two
   // different quantities, and there is no conversion between them.
-  const { context, label } = page();
+  const { context, label, history } = page();
   feed(context, vramSample(0.9));
   feed(context, vramSample(0.9));
 
   feed(context, cpuSample(0.1));
 
-  assert.deepEqual(Array.from(context.resourceHistory), [0.1]);
+  assert.deepEqual(history(), [0.1]);
   assert.equal(label.textContent, "CPU");
 });
 
 test("a fraction outside the axis is clamped", () => {
   // The worker clamps too, so this is the paired check on the far
   // of the wire: the line has a top and a bottom either way.
-  const { context } = page();
+  const { context, history } = page();
 
   feed(context, vramSample(0));
   context.handleMessage({
@@ -191,7 +215,7 @@ test("a fraction outside the axis is clamped", () => {
     used_bytes: 1, total_bytes: 1,
   });
 
-  assert.equal(context.resourceHistory[1], 1);
+  assert.equal(history()[1], 1);
 });
 
 // -- going away with the model --
@@ -239,14 +263,14 @@ test("the history does not span the gap", async () => {
   // Two models on the same device would otherwise join into one line
   // running through a period nothing was measured in. The kind-change
   // reset cannot catch that case, because the kind does not change.
-  const { context, socket } = await pageWithSocket();
+  const { context, socket, history } = await pageWithSocket();
   feed(context, vramSample(0.6));
   feed(context, vramSample(0.7));
 
   socket.close();
   feed(context, vramSample(0.2));
 
-  assert.deepEqual(Array.from(context.resourceHistory), [0.2]);
+  assert.deepEqual(history(), [0.2]);
 });
 
 // -- what it refuses --
@@ -255,24 +279,24 @@ test("an unknown kind is ignored", () => {
   // A future sample this build cannot label. Dropping it leaves a gap
   // in the line, which is honest; drawing it would put a number under
   // the wrong word.
-  const { context, row } = page();
+  const { context, row, history } = page();
 
   context.handleMessage({
     type: "resource_sample", kind: "tokens_per_joule", fraction: 0.5,
   });
 
   assert.equal(row.hidden, true);
-  assert.equal(context.resourceHistory.length, 0);
+  assert.equal(history().length, 0);
 });
 
 test("a sample with no fraction is ignored", () => {
   // The one field the line cannot do without.
-  const { context, row } = page();
+  const { context, row, history } = page();
 
   context.handleMessage({ type: "resource_sample", kind: "vram" });
 
   assert.equal(row.hidden, true);
-  assert.equal(context.resourceHistory.length, 0);
+  assert.equal(history().length, 0);
 });
 
 test("a missing byte count reads as unknown, not as zero", () => {

@@ -1,7 +1,7 @@
 """The elapsed line advances between frames, not only on them.
 
-Strategy: source inspection of `app.js`, the approach this repo uses
-for its classic-script pages.
+Strategy: source inspection of the composition root and chrome
+controller, the approach this repo uses for classic-script pages.
 
 The reading used to move only when a frame landed, because
 `updateRunRateFooter` has one caller and that caller is
@@ -28,24 +28,27 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-APP_JS = (
-    Path(__file__).resolve().parents[2]
-    / "src"
-    / "web"
-    / "static"
-    / "app.js"
+STATIC = (
+    Path(__file__).resolve().parents[2] / "src" / "web" / "static"
 )
+APP_JS = STATIC / "app.js"
+CHROME_JS = STATIC / "generator_chrome.js"
 
 
-def _source() -> str:
-    return APP_JS.read_text(encoding="utf-8")
+def _source(path: Path = CHROME_JS) -> str:
+    return path.read_text(encoding="utf-8")
 
 
-def _region(anchor: str, chars: int) -> str:
-    source = _source()
+def _region(
+    anchor: str,
+    chars: int,
+    path: Path = CHROME_JS,
+) -> str:
+    source = _source(path)
     start = source.find(anchor)
     assert start != -1, (
-        f"anchor {anchor!r} is gone from app.js; update this test"
+        f"anchor {anchor!r} is gone from {path.name};"
+        " update this test"
         " rather than deleting it"
     )
     return source[start : start + chars]
@@ -62,9 +65,11 @@ def test_a_ticker_drives_the_reading() -> None:
 
 
 def test_the_ticker_is_started_by_a_frame() -> None:
-    body = _region("function updateRunRateFooter()", 500)
+    page = _region("function updateRunRateFooter()", 500, APP_JS)
+    chrome = _region("function updateRateFooter(state)", 700)
 
-    assert "elapsedTick()" in body
+    assert "generatorChrome.updateRateFooter" in page
+    assert "elapsedTick()" in chrome
 
 
 def test_starting_twice_does_not_stack_timers() -> None:
@@ -80,11 +85,12 @@ def test_starting_twice_does_not_stack_timers() -> None:
 
 
 def test_a_frame_stamps_the_worker_value() -> None:
-    body = _region("function updateRunRateFooter()", 500)
+    page = _region("function updateRunRateFooter()", 500, APP_JS)
+    chrome = _region("function updateRateFooter(state)", 700)
 
-    stamped = "elapsedStampSeconds = runFrames.elapsed[frames - 1]"
-    assert stamped in body
-    assert "elapsedStampAt = Date.now()" in body
+    assert "elapsedSeconds: runFrames.elapsed[frames - 1]" in page
+    assert "elapsedStampSeconds = state.elapsedSeconds" in chrome
+    assert "elapsedStampAt = Date.now()" in chrome
 
 
 def test_the_tick_adds_local_time_to_that_stamp() -> None:
@@ -99,10 +105,8 @@ def test_the_tick_adds_local_time_to_that_stamp() -> None:
 def test_the_reading_has_one_formatter() -> None:
     """Three writers of the same string would be three chances for
     the tick and the frame to disagree about precision."""
-    source = _source()
-    built = re.findall(
-        r'"Elapsed: " \+ seconds\.toFixed', source
-    )
+    source = _source(CHROME_JS)
+    built = re.findall(r'"Elapsed: " \+ seconds\.toFixed', source)
 
     assert len(built) == 1
 
@@ -127,6 +131,8 @@ def test_every_terminal_path_settles_it() -> None:
     body = _region("function endRunStatus()", 400)
 
     assert "elapsedSettle()" in body
+    page = _source(APP_JS)
+    assert page.count("generatorChrome.endRunStatus()") >= 3
 
 
 # -- and nothing outlives it --
@@ -135,7 +141,7 @@ def test_every_terminal_path_settles_it() -> None:
 def test_clearing_the_footer_stops_the_ticker_first() -> None:
     """Order matters: a tick still in flight would paint a stale
     number back over the dash a fraction of a second later."""
-    body = _region("function resetStatus()", 500)
+    body = _region("function resetStatus(tpsMode)", 500)
     stopped = body.find("elapsedStop()")
     cleared = body.find('"Elapsed: -"')
 
@@ -155,7 +161,7 @@ def test_stopping_forgets_the_stamp() -> None:
 
 
 def test_the_timer_is_only_created_in_one_place() -> None:
-    source = _source()
+    source = _source(CHROME_JS)
     created = re.findall(r"elapsedTimer = setInterval", source)
 
     assert len(created) == 1
@@ -176,7 +182,7 @@ def test_the_rate_still_moves_only_on_a_frame() -> None:
 
 def test_the_rate_reads_the_worker_series_not_a_clock() -> None:
     """What keeps the footer and the Analytics chart agreeing."""
-    body = _region("function currentTokensPerSecond()", 900)
+    body = _region("function currentTokensPerSecond()", 900, APP_JS)
 
     assert "runFrames.elapsed" in body
     assert "Date.now()" not in body

@@ -83,7 +83,7 @@ def test_the_message_is_shown_either_way() -> None:
     """Scope decides what is undone, not what is said. An auxiliary
     failure the user cannot see is its own kind of wrong."""
     body = _handle_error()
-    shown = body.find("statusMessage.textContent")
+    shown = body.find("generatorChrome.setMessage")
     guard = body.find("if (routed.unwindsRun)")
     closing = body.find("\n  }\n", guard)
 
@@ -105,5 +105,5 @@ def test_scope_is_decided_in_one_place() -> None:
     strings live in wire_errors.js and are tested there."""
     source = APP_JS.read_text(encoding="utf-8")
 
-    assert not re.search(r'data\.scope', source)
+    assert not re.search(r"data\.scope", source)
     assert not re.search(r'"request"\s*===', source)
