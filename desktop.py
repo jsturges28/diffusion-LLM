@@ -47,6 +47,9 @@ import uvicorn  # noqa: E402  (imported after cwd/sys.path setup)
 import webview  # noqa: E402
 
 from src.web.server import APP_IDENTITY, app  # noqa: E402
+from src.web.supervisor_logging import (  # noqa: E402
+    supervisor_log_config,
+)
 
 WINDOW_TITLE = "LLM Visualizer"
 APP_ID = "llm-xai-visualizer"
@@ -532,7 +535,11 @@ def main() -> None:
     port = _resolve_port()
     server = uvicorn.Server(
         uvicorn.Config(
-            app, host=HOST, port=port, log_level="info"
+            app,
+            host=HOST,
+            port=port,
+            log_level="info",
+            log_config=supervisor_log_config(),
         )
     )
     # uvicorn only installs signal handlers on the main thread, so

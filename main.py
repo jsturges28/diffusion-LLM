@@ -10,6 +10,7 @@ import uvicorn
 # root before --results-dir had been written into the environment,
 # which is the one ordering this file has to get right.
 from src.web.data_root import RESULTS_DIR_ENV
+from src.web.supervisor_logging import supervisor_log_config
 
 # Loopback, not 0.0.0.0. The same unauthenticated origin that renders
 # the UI can also activate models, submit saves, and permanently
@@ -114,6 +115,7 @@ def main() -> None:
         host=args.host,
         port=args.port,
         log_level="info",
+        log_config=supervisor_log_config(),
     )
 
 

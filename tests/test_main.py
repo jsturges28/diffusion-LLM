@@ -16,7 +16,7 @@ default rather than by convention.
 from __future__ import annotations
 
 import socket
-from typing import List
+from typing import Any, Dict, List
 
 import pytest
 
@@ -123,6 +123,31 @@ def test_a_loopback_bind_says_nothing(
     main._warn_if_exposed("127.0.0.1")
 
     assert capsys.readouterr().err == ""
+
+
+# -- what it hands uvicorn --
+
+
+def test_the_launcher_gives_the_supervisor_a_log(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """uvicorn configures only its own loggers, so without a
+    configuration of its own every line the supervisor logged below
+    a warning was dropped. See src/web/supervisor_logging.py."""
+    calls: List[Dict[str, Any]] = []
+
+    def run(*_args: Any, **kwargs: Any) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr("sys.argv", ["main.py"])
+    monkeypatch.setattr(main.uvicorn, "run", run)
+
+    main.main()
+
+    assert len(calls) == 1
+    config = calls[0].get("log_config")
+    assert isinstance(config, dict)
+    assert "diffusion_supervisor" in config["loggers"]
 
 
 # -- the property the argument default exists to produce --
