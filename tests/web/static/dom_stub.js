@@ -62,6 +62,7 @@ const GENERATOR_SCRIPTS = [
   "generator_chrome.js",
   "generator_canvas.js",
   "generator_readouts.js",
+  "generator_candidates.js",
   "app.js",
 ];
 
@@ -164,6 +165,7 @@ function makeElement(id) {
     scrollHeight: 0,
     offsetWidth: 0,
     clientWidth: 0,
+    isConnected: true,
   };
 
   // Backed by the same set as `classList`, because the two are one
@@ -324,6 +326,7 @@ function makeElement(id) {
   };
   element.focus = () => {};
   element.blur = () => {};
+  element.setSelectionRange = () => {};
   element.scrollIntoView = () => {};
   element.click = () => { element.dispatch("click"); };
   // The menu's background video is autoplayed and paused from script.
@@ -524,6 +527,7 @@ function makeDocument(registry, fontsReady) {
     // for a selector that has nothing to do with the test.
     querySelector: (selector) => makeElement(selector),
     querySelectorAll: () => [],
+    contains: (node) => !!node && node.isConnected !== false,
     addEventListener: (type, fn) => {
       (documentListeners[type] = documentListeners[type] || [])
         .push(fn);

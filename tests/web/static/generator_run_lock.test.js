@@ -332,10 +332,10 @@ test("nor is a probe or a rewind sent once the page reconnects", async () => {
     final_text: " Yeast eats",
     run_token: "a3f9c1:1",
   });
-  context.typedEntryToken = { id: 7, t: " ale" };
-  context.typedEntryPos = 0;
 
-  context.requestTypedProbe();
+  context.generatorCandidatesRequestProbe({
+    position: 0, tokenId: 7, requestId: 1,
+  });
   context.rewindWorkerRun();
 
   assert.deepEqual(stateful(reconnected), []);
@@ -399,11 +399,11 @@ test("a locked run sends nothing to the worker that replaced it", async () => {
   // is all that keeps the request off the wire.
   const { context, socket } = await finishedLlada("b0a7:1");
   context.handleResident(resident(LLADA, "b0a7:2"));
-  context.typedEntryToken = { id: 7, t: " ale" };
-  context.typedEntryPos = 0;
 
   context.enterRemaskMode();
-  context.requestTypedProbe();
+  context.generatorCandidatesRequestProbe({
+    position: 0, tokenId: 7, requestId: 1,
+  });
 
   assert.equal(context.runPhase.mode, null);
   assert.deepEqual(stateful(socket), []);

@@ -77,13 +77,19 @@ def test_the_readout_is_not_inside_the_strip() -> None:
 
 def test_both_pages_build_the_readout_at_boot() -> None:
     # Analytics builds both in its token viewer's wire, which the
-    # page's boot calls.
+    # page's boot calls. The generator delegates the same pair to its
+    # readout controller.
     anchor = "overlaysBuildTokenMetrics(tokenMetricsStrip);"
     readout = "overlaysBuildStopReadout(stopReadout);"
 
-    for script in ("app.js", "token_viewer.js"):
-        boot = _after(_read(script), anchor, 120)
-        assert readout in boot, script
+    generator = _after(
+        _read("generator_readouts.js"), anchor, 120
+    )
+    analytics = _after(_read("token_viewer.js"), anchor, 120)
+
+    assert readout in generator
+    assert readout in analytics
+    assert "generatorReadouts.boot();" in _read("app.js")
     assert "\ntokenViewer.wire();\n" in _read("analytics.js")
 
 

@@ -184,7 +184,7 @@ function popoverAt(context, registry, frame, position) {
   const popover = registry.get("token-alts-popover");
   context.navigateToFrame(frame);
   popover.children = [];
-  context.showAltsPopover(position, null);
+  context.generatorCandidates.showPopover(position, null);
   return popover;
 }
 

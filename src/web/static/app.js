@@ -69,6 +69,7 @@ var generatorRun = generatorRunCreate({
   storage: sessionStorage,
   sessionKey: PERSIST_LAST_RUN_KEY,
 });
+var generatorCandidates = null;
 var generatorCanvas = generatorCanvasCreate({
   run: generatorRun,
   readModel: generatorCanvasReadModel,
@@ -76,8 +77,12 @@ var generatorCanvas = generatorCanvasCreate({
   readEdit: generatorCanvasReadEdit,
   readReducedMotion: prefersReducedMotion,
   writeHighlight: generatorCanvasWriteHighlight,
-  startCandidates: flickerStart,
-  stopCandidates: flickerStop,
+  startCandidates: function (layers, mask) {
+    generatorCandidates.startFlicker(layers, mask);
+  },
+  stopCandidates: function () {
+    generatorCandidates.stopFlicker();
+  },
   onOutputReset: generatorCanvasOutputReset,
   onRender: generatorCanvasRendered,
   onOverlayChanged: generatorCanvasOverlayChanged,
@@ -89,6 +94,15 @@ var generatorReadouts = generatorReadoutsCreate({
   readModel: generatorReadoutsReadModel,
   readSettings: generatorReadoutsReadSettings,
   readScrubber: generatorReadoutsReadScrubber,
+});
+generatorCandidates = generatorCandidatesCreate({
+  run: generatorRun,
+  canvas: generatorCanvas,
+  readouts: generatorReadouts,
+  readState: generatorCandidatesReadState,
+  requestTokenize: generatorCandidatesRequestTokenize,
+  requestProbe: generatorCandidatesRequestProbe,
+  requestSubstitute: generatorCandidatesRequestSubstitute,
 });
 var generatorSocket = generatorSocketCreate({
   onOpen: generatorSocketOpened,
@@ -119,8 +133,6 @@ var btnEditFrames =
   document.getElementById("btn-edit-frames");
 var btnWhatIf =
   document.getElementById("btn-what-if");
-var altsPopover =
-  document.getElementById("token-alts-popover");
 
 // Guided edit mode DOM refs.
 var guidedEditControls =
@@ -172,60 +184,9 @@ var saveCheckTimer = null;
 var modelReady = false;
 
 // generator_run.js owns every mutable fact and store about the run
-// on screen. generator_socket.js owns transport; this file keeps
-// view state and edit phases.
-// Position whose candidate popover is open, or null when closed.
-// The page names the run it reads, "original" or "edited", and is
-// null where there is only one set to show, as on an unedited run.
-var altsPopoverPos = null;
-var altsPopoverPage = null;
-
-// ---- Typed token entry state (What If) ----
-//
-// Held outside the DOM on purpose. The popover rebuilds all of its
-// children on every hover and page flip, so a draft stored only in
-// the input element would be destroyed by a pointer twitch. Keeping
-// it here lets buildTypedRow rehydrate the field after any rebuild,
-// which is what makes the popover safe to type into at all.
-//
-// Position the draft belongs to. A draft is meaningless at any
-// other position, so this is also how a stale one is detected.
-var typedEntryPos = null;
-var typedEntryDraft = "";
-// Whether the user has engaged with the field at all. Set on focus
-// and never cleared by blur, because blur is not an exit: clicking
-// confirm blurs the input, and so does clicking anywhere in the
-// popover. The deliberate exits clear it instead.
-//
-// Note this is not "the draft is non-empty". The field arrives
-// pre-seeded with a leading space, so a draft-based test would pin
-// the popover the instant the pointer crossed a mid-sentence token.
-var typedEntryActive = false;
-// Whether the leading space has been offered for this position yet.
-// One offer only, so a backspace that removes it stays removed
-// through the next rebuild instead of being helpfully undone.
-var typedEntrySeeded = false;
-// Last preview from the worker: {pieces: [{id, t}], count} for the
-// text in typedEntryDraft, or null while none has arrived.
-var typedEntryPreview = null;
-// The confirmed single token, {id, t}, once the user solidifies it.
-// Clicking it runs the substitution, exactly like a candidate row.
-var typedEntryToken = null;
-// What the model gave that token at this position, measured on
-// confirm: {probability, rank, vocabSize}, or null while the probe is
-// still out. Separate from typedEntryToken because the token is
-// clickable immediately and the figure arrives a forward pass later;
-// waiting for it would make confirm feel like it had failed.
-var typedEntryMeasure = null;
-// Monotonic, so a slow reply for an older draft can be discarded.
-// Debouncing alone does not guarantee replies arrive in order.
-var typedEntryRequest = 0;
-// Separate counter for probes. A retry after a confirm has to be able
-// to invalidate the outstanding probe without disturbing the preview
-// sequence, which is still counting keystrokes.
-var typedProbeRequest = 0;
-// True while "What If" substitution is armed: the popover's
-// candidates become clickable instead of read-only.
+// on screen. generator_socket.js owns transport, and
+// generator_candidates.js owns candidate view state. This file keeps
+// the remaining page view state and edit phases.
 
 // Scrubber and remasking state.
 var scrubberActive = false;
@@ -460,10 +421,10 @@ function handleMessage(data) {
       handleError(data);
       break;
     case "tokenize_result":
-      handleTokenizeResult(data);
+      generatorCandidates.handleTokenizeResult(data);
       break;
     case "probe_result":
-      handleProbeResult(data);
+      generatorCandidates.handleProbeResult(data);
       break;
     case "count_prompt_result":
       generatorComposer.handleCountResult(data);
@@ -910,932 +871,6 @@ function handleError(data) {
   }
 }
 
-// ---- Rendering ----
-
-// Whether any position captured competing candidates for the hover
-// popover (and, for models that support it, What If substitution).
-function alternativesAvailable() {
-  return generatorRun.hasAlternatives(false);
-}
-
-// The earliest position a What If branch could differ at: the
-// leftmost remasked position across every edit. Null on an unedited
-// run. Left of it the branch reproduces the original verbatim,
-// candidate sets included, so there is nothing to compare there.
-function editDivergencePosition() {
-  var earliest = null;
-  for (var e = 0; e < remaskEdits.length; e++) {
-    var positions = remaskEdits[e].token_positions || [];
-    for (var p = 0; p < positions.length; p++) {
-      if (earliest === null || positions[p] < earliest) {
-        earliest = positions[p];
-      }
-    }
-  }
-  return earliest;
-}
-
-// ---- Top-k alternatives popover ----
-
-// Whether the popover is currently a surface the user is working
-// in rather than a readout they are passing over. True from the
-// first keystroke (or focus) until the entry is confirmed, cancelled
-// or run.
-//
-// This is the whole reason the typed token needed groundwork: the
-// popover is hover-scoped, and four separate listeners tear it down
-// when the pointer or the viewport moves. Every one of them would
-// otherwise erase a half-typed word. While pinned they stand down,
-// and the only ways out are deliberate: Escape, the cancel button,
-// a click outside, or running the substitution.
-function altsPopoverPinned() {
-  return typedEntryActive || typedEntryToken !== null;
-}
-
-function hideAltsPopover() {
-  if (!altsPopover) {
-    return;
-  }
-  altsPopover.hidden = true;
-  altsPopover.textContent = "";
-  altsPopoverPos = null;
-  altsPopoverPage = null;
-  // Same reason as in renderAltsPopover: the rows go without firing
-  // the mouseleave that would have cleared their readout. Needed here
-  // too, because scroll and resize close the popover on their own
-  // rather than through a pointer leaving it.
-  generatorReadouts.setCandidateHover(null);
-  // The popover is the draft's only home, so closing it discards
-  // the draft. Callers that must not do that check altsPopoverPinned
-  // first; the rest (a new run, a frame change, a mode reset) are
-  // meant to clear everything.
-  clearTypedEntry();
-}
-
-// Drop the draft and any confirmed token, without touching the
-// popover itself. Split from hideAltsPopover so cancelling an entry
-// can leave the candidates on screen.
-function clearTypedEntry() {
-  typedEntryPos = null;
-  typedEntryDraft = "";
-  typedEntryActive = false;
-  typedEntrySeeded = false;
-  typedEntryPreview = null;
-  typedEntryToken = null;
-  typedEntryMeasure = null;
-}
-
-// Whether this position has a candidate set from each run to page
-// between. Only possible at or past the divergence point, and only
-// for a branch whose pre-edit candidates were retained.
-function altsPageable(pos) {
-  var divergence = editDivergencePosition();
-  if (divergence === null || pos < divergence) {
-    return false;
-  }
-  var original =
-    generatorRun.positionAlternatives(pos, true);
-  var edited =
-    generatorRun.positionAlternatives(pos, false);
-  return !!(
-    original && original.length > 0
-    && edited && edited.length > 0
-  );
-}
-
-// Build one row per candidate: the token text, a proportional bar,
-// and its probability. The chosen token is marked so the popover
-// reads as "what it picked, and what it nearly picked instead".
-function buildAltsRows(alts, chosenId) {
-  var fragment = document.createDocumentFragment();
-  for (var i = 0; i < alts.length; i++) {
-    fragment.appendChild(
-      overlaysBuildAltRow(
-        alts[i],
-        chosenId,
-        generatorReadouts.setCandidateHover,
-        i
-      )
-    );
-  }
-  return fragment;
-}
-
-// Which run's candidates a pageable position opens on: the one the
-// crossfade is favoring, so the popover agrees with the tokens and
-// the entropy strip. Both pages stay reachable through the arrows
-// either way, so the midpoint picks a default rather than gating
-// access.
-function defaultAltsPage() {
-  return generatorCanvas.blendFavorsOriginal()
-    ? "original"
-    : "edited";
-}
-
-// Show the candidate popover for a token position, anchored to its
-// span. The pager reaches the pre-edit set where one was retained:
-// by position on an append run, by frame on a canvas run.
-function showAltsPopover(pos, span) {
-  if (generatorRun.frameIsAppend()) {
-    altsPopoverPage = altsPageable(pos) ? defaultAltsPage() : null;
-  } else {
-    altsPopoverPage = candidatesPage();
-  }
-  renderAltsPopover(pos, span);
-}
-
-// Flip pages in place. Rendered without an anchor deliberately: the
-// two pages can differ in height, and re-placing the box under the
-// pointer that just clicked an arrow can slide it out from under that
-// pointer, firing the mouseleave that closes it.
-function setAltsPage(page) {
-  if (altsPopoverPos === null) {
-    return;
-  }
-  altsPopoverPage = page;
-  renderAltsPopover(altsPopoverPos, null);
-}
-
-// With an anchor span, positioned in viewport coordinates (the
-// popover is fixed at body level) and flipped above the token when it
-// would overflow. Without one, left where it already sits.
-function renderAltsPopover(pos, span) {
-  if (!altsPopover) {
-    return;
-  }
-  if (!generatorRun.frameIsAppend()) {
-    renderCandidatesPopover(pos, span);
-    return;
-  }
-  var original = altsPopoverPage === "original";
-  var alts = generatorRun.positionAlternatives(
-    pos, original
-  );
-  if (!alts || alts.length === 0) {
-    hideAltsPopover();
-    return;
-  }
-  // Each page marks the token its own run drew, so the Original page
-  // does not mark the branch's substitution as chosen.
-  var tokens = original
-    ? generatorRun.originalTokensLast()
-    : generatorRun.frameTokens(currentScrubFrame);
-  var chosen = tokens && tokens[pos] ? tokens[pos].id : null;
-
-  // Discarding the rows discards their pending mouseleave: a removed
-  // node never fires one, so a readout for a row that no longer
-  // exists would sit in the strip until the next hover. Cleared here
-  // rather than per caller, since every rebuild comes through here.
-  generatorReadouts.setCandidateHover(null);
-  altsPopover.textContent = "";
-  altsPopover.appendChild(
-    overlaysBuildAltHeading(pos, altsPopoverPage, setAltsPage)
-  );
-  altsPopover.appendChild(buildAltsRows(alts, chosen));
-  // Substitution only ever applies to the live run, so the Original
-  // page is read-only even while What If is armed.
-  var pickable = runPhase.substituting && !original;
-  if (pickable) {
-    altsPopover.appendChild(buildTypedEntry(pos));
-    var hint = document.createElement("div");
-    hint.className = "alt-hint";
-    hint.textContent = "Click a candidate to substitute";
-    altsPopover.appendChild(hint);
-  }
-  var tokenizer = overlaysBuildAltTokenizer(
-    generatorModelPanel.activeTokenizer()
-  );
-  if (tokenizer) {
-    altsPopover.appendChild(tokenizer);
-  }
-  altsPopover.classList.toggle("alt-pickable", pickable);
-  placeAltsPopover(span);
-  altsPopoverPos = pos;
-}
-
-// A canvas run's popover: what the position was weighing at the frame
-// on screen, or at the latest captured frame before it when the
-// stride skipped this one. From the frame an edit branched at on it
-// pages between the two runs, opening on the one the crossfade
-// favours; if that run has nothing there it stays closed rather than
-// show the other run's candidates under this one's tokens.
-function renderCandidatesPopover(pos, span) {
-  var page = altsPopoverPage;
-  var reading = candidatesReading(page, pos);
-  if (reading === null) {
-    hideAltsPopover();
-    return;
-  }
-  var other = page === null
-    ? null
-    : candidatesReading(otherAltsPage(page), pos);
-  generatorReadouts.setCandidateHover(null);
-  altsPopover.textContent = "";
-  altsPopover.appendChild(
-    overlaysBuildStepHeading(
-      pos, reading.frame, reading.shown, page,
-      other === null ? null : setAltsPage
-    )
-  );
-  altsPopover.appendChild(
-    buildAltsRows(reading.set.c, reading.set.h)
-  );
-  var tokenizer = overlaysBuildAltTokenizer(
-    generatorModelPanel.activeTokenizer()
-  );
-  if (tokenizer) {
-    altsPopover.appendChild(tokenizer);
-  }
-  altsPopover.classList.remove("alt-pickable");
-  placeAltsPopover(span);
-  altsPopoverPos = pos;
-}
-
-// The canvas a frame belongs to, 0 for a model with only one.
-function runFrameCanvas(frame) {
-  return generatorRun.frameCanvas(frame);
-}
-
-// The earliest frame any edit branched at, or null on an unedited
-// run. Before it both runs hold the same frames, so there is only
-// one set of candidates to show.
-function editDivergenceFrame() {
-  var earliest = null;
-  for (var e = 0; e < remaskEdits.length; e++) {
-    var frame = remaskEdits[e].frame_index;
-    if (earliest === null || frame < earliest) {
-      earliest = frame;
-    }
-  }
-  return earliest;
-}
-
-// The page a canvas run's popover opens on: the run the crossfade
-// favours, from the frame an edit branched at on, and null before it,
-// on an unedited run, or while an edit phase has the crossfade off.
-function candidatesPage() {
-  var divergence = editDivergenceFrame();
-  if (
-    !generatorCanvas.blendActive()
-    || divergence === null
-  ) {
-    return null;
-  }
-  return currentScrubFrame >= divergence ? defaultAltsPage() : null;
-}
-
-function otherAltsPage(page) {
-  return page === "original" ? "edited" : "original";
-}
-
-// One run's set for a position, at the frame that run is showing, as
-// {frame, set, shown}, or null when it has none there. The edited run
-// shows the scrubbed frame; the original shows the frame its layer
-// clamps to past its own end. An edited run is single-canvas, since
-// Edit Frames is off for a run that chains canvases, so the pre-edit
-// run's lookups are on canvas 0.
-function candidatesReading(page, pos) {
-  if (page === "original") {
-    var shown = Math.min(
-      currentScrubFrame,
-      generatorRun.originalTokenFrames() - 1
-    );
-    return candidatesReadingOf(
-      generatorRun.candidateSet(
-        shown, pos, true, singleCanvas
-      ),
-      shown
-    );
-  }
-  return candidatesReadingOf(
-    generatorRun.candidateSet(
-      currentScrubFrame,
-      pos,
-      false,
-      runFrameCanvas
-    ),
-    currentScrubFrame
-  );
-}
-
-function candidatesReadingOf(found, shown) {
-  if (found === null) {
-    return null;
-  }
-  return { frame: found.frame, set: found.set, shown: shown };
-}
-
-function singleCanvas() {
-  return 0;
-}
-
-// Measure before placing: the popover must be visible for its height
-// to be known, so unhide first, then correct the position. Without a
-// span it stays where it already sits.
-function placeAltsPopover(span) {
-  altsPopover.hidden = false;
-  if (!span) {
-    return;
-  }
-  var rect = span.getBoundingClientRect();
-  var box = altsPopover.getBoundingClientRect();
-  altsPopover.style.left =
-    overlaysPopoverLeft(rect, box) + "px";
-  altsPopover.style.top =
-    overlaysPopoverTop(
-      rect, box, outputArea.getBoundingClientRect().top
-    ) + "px";
-}
-
-// ---- Typed token entry ----
-//
-// The row under the candidates that lets you force a token the model
-// never offered. Everything it shows is derived from the state block
-// near the top of this file rather than from its own DOM, so the
-// popover can rebuild around it without losing a draft.
-//
-// Debounce for the preview. Long enough that a normal typing burst
-// sends one request instead of one per key, short enough that the
-// pieces feel like they track the text.
-var TYPED_PREVIEW_DEBOUNCE_MS = 120;
-
-// Matches TOKENIZE_TEXT_MAX_CHARS in worker_base.py. Enforced here
-// too so the field simply stops accepting rather than silently
-// diverging from what the worker would resolve.
-var TYPED_INPUT_MAX_CHARS = 200;
-
-var typedPreviewTimer = null;
-
-// Build whatever the entry should look like right now: the confirmed
-// token if there is one, otherwise the input.
-function buildTypedEntry(pos) {
-  if (typedEntryPos !== pos) {
-    clearTypedEntry();
-    typedEntryPos = pos;
-  }
-  if (typedEntryToken !== null) {
-    return buildTypedSolidified();
-  }
-  return buildTypedInput(pos);
-}
-
-// A leading space is decided by the token being replaced, not by
-// guessing at sentence position. Mid-sentence words carry their
-// space inside the token, so replacing one without it silently
-// welds the result onto the previous word. Reading the original is
-// exact where a "looks mid-sentence" rule would only be usually
-// right, and a single backspace overrides it.
-function typedEntrySeedText(pos) {
-  var tokens = generatorRun.frameTokens(currentScrubFrame);
-  var token = tokens && tokens[pos] ? tokens[pos] : null;
-  var text = token && typeof token.t === "string" ? token.t : "";
-  return text.charAt(0) === " " ? " " : "";
-}
-
-function buildTypedInput(pos) {
-  var wrap = document.createElement("div");
-  wrap.className = "typed-entry";
-
-  if (!typedEntrySeeded) {
-    typedEntrySeeded = true;
-    typedEntryDraft = typedEntrySeedText(pos);
-  }
-
-  var field = document.createElement("input");
-  field.type = "text";
-  field.className = "typed-input";
-  field.maxLength = TYPED_INPUT_MAX_CHARS;
-  field.value = typedEntryDraft;
-  field.spellcheck = false;
-  field.autocomplete = "off";
-  field.addEventListener("input", onTypedInput);
-  field.addEventListener("focus", onTypedFocus);
-
-  // The field and its drawn hint share a positioning context, so the
-  // hint can sit over the text origin without measuring the wrap's
-  // own border and padding.
-  var box = document.createElement("div");
-  box.className = "typed-field";
-  box.appendChild(field);
-  box.appendChild(buildTypedPlaceholder());
-  wrap.appendChild(box);
-
-  wrap.appendChild(buildTypedActions());
-
-  var preview = document.createElement("div");
-  preview.className = "typed-preview";
-  wrap.appendChild(preview);
-  renderTypedPieces(preview);
-
-  // Deferred: the popover is still being assembled, and focusing a
-  // node mid-build scrolls it into view before it has been placed.
-  if (typedEntryActive) {
-    setTimeout(function () {
-      if (!typedEntryActive || !document.contains(field)) {
-        return;
-      }
-      field.focus();
-      var end = field.value.length;
-      field.setSelectionRange(end, end);
-    }, 0);
-  }
-  return wrap;
-}
-
-// The greyed hint inside the field, drawn rather than delegated to a
-// native ``placeholder``. The native one renders only on the empty
-// string, and a mid-sentence position seeds the field with a leading
-// space, so it was invisible in precisely the case that needed it.
-function buildTypedPlaceholder() {
-  var hint = document.createElement("span");
-  hint.className = "typed-placeholder";
-  syncTypedPlaceholder(hint);
-  return hint;
-}
-
-// Derived from the live draft, not from whether the field was seeded.
-// That is what makes the dot a lesson rather than a label: backspace
-// the space away and the dot goes with it, type it back and it
-// returns, so the hint keeps saying whether a leading space is
-// currently there.
-function typedPlaceholderText() {
-  if (typedEntryDraft === "") {
-    return "Enter your own";
-  }
-  // The same stand-in overlaysAltDisplay gives a space, so the hint
-  // reads continuously with the candidate rows above it.
-  if (typedEntryDraft === " ") {
-    return "\u00B7Enter your own";
-  }
-  return "";
-}
-
-function syncTypedPlaceholder(hint) {
-  var text = typedPlaceholderText();
-  hint.textContent = text;
-  hint.hidden = text === "";
-}
-
-// Confirm and cancel, which slide down from behind the field's right
-// edge once it is in use. Present in the DOM either way so the drop
-// is a CSS state change rather than an insertion.
-function buildTypedActions() {
-  var actions = document.createElement("div");
-  actions.className = "typed-actions";
-  if (typedEntryActive) {
-    actions.classList.add("is-open");
-  }
-
-  var confirm = document.createElement("button");
-  confirm.type = "button";
-  confirm.className = "typed-confirm";
-  confirm.textContent = "\u2713";
-  syncTypedConfirm(confirm);
-  confirm.addEventListener("click", confirmTypedEntry);
-  actions.appendChild(confirm);
-
-  var cancel = document.createElement("button");
-  cancel.type = "button";
-  cancel.className = "typed-cancel";
-  cancel.textContent = "\u2715";
-  cancel.title = "Discard";
-  cancel.addEventListener("click", cancelTypedEntry);
-  actions.appendChild(cancel);
-
-  return actions;
-}
-
-// Only exactly one token can be confirmed. Everything downstream of
-// a substitution is position-indexed (overlaysComputeDiff, the
-// entropy chart, the edit marker), so a replacement of any other
-// length would shift every index after it.
-function typedEntryResolvesToOne() {
-  return (
-    typedEntryPreview !== null
-    && typedEntryPreview.count === 1
-    && typedEntryDraft !== ""
-  );
-}
-
-function syncTypedConfirm(confirm) {
-  confirm.disabled = !typedEntryResolvesToOne();
-  confirm.title = confirm.disabled
-    ? "Type text that resolves to exactly one token"
-    : "Use this token";
-}
-
-// Update the parts of a live entry that change as you type, in
-// place. Deliberately not a rebuild: recreating the input on every
-// keystroke would tear the focused element out from under the
-// caret, and the characters typed before it was put back would go
-// nowhere. Only a structural change (confirming, retrying,
-// cancelling) goes through redrawTypedEntry.
-function refreshTypedControls() {
-  if (!altsPopover) {
-    return;
-  }
-  var actions = altsPopover.querySelector(".typed-actions");
-  if (actions) {
-    actions.classList.toggle("is-open", typedEntryActive);
-  }
-  var confirm = altsPopover.querySelector(".typed-confirm");
-  if (confirm) {
-    syncTypedConfirm(confirm);
-  }
-  var hint = altsPopover.querySelector(".typed-placeholder");
-  if (hint) {
-    syncTypedPlaceholder(hint);
-  }
-  var preview = altsPopover.querySelector(".typed-preview");
-  if (preview) {
-    renderTypedPieces(preview);
-  }
-}
-
-// The pieces the draft resolves to, with their vocabulary ids. Shown
-// rather than merely counted: a rejection that says "3 tokens" is a
-// verdict, while showing which three is an explanation.
-function renderTypedPieces(host) {
-  host.textContent = "";
-  var preview = typedEntryPreview;
-  if (preview === null || typedEntryDraft === "") {
-    return;
-  }
-  for (var i = 0; i < preview.pieces.length; i++) {
-    host.appendChild(buildTypedPiece(preview.pieces[i], i));
-  }
-  var note = document.createElement("span");
-  note.className = "typed-count";
-  if (preview.count === 1) {
-    note.textContent = "1 token";
-  } else if (preview.count === 0) {
-    note.textContent = "no tokens";
-    note.classList.add("typed-count-over");
-  } else {
-    note.textContent = preview.count + " tokens";
-    // Orange only here. It means edit or remask everywhere else in
-    // the app, so spending it on the ordinary multi-piece case would
-    // read as a state rather than as a problem.
-    note.classList.add("typed-count-over");
-  }
-  host.appendChild(note);
-}
-
-function buildTypedPiece(piece, index) {
-  var el = document.createElement("span");
-  el.className = "typed-piece";
-  // Alternating tints so adjacent pieces stay distinguishable when
-  // a split falls inside a word and the boundary is the whole point.
-  if (index % 2 === 1) {
-    el.classList.add("typed-piece-alt");
-  }
-  var text = document.createElement("span");
-  text.className = "typed-piece-text";
-  text.textContent = overlaysAltDisplay(piece.t);
-  el.appendChild(text);
-  var id = document.createElement("span");
-  id.className = "typed-piece-id";
-  id.textContent = String(piece.id);
-  el.appendChild(id);
-  return el;
-}
-
-// The confirmed token, dressed as a candidate row so it clicks the
-// same way. data-typed tells the click handler to send it down the
-// worker's typed path rather than the captured one.
-function buildTypedSolidified() {
-  var row = document.createElement("div");
-  row.className = "alt-row typed-solid";
-  row.setAttribute(
-    "data-alt-id", String(typedEntryToken.id)
-  );
-  row.setAttribute("data-typed", "1");
-
-  var text = document.createElement("span");
-  text.className = "alt-text";
-  text.textContent = overlaysAltDisplay(typedEntryToken.t);
-  row.appendChild(text);
-
-  var tag = document.createElement("span");
-  tag.className = "typed-tag";
-  tag.textContent = "yours";
-  row.appendChild(tag);
-
-  // Left of the retry icon, where the candidate rows keep theirs, so
-  // the six rows read as one column of odds rather than five plus an
-  // exception.
-  var prob = document.createElement("span");
-  prob.className = "typed-prob";
-  renderTypedMeasure(prob);
-  row.appendChild(prob);
-
-  var retry = document.createElement("button");
-  retry.type = "button";
-  retry.className = "typed-retry";
-  retry.textContent = "\u21BA";
-  retry.title = "Type a different token";
-  retry.addEventListener("click", retryTypedEntry);
-  row.appendChild(retry);
-
-  // Bound directly rather than through overlaysBindAltHover, which
-  // captures its candidate when the row is built. This one has to be
-  // read at hover time, because the probe can land after the row is
-  // drawn and would otherwise never reach the strip.
-  row.addEventListener("mouseenter", function () {
-    generatorReadouts.setCandidateHover(
-      typedCandidateReading()
-    );
-  });
-  row.addEventListener("mouseleave", function () {
-    generatorReadouts.setCandidateHover(null);
-  });
-  return row;
-}
-
-// The typed token in the shape a candidate row hands the strip. The
-// rank arrives with the measurement here rather than from the row's
-// position, since a typed token has no position in a sorted list.
-function typedCandidateReading() {
-  if (typedEntryToken === null) {
-    return null;
-  }
-  var reading = { t: typedEntryToken.t, p: null };
-  if (typedEntryMeasure !== null) {
-    reading.p = typedEntryMeasure.probability;
-    reading.rank = typedEntryMeasure.rank;
-    reading.vocab_size = typedEntryMeasure.vocabSize;
-  }
-  return reading;
-}
-
-// The measured odds, or a pending mark while the probe is out. The
-// mark matters on CPU, where the pass takes long enough that a blank
-// slot would read as "this row has no number" rather than "not yet".
-function renderTypedMeasure(slot) {
-  if (typedEntryMeasure === null) {
-    slot.textContent = "\u2026";
-    slot.classList.add("is-pending");
-    slot.title = "Measuring what the model gave this token";
-    return;
-  }
-  slot.classList.remove("is-pending");
-  slot.textContent = typedProbabilityText(
-    typedEntryMeasure.probability
-  );
-  slot.title = typedMeasureTitle(typedEntryMeasure);
-}
-
-// One decimal, like the candidate rows, but never a bare "0.0%". A
-// typed token is most interesting precisely where it is improbable,
-// so the one reading this must not produce is a flat zero for
-// something the model did give a little weight to.
-function typedProbabilityText(probability) {
-  var p = Number(probability);
-  if (!isFinite(p) || p <= 0) {
-    return "0.0%";
-  }
-  if (p < 0.001) {
-    return "<0.1%";
-  }
-  return (p * 100).toFixed(1) + "%";
-}
-
-// The precision the row has no width for. Rank is the honest answer
-// where the percentage has collapsed: "one of 41,203 the model liked
-// better" says what "<0.1%" cannot.
-function typedMeasureTitle(measure) {
-  var text = "Probability "
-    + Number(measure.probability).toPrecision(3);
-  if (measure.rank) {
-    text += ", rank "
-      + Number(measure.rank).toLocaleString();
-  }
-  if (measure.rank && measure.vocabSize) {
-    text += " of "
-      + Number(measure.vocabSize).toLocaleString();
-  }
-  return text;
-}
-
-function onTypedFocus() {
-  if (typedEntryActive) {
-    return;
-  }
-  typedEntryActive = true;
-  refreshTypedControls();
-}
-
-function onTypedInput(e) {
-  typedEntryDraft = e.target.value;
-  // The old pieces describe text that is no longer on screen, so
-  // they go immediately rather than lingering until the reply.
-  typedEntryPreview = null;
-  refreshTypedControls();
-  if (typedPreviewTimer !== null) {
-    clearTimeout(typedPreviewTimer);
-  }
-  typedPreviewTimer = setTimeout(
-    requestTypedPreview, TYPED_PREVIEW_DEBOUNCE_MS
-  );
-}
-
-// Ask the worker what the draft resolves to. Fire and forget: the
-// reply is matched by request id, since a slow answer for an earlier
-// draft must not overwrite a newer one.
-function requestTypedPreview() {
-  typedPreviewTimer = null;
-  if (!generatorSocket.isReady()) {
-    return;
-  }
-  if (typedEntryDraft === "") {
-    typedEntryPreview = null;
-    refreshTypedControls();
-    return;
-  }
-  typedEntryRequest += 1;
-  generatorSocket.send({
-    type: "tokenize",
-    text: typedEntryDraft,
-    request_id: typedEntryRequest,
-  });
-}
-
-// Accept a preview only if it is both the newest request and still
-// about the text on screen. The second test matters because the
-// draft can change without a new request going out.
-function handleTokenizeResult(msg) {
-  if (msg.request_id !== typedEntryRequest) {
-    return;
-  }
-  if (msg.text !== typedEntryDraft) {
-    return;
-  }
-  typedEntryPreview = {
-    pieces: msg.pieces || [],
-    count: msg.count || 0,
-  };
-  refreshTypedControls();
-}
-
-function confirmTypedEntry() {
-  if (!typedEntryResolvesToOne()) {
-    return;
-  }
-  typedEntryToken = typedEntryPreview.pieces[0];
-  typedEntryMeasure = null;
-  redrawTypedEntry();
-  requestTypedProbe();
-}
-
-// Ask the model what it actually gave this token here. Fired on
-// confirm rather than while typing: it is a forward pass, not a
-// vocabulary lookup, so one per decision is the right budget where
-// one per keystroke would not be.
-//
-// The same figure the substitution will report, because both read the
-// same distribution, so the row cannot promise a number the run then
-// contradicts.
-function requestTypedProbe() {
-  if (typedEntryToken === null || typedEntryPos === null) {
-    return;
-  }
-  if (fillMeasureFromRecord()) {
-    return;
-  }
-  if (!generatorSocket.isReady()) {
-    return;
-  }
-  if (editRequestRefused()) {
-    return;
-  }
-  typedProbeRequest += 1;
-  generatorSocket.send({
-    type: "probe",
-    position: typedEntryPos,
-    token_id: typedEntryToken.id,
-    request_id: typedProbeRequest,
-    run_token: generatorRun.runToken(),
-  });
-}
-
-// Answer from what the run already recorded, when it can. Typing a
-// token that is one of the candidates on screen is the common case,
-// and the stored figure is better than a measured one, not merely
-// cheaper: the run sampled position n from a single decode step, and
-// a probe rebuilds that with a fresh prefill, which in bf16 lands an
-// ulp away. Two paths to one number is one number too many when the
-// row sits directly above the rows it would disagree with.
-//
-// Returns whether it answered, so the caller knows to send nothing.
-function fillMeasureFromRecord() {
-  var alts = generatorRun.positionAlternatives(
-    typedEntryPos, false
-  );
-  if (!alts) {
-    return false;
-  }
-  for (var i = 0; i < alts.length; i++) {
-    if (alts[i].id !== typedEntryToken.id) {
-      continue;
-    }
-    typedEntryMeasure = {
-      probability: alts[i].p,
-      rank: overlaysAltRank(alts[i], i),
-      vocabSize: metricsVocabSize(),
-    };
-    refreshTypedMeasure();
-    return true;
-  }
-  return false;
-}
-
-// Accept a measurement only for the newest probe and only while the
-// token it describes is still the confirmed one. A retry between
-// request and reply would otherwise label the new token with the old
-// token's odds, which is worse than showing nothing.
-function handleProbeResult(msg) {
-  if (msg.request_id !== typedProbeRequest) {
-    return;
-  }
-  if (typedEntryToken === null) {
-    return;
-  }
-  if (msg.token_id !== typedEntryToken.id) {
-    return;
-  }
-  typedEntryMeasure = {
-    probability: msg.probability,
-    rank: msg.rank,
-    vocabSize: msg.vocab_size,
-  };
-  refreshTypedMeasure();
-}
-
-// Fill the figure in place rather than rebuilding the row. The row is
-// a click target, and replacing the node the pointer is resting on
-// would drop the hover that says so.
-function refreshTypedMeasure() {
-  if (!altsPopover) {
-    return;
-  }
-  var slot = altsPopover.querySelector(".typed-prob");
-  if (slot) {
-    renderTypedMeasure(slot);
-  }
-}
-
-// Back to an empty field, keeping the position. Distinct from
-// cancel: the user wants a different token, not to stop.
-function retryTypedEntry(e) {
-  // The retry icon lives inside a row that clicks through to
-  // doSubstitute. Without this, changing your mind would run the
-  // very substitution you were backing out of.
-  e.stopPropagation();
-  typedEntryToken = null;
-  typedEntryMeasure = null;
-  typedEntryPreview = null;
-  typedEntryDraft = "";
-  // Back to a fresh field, leading space and all, which is what the
-  // user gets on a first visit and so what they expect on a redo.
-  typedEntrySeeded = false;
-  typedEntryActive = true;
-  redrawTypedEntry();
-}
-
-function cancelTypedEntry() {
-  var pos = altsPopoverPos;
-  clearTypedEntry();
-  if (typedPreviewTimer !== null) {
-    clearTimeout(typedPreviewTimer);
-    typedPreviewTimer = null;
-  }
-  if (pos === null || !altsPopover) {
-    return;
-  }
-  // Where the pointer is decides what a cancel leaves behind. Over
-  // the popover (the cancel button) it goes back to showing the
-  // candidates. Anywhere else (Escape, a click outside) the pointer
-  // has already left, so nothing would ever come along to close the
-  // box, and it would sit there stranded.
-  if (altsPopover.matches(":hover")) {
-    renderAltsPopover(pos, null);
-    return;
-  }
-  generatorReadouts.clearTokenHover();
-  hideAltsPopover();
-}
-
-// Rebuild the popover around a structural change: the entry
-// becoming a solidified row, or going back to a field. Unanchored on
-// purpose, since re-placing the box against its token would walk it
-// around under the pointer.
-function redrawTypedEntry() {
-  if (altsPopoverPos === null) {
-    return;
-  }
-  renderAltsPopover(altsPopoverPos, null);
-}
-
 // Prompt composition lives in generator_composer.js. The page passes
 // model-panel values and transports its count requests, and otherwise
 // reaches it only through the controller API created above.
@@ -2171,7 +1206,8 @@ function activateScrubber() {
   // hidden when the run was generated with Alternatives off.
   if (btnWhatIf) {
     btnWhatIf.hidden = !(
-      supportsSubstitution() && alternativesAvailable()
+      supportsSubstitution()
+      && generatorCandidates.alternativesAvailable()
     );
   }
   updateEditFramesLock();
@@ -2199,7 +1235,7 @@ function deactivateScrubber() {
   guidedEditControls.hidden = true;
   generatorCanvas.deactivate();
   generatorReadouts.deactivate();
-  hideAltsPopover();
+  generatorCandidates.hidePopover();
   clearRemaskedPositions();
 }
 
@@ -2263,9 +1299,6 @@ function navigateToFrame(index) {
     renderTargetFrame(index);
   }
   generatorReadouts.refreshStop();
-  // The token spans were just replaced, so any open popover now
-  // points at a detached element.
-  hideAltsPopover();
   if (scrubberActive) {
     generatorReadouts.updateProfile();
   }
@@ -2435,7 +1468,7 @@ function playShuffleDiffusion() {
 
 function resetGuidedMode() {
   runPhasesReset(runPhase);
-  hideAltsPopover();
+  generatorCandidates.hidePopover();
   preEditSnapshot = null;
   pendingResume = null;
   randomizeInitFrame = null;
@@ -2622,15 +1655,14 @@ function beginSubstitutionSession() {
 // trip rather than being inferred from the id.
 function doSubstitute(position, tokenId, typedText) {
   if (!runPhase.substituting || runPhase.mode !== "substitute") {
-    return;
+    return false;
   }
   if (position < 0 || position >= generatorRun.frameCount()) {
-    return;
+    return false;
   }
   if (editRequestRefused()) {
-    return;
+    return false;
   }
-  hideAltsPopover();
   runPhase.substituting = false;
 
   // Recorded as an ordinary remask edit so the analytics Edited
@@ -2673,6 +1705,7 @@ function doSubstitute(position, tokenId, typedText) {
     request.typed_text = typedText;
   }
   generatorSocket.send(request);
+  return true;
 }
 
 // Edit Frames entry point. The current run is the "original": if it
@@ -3374,7 +2407,7 @@ function resetRunState() {
   generatorCanvas.reset();
   generatorCanvas.deactivate();
   generatorReadouts.reset();
-  hideAltsPopover();
+  generatorCandidates.hidePopover();
   isResuming = false;
   pendingResume = null;
   updateEditFramesLock();
@@ -3497,12 +2530,63 @@ function generatorCanvasReadEdit() {
   };
 }
 
+function generatorCandidatesReadState() {
+  var tokenizer = generatorModelPanel.activeTokenizer();
+  return {
+    frame: currentScrubFrame,
+    scrubberActive: scrubberActive,
+    editing: runPhasesEditing(runPhase),
+    substituting: runPhase.substituting,
+    remaskEdits: remaskEdits,
+    tokenizer: tokenizer,
+    vocabSize: tokenizer.model_vocab_size || null,
+  };
+}
+
+function generatorCandidatesRequestTokenize(intent) {
+  if (!generatorSocket.isReady()) {
+    return false;
+  }
+  generatorSocket.send({
+    type: "tokenize",
+    text: intent.text,
+    request_id: intent.requestId,
+  });
+  return true;
+}
+
+function generatorCandidatesRequestProbe(intent) {
+  if (!generatorSocket.isReady()) {
+    return false;
+  }
+  if (editRequestRefused()) {
+    return false;
+  }
+  generatorSocket.send({
+    type: "probe",
+    position: intent.position,
+    token_id: intent.tokenId,
+    request_id: intent.requestId,
+    run_token: generatorRun.runToken(),
+  });
+  return true;
+}
+
+function generatorCandidatesRequestSubstitute(intent) {
+  return doSubstitute(
+    intent.position,
+    intent.tokenId,
+    intent.typedText
+  );
+}
+
 function generatorCanvasWriteHighlight(value) {
   appSettings.highlightTokens = value;
   overlaysWriteHighlightTokens(value);
 }
 
 function generatorCanvasOutputReset() {
+  generatorCandidates.outputReset();
   generatorReadouts.outputReset();
 }
 
@@ -3511,7 +2595,7 @@ function generatorCanvasRendered() {
 }
 
 function generatorCanvasOverlayChanged() {
-  hideAltsPopover();
+  generatorCandidates.hidePopover();
 }
 
 function generatorCanvasLayerChanged(change) {
@@ -3686,6 +2770,7 @@ generatorModelPanel.wire();
 generatorChrome.wire();
 generatorCanvas.wire();
 generatorReadouts.wire();
+generatorCandidates.wire();
 
 // Scrubber event listeners.
 //
@@ -3884,167 +2969,6 @@ outputArea.addEventListener(
     toggleRemaskPosition(parseInt(pos, 10));
   }
 );
-
-// Token hover, delegated like the click handler above. Drives three
-// things: the metrics strip above the canvas, the entropy profile's
-// glowing column, which follows every token, and the candidate
-// popover, which is suppressed during guided remask editing so it
-// never covers the tokens being selected.
-outputArea.addEventListener(
-  "mouseover",
-  function (e) {
-    var target = e.target;
-    var pos = hoveredTokenPosition(target);
-    // The canvas's own padding and the leading between lines are not
-    // tokens, and the trip from a token up into the popover crosses
-    // them. Reporting that as "nothing hovered" wiped the readout
-    // mid-journey, so the last token stands until the pointer leaves
-    // the canvas, which the mouseleave below handles. Analytics has
-    // always behaved this way; this brought the generator in line.
-    if (pos === null) {
-      return;
-    }
-    generatorReadouts.setTokenHover(pos, target);
-    if (!scrubberActive || !altsPopover) {
-      return;
-    }
-    if (runPhasesEditing(runPhase) && !runPhase.substituting) {
-      return;
-    }
-    if (pos === altsPopoverPos) {
-      return;
-    }
-    // A live draft owns the popover. Retargeting it to whatever the
-    // pointer wandered onto would throw the draft away and move the
-    // field out from under the user mid-word.
-    if (altsPopoverPinned()) {
-      return;
-    }
-    showAltsPopover(pos, target);
-  }
-);
-
-// The token position an event target represents, or null when the
-// pointer is over the output area's padding rather than a token.
-function hoveredTokenPosition(target) {
-  if (!target.classList || !target.classList.contains("token-span")) {
-    return null;
-  }
-  var raw = target.getAttribute("data-pos");
-  if (raw === null) {
-    return null;
-  }
-  return parseInt(raw, 10);
-}
-
-outputArea.addEventListener(
-  "mouseleave",
-  function () {
-    // Keep the popover open, and its position glowing, while the
-    // pointer is inside the popover itself: it sits above the token,
-    // so reaching a candidate to click means leaving the output area.
-    if (altsPopover && altsPopover.matches(":hover")) {
-      return;
-    }
-    if (altsPopoverPinned()) {
-      return;
-    }
-    generatorReadouts.clearTokenHover();
-    hideAltsPopover();
-  }
-);
-
-if (altsPopover) {
-  altsPopover.addEventListener("mouseleave", function () {
-    if (altsPopoverPinned()) {
-      return;
-    }
-    generatorReadouts.clearTokenHover();
-    hideAltsPopover();
-  });
-  // Picking a candidate commits the substitution. Only armed in What
-  // If mode; the popover is read-only otherwise.
-  altsPopover.addEventListener("click", function (e) {
-    if (!runPhase.substituting || altsPopoverPos === null) {
-      return;
-    }
-    // The Original page shows the pre-edit run's candidates. There is
-    // nothing to substitute into on that side, and the worker only
-    // holds the live run's state anyway.
-    if (altsPopoverPage === "original") {
-      return;
-    }
-    var row = e.target.closest(".alt-row");
-    if (!row) {
-      return;
-    }
-    var raw = row.getAttribute("data-alt-id");
-    if (raw === null) {
-      return;
-    }
-    // The appended row is the token already in this position, so
-    // forcing it would spend a full re-generation arriving back
-    // where it started.
-    if (row.classList.contains("alt-row-outside")) {
-      return;
-    }
-    // A solidified typed row looks and clicks like a candidate, but
-    // the worker has to be told which it is: the captured path
-    // rejects anything the model did not consider, and that
-    // rejection is deliberate (see _validate_substitute).
-    var typed = row.getAttribute("data-typed") === "1"
-      ? typedEntryDraft : null;
-    doSubstitute(altsPopoverPos, parseInt(raw, 10), typed);
-  });
-}
-
-// Escape and a click outside are the two ways out of a typed entry
-// that do not involve reaching for the cancel button. Both are plain
-// cancels: the draft goes, the candidates stay.
-document.addEventListener("keydown", function (e) {
-  if (e.key !== "Escape" || !altsPopoverPinned()) {
-    return;
-  }
-  e.preventDefault();
-  cancelTypedEntry();
-});
-
-// pointerdown rather than click, so the cancel lands before the
-// press can do anything else with the element underneath.
-document.addEventListener("pointerdown", function (e) {
-  if (!altsPopoverPinned() || !altsPopover) {
-    return;
-  }
-  if (altsPopover.contains(e.target)) {
-    return;
-  }
-  cancelTypedEntry();
-});
-
-// A scroll moves the anchoring token out from under a fixed popover.
-// Not while pinned: a stray wheel click should not cost a draft, and
-// re-anchoring instead would slide the text field away from the
-// pointer. The box stays where it is, which is the least surprising
-// of the three, and the anchor is only decorative once you are
-// typing into it.
-window.addEventListener(
-  "scroll",
-  function () {
-    if (altsPopoverPos !== null && !altsPopoverPinned()) {
-      hideAltsPopover();
-    }
-  },
-  true
-);
-
-window.addEventListener("resize", function () {
-  if (!altsPopoverPinned()) {
-    hideAltsPopover();
-  }
-  if (scrubberActive) {
-    generatorReadouts.updateProfile();
-  }
-});
 
 // Keyboard shortcuts for scrubber navigation.
 document.addEventListener(

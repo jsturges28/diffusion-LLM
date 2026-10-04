@@ -55,6 +55,7 @@ STATIC = (
 INDEX_HTML = STATIC / "index.html"
 APP_JS = STATIC / "app.js"
 CANVAS_JS = STATIC / "generator_canvas.js"
+READOUTS_JS = STATIC / "generator_readouts.js"
 
 
 def _overlay_tag() -> str:
@@ -73,6 +74,16 @@ def _region(anchor: str, chars: int) -> str:
     assert start != -1, (
         f"anchor {anchor!r} is gone from app.js; update this test"
         " rather than deleting it"
+    )
+    return source[start : start + chars]
+
+
+def _readouts_region(anchor: str, chars: int) -> str:
+    source = READOUTS_JS.read_text(encoding="utf-8")
+    start = source.find(anchor)
+    assert start != -1, (
+        f"anchor {anchor!r} is gone from generator_readouts.js;"
+        " update this test rather than deleting it"
     )
     return source[start : start + chars]
 
@@ -322,25 +333,29 @@ def test_the_entropy_row_is_reserved_only_when_it_can_fill() -> None:
     rather than a shift avoided once, so the reservation follows the
     model's own declaration. It followed generation shape while only
     autoregressive models recorded entropy."""
-    region = _region(
-        "function setEntropyProfileVisible(visible)", 400
+    region = _readouts_region(
+        "function setProfileVisible(visible)", 400
     )
+    compact = " ".join(region.split())
 
     assert (
-        "entropyProfileRow.hidden = !visible && !entropyDeclared()"
-        in region
+        "entropyProfileRow.hidden = !visible"
+        " && !canvas.entropyDeclared();"
+        in compact
     )
-    assert 'classList.toggle("is-empty", !visible)' in region
+    assert 'classList.toggle( "is-empty", !visible )' in compact
 
 
 def test_the_reservation_reads_the_declaration() -> None:
     """The same channel and the same drawable shapes the strip itself
     is offered for, so the row is never held for bars it cannot
     draw."""
-    region = _region("function entropyDeclared()", 300)
+    region = _readouts_region(
+        "function setProfileVisible(visible)", 300
+    )
     canvas = CANVAS_JS.read_text(encoding="utf-8")
 
-    assert "generatorCanvas.entropyDeclared()" in region
+    assert "canvas.entropyDeclared()" in region
     assert 'declaredChannel("entropy")' in canvas
     assert "ENTROPY_SHAPES" in canvas
 
@@ -363,12 +378,14 @@ def test_boot_settles_the_entropy_row_once_a_model_is_known() -> None:
     the previous anchor broke when this moved out of a `.then`."""
     region = _region("function applyModelInfo(info)", 1800)
 
-    assert "setEntropyProfileVisible(false)" in region
+    assert "generatorReadouts.applyModel()" in region
 
 
 def test_one_helper_owns_the_entropy_row_too() -> None:
     """Four call sites set `.hidden` directly before this, none of
     which knew about the conditional part."""
-    source = APP_JS.read_text(encoding="utf-8")
+    app = APP_JS.read_text(encoding="utf-8")
+    readouts = READOUTS_JS.read_text(encoding="utf-8")
 
-    assert source.count("entropyProfileRow.hidden =") == 1
+    assert "entropyProfileRow.hidden =" not in app
+    assert readouts.count("entropyProfileRow.hidden =") == 1
