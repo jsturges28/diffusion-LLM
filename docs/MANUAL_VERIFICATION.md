@@ -323,8 +323,9 @@ kept when these were written:
 - **412**: confirmed on 2026-10-03: a stopped run keeping what the page
   received, from two items raised during the 2026-10 remediation:
   DiffusionGemma's stopped text, and a resume stopped before its first frame.
-- **413**: **outstanding**: an edit session's Back after Select Frame, and
-  Continue in review on a stopped Resume to End, on LLaDA and DiffusionGemma.
+- **413**: confirmed on 2026-10-03: an edit session's Back after Select
+  Frame, and Continue in review on a stopped Resume to End, on LLaDA and
+  DiffusionGemma.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
