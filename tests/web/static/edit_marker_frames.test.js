@@ -135,7 +135,7 @@ function analyticsRun(edits) {
   };
   const canvas = positions(WORDS);
   const frames = WORDS.map((_, at) => canvas.slice(0, at + 1));
-  context.renderRunOverlays({
+  context.tokenViewer.show({
     frames: frames, remask_edits: edits, records_available: true,
   });
   assert.ok(entropy, "the entropy chart was not built");

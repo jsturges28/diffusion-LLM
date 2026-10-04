@@ -73,6 +73,7 @@ const ANALYTICS_SCRIPTS = [
   "line_charts.js",
   "run_candidates.js",
   "candidate_flicker.js",
+  "token_viewer.js",
   "detail_requests.js",
   "collections_client.js",
   "download_client.js",

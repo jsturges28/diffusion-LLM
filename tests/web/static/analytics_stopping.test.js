@@ -94,8 +94,8 @@ function pageWith(data, frame) {
     };
   };
   data.records_available = true;
-  context.renderRunOverlays(data);
-  context.setOverlayFrame(frame);
+  context.tokenViewer.show(data);
+  context.tokenViewer.setFrame(frame);
   return page;
 }
 
@@ -136,10 +136,10 @@ test("the readout reads the scrubbed frame", () => {
   const page = pageWith(twoCanvases(), 2);
   assert.equal(words(page), "entropy 0.0020 of 0.005, steady");
 
-  page.context.setOverlayFrame(3);
+  page.context.tokenViewer.setFrame(3);
   assert.equal(words(page), "Canvas 1 stopped after 3 steps");
 
-  page.context.setOverlayFrame(4);
+  page.context.tokenViewer.setFrame(4);
   assert.equal(words(page), "entropy 3.00 of 0.005, 4 changing");
 });
 
@@ -185,6 +185,6 @@ test("an edit's first resumed frame is never steady", () => {
 
   assert.equal(words(page), "entropy 0.20 of 0.005, steady 0 of 1");
 
-  page.context.setOverlayFrame(3);
+  page.context.tokenViewer.setFrame(3);
   assert.equal(words(page), "entropy 0.10 of 0.005, steady");
 });

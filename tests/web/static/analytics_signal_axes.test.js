@@ -243,8 +243,8 @@ test("axes join in declaration order", () => {
 // -- the chart, as a saved run opens and is scrubbed --
 //
 // The tests above hand the readers a run with its manifest already
-// attached. These open one the way Analytics does, through
-// renderRunOverlays and the scrubber, from a payload carrying exactly
+// attached. These open one the way Analytics does, through the token
+// viewer's show and the scrubber, from a payload carrying exactly
 // the keys the frames endpoint returns. A manifest the endpoint drops
 // or a chart that never re-reads its bars shows up here, where the
 // readers alone would still pass.
@@ -329,7 +329,7 @@ function openedRun(payload) {
     }
     return chart;
   };
-  context.renderRunOverlays(payload);
+  context.tokenViewer.show(payload);
   assert.ok(
     entropyCharts.has(context), "the entropy chart was not built"
   );
@@ -353,12 +353,12 @@ test("a saved diffusion run's bars follow the scrub", () => {
     signals: [FRAME_BY_POSITION],
   }));
 
-  context.setOverlayFrame(0);
+  context.tokenViewer.setFrame(0);
   const early = layer(context, "Edited");
   assert.deepEqual(host(early.data), [0, 0.1, 0.2, 0.3]);
   assert.deepEqual(host(early.texts), ["a0", "b0", "c0", "d0"]);
 
-  context.setOverlayFrame(2);
+  context.tokenViewer.setFrame(2);
   const late = layer(context, "Edited");
   assert.deepEqual(host(late.data), [2, 2.1, 2.2, 2.3]);
   assert.deepEqual(host(late.texts), ["a2", "b2", "c2", "d2"]);
@@ -376,12 +376,12 @@ test("an edited run's original layer follows to its own end", () => {
     signals: [FRAME_BY_POSITION],
   }));
 
-  context.setOverlayFrame(0);
+  context.tokenViewer.setFrame(0);
   assert.deepEqual(
     host(layer(context, "Original").data), [10, 10.1, 10.2, 10.3]
   );
 
-  context.setOverlayFrame(2);
+  context.tokenViewer.setFrame(2);
   assert.deepEqual(
     host(layer(context, "Original").data), [11, 11.1, 11.2, 11.3]
   );
@@ -398,7 +398,7 @@ test("a run saved before manifests reads its final frame", () => {
     canvas_index: [0, 0, 0],
   }));
 
-  context.setOverlayFrame(0);
+  context.tokenViewer.setFrame(0);
 
   assert.deepEqual(
     host(layer(context, "Edited").data), [2, 2.1, 2.2, 2.3]
@@ -413,7 +413,7 @@ test("an autoregressive run's bars stay put", () => {
   }));
   const opened = host(layer(context, "Edited").data);
 
-  context.setOverlayFrame(1);
+  context.tokenViewer.setFrame(1);
 
   assert.deepEqual(opened, [0, 0.1, 0.2, 0.3]);
   assert.deepEqual(host(layer(context, "Edited").data), opened);
@@ -458,7 +458,7 @@ test("a diffusion run draws every bar at full strength", () => {
   }));
   const opened = fullStrength(context, layer(context, "Edited"));
 
-  context.setOverlayFrame(0);
+  context.tokenViewer.setFrame(0);
 
   assert.deepEqual(opened, [true, true, true, true]);
   assert.deepEqual(
@@ -474,7 +474,7 @@ test("so does a diffusion run saved before manifests", () => {
     canvas_index: [0, 0, 0],
   }));
 
-  context.setOverlayFrame(0);
+  context.tokenViewer.setFrame(0);
 
   assert.deepEqual(
     fullStrength(context, layer(context, "Edited")),
@@ -488,7 +488,7 @@ test("an autoregressive run fades the positions to come", () => {
     signals: [channel(["position"])],
   }));
 
-  context.setOverlayFrame(1);
+  context.tokenViewer.setFrame(1);
 
   assert.deepEqual(
     fullStrength(context, layer(context, "Edited")),
@@ -502,7 +502,7 @@ test("as does one saved before manifests", () => {
     positions: appendPositions(4),
   }));
 
-  context.setOverlayFrame(1);
+  context.tokenViewer.setFrame(1);
 
   assert.deepEqual(
     fullStrength(context, layer(context, "Edited")),
@@ -622,7 +622,7 @@ test("opened on a commit, the bars borrow the last draft", () => {
 test("a draft reads its own entropy, unlabeled", () => {
   const context = openedRun(committedPayload());
 
-  context.setOverlayFrame(1);
+  context.tokenViewer.setFrame(1);
 
   const edited = layer(context, "Edited");
   assert.deepEqual(host(edited.data), draftValues(1, 0));
@@ -634,7 +634,7 @@ test("a commit borrows from its own canvas's draft", () => {
   // than anything of canvas 1's.
   const context = openedRun(committedPayload());
 
-  context.setOverlayFrame(2);
+  context.tokenViewer.setFrame(2);
 
   const edited = layer(context, "Edited");
   assert.deepEqual(host(edited.data), draftValues(1, 0));
@@ -676,7 +676,7 @@ test("the metrics strip reads a commit through its draft", () => {
 test("the Entropy overlay colors a commit from its draft", () => {
   const context = openedRun(committedPayload());
 
-  context.setOverlayMode("entropy");
+  context.tokenViewer.setMode("entropy");
 
   const colors = newestSpans(context).map((span) => span.style.color);
   assert.deepEqual(

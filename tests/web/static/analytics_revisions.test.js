@@ -111,8 +111,8 @@ function pageWith(data, frame) {
   const page = loadPage({
     scripts: ANALYTICS_SCRIPTS, fetchImpl: bootFetch(),
   });
-  page.context.renderRunOverlays(withRecords(data));
-  page.context.setOverlayFrame(frame);
+  page.context.tokenViewer.show(withRecords(data));
+  page.context.tokenViewer.setFrame(frame);
   return page;
 }
 
@@ -153,7 +153,7 @@ function layerSpans(page, layerClass) {
 // What Revisions paints each position of a layer. An untinted token
 // carries no colour of its own.
 function revisionColors(page, layerClass) {
-  page.context.setOverlayMode("revisions");
+  page.context.tokenViewer.setMode("revisions");
   return layerSpans(page, layerClass).map((span) => span.style.color);
 }
 
@@ -249,7 +249,7 @@ test("each canvas counts on its own", () => {
   }, 4);
 
   assert.deepEqual(revisionColors(page), [""]);
-  page.context.setOverlayFrame(2);
+  page.context.tokenViewer.setFrame(2);
   assert.deepEqual(
     revisionColors(page), [page.context.revisionColor(1)]
   );
@@ -292,7 +292,7 @@ test("the pre-edit layer holds its last frame past its end", () => {
 
 test("the strip reads the hovered layer's count", () => {
   const page = editedRun(6);
-  page.context.setOverlayMode("revisions");
+  page.context.tokenViewer.setMode("revisions");
 
   const edited = "token-layer-edited";
   const original = "token-layer-original";
@@ -316,11 +316,11 @@ test("the legend shows only while Revisions is selected", () => {
   const revisions = page.registry.get("overlay-revision-legend");
   const commit = page.registry.get("overlay-legend");
 
-  page.context.setOverlayMode("revisions");
+  page.context.tokenViewer.setMode("revisions");
   assert.equal(revisions.hidden, false);
   assert.equal(commit.hidden, true);
 
-  page.context.setOverlayMode("commit");
+  page.context.tokenViewer.setMode("commit");
   assert.equal(revisions.hidden, true);
   assert.equal(commit.hidden, false);
 });
@@ -330,13 +330,13 @@ test("loading another run forgets the last one's revisions", () => {
   // previous run's counts, and keep offering their overlay.
   const page = pageWith({ frames: copy(REVISING) }, 6);
   assert.ok(pickerValues(page).includes("revisions"));
-  page.context.setOverlayMode("revisions");
+  page.context.tokenViewer.setMode("revisions");
 
-  page.context.clearOverlay();
+  page.context.tokenViewer.clear();
   assert.equal(
     page.registry.get("overlay-revision-legend").hidden, true
   );
-  page.context.renderRunOverlays(withRecords({
+  page.context.tokenViewer.show(withRecords({
     frames: copy(SETTLING),
   }));
 

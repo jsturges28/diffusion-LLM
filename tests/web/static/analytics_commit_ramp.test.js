@@ -89,7 +89,7 @@ function pageWithRun(baselineWidth) {
     data.original_frames = canvasFrames(baselineWidth);
     data.remask_edits = [{ frame_index: 1, token_positions: [3] }];
   }
-  context.renderRunOverlays(data);
+  context.tokenViewer.show(data);
   return { page, context, data, last: data.frames.length - 1 };
 }
 
@@ -121,7 +121,7 @@ function layerSpans(output, layerClass) {
 // What Commit Order paints each position of a layer, read off the
 // spans the real renderer drew for it.
 function commitColors(page, layerClass) {
-  page.context.setOverlayMode("commit");
+  page.context.tokenViewer.setMode("commit");
   const output = page.registry.get("overlay-output");
   return layerSpans(output, layerClass).map(
     (span) => span.style.color

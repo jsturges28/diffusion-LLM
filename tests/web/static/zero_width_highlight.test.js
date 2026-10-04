@@ -208,7 +208,7 @@ function analyticsOpened() {
     }
     return chart;
   };
-  page.context.renderRunOverlays({
+  page.context.tokenViewer.show({
     frames: [tokens()], records_available: true,
   });
   assert.ok(entropy, "the entropy chart was not built");

@@ -76,11 +76,15 @@ def test_the_readout_is_not_inside_the_strip() -> None:
 
 
 def test_both_pages_build_the_readout_at_boot() -> None:
+    # Analytics builds both in its token viewer's wire, which the
+    # page's boot calls.
     anchor = "overlaysBuildTokenMetrics(tokenMetricsStrip);"
+    readout = "overlaysBuildStopReadout(stopReadout);"
 
-    for page in ("app.js", "analytics.js"):
-        boot = _after(_read(page), anchor, 120)
-        assert "overlaysBuildStopReadout(stopReadout);" in boot, page
+    for script in ("app.js", "token_viewer.js"):
+        boot = _after(_read(script), anchor, 120)
+        assert readout in boot, script
+    assert "\ntokenViewer.wire();\n" in _read("analytics.js")
 
 
 def test_the_detail_modal_sets_the_readout_beside_its_strip() -> None:

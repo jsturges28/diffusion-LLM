@@ -1,19 +1,21 @@
 """Analytics reads a run's frames and signals through its adapter
 (`A2-ORG-04`).
 
-Strategy: read the shipped `analytics.html`, `analytics.js` and
-`overlay_series.js`, and the browser tests. What the adapter answers
-is checked in `tests/web/static/overlay_series.test.js` against the
-server's own payloads; what that cannot check is whether the page
-still carries a copy of the adapter, or reaches it by a name it no
-longer has.
+Strategy: read the shipped `analytics.html`, `analytics.js`,
+`token_viewer.js` and `overlay_series.js`, and the browser tests.
+What the adapter answers is checked in
+`tests/web/static/overlay_series.test.js` against the server's own
+payloads; what that cannot check is whether the page or its token
+viewer still carries a copy of the adapter, or reaches it by a name
+it no longer has.
 
 Passing proves the adapter loads after `overlays.js`, which it reads,
 and before the page that calls it; that it names no page, no page
 state and no storage, so a reader is handed everything it reads; and
-that `analytics.js` defines nothing that moved while no browser test
-or page line uses a former name of the manifest helpers, the stop
-source or the per-token readers.
+that neither `analytics.js` nor the viewer defines anything that
+moved while no browser test, page line or viewer line uses a former
+name of the manifest helpers, the stop source or the per-token
+readers.
 """
 
 from __future__ import annotations
@@ -27,11 +29,12 @@ STATIC = (
 )
 ANALYTICS_HTML = STATIC / "analytics.html"
 ANALYTICS_JS = STATIC / "analytics.js"
+VIEWER_JS = STATIC / "token_viewer.js"
 MODULE_JS = STATIC / "overlay_series.js"
 TESTS_STATIC = Path(__file__).resolve().parent / "static"
 
 # What a reader handed everything it reads has no reason to name: the
-# page, its storage, and the viewer state analytics.js keeps.
+# page, its storage, and the viewer state token_viewer.js keeps.
 PAGE_NAMES = (
     "document",
     "window",
@@ -93,6 +96,10 @@ def _page() -> str:
     return ANALYTICS_JS.read_text(encoding="utf-8")
 
 
+def _viewer() -> str:
+    return VIEWER_JS.read_text(encoding="utf-8")
+
+
 def _scripts() -> List[str]:
     html = ANALYTICS_HTML.read_text(encoding="utf-8")
     return re.findall(r'<script src="/([^"?]+)"', html)
@@ -122,16 +129,19 @@ def test_the_adapter_names_no_page_and_no_page_state() -> None:
 def test_what_moved_is_defined_once_in_the_adapter() -> None:
     module = _module()
     page = _page()
+    viewer = _viewer()
 
     for name in MOVED:
         assert f"\nfunction {name}(" in module, name
         assert f"\nfunction {name}(" not in page, name
+        assert f"function {name}(" not in viewer, name
     assert "var OVERLAY_SERIES_ENTROPY_SHAPES = " in module
 
 
 def test_no_former_name_survives() -> None:
     texts = [
         ("analytics.js", _page()),
+        ("token_viewer.js", _viewer()),
         ("overlay_series.js", _module()),
     ]
     for path in sorted(TESTS_STATIC.glob("*.test.js")):
@@ -146,12 +156,13 @@ def test_no_former_name_survives() -> None:
     assert found == []
 
 
-def test_the_page_hands_the_adapter_its_frame() -> None:
+def test_the_viewer_hands_the_adapter_its_frame() -> None:
     """The one reader that needs the scrubbed frame is given it, where
-    it used to read the page's own variable."""
-    assert "overlayFrameIndex" in _page()
+    it used to read the page's own variable. The token viewer holds
+    that frame now, so it is the caller."""
+    assert "overlayFrameIndex" in _viewer()
     assert re.search(
         r"overlaySeriesChannelFrame\(\s*channel,\s*series,"
         r"\s*overlayFrameIndex\s*\)",
-        _page(),
+        _viewer(),
     )

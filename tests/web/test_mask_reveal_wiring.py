@@ -64,15 +64,18 @@ def _region(name: str, anchor: str, chars: int) -> str:
 
 
 def _function(name: str, anchor: str) -> str:
-    """A top-level function whole, to the first closing brace in
-    column zero after its signature."""
+    """A function whole, to the first closing brace at its own
+    indentation after its signature, so one inside a controller's
+    factory reads the same as one at the top level."""
     source = _source(name)
     start = source.find(anchor)
     assert start != -1, (
         f"anchor {anchor!r} is gone from {name}; update this test"
         " rather than deleting it"
     )
-    end = source.find("\n}\n", start)
+    indent = source[source.rfind("\n", 0, start) + 1 : start]
+    assert indent.strip() == "", f"{anchor!r} does not open a line"
+    end = source.find("\n" + indent + "}\n", start)
     assert end != -1, f"{anchor!r} has no closing brace"
     return source[start:end]
 
@@ -149,6 +152,11 @@ def test_the_generators_diff_overlay_grades() -> None:
 
 
 # -- analytics --
+#
+# Analytics draws its tokens through its token viewer, so these read
+# token_viewer.js. Its windows are wider than the page's were by the
+# two columns of indent each line gained inside the viewer's factory,
+# so each still covers the code it did.
 
 
 def test_analytics_reads_the_durable_settings() -> None:
@@ -156,7 +164,7 @@ def test_analytics_reads_the_durable_settings() -> None:
     saved run answer to the setting, and a diffusion run saved before
     the feature existed carries the same per-position guess a live
     one does."""
-    source = _source("analytics.js")
+    source = _source("token_viewer.js")
 
     assert "overlaysLoadSettings()" in source
 
@@ -166,7 +174,7 @@ def test_the_saved_run_view_asks_for_it() -> None:
     because a window wide enough to hold the whole function also
     holds the comparison layers below it, and then dropping the hook
     here still passes on the neighbour's copy of it."""
-    body = _region("analytics.js", "var edited = {", 300)
+    body = _region("token_viewer.js", "var edited = {", 320)
 
     assert ANALYTICS_GUESS in body
     assert f"{HOOK}: overlayOpacityFn" in body
@@ -175,7 +183,7 @@ def test_the_saved_run_view_asks_for_it() -> None:
 def test_the_analytics_comparison_layers_ask_for_it() -> None:
     """Both stacked layers, for the same reason the generator's do."""
     body = _region(
-        "analytics.js", "function renderOverlayLayers(", 900
+        "token_viewer.js", "function renderOverlayLayers(", 960
     )
 
     assert body.count(f"{FLAG}:") == 2
@@ -184,7 +192,7 @@ def test_the_analytics_comparison_layers_ask_for_it() -> None:
 
 def test_the_analytics_diff_overlay_asks_for_it() -> None:
     body = _region(
-        "analytics.js", "overlayDiffOrigOpacity,\n", 300
+        "token_viewer.js", "overlayDiffOrigOpacity,\n", 320
     )
 
     assert ANALYTICS_GUESS in body
@@ -198,9 +206,9 @@ def test_the_analytics_hook_has_no_selection_to_spare() -> None:
     would read a `remaskedPositions` that does not exist on the
     page."""
     body = _region(
-        "analytics.js",
+        "token_viewer.js",
         "function overlayOpacityFn(index, tok, masked)",
-        300,
+        320,
     )
 
     assert "overlaysMaskOpacity(" in body
@@ -217,9 +225,9 @@ def test_a_hole_is_faint_rather_than_solid_on_both_pages() -> None:
         "app.js", "function tokenOpacityFn(index, tok, masked)", 400
     )
     analytics = _region(
-        "analytics.js",
+        "token_viewer.js",
         "function overlayOpacityFn(index, tok, masked)",
-        400,
+        430,
     )
 
     for body in (generator, analytics):
@@ -293,8 +301,10 @@ def test_one_helper_reads_the_choice_for_the_builder() -> None:
     )
 
     assert 'settings.unsettledShows !== "glyph"' in helper
-    for page in ("app.js", "analytics.js", "settings.js"):
-        assert "revealMaskCandidate" not in _source(page)
+    for script in (
+        "app.js", "analytics.js", "token_viewer.js", "settings.js"
+    ):
+        assert "revealMaskCandidate" not in _source(script)
     assert _source("overlays.js").count("revealMaskCandidate") == 1
 
 
@@ -342,13 +352,15 @@ def test_the_generator_cycles_after_a_run_outside_edits() -> None:
 
 def test_the_analytics_paths_start_and_stop_the_flicker() -> None:
     tokens = _function(
-        "analytics.js", "function renderOverlayTokens("
+        "token_viewer.js", "function renderOverlayTokens("
     )
     layers = _function(
-        "analytics.js", "function renderOverlayLayers("
+        "token_viewer.js", "function renderOverlayLayers("
     )
-    diff = _function("analytics.js", "function renderDiffOverlay()")
-    clear = _function("analytics.js", "function clearOverlay()")
+    diff = _function(
+        "token_viewer.js", "function renderDiffOverlay()"
+    )
+    clear = _function("token_viewer.js", "function clearOverlay()")
 
     assert "flickerStart([flickerLayer(" in tokens
     assert "overlayStackedFlicker(" in layers
@@ -359,9 +371,11 @@ def test_the_analytics_paths_start_and_stop_the_flicker() -> None:
 
 def test_both_pages_load_the_flicker_in_order() -> None:
     """After overlays.js and run_candidates.js, which it calls, and
-    before the page script that calls it."""
+    before the script that calls it: the generator's page, and the
+    Analytics token viewer."""
     for page, script in (
-        ("index.html", "app.js"), ("analytics.html", "analytics.js")
+        ("index.html", "app.js"),
+        ("analytics.html", "token_viewer.js"),
     ):
         markup = _source(page)
         store = markup.find('src="/run_candidates.js"')

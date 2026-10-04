@@ -362,7 +362,7 @@ function analytics() {
 function analyticsOpened(run) {
   const context = analytics();
   run.records_available = true;
-  context.renderRunOverlays(run);
+  context.tokenViewer.show(run);
   return context;
 }
 
@@ -437,7 +437,7 @@ test("Analytics reads a run saved without a manifest by its data", () => {
 
 test("Analytics reads the value in the strip", () => {
   const context = analyticsOpened(savedRun([FORGETTING], true));
-  context.setOverlayMode("forgetting");
+  context.tokenViewer.setMode("forgetting");
   const output = context.document.getElementById("overlay-output");
 
   output.dispatch("mouseover", { target: newestSpans(context)[0] });
@@ -465,7 +465,7 @@ test("Analytics lists the option in its picker", () => {
 test("Analytics colours each token by its own value", () => {
   const context = analyticsOpened(savedRun([FORGETTING], true));
 
-  context.setOverlayMode("forgetting");
+  context.tokenViewer.setMode("forgetting");
 
   const colors = newestSpans(context).map((span) => span.style.color);
   assert.deepEqual(

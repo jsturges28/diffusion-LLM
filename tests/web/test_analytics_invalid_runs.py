@@ -106,7 +106,7 @@ def test_opening_a_broken_run_clears_the_previous_one() -> None:
     region = _region("function showInvalidDetail", 1400)
 
     assert "clearRunCharts()" in region
-    assert "clearOverlay()" in region
+    assert "tokenViewer.clear()" in region
 
 
 def test_opening_a_broken_run_hides_the_chart_frames() -> None:

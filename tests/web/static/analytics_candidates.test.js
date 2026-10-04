@@ -3,7 +3,7 @@
 // Strategy: load the Analytics page into the DOM stub, hand the
 // overlay viewer a frames payload the way the server serves a saved
 // run, move its scrubber, and render the popover at a position. The
-// payload goes through renderRunOverlays, so the path from the
+// payload goes through the token viewer's show, so the path from the
 // server's `candidates` to what the popover draws is the real one.
 //
 // Passing proves the saved popover reads as the live one does: a
@@ -147,7 +147,7 @@ function loaded(fetchImpl, settings) {
 
 function opened(data, settings) {
   const page = loaded(bootFetch(), settings);
-  page.context.renderRunOverlays(data);
+  page.context.tokenViewer.show(data);
   return page;
 }
 
@@ -194,7 +194,7 @@ function newestSpans(output) {
 function popoverAt(page, frame, position) {
   const popover = page.registry.get("token-alts-popover");
   const output = page.registry.get("overlay-output");
-  page.context.setOverlayFrame(frame);
+  page.context.tokenViewer.setFrame(frame);
   popover.children = [];
   output.dispatch("mouseover", {
     target: newestSpans(output)[position],
@@ -422,7 +422,7 @@ test("an autoregressive run keeps its own popover", async () => {
 // -- the candidates cycle --
 
 function cyclingAt(page, frame) {
-  page.context.setOverlayFrame(frame);
+  page.context.tokenViewer.setFrame(frame);
   const entries = [...page.context.flickerEntries];
   page.context.flickerStop();
   return entries;
