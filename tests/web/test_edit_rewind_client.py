@@ -107,7 +107,7 @@ def test_it_is_skipped_without_a_run_to_name() -> None:
 def test_it_is_skipped_on_a_closed_socket() -> None:
     region = _region("function rewindWorkerRun()", 700)
 
-    assert "ws.readyState !== WebSocket.OPEN" in region
+    assert "if (!generatorSocket.isReady())" in region
 
 
 # -- what is deliberately absent --

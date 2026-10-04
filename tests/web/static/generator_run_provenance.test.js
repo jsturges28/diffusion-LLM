@@ -105,7 +105,7 @@ function runOn(model) {
     bootState: { ui_state: {}, models: models },
   });
   const { context, registry } = page;
-  context.ws = new OpenSocket("ws://test");
+  page.generatorSocketController().connect();
   registry.get("prompt-input").value = "explain yeast";
   context.startGeneration();
   return context;

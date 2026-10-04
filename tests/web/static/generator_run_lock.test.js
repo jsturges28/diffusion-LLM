@@ -156,7 +156,12 @@ async function runOn(model, worker) {
   registry.get("prompt-input").value = "explain yeast";
   context.startGeneration();
   assert.equal(context.isGenerating, true, "the run did not start");
-  return { context, registry, socket: FakeSocket.opened[mark] };
+  return {
+    page,
+    context,
+    registry,
+    socket: FakeSocket.opened[mark],
+  };
 }
 
 function snapshotFrame(index, text, provenance) {
@@ -319,9 +324,10 @@ test("nor is a probe or a rewind sent once the page reconnects", async () => {
   // The two that check the socket first: after a reconnect the socket
   // is open again, and only the lock stands between them and a worker
   // that would refuse them.
-  const { context } = await cutOffSmol();
-  const reconnected = new OpenSocket("ws://test/ws");
-  context.ws = reconnected;
+  const { page, context } = await cutOffSmol();
+  const mark = FakeSocket.opened.length;
+  page.generatorSocketController().connect();
+  const reconnected = FakeSocket.opened[mark];
   context.generatorRun.finish({
     final_text: " Yeast eats",
     run_token: "a3f9c1:1",

@@ -205,7 +205,7 @@ function desktopPage() {
     sizes.delete(key);
     remove(key);
   };
-  page.context.ws = new OpenSocket("ws://test");
+  page.generatorSocketController().connect();
   page.registry.get("prompt-input").value = "explain yeast";
   return page;
 }

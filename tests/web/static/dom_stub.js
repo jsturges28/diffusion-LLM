@@ -52,6 +52,7 @@ const GENERATOR_SCRIPTS = [
   "run_candidates.js",
   "run_snapshot.js",
   "generator_run.js",
+  "generator_socket.js",
   "candidate_flicker.js",
   "run_phases.js",
   "download_client.js",
@@ -596,6 +597,10 @@ class FakeSocket {
     this["on" + type] = null;
   }
 }
+FakeSocket.CONNECTING = 0;
+FakeSocket.OPEN = 1;
+FakeSocket.CLOSING = 2;
+FakeSocket.CLOSED = 3;
 FakeSocket.opened = [];
 
 // Answers every request with an empty success. Enough for a boot
@@ -703,7 +708,14 @@ function loadPage(options) {
     },
     getComputedStyle: () => ({ getPropertyValue: () => "" }),
     matchMedia: () => ({ matches: false, addEventListener() {} }),
-    location: { search: "", href: "", pathname: "/", reload() {} },
+    location: {
+      protocol: "http:",
+      host: "test",
+      search: "",
+      href: "",
+      pathname: "/",
+      reload() {},
+    },
     navigator: { userAgent: "node", clipboard: { writeText() {} } },
     alert: () => {},
     confirm: () => true,
@@ -763,6 +775,21 @@ function loadPage(options) {
     sandbox,
     // Every request the page made, in order.
     fetched,
+    // The controller is the supported full-page socket seam. Its
+    // mutable WebSocket and reconnect state remain private; tests can
+    // ask it to connect or read readiness without replacing a page
+    // global that production no longer has.
+    generatorSocketController() {
+      const controller = context.generatorSocket;
+      if (
+        !controller
+        || typeof controller.connect !== "function"
+        || typeof controller.isReady !== "function"
+      ) {
+        throw new Error("The loaded page has no generator socket");
+      }
+      return controller;
+    },
     // Settle `document.fonts.ready`. Anything the page defers until
     // its webfont has loaded runs on the microtask after this.
     announceFontsLoaded() {

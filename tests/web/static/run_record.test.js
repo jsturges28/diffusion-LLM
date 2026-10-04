@@ -132,7 +132,7 @@ function finishedRun() {
     storage: { [HISTORY_KEY]: JSON.stringify([BROWSED]) },
   });
   const { context, registry } = page;
-  context.ws = new OpenSocket("ws://test");
+  page.generatorSocketController().connect();
   registry.get("prompt-input").value = RAN;
 
   context.startGeneration();

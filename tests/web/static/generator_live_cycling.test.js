@@ -157,7 +157,7 @@ function streaming(specs, prepare) {
     bootState: { ui_state: {}, models: MODELS },
   });
   const { context, registry } = page;
-  context.ws = new OpenSocket("ws://test");
+  page.generatorSocketController().connect();
   registry.get("prompt-input").value = "explain yeast";
   context.startGeneration();
   (prepare || choose("candidates"))(context);

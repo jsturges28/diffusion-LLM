@@ -79,7 +79,7 @@ def test_a_cancel_is_not_sent_without_a_run() -> None:
     """Guarded twice: a live socket and a run to stop."""
     body = _region("function requestCancel()", 700)
 
-    assert "ws.readyState !== WebSocket.OPEN" in body
+    assert "if (!generatorSocket.isReady())" in body
     assert "if (!isGenerating)" in body
 
 
@@ -125,7 +125,7 @@ def test_the_terminal_frame_is_read_for_the_stopped_flag() -> None:
 
 def test_losing_the_socket_reaches_the_stopped_state() -> None:
     """Not merely clearing the flag, which the report rejected."""
-    body = _region("ws.onclose = function ()", 900)
+    body = _region("function generatorSocketClosed()", 900)
 
     assert "enterInterruptedState()" in body
 

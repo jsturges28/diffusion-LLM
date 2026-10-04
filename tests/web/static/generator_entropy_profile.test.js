@@ -173,7 +173,7 @@ function finishedRun(model, frames) {
     bootState: { ui_state: {}, models: models },
   });
   const { context, registry } = page;
-  context.ws = new OpenSocket("ws://test");
+  page.generatorSocketController().connect();
   registry.get("prompt-input").value = "explain yeast";
   context.startGeneration();
   frames.forEach((frame) => {
@@ -390,8 +390,9 @@ test("a diffusion model holds the row from page load", () => {
 });
 
 test("the row stays held through a diffusion run", () => {
-  const { context, registry } = bootedOn(diffusionModel("llada"));
-  context.ws = new OpenSocket("ws://test");
+  const page = bootedOn(diffusionModel("llada"));
+  const { context, registry } = page;
+  page.generatorSocketController().connect();
   registry.get("prompt-input").value = "explain yeast";
   context.startGeneration();
   context.handleFrame(diffusionFrame(0, 0, false));

@@ -147,7 +147,7 @@ function finishedRun(options) {
     bootState: { ui_state: {}, models: MODELS },
   });
   const { context, registry } = page;
-  context.ws = new OpenSocket("ws://test");
+  page.generatorSocketController().connect();
   registry.get("prompt-input").value = "explain yeast";
   context.startGeneration();
   for (let index = 0; index <= STEPS; index++) {
@@ -433,7 +433,7 @@ test("a run without candidates saves none", async () => {
     bootState: { ui_state: {}, models: MODELS },
   });
   const { context, registry } = page;
-  context.ws = new OpenSocket("ws://test");
+  page.generatorSocketController().connect();
   registry.get("prompt-input").value = "explain yeast";
   context.startGeneration();
   for (let index = 0; index <= STEPS; index++) {
@@ -742,7 +742,7 @@ test("nothing cycles while a run streams", () => {
   });
   const { context, registry } = page;
   chooseCandidates(context);
-  context.ws = new OpenSocket("ws://test");
+  page.generatorSocketController().connect();
   registry.get("prompt-input").value = "explain yeast";
   context.startGeneration();
 

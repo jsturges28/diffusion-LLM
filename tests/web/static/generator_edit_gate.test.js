@@ -90,7 +90,7 @@ function finishedRun(canvases) {
   });
   const { context, registry } = page;
   registry.get("btn-edit-frames").hidden = true;
-  context.ws = new OpenSocket("ws://test");
+  page.generatorSocketController().connect();
   registry.get("prompt-input").value = "explain yeast";
   context.startGeneration();
   canvases.forEach((canvasIndex, index) => {

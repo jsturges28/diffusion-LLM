@@ -4,10 +4,6 @@
 
 // Unresolved-token glyph; set from the active model.
 var MASK_CHAR = "\u2591"; // ░
-var RECONNECT_DELAY_MS = 2000;
-var MAX_RECONNECT_DELAY_MS = 16000;
-
-var suppressReconnect = false;
 
 // ---- DOM refs ----
 
@@ -75,6 +71,13 @@ var generatorRun = generatorRunCreate({
   onSaveRefused: generatorRunSaveRefused,
   storage: sessionStorage,
   sessionKey: PERSIST_LAST_RUN_KEY,
+});
+var generatorSocket = generatorSocketCreate({
+  onOpen: generatorSocketOpened,
+  onClose: generatorSocketClosed,
+  onMessage: handleMessage,
+  onMalformed: generatorSocketMalformed,
+  onFatal: generatorSocketFatal,
 });
 
 // Scrubber DOM refs.
@@ -218,15 +221,13 @@ var shuffleLabel =
 
 // ---- State ----
 
-var ws = null;
 var isGenerating = false;
 var saveCheckTimer = null;
 var modelReady = false;
-var reconnectDelay = RECONNECT_DELAY_MS;
-var reconnectTimer = null;
 
 // generator_run.js owns every mutable fact and store about the run
-// on screen. This file keeps view state, edit phases and transport.
+// on screen. generator_socket.js owns transport; this file keeps
+// view state and edit phases.
 // Position whose candidate popover is open, or null when closed.
 // The page names the run it reads, "original" or "edited", and is
 // null where there is only one set to show, as on an unedited run.
@@ -407,14 +408,8 @@ function switchModel(id, device) {
   if (id === activeId && (device || activeDevice) === activeDevice) {
     return;
   }
-  suppressReconnect = true;
-  if (ws) {
-    try {
-      ws.close();
-    } catch (_e) {
-      // ignore
-    }
-  }
+  generatorSocket.setReconnectSuppressed(true);
+  generatorSocket.close();
   var name = generatorModelPanel.modelDisplayName(id);
   generatorChrome.setLoadingText(
     "Loading " + name + "\u2026"
@@ -459,7 +454,7 @@ function switchModel(id, device) {
 }
 
 function switchFailed(err) {
-  suppressReconnect = false;
+  generatorSocket.setReconnectSuppressed(false);
   generatorModelPanel.setDisabled(false);
   generatorModelPanel.refreshSelector();
   stopLoadProgressPoll();
@@ -482,77 +477,40 @@ function switchFailed(err) {
 
 // ---- WebSocket connection ----
 
-function connect() {
-  if (
-    ws
-    && (
-      ws.readyState === WebSocket.OPEN
-      || ws.readyState === WebSocket.CONNECTING
-    )
-  ) {
-    return;
-  }
-
-  var protocol =
-    location.protocol === "https:"
-      ? "wss:" : "ws:";
-  var url =
-    protocol + "//" + location.host + "/ws";
-  ws = new WebSocket(url);
-
-  ws.onopen = function () {
-    reconnectDelay = RECONNECT_DELAY_MS;
-    generatorChrome.setConnection("loading");
-  };
-
-  ws.onclose = function () {
-    generatorChrome.setConnection("disconnected");
-    modelReady = false;
-    // Nothing is sampling this machine any more, so the meter must
-    // stop claiming to. A switch between models comes through here.
-    generatorChrome.clearResourceMeter();
-    // A run in flight when the socket drops has stopped: the worker
-    // treats the disconnect as a cancel, so there is no terminal
-    // frame coming and nothing left computing. Leaving the
-    // generating state here is not the same as merely clearing the
-    // flag, which the report rejected: the run reaches the labelled
-    // stopped state, keeping its frames while refusing to present
-    // them as complete.
-    if (isGenerating) {
-      enterInterruptedState();
-    }
-    updateGenerateButton();
-    if (!suppressReconnect) {
-      scheduleReconnect();
-    }
-  };
-
-  ws.onerror = function () {
-    ws.close();
-  };
-
-  ws.onmessage = function (event) {
-    var data;
-    try {
-      data = JSON.parse(event.data);
-    } catch (_unused) {
-      return;
-    }
-    handleMessage(data);
-  };
+function generatorSocketOpened() {
+  generatorChrome.setConnection("loading");
 }
 
-function scheduleReconnect() {
-  if (reconnectTimer) {
-    return;
+function generatorSocketClosed() {
+  generatorChrome.setConnection("disconnected");
+  modelReady = false;
+  // Nothing is sampling this machine any more, so the meter must
+  // stop claiming to. A switch between models comes through here.
+  generatorChrome.clearResourceMeter();
+  // A run in flight when the socket drops has stopped: the worker
+  // treats the disconnect as a cancel, so there is no terminal
+  // frame coming and nothing left computing. Leaving the
+  // generating state here is not the same as merely clearing the
+  // flag, which the report rejected: the run reaches the labelled
+  // stopped state, keeping its frames while refusing to present
+  // them as complete.
+  if (isGenerating) {
+    enterInterruptedState();
   }
-  reconnectTimer = setTimeout(function () {
-    reconnectTimer = null;
-    connect();
-  }, reconnectDelay);
-  reconnectDelay = Math.min(
-    reconnectDelay * 2,
-    MAX_RECONNECT_DELAY_MS
+  updateGenerateButton();
+}
+
+function generatorSocketMalformed(error) {
+  console.warn(
+    "Ignoring malformed generator socket frame:",
+    error
+  );
+}
+
+function generatorSocketFatal(error) {
+  console.error(
+    "Generator socket failure:",
+    error
   );
 }
 
@@ -656,7 +614,7 @@ function handleResident(data) {
   // must not race the reload by pulling the page back onto the new
   // worker as though it belonged here.
   modelReady = false;
-  suppressReconnect = true;
+  generatorSocket.setReconnectSuppressed(true);
   updateGenerateButton();
   var name = generatorModelPanel.modelDisplayName(data.model);
   generatorChrome.setConnection("loading");
@@ -924,9 +882,9 @@ function toggleTpsMode() {
 
 // The run on screen stopped without a terminal frame to say so,
 // which happens when the connection drops mid-run rather than when
-// Stop was pressed. Reached from ws.onclose only: every other stop
-// arrives as a cancelled ``done`` and goes through handleDone,
-// which has the run's own text and token to record as well.
+// Stop was pressed. Reached from the socket close callback only:
+// every other stop arrives as a cancelled ``done`` and goes through
+// handleDone, which has the run's own text and token to record too.
 function enterInterruptedState() {
   setGenerating(false);
   isResuming = false;
@@ -2672,7 +2630,7 @@ function onTypedInput(e) {
 // draft must not overwrite a newer one.
 function requestTypedPreview() {
   typedPreviewTimer = null;
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
+  if (!generatorSocket.isReady()) {
     return;
   }
   if (typedEntryDraft === "") {
@@ -2681,11 +2639,11 @@ function requestTypedPreview() {
     return;
   }
   typedEntryRequest += 1;
-  ws.send(JSON.stringify({
+  generatorSocket.send({
     type: "tokenize",
     text: typedEntryDraft,
     request_id: typedEntryRequest,
-  }));
+  });
 }
 
 // Accept a preview only if it is both the newest request and still
@@ -2730,20 +2688,20 @@ function requestTypedProbe() {
   if (fillMeasureFromRecord()) {
     return;
   }
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
+  if (!generatorSocket.isReady()) {
     return;
   }
   if (editRequestRefused()) {
     return;
   }
   typedProbeRequest += 1;
-  ws.send(JSON.stringify({
+  generatorSocket.send({
     type: "probe",
     position: typedEntryPos,
     token_id: typedEntryToken.id,
     request_id: typedProbeRequest,
     run_token: generatorRun.runToken(),
-  }));
+  });
 }
 
 // Answer from what the run already recorded, when it can. Typing a
@@ -3886,17 +3844,14 @@ function composerOutputBudget() {
 }
 
 function composerCountReady() {
-  return Boolean(
-    ws
-    && ws.readyState === WebSocket.OPEN
-  );
+  return generatorSocket.isReady();
 }
 
 function sendComposerCount(payload) {
   if (!composerCountReady()) {
     return;
   }
-  ws.send(JSON.stringify(payload));
+  generatorSocket.send(payload);
 }
 
 function submitComposer() {
@@ -4872,7 +4827,7 @@ function captureEditSnapshot() {
 // Harmless when there is nothing to undo: rewinding a run that has
 // committed no branch restores what the worker already holds.
 function rewindWorkerRun() {
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
+  if (!generatorSocket.isReady()) {
     return;
   }
   if (!generatorRun.runToken()) {
@@ -4882,10 +4837,10 @@ function rewindWorkerRun() {
   if (runEditBlock()) {
     return;
   }
-  ws.send(JSON.stringify({
+  generatorSocket.send({
     type: "rewind",
     run_token: generatorRun.runToken(),
-  }));
+  });
 }
 
 // Restore the pre-edit run, discarding any partial/uncommitted
@@ -5077,7 +5032,7 @@ function doSubstitute(position, tokenId, typedText) {
     request.typed = true;
     request.typed_text = typedText;
   }
-  ws.send(JSON.stringify(request));
+  generatorSocket.send(request);
 }
 
 // Edit Frames entry point. The current run is the "original": if it
@@ -5389,7 +5344,7 @@ function doGuidedResume(action) {
     message.max_frames = resumeTarget - frameIndex + 1;
   }
 
-  ws.send(JSON.stringify(message));
+  generatorSocket.send(message);
 }
 
 // What a resume is about to cut, and where it is being sent from.
@@ -5609,13 +5564,13 @@ function continueGuidedEdit() {
   setGenerating(true);
   generatorChrome.startRunStatus(editRunLabel(from, null));
 
-  ws.send(JSON.stringify({
+  generatorSocket.send({
     type: "resume",
     frame_index: from,
     remask_positions: [],
     "continue": true,
     run_token: generatorRun.runToken(),
-  }));
+  });
 }
 
 // ---- UI state helpers ----
@@ -5827,21 +5782,18 @@ function startNewRun() {
 // the worker still owns the frames in flight, and tidying up before
 // it has answered would discard tokens that are still arriving.
 function requestCancel() {
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
+  if (!generatorSocket.isReady()) {
     return;
   }
   if (!isGenerating) {
     return;
   }
   generatorChrome.setMessage("Stopping...");
-  ws.send(JSON.stringify({ type: "cancel" }));
+  generatorSocket.send({ type: "cancel" });
 }
 
 function startGeneration() {
-  if (
-    !ws
-    || ws.readyState !== WebSocket.OPEN
-  ) {
+  if (!generatorSocket.isReady()) {
     return;
   }
   if (isGenerating) {
@@ -5881,7 +5833,7 @@ function startGeneration() {
   payload.type = "generate";
   payload.prompt = prompt;
   payload.experimental = generatorModelPanel.experimental();
-  ws.send(JSON.stringify(payload));
+  generatorSocket.send(payload);
 }
 
 // Run serialization and save request ownership live in
@@ -6757,7 +6709,7 @@ function finishBoot() {
       generatorModelPanel.activeDisplayName()
     );
   }
-  connect();
+  generatorSocket.connect();
 }
 
 // Fill in the fields a GPU probe has to answer for. They feed the
@@ -6796,7 +6748,7 @@ function boot() {
     })
     .catch(function () {
       generatorChrome.showOutputPlaceholder("");
-      connect();
+      generatorSocket.connect();
     });
 }
 

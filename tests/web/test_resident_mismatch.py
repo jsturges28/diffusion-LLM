@@ -100,7 +100,7 @@ def test_a_mismatch_stops_the_reconnect_loop() -> None:
     new worker as though it belonged there, racing the reload."""
     region = _region(APP_JS, "function handleResident(data)", 1500)
 
-    assert "suppressReconnect = true" in region
+    assert "generatorSocket.setReconnectSuppressed(true)" in region
 
 
 def test_the_page_says_what_happened() -> None:
