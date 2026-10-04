@@ -1,10 +1,10 @@
 """A saved run describes the worker that produced it.
 
-Strategy: drive `_build_metadata` directly, with the supervisor's
-global state monkeypatched to something *different* from what the run
-attests. That difference is the whole test. If a field is read from
-the manager, it shows up wrong; if it is read from the run's
-provenance envelope, it shows up right.
+Strategy: drive `_build_metadata` directly, with injected fallback
+facts deliberately *different* from what the run attests. That
+difference is the whole test. If a field is read from the fallback,
+it shows up wrong; if it is read from the run's provenance envelope,
+it shows up right.
 
 The scenario being reproduced is not exotic. Two browser windows share
 one supervisor. Window A finishes a run. Window B switches the model,
@@ -21,18 +21,18 @@ rather than where it was told to load, is in
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict, List
 
 import pytest
 
 from src.backends.registry import LLADA
-from src.web import run_store
-from src.web.server import (
+from src.web import run_store, save_pipeline
+from src.web.save_pipeline import (
+    CurrentModelFacts,
     RunProvenance,
+    SavePipelineContext,
     SaveRunRequest,
-    _build_metadata,
-    _context_metadata,
-    manager,
 )
 
 # What the run itself attests: an LLaDA worker that ran on CPU.
@@ -55,21 +55,58 @@ OTHER_TOKENIZER: Dict[str, Any] = {
 OTHER_VERSIONS = {"torch": "2.6.0", "transformers": "4.53.1"}
 
 
+SWITCHED_FACTS = CurrentModelFacts(
+    device="cuda",
+    versions=OTHER_VERSIONS,
+    tokenizer=OTHER_TOKENIZER,
+    context_length=65_536,
+)
+
+
+def _current_model_facts() -> CurrentModelFacts:
+    return SWITCHED_FACTS
+
+
+def _gpu_name() -> str:
+    return "Other GPU"
+
+
+def _cpu_name() -> str:
+    return "Other CPU"
+
+
+def _git_commit() -> str:
+    return "other-code"
+
+
+SAVE_CONTEXT = SavePipelineContext(
+    results_dir=Path("/tmp/results"),
+    repo_root=Path("/tmp"),
+    current_model_facts=_current_model_facts,
+    gpu_name=_gpu_name,
+    cpu_name=_cpu_name,
+    git_commit=_git_commit,
+)
+
+
+def _build_metadata(body: SaveRunRequest) -> Dict[str, Any]:
+    return save_pipeline._build_metadata(body, SAVE_CONTEXT)
+
+
+def _context_metadata(
+    prompt_len: int,
+    provenance: RunProvenance | None,
+) -> Dict[str, Any]:
+    return save_pipeline._context_metadata(
+        prompt_len, provenance, SWITCHED_FACTS
+    )
+
+
 @pytest.fixture
-def switched_supervisor(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The state a second window leaves behind after switching."""
-    monkeypatch.setattr(manager, "active_device", "cuda")
-    monkeypatch.setattr(
-        manager, "active_versions", OTHER_VERSIONS
-    )
-    monkeypatch.setattr(
-        manager, "active_tokenizer", OTHER_TOKENIZER
-    )
-    monkeypatch.setattr(
-        manager, "active_context_length", 65_536
-    )
+def switched_supervisor() -> None:
+    """Name the deliberately different injected fallback."""
+    assert SWITCHED_FACTS.device == "cuda"
+    assert SWITCHED_FACTS.context_length == 65_536
 
 
 def _provenance(**overrides: Any) -> RunProvenance:

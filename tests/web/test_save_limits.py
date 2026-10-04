@@ -38,7 +38,7 @@ from src.backends.protocol import (
     PROMPT_CHARS_MAX,
 )
 from src.backends.registry import REGISTRY, RunBounds, run_bounds
-from src.web import run_store, save_limits, server
+from src.web import run_store, save_limits, save_pipeline, server
 
 # Small enough that a body past it costs nothing to build, large
 # enough that an ordinary short run fits beneath it.
@@ -220,7 +220,9 @@ EDIT = {"frame_index": 0, "token_positions": []}
 
 @pytest.fixture()
 def tiny_bounds(monkeypatch: pytest.MonkeyPatch) -> RunBounds:
-    monkeypatch.setattr(server, "run_bounds", lambda model_id: TINY)
+    monkeypatch.setattr(
+        save_pipeline, "run_bounds", lambda model_id: TINY
+    )
     return TINY
 
 
@@ -404,7 +406,9 @@ def test_the_longest_smollm3_run_is_saved(
     model whose largest run is cheap enough to send whole. Its
     preview is skipped: drawn once the run is published, it is not
     what is bounded here, and it is most of what such a save costs."""
-    monkeypatch.setattr(server, "_draw_preview", _no_preview)
+    monkeypatch.setattr(
+        save_pipeline, "_draw_preview", _no_preview
+    )
     positions = run_bounds("smollm3").positions_max
     body = _payload(
         model="smollm3",
@@ -420,19 +424,19 @@ def test_the_longest_smollm3_run_is_saved(
     assert len(_published(results)) == 1
 
 
-def _largest(model_id: str) -> server.SaveRunRequest:
+def _largest(model_id: str) -> save_pipeline.SaveRunRequest:
     """The largest edited run ``model_id`` can make, built without
     validation from shared rows, so it costs references rather than
     the hundred megabytes it would as JSON."""
     bounds = run_bounds(model_id)
-    record = server.TokenRecord(t=" a", m=False, id=1)
+    record = save_pipeline.TokenRecord(t=" a", m=False, id=1)
     frame = [record] * bounds.frame_positions_max
     count = bounds.frames_max
-    edit = server.RemaskEdit(
+    edit = save_pipeline.RemaskEdit(
         frame_index=0,
         token_positions=list(range(bounds.frame_positions_max)),
     )
-    return server.SaveRunRequest.model_construct(
+    return save_pipeline.SaveRunRequest.model_construct(
         model=model_id,
         prompt="p",
         final_text=" a" * bounds.positions_max,
@@ -452,11 +456,11 @@ def test_the_largest_diffusion_run_passes_its_bounds(
 ) -> None:
     body = _largest(model_id)
 
-    server._check_run_bounds(body)
+    save_pipeline._check_run_bounds(body)
 
     longer = body.model_copy(update={"frames": [*body.frames, "a"]})
     with pytest.raises(ValueError, match="frames holds"):
-        server._check_run_bounds(longer)
+        save_pipeline._check_run_bounds(longer)
 
 
 def _priced(record: Any) -> int:
@@ -469,10 +473,10 @@ def test_the_ceiling_holds_the_largest_run_of_any_model() -> None:
     layers and both candidate captures at their budget. Records are
     priced at full float precision, which is more than the page
     sends, so the estimate errs large."""
-    record = server.TokenRecord(
+    record = save_pipeline.TokenRecord(
         t=" word", m=False, id=123_456, c=0.1 / 3, e=1 / 3
     )
-    alternative = server.TokenAlternative(
+    alternative = save_pipeline.TokenAlternative(
         id=123_456, t=" word", p=1 / 3
     )
     per_record = _priced(record) + len(record.t)

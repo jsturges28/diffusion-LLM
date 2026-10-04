@@ -38,7 +38,8 @@ import pytest
 from fastapi import BackgroundTasks
 from starlette.testclient import TestClient
 
-from src.web import run_store, server
+from src.backends.registry import REGISTRY
+from src.web import run_store, save_pipeline, server
 
 from process_race import race_context
 
@@ -50,11 +51,15 @@ def results(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> Path:
     monkeypatch.setattr(server, "RESULTS_DIR", tmp_path)
-    monkeypatch.setattr(server, "_render_run_gif", _draw_revision)
+    monkeypatch.setattr(
+        save_pipeline, "_render_run_gif", _draw_revision
+    )
     return tmp_path
 
 
-def _draw_revision(preview: server.RunPreview, path: Path) -> None:
+def _draw_revision(
+    preview: save_pipeline.RunPreview, path: Path
+) -> None:
     """Stands in for the real drawer, which takes seconds and writes
     pixels, by writing which revision it was asked to draw."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -72,12 +77,12 @@ def _payload(**overrides: Any) -> Dict[str, Any]:
     return payload
 
 
-def _body(**overrides: Any) -> server.SaveRunRequest:
-    return server.SaveRunRequest(**_payload(**overrides))
+def _body(**overrides: Any) -> save_pipeline.SaveRunRequest:
+    return save_pipeline.SaveRunRequest(**_payload(**overrides))
 
 
 def _save(
-    body: server.SaveRunRequest,
+    body: save_pipeline.SaveRunRequest,
 ) -> Tuple[Dict[str, Any], BackgroundTasks]:
     """The save route's reply, and the tasks it left to run after."""
     tasks = BackgroundTasks()
@@ -128,11 +133,13 @@ def test_the_reply_comes_before_the_preview(
 ) -> None:
     drawn: List[int] = []
 
-    def draw(preview: server.RunPreview, path: Path) -> None:
+    def draw(
+        preview: save_pipeline.RunPreview, path: Path
+    ) -> None:
         drawn.append(preview.revision)
         _draw_revision(preview, path)
 
-    monkeypatch.setattr(server, "_render_run_gif", draw)
+    monkeypatch.setattr(save_pipeline, "_render_run_gif", draw)
 
     reply, tasks = _save(_body())
 
@@ -154,13 +161,15 @@ def test_the_preview_describes_the_run_as_saved(
     """Taken at save time, because by the time it is drawn the
     request is gone; the label still comes from the metadata just
     written rather than off the request."""
-    seen: List[server.RunPreview] = []
+    seen: List[save_pipeline.RunPreview] = []
 
-    def draw(preview: server.RunPreview, path: Path) -> None:
+    def draw(
+        preview: save_pipeline.RunPreview, path: Path
+    ) -> None:
         seen.append(preview)
         _draw_revision(preview, path)
 
-    monkeypatch.setattr(server, "_render_run_gif", draw)
+    monkeypatch.setattr(save_pipeline, "_render_run_gif", draw)
 
     reply, tasks = _save(_body())
     _run(tasks)
@@ -172,7 +181,7 @@ def test_the_preview_describes_the_run_as_saved(
     assert preview.revision == reply["revision"]
     assert preview.frames == ("frame one", "frame two")
     assert preview.prompt == "explain REST"
-    label = server.REGISTRY["llada"].display_name
+    label = REGISTRY["llada"].display_name
     assert preview.model_label == label
     assert preview.model_type == "diffusion"
 
@@ -266,12 +275,14 @@ def test_a_failed_draw_costs_only_the_preview(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    def draw(preview: server.RunPreview, path: Path) -> None:
+    def draw(
+        preview: save_pipeline.RunPreview, path: Path
+    ) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("half a picture", encoding="utf-8")
         raise RuntimeError("the renderer broke")
 
-    monkeypatch.setattr(server, "_render_run_gif", draw)
+    monkeypatch.setattr(save_pipeline, "_render_run_gif", draw)
     reply, tasks = _save(_body())
 
     with caplog.at_level(logging.ERROR, logger=LOGGER):

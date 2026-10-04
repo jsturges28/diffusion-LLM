@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pytest
 from pydantic import ValidationError
@@ -35,7 +35,8 @@ from src.analytics.metrics import load_run_frames
 from src.backends.protocol import CANDIDATE_BUDGET_RECORDS
 from src.backends.registry import LLADA, run_bounds
 from src.web import server
-from src.web.server import (
+from src.web.save_pipeline import (
+    CurrentModelFacts,
     RemaskEdit,
     SaveRunRequest,
     TokenAlternative,
@@ -43,7 +44,6 @@ from src.web.server import (
     _context_metadata,
     _dump_alternatives,
     _dump_frame_tokens,
-    manager,
 )
 
 
@@ -623,6 +623,18 @@ def test_a_run_saved_without_a_manifest_reports_none(
 # -- The context block --
 
 
+def _facts(
+    context_length: Optional[int],
+) -> CurrentModelFacts:
+    """Only the fallback fact these unit cases exercise."""
+    return CurrentModelFacts(
+        device=None,
+        versions={},
+        tokenizer={},
+        context_length=context_length,
+    )
+
+
 def test_the_prompt_length_survives_the_request() -> None:
     body = SaveRunRequest(
         prompt="p",
@@ -654,16 +666,10 @@ def test_the_prompt_length_defaults_to_absent() -> None:
     assert body.prompt_len is None
 
 
-def test_the_context_block_pairs_the_prompt_with_the_window(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_the_context_block_pairs_the_prompt_with_the_window() -> None:
     """Both figures, because either alone answers nothing: a length
     means one thing in a 4k window and another in a 128k one."""
-    monkeypatch.setattr(
-        manager, "active_context_length", 65_536
-    )
-
-    block = _context_metadata(1240, None)
+    block = _context_metadata(1240, None, _facts(65_536))
 
     assert block == {
         "prompt_tokens": 1240,
@@ -671,16 +677,10 @@ def test_the_context_block_pairs_the_prompt_with_the_window(
     }
 
 
-def test_the_window_is_omitted_when_unreadable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_the_window_is_omitted_when_unreadable() -> None:
     """A checkpoint that reported no window still records what its
     prompt cost; inventing a ceiling would be worse than none."""
-    monkeypatch.setattr(
-        manager, "active_context_length", None
-    )
-
-    block = _context_metadata(1240, None)
+    block = _context_metadata(1240, None, _facts(None))
 
     assert block == {"prompt_tokens": 1240}
 
@@ -688,19 +688,15 @@ def test_the_window_is_omitted_when_unreadable(
 def test_no_context_block_without_a_measured_length() -> None:
     """An older run gets no block at all, which is what lets the
     Analytics rows stay absent rather than reading zero."""
-    assert _context_metadata(None, None) == {}
+    assert _context_metadata(None, None, _facts(65_536)) == {}
 
 
-def test_an_empty_prompt_still_records_its_length(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_an_empty_prompt_still_records_its_length() -> None:
     """The boundary that makes None and 0 different: zero tokens is a
     measurement, and it must not be mistaken for a missing one."""
-    monkeypatch.setattr(
-        manager, "active_context_length", None
-    )
-
-    assert _context_metadata(0, None) == {"prompt_tokens": 0}
+    assert _context_metadata(
+        0, None, _facts(None)
+    ) == {"prompt_tokens": 0}
 
 
 # -- an undeclared field is an error, not a silent loss --

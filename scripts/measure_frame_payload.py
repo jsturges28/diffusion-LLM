@@ -39,7 +39,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.web.server import (  # noqa: E402  (after sys.path setup)
+from src.web.save_pipeline import (  # noqa: E402
     expand_position_text,
     expand_positions,
 )
@@ -187,7 +187,7 @@ def _report_growth(rows: List[Dict[str, int]]) -> None:
     if len(rows) < 2:
         return
     print("growth per doubling of run length (2.0 is linear):")
-    for earlier, later in zip(rows, rows[1:]):
+    for earlier, later in zip(rows, rows[1:], strict=False):
         span = later["tokens"] / earlier["tokens"]
         append = later["append_wire"] / earlier["append_wire"]
         before = later["snapshot_wire"] / earlier["snapshot_wire"]
