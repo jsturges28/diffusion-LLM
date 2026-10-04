@@ -13,12 +13,13 @@ first ledger reached 3,899 lines because every session appended its story to
 it. Here a finding gets one row and a decision one line, with any longer
 reasoning in `docs/ROADMAP.md`, and git history keeps the rest.
 
-**As of 2026-10-03**, all three stages are done, and with them all 21
+**As of 2026-10-04**, all three stages are done, and with them all 21
 findings. Stage 2, cross-supervisor ownership, was validated as a whole by
 the two-supervisor passes confirmed for items 310 to 314, 389 to 396, 400 to
 404 and 405. Stage 3, extracting owners, closed with `A2-ORG-04`'s token
-viewer, confirmed with item 411. The one open row under Raised during
-remediation, the Help signals panel's budget, is its own slice when taken.
+viewer, confirmed with item 411. Nothing raised during remediation is still
+open. The one row not done, a retried save of an interrupted run, is accepted
+with the decision that keeps the run token on a run's terminal frame.
 
 ## How to work a finding
 
@@ -132,7 +133,7 @@ Not findings, and each its own slice when taken.
 | Edit Frames and What If? on an interrupted run are refused as if it had been replaced | done | `cc47981` | 402 |
 | A resume stopped before its first frame could restore the frames the page cut | done | `f5fc6ac` | 412 |
 | An interrupted save carries no run token, so a retried save can duplicate | accepted | | |
-| The Help "signals" panel is at its 2,200-word budget | open | | |
+| The Help "signals" panel is at its 2,200-word budget | done | `d5d684e` | |
 | A long run's save waits seconds on drawing its GIF preview | done | `cf4a402` | 414 |
 | The GIF preview is drawn outside the publication lock, so two near-simultaneous replacements can leave the earlier one's | done | `cf4a402` | 414 |
 | The process-race tests fork a multi-threaded process, which Python warns about 31 times a run (16 from `DATA-02`'s tests, 15 from `A2-DATA-01`'s) | done | `b670e62` | |

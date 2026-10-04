@@ -105,7 +105,7 @@ in an analytics suite.
 **A second audit has been worked through.** Its 21 findings, in
 `docs/audit/AUDIT_REPORT_2026-10.md`, are all done, and
 `docs/audit/IMPLEMENTATION_LEDGER_2026-10.md` names the commits and decisions
-behind each, with what was raised along the way, some of it still open. Read
+behind each, with what was raised along the way, none of it still open. Read
 it before changing what a finding touched. **The first campaign is
 complete except for a short remainder**, listed at the top of
 `docs/audit/IMPLEMENTATION_LEDGER.md`: three findings waiting on hardware,
