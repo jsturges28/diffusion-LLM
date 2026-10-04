@@ -128,6 +128,7 @@ function generatorComposerCreate(options) {
   var promptCountTimer = null;
   var promptCountLatest = null;
   var promptCountThinkingSent = false;
+  var promptCountOutputSent = 0;
   var wired = false;
 
   function requiredElement(id) {
@@ -677,6 +678,7 @@ function generatorComposerCreate(options) {
     });
     promptCountRequest = requestId;
     promptCountThinkingSent = thinking;
+    promptCountOutputSent = outputBudgetTokens();
   }
 
   function handleCountResult(message) {
@@ -688,6 +690,12 @@ function generatorComposerCreate(options) {
       count: Number(message.count) || 0,
       truncated: Boolean(message.truncated),
       thinking: promptCountThinkingSent,
+      outputReserve: promptCountOutputSent,
+      contextPack:
+        message.context_pack
+        && typeof message.context_pack === "object"
+          ? message.context_pack
+          : null,
     };
     renderPromptContext();
   }
@@ -696,6 +704,15 @@ function generatorComposerCreate(options) {
     if (
       promptCountLatest !== null
       && promptCountLatest.thinking !== Boolean(readThinking())
+    ) {
+      promptTextChanged();
+      return;
+    }
+    if (
+      promptCountLatest !== null
+      && promptCountLatest.contextPack !== null
+      && promptCountLatest.outputReserve
+        !== outputBudgetTokens()
     ) {
       promptTextChanged();
       return;
@@ -720,15 +737,38 @@ function generatorComposerCreate(options) {
     }
     var count = promptCountLatest.count;
     var text = count.toLocaleString();
-    if (contextLength !== null) {
+    var packed = promptCountLatest.contextPack;
+    if (
+      packed
+      && Number.isInteger(packed.effective_total_budget)
+    ) {
+      text += " / "
+        + packed.effective_total_budget.toLocaleString();
+      text += " tokens packed";
+    } else if (contextLength !== null) {
       text += " / " + contextLength.toLocaleString();
+      text += count === 1 ? " token" : " tokens";
+    } else {
+      text += count === 1 ? " token" : " tokens";
     }
-    text += count === 1 ? " token" : " tokens";
     promptContextCount.textContent = text;
     promptContextRow.classList.remove("is-empty");
-    applyPromptContextWarning(
-      count, promptCountLatest.truncated
-    );
+    applyPromptContextNote(promptCountLatest);
+  }
+
+  function applyPromptContextNote(latest) {
+    var packed = latest.contextPack;
+    if (packed && Number.isInteger(packed.omitted_turn_count)) {
+      var omitted = packed.omitted_turn_count;
+      promptContextNote.textContent =
+        omitted.toLocaleString()
+        + " earlier turn"
+        + (omitted === 1 ? "" : "s")
+        + " omitted from this inference";
+      promptContextRow.classList.remove("is-warning", "is-over");
+      return;
+    }
+    applyPromptContextWarning(latest.count, latest.truncated);
   }
 
   function applyPromptContextWarning(count, truncated) {

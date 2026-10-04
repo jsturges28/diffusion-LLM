@@ -1111,6 +1111,9 @@ SUMMARY_FIELDS = (
     "elapsed_seconds",
     "has_diff",
     "partial",
+    "conversation_id",
+    "assistant_turn_id",
+    "turn_index",
     # Present only on a run that could not be read, and carrying the
     # reason. The table renders those rows differently and offers no
     # checkbox, so both have to survive the projection.

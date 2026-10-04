@@ -136,7 +136,7 @@ async function runOn(model) {
   );
   const { context, registry } = page;
   registry.get("prompt-input").value = "explain yeast";
-  context.startGeneration();
+  await context.startGeneration();
   assert.equal(context.isGenerating, true, "the run did not start");
   return {
     context,

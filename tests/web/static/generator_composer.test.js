@@ -308,3 +308,36 @@ test("context requests are fenced and repaint budget warnings",
     assert.equal(row.classList.contains("is-over"), true);
   }
 );
+
+test("structured counts report packed budget and omitted turns",
+  async () => {
+    const h = loadComposer({
+      outputBudget: 64,
+      countReady: true,
+      contextLength: 65536,
+    });
+    h.input.value = "Next question";
+    h.input.dispatch("input");
+    await waitForCount();
+
+    h.composer.handleCountResult({
+      request_id: 1,
+      count: 120,
+      truncated: false,
+      context_pack: {
+        prompt_token_count: 120,
+        effective_total_budget: 4096,
+        omitted_turn_count: 6,
+      },
+    });
+
+    assert.equal(
+      h.page.registry.get("prompt-context-count").textContent,
+      "120 / 4,096 tokens packed"
+    );
+    assert.equal(
+      h.page.registry.get("prompt-context-note").textContent,
+      "6 earlier turns omitted from this inference"
+    );
+  }
+);

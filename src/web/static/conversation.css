@@ -1,9 +1,4 @@
-/* Generator-only conversation shell.
-
-   The shipped protocol still owns one run, so the transcript mount is
-   intentionally empty. The structure gives the current turn, composer,
-   and future completed turns separate layout owners without pretending
-   that chat turns already exist. */
+/* Generator-only bounded conversation shell. */
 
 #conversation-shell {
   display: flex;
@@ -65,10 +60,133 @@
 #conversation-transcript {
   flex: 0 0 auto;
   min-height: 0;
+  padding: 10px 0 4px;
 }
 
-#conversation-transcript:empty {
+#conversation-empty,
+#conversation-status {
+  margin: 8px 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+#conversation-status {
+  color: var(--danger);
+}
+
+#btn-load-older {
+  display: block;
+  margin: 0 auto 10px;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+#btn-load-older[hidden] {
   display: none;
+}
+
+#btn-load-older:hover:not(:disabled) {
+  border-color: rgba(79, 195, 247, 0.45);
+  color: var(--accent);
+}
+
+#btn-load-older:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+#conversation-turns {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.conversation-turn {
+  width: min(88%, 820px);
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(7, 14, 20, 0.7);
+}
+
+.conversation-turn-user {
+  align-self: flex-end;
+  border-color: rgba(79, 195, 247, 0.25);
+  background: rgba(79, 195, 247, 0.07);
+}
+
+.conversation-turn-assistant {
+  align-self: flex-start;
+}
+
+.conversation-turn.is-active-user {
+  border-color: rgba(79, 195, 247, 0.48);
+}
+
+.conversation-turn-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 5px;
+}
+
+.conversation-turn-speaker {
+  margin-right: 2px;
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.conversation-turn-badge {
+  padding: 2px 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-dim);
+  font-size: 8px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.conversation-turn-badge-saved {
+  border-color: rgba(0, 255, 65, 0.25);
+  color: var(--accent);
+}
+
+.conversation-turn-badge-partial {
+  border-color: rgba(255, 177, 66, 0.35);
+  color: #ffb142;
+}
+
+.conversation-turn-badge-text-only {
+  border-color: rgba(160, 170, 180, 0.24);
+}
+
+.conversation-turn-text {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.conversation-run-link {
+  margin-left: auto;
+  color: #78c8ff;
+  font-size: 9px;
+  text-decoration: none;
+}
+
+.conversation-run-link:hover {
+  text-decoration: underline;
 }
 
 #active-turn-workspace {

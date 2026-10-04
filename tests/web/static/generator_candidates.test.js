@@ -522,7 +522,9 @@ test("an edit that brings no candidates shows none", () => {
 
 test("a new run forgets the last run's candidates", () => {
   const { context, registry } = finishedRun();
-  context.startGeneration();
+  context.resetRunState();
+  context.generatorRun.begin("again", {});
+  context.setGenerating(true);
   for (let index = 0; index <= STEPS; index++) {
     context.handleFrame(canvasFrame(index));
   }
@@ -537,7 +539,9 @@ test("a new run's Original page never shows the last run's", () => {
   // The pre-edit candidates are frozen when a run first finishes, so
   // a new run has to let go of the last one's to freeze its own.
   const { context, registry } = finishedRun();
-  context.startGeneration();
+  context.resetRunState();
+  context.generatorRun.begin("again", {});
+  context.setGenerating(true);
   for (let index = 0; index <= STEPS; index++) {
     context.handleFrame(canvasFrame(index));
   }

@@ -43,6 +43,7 @@ const SMOL = {
   capabilities: {
     family: "autoregressive",
     generation_shape: "append_only",
+    input_mode: "chat",
     supported_devices: ["cuda", "cpu"],
   },
   param_specs: [
@@ -123,7 +124,7 @@ function appendFrame(index) {
 
 // A page holding a finished run of RAN, with BROWSED already in the
 // history behind it.
-function finishedRun() {
+async function finishedRun() {
   const saved = [];
   const page = loadPage({
     WebSocket: OpenSocket,
@@ -135,7 +136,16 @@ function finishedRun() {
   page.generatorSocketController().connect();
   registry.get("prompt-input").value = RAN;
 
-  context.startGeneration();
+  const started = await context.startGeneration();
+  assert.equal(
+    started,
+    true,
+    registry.get("status-message").textContent
+  );
+  assert.equal(
+    context.generatorRun.parameters().temperature,
+    0.7
+  );
   for (let index = 1; index <= WORDS.length; index++) {
     context.handleFrame(appendFrame(index));
   }
@@ -144,6 +154,11 @@ function finishedRun() {
     final_text: WORDS.join(""),
     prompt_len: 7,
   });
+  assert.equal(context.generatorRun.buildSavePayload().prompt, RAN);
+  assert.equal(
+    context.generatorRun.parameters().temperature,
+    0.7
+  );
   return { page, context, registry, saved };
 }
 
@@ -153,7 +168,7 @@ function browseToOlder(registry) {
 }
 
 test("a save records the prompt the run was generated from", async () => {
-  const { context, registry, saved } = finishedRun();
+  const { context, registry, saved } = await finishedRun();
   browseToOlder(registry);
   assert.equal(registry.get("prompt-input").value, BROWSED);
 
@@ -167,7 +182,7 @@ test("a prompt kept from the history is still not the run's", async () => {
   // Confirming the browsed prompt makes it the box's text for real,
   // ready to be edited and run next. It still did not produce this
   // run.
-  const { context, registry, saved } = finishedRun();
+  const { context, registry, saved } = await finishedRun();
   browseToOlder(registry);
   registry.get("btn-hist-confirm").click();
 
@@ -177,7 +192,7 @@ test("a prompt kept from the history is still not the run's", async () => {
 });
 
 test("a save records the parameters the run was generated from", async () => {
-  const { context, registry, saved } = finishedRun();
+  const { context, registry, saved } = await finishedRun();
   registry
     .get("param-fields")
     .querySelector("#param-temperature")
@@ -193,7 +208,7 @@ test("a resumed edit keeps the run's parameters", async () => {
   // terminal frame used to read the form back anyway, so a value
   // changed between the run and the edit was saved as if it had
   // produced both.
-  const { context, registry, saved } = finishedRun();
+  const { context, registry, saved } = await finishedRun();
   registry
     .get("param-fields")
     .querySelector("#param-temperature")
@@ -205,11 +220,11 @@ test("a resumed edit keeps the run's parameters", async () => {
   assert.equal(saved[0].params.temperature, 0.7);
 });
 
-test("the Analytics snapshot keeps the run's prompt apart", () => {
+test("the Analytics snapshot keeps the run's prompt apart", async () => {
   // The box's text comes back into the box; the run's prompt comes
   // back as the run's. Folding the two is how the wrong prompt used
   // to survive the round trip and be saved later.
-  const { page, context, registry } = finishedRun();
+  const { page, context, registry } = await finishedRun();
   browseToOlder(registry);
   registry.get("btn-hist-confirm").click();
 

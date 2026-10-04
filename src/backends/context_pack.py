@@ -207,7 +207,34 @@ def parse_messages(
     messages = _parse_message_records(raw)
     _validate_message_sequence(messages)
     conversation = _parse_conversation(data, messages)
+    offset = candidate_turn_offset(data)
+    _validate_candidate_location(
+        messages,
+        conversation=conversation,
+        offset=offset,
+    )
     return messages, conversation
+
+
+def candidate_turn_offset(data: Mapping[str, object]) -> int:
+    """Absolute zero-based location of the candidate suffix."""
+    raw = data.get("candidate_turn_offset", 0)
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise ContextRequestError(
+            "candidate_turn_offset must be a non-negative integer",
+            code=ERROR_MALFORMED_MESSAGES,
+        )
+    if raw < 0:
+        raise ContextRequestError(
+            "candidate_turn_offset must not be negative",
+            code=ERROR_MALFORMED_MESSAGES,
+        )
+    if raw % 2 != 0:
+        raise ContextRequestError(
+            "candidate_turn_offset must start on a user turn",
+            code=ERROR_INVALID_MESSAGE_ORDER,
+        )
+    return raw
 
 
 def pack_context(
@@ -220,6 +247,7 @@ def pack_context(
     requested_total_budget: Optional[int] = None,
     checkpoint_window: Optional[int] = None,
     conversation: Optional[ConversationMetadata] = None,
+    candidate_turn_offset: int = 0,
 ) -> PackedContext:
     """Select the longest exact suffix that fits the total budget.
 
@@ -230,6 +258,7 @@ def pack_context(
     """
     _validate_message_sequence(messages)
     _validate_message_chars(messages)
+    offset = _candidate_offset(candidate_turn_offset)
     reserve = _positive_int(output_reserve, "output_reserve")
     default = _positive_int(
         policy_default_tokens, "policy default"
@@ -269,12 +298,13 @@ def pack_context(
     )
 
     included = messages[first:]
+    first_absolute = offset + first
     manifest = ContextPackManifest(
         included_turn_ids=tuple(
             message.turn_id for message in included
         ),
-        first_included_index=first,
-        omitted_turn_count=first,
+        first_included_index=first_absolute,
+        omitted_turn_count=first_absolute,
         prompt_token_count=prompt_count,
         output_reserve=reserve,
         requested_total_budget=requested,
@@ -287,6 +317,21 @@ def pack_context(
         manifest=manifest,
         conversation=conversation,
     )
+
+
+def _candidate_offset(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ContextRequestError(
+            "candidate_turn_offset must be a non-negative integer",
+            code=ERROR_CONTEXT_BOUNDS,
+        )
+    if value < 0 or value % 2 != 0:
+        raise ContextRequestError(
+            "candidate_turn_offset must be a non-negative even"
+            " integer",
+            code=ERROR_CONTEXT_BOUNDS,
+        )
+    return value
 
 
 def _select_suffix(
@@ -459,6 +504,28 @@ def _parse_conversation(
         conversation_revision=revision,
         assistant_turn_id=assistant_turn_id,
     )
+
+
+def _validate_candidate_location(
+    messages: Tuple[MessageRecord, ...],
+    *,
+    conversation: Optional[ConversationMetadata],
+    offset: int,
+) -> None:
+    """Tie numeric durable turn ids to the absolute suffix."""
+    if conversation is None:
+        return
+    assistant = conversation.assistant_turn_id
+    if not assistant.isascii() or not assistant.isdigit():
+        return
+    assistant_index = int(assistant)
+    pending_index = offset + len(messages)
+    if assistant_index != pending_index + 1:
+        raise ContextRequestError(
+            "candidate_turn_offset and messages do not end before"
+            " the reserved assistant turn",
+            code=ERROR_MALFORMED_MESSAGES,
+        )
 
 
 def _identifier(value: object, name: str) -> str:

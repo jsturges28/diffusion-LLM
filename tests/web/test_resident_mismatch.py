@@ -116,7 +116,7 @@ def test_the_page_says_what_happened() -> None:
 
 def test_an_unsaved_run_is_saved_before_the_reload() -> None:
     region = _region(
-        APP_JS, "function rescueRunThenReload()", 1200
+        APP_JS, "function rescueRunThenReload()", 2600
     )
 
     save = region.find("generatorRun.save()")
@@ -130,7 +130,7 @@ def test_a_saved_run_reloads_without_saving_again() -> None:
     """The controller's saved flag keeps a normal save from filing a
     duplicate."""
     region = _region(
-        APP_JS, "function rescueRunThenReload()", 1200
+        APP_JS, "function rescueRunThenReload()", 2600
     )
 
     guard = region.find("generatorRun.saved()")
@@ -144,7 +144,7 @@ def test_a_hung_save_cannot_strand_the_page() -> None:
     """The page is describing a worker that no longer exists, so it
     cannot wait indefinitely on the chance a request completes."""
     region = _region(
-        APP_JS, "function rescueRunThenReload()", 1200
+        APP_JS, "function rescueRunThenReload()", 2600
     )
 
     assert "Promise.race" in region
@@ -152,13 +152,13 @@ def test_a_hung_save_cannot_strand_the_page() -> None:
 
 
 def test_a_failed_save_still_reloads() -> None:
-    """Both arms of the race's then(), because a rejected save must
-    not leave the page pointed at a model that is gone."""
+    """Every settled outcome reaches the one reload."""
     region = _region(
-        APP_JS, "function rescueRunThenReload()", 1200
+        APP_JS, "function rescueRunThenReload()", 2600
     )
 
-    assert region.count("location.reload()") >= 2
+    assert "function (error)" in region
+    assert region.count("location.reload()") == 1
 
 
 def test_save_hands_back_a_promise() -> None:
@@ -166,7 +166,8 @@ def test_save_hands_back_a_promise() -> None:
     ignore the result, which is why returning it is safe."""
     region = _region(RUN_JS, "function save()", 1700)
 
-    assert "Promise.resolve()" in region
+    assert "savePending" in region
+    assert "return savePending" in region
     assert 'return requestSave("/api/save"' in _source(RUN_JS)
 
 

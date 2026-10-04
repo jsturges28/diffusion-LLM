@@ -154,7 +154,7 @@ async function runOn(model, worker) {
     context.handleResident(resident(model, worker));
   }
   registry.get("prompt-input").value = "explain yeast";
-  context.startGeneration();
+  await context.startGeneration();
   assert.equal(context.isGenerating, true, "the run did not start");
   return {
     page,
@@ -214,6 +214,7 @@ async function cutOffLlada() {
   );
   run.context.handleFrame(snapshotFrame(1, "a" + MASK));
   run.socket.close();
+  await run.context.conversationClient.flush();
   return run;
 }
 
@@ -223,6 +224,7 @@ async function cutOffSmol() {
   run.context.handleFrame(appendFrame(1, " Yeast", opening(SMOL)));
   run.context.handleFrame(appendFrame(2, " eats"));
   run.socket.close();
+  await run.context.conversationClient.flush();
   return run;
 }
 
@@ -273,6 +275,7 @@ test("a run stopped with Stop stays editable", async () => {
     cancelled: true,
     run_token: "a3f9c1:1",
   });
+  await context.conversationClient.flush();
 
   assert.equal(isLocked(registry.get("btn-edit-frames")), false);
 });
@@ -322,6 +325,7 @@ test("a substitution already chosen is refused before the run is cut", async () 
     final_text: " Yeast eats",
     run_token: "a3f9c1:1",
   });
+  await context.conversationClient.flush();
   context.generatorEdit.enterWhatIf();
   const frames = context.generatorRun.frameCount();
   const before = stateful(socket);
@@ -372,6 +376,7 @@ async function finishedLlada(worker) {
     final_text: "ab",
     run_token: "a3f9c1:1",
   });
+  await run.context.conversationClient.flush();
   return run;
 }
 

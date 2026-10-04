@@ -39,6 +39,7 @@ from src.backends.context_pack import (
     ContextRequestError,
     PackedContext,
     PromptInput,
+    candidate_turn_offset,
     pack_context,
     parse_messages,
 )
@@ -741,6 +742,39 @@ class Backend(ABC):
                 "That run has been replaced by a newer one."
                 " Generate again to continue from this output."
             )
+        self._check_run_conversation(data)
+
+    def _check_run_conversation(
+        self, data: Mapping[str, object]
+    ) -> None:
+        """Match a stateful request to the retained durable turn."""
+        packed = self.run_context_pack
+        if not isinstance(packed, dict):
+            return
+        retained = packed.get("conversation")
+        if not isinstance(retained, dict):
+            return
+        expected_conversation = retained.get("conversation_id")
+        expected_assistant = retained.get("assistant_turn_id")
+        claimed_conversation = data.get("conversation_id")
+        claimed_assistant = data.get("assistant_turn_id")
+        if (
+            claimed_conversation is None
+            or claimed_assistant is None
+        ):
+            raise StaleRunError(
+                "This request did not identify its conversation"
+                " response."
+            )
+        if (
+            claimed_conversation != expected_conversation
+            or claimed_assistant != expected_assistant
+        ):
+            raise StaleRunError(
+                "That response is not the conversation turn this"
+                " run belongs to. Open the latest response and try"
+                " again."
+            )
 
     @abstractmethod
     def load(self, *, device: str = "cuda") -> None:
@@ -1024,6 +1058,7 @@ class Backend(ABC):
     ) -> PackedContext:
         """Apply the model/device policy and exact adapter count."""
         messages, conversation = parse_messages(data)
+        candidate_offset = candidate_turn_offset(data)
         limits = (
             self.model_info.capabilities.context_policy.limits_for(
                 self.effective_device
@@ -1057,6 +1092,7 @@ class Backend(ABC):
             requested_total_budget=requested,
             checkpoint_window=checkpoint,
             conversation=conversation,
+            candidate_turn_offset=candidate_offset,
         )
 
     def check_prompt_fits(

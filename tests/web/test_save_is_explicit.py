@@ -86,9 +86,10 @@ def test_the_save_button_is_one_of_them() -> None:
 
 def test_confirming_an_edit_is_one_of_them() -> None:
     """Confirm is itself a save, so it is not an implicit one."""
-    assert "requestSave()" in _edit_region(
-        "function confirm()", 300
-    )
+    body = _edit_region("function confirm()", 900)
+
+    assert "requestCommit()" in body
+    assert "requestSave()" in body
 
 
 def test_the_rescue_is_the_third() -> None:

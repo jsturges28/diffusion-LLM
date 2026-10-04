@@ -1,4 +1,4 @@
-// The conversation shell keeps the existing single-turn lifecycle.
+// The conversation shell owns durable New Conversation behavior.
 //
 // Strategy: load the complete generator page, seed an active run
 // through its public controller, and press the shipped toolbar action.
@@ -38,11 +38,50 @@ function pageWithModel() {
     gpu_name: "Test GPU",
   };
   return loadPage({
+    fetchImpl(url, init) {
+      const path = String(url).split("?")[0];
+      if (path === "/api/models") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve(models),
+        });
+      }
+      if (
+        path === "/api/conversations"
+        && init && init.method === "POST"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          status: 201,
+          json: () => Promise.resolve({
+            conversation: {
+              id: "a".repeat(32),
+              title: "New conversation",
+              revision: 1,
+              turn_count: 0,
+              tail_turn_id: null,
+              tail_version: null,
+              pending_assistant_id: null,
+            },
+          }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({}),
+      });
+    },
     bootState: { ui_state: {}, models: models },
   });
 }
 
-test("New Conversation clears the existing single turn", () => {
+function tick() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+test("New Conversation clears only after durable creation", async () => {
   const page = pageWithModel();
   const run = page.context.generatorRun;
   const prompt = page.registry.get("prompt-input");
@@ -60,6 +99,7 @@ test("New Conversation clears the existing single turn", () => {
   assert.equal(run.frameCount(), 1);
 
   page.registry.get("btn-new-conversation").click();
+  await tick();
 
   assert.equal(prompt.value, "");
   assert.equal(run.frameCount(), 0);
@@ -69,18 +109,19 @@ test("New Conversation clears the existing single turn", () => {
   );
 });
 
-test("Generate keeps only Generate and Stop labels", () => {
+test("Send keeps only Send and Stop labels", () => {
   const page = pageWithModel();
   const run = page.context.generatorRun;
   const readEditedSaved = run.editedSaved;
+  page.context.handleModelStatus({ status: "ready" });
 
   run.editedSaved = () => true;
   page.context.updateGenerateButton();
   assert.equal(
-    page.registry.get("btn-generate-label").textContent,
-    "Generate"
+    page.context.currentGenerateLabel(),
+    "Send"
   );
-  assert.equal(page.registry.get("btn-generate").disabled, true);
+  assert.equal(page.registry.get("btn-generate").disabled, false);
   assert.equal(
     page.registry.get("btn-new-conversation").disabled,
     false

@@ -61,6 +61,20 @@ def test_set_multiple_keys_are_independent(tmp_path: Path) -> None:
     assert loaded["diffusion_generate_teased"] == "1"
 
 
+def test_active_conversation_pointer_is_durable(
+    tmp_path: Path,
+) -> None:
+    value = json.dumps({"id": "a" * 32, "revision": 7})
+
+    set_ui_state_key(
+        tmp_path, "diffusion_active_conversation", value
+    )
+
+    assert load_ui_state(tmp_path)[
+        "diffusion_active_conversation"
+    ] == value
+
+
 def test_unknown_key_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(KeyError):
         set_ui_state_key(tmp_path, "not_a_real_key", "x")

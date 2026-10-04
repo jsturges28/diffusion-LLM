@@ -332,7 +332,12 @@ kept when these were written:
 - **415 to 418**: **not yet validated.** These are the hardware tuning and
   real-checkpoint checks for the provisional structured-context policy.
   The automated suite pins exact packing and protocol behavior; these items
-  decide whether the conservative totals should move on this hardware.
+  remain for real models and devices to decide whether the conservative
+  totals should move on this hardware.
+- **419 to 424**: **not yet validated.** These cover the shipped
+  conversation display, model inputs, saved/text-only distinction,
+  two-window recovery, tail-only edits, and restart behavior on a real
+  display with real workers.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -531,7 +536,7 @@ because runs saved before the previous pass carry no `original_alternatives`.
     should be exactly as you left it. Repeat the round trip **before** running
     anything and again **after** a completed run; both paths were broken, and
     the second is where a completed run's prompt should override the draft
-    rather than the other way round. Then hit **Generate** and confirm the
+    rather than the other way round. Then hit **Send** and confirm the
     params are still there afterward (they used to be cleared at the *start*
     of a run). Switch models and back, confirming each model keeps its own
     values across the reload. Finally close the app and relaunch: everything
@@ -697,7 +702,7 @@ The generator crossfade pass (all on the **generation** page, not Analytics):
 41. **Nothing lingers or leaks.** Run several generate/save cycles in a row
     and confirm chips always drain, never pile up permanently, and never
     leave a half-faded ghost or an orphaned separator dot. Retry a run while
-    one is going (Generate again after an error) and confirm the old chip
+    one is going (Send again after an error) and confirm the old chip
     goes rather than sitting there animating forever.
 42. **The ellipsis animates in all three text modes, at a fixed width.** In
     Settings, cycle through the diffusion text effect (off, default, cycle)
@@ -1672,7 +1677,7 @@ does nothing at all.
     by a different route: LLaDA and SmolLM3 check between steps, and
     DiffusionGemma is unwound from inside its streamer.
     Start a long run, at least a few hundred tokens so there is time to
-    act. **Generate** should have become **Stop**. Watch `nvidia-smi` (or
+    act. **Send** should have become **Stop**. Watch `nvidia-smi` (or
     the Settings VRAM readout) alongside it, press Stop partway, and
     confirm three things: the frames halt within about a step rather than
     running on to the token budget, GPU utilisation drops back to idle,
@@ -4574,8 +4579,8 @@ without it. The halves that need no hardware are in
 
 From 2026-10-02 a save is held to what one run of its model can be: a
 256 MiB ceiling checked before the body is read, then every field
-against bounds read off the tops of the model's sliders. **Generate**
-refuses a prompt over 1,000,000 characters on every model. The halves
+against bounds read off the tops of the model's sliders. **Send**
+refuses a user turn over 1,000,000 characters on every model. The halves
 that need no hardware are in `tests/web/test_save_limits.py`,
 `tests/backends/test_run_bounds.py` and
 `tests/backends/test_context_window.py`. Every run already in
@@ -4616,7 +4621,7 @@ at the limits.
         document.getElementById("prompt-input").value =
           "a".repeat(1000001)
 
-    Click **Generate**. It is refused, the status line reading *Error:
+    Click **Send**. It is refused, the status line reading *Error:
     Prompt is 1,000,001 characters; the limit is 1,000,000. Shorten
     it.*, and nothing is generated.
 
@@ -4637,10 +4642,10 @@ hardware are in `tests/web/static/generator_run_lock.test.js`,
     connection lost and keeps retrying. Load LLaDA from the Main Menu
     in window B. When window A reconnects:
     - its status line reads *The model has been reloaded since this run
-      was made, so it can be saved but not edited. Generate again to
+      was made, so it can be saved but not edited. Send it again to
       edit.*
     - **Edit Frames** is locked, and its tooltip says the same.
-    - **Save** saves the run, and **Generate** works.
+    - **Save** saves the run, and **Send** works.
 
 401. **A worker that ended and was loaded again.** As in 400, but
     rather than restarting the supervisor, end the worker:
@@ -5017,3 +5022,49 @@ models and target devices before anyone raises or lowers them.
     that pack under `metadata.json`'s context block. Also request a total
     above policy and a pending user turn too large to fit; each must be
     refused before inference with a bounded-context protocol error.
+
+## Durable bounded conversations
+
+419. **Conversation display and paging.** In the browser launcher, build
+    more than 50 turns, reload, and confirm the active conversation opens
+    on its newest page. Use Load older messages until four pages are in
+    memory. The scroll position stays anchored, keyboard focus reaches the
+    native button and every Analytics link, and browser memory does not
+    retain old frame or candidate payloads.
+
+420. **Context readout and model inputs.** Continue one three-exchange
+    conversation on all four models. The composer reports packed prompt
+    tokens, effective budget, and the absolute number of earlier turns
+    omitted. LLaDA, DiffusionGemma and SmolLM3 use their chat templates.
+    Mamba-3 receives raw chronological text with no role labels or
+    separators.
+
+421. **Saved and text-only history.** Finish two responses. Save the first
+    before continuing and leave the second unsaved. The frozen first turn
+    shows Saved and Open in Analytics opens its exact run. The frozen
+    second turn shows Text only; its response text remains, but no frames,
+    candidates or overlays are offered.
+
+422. **Failure recovery and two windows.** With two windows on one
+    conversation, append at nearly the same time. Exactly one CAS write
+    wins and the other reloads current state without duplicate user text.
+    Repeat with the network disabled after reservation, then restore it:
+    Send retries the pending assistant. Make New Conversation fail and
+    confirm the current composer and run remain untouched.
+
+423. **Tail-only edits.** Finish two turns, then try Edit Frames or What If
+    from a stale window holding the first response. Its controls lock with
+    the tail-only explanation, and direct resume, substitute, probe and
+    rewind requests carrying the old conversation or assistant id are
+    refused by the worker. The current tail remains editable.
+
+424. **Stop, disconnect and restart.** Stop a run and disconnect another
+    after visible output. Each assistant text is durable and marked
+    partial. Restart the supervisor and desktop window: the active
+    conversation and newest page restore, and a matching session snapshot
+    restores only the active run. With no matching snapshot, the completed
+    tail text remains visible in the transcript rather than disappearing
+    behind an empty workspace. Finish an edit but reload before Confirm:
+    the durable text and workspace both return to the original. A
+    pre-conversation snapshot remains on the legacy single-prompt path
+    until Send.

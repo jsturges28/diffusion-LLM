@@ -125,7 +125,7 @@ async function finishedRun() {
   assert.equal(FakeSocket.opened.length, mark + 1);
   const { context, registry } = page;
   registry.get("prompt-input").value = "explain yeast";
-  context.startGeneration();
+  await context.startGeneration();
   for (let index = 0; index < TEXTS.length; index++) {
     context.handleFrame(snapshotFrame(index, TEXTS[index]));
   }
@@ -136,6 +136,7 @@ async function finishedRun() {
     prompt_len: 12,
     run_token: TOKEN,
   });
+  await context.conversationClient.flush();
   assert.equal(context.generatorRun.frameCount(), 4);
   return { context, registry, socket: FakeSocket.opened[mark] };
 }

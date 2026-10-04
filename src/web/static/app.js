@@ -12,6 +12,21 @@ var btnSave =
   document.getElementById("btn-save");
 var btnNewConversation =
   document.getElementById("btn-new-conversation");
+var conversationState = conversationStateCreate();
+var conversationBusy = false;
+var conversationView = conversationViewCreate({
+  onLoadOlder: loadOlderConversation,
+});
+var conversationClient = conversationClientCreate({
+  request: function (url, init) {
+    return fetch(url, init);
+  },
+  readState: function () {
+    return conversationState;
+  },
+  applyAction: applyConversationAction,
+  onConflict: conversationConflict,
+});
 var generatorComposer = generatorComposerCreate({
   onSubmit: submitComposer,
   onDraftChanged: composerDraftChanged,
@@ -70,6 +85,8 @@ var generatorRun = generatorRunCreate({
   onSaveSuccess: generatorRunSaveSuccess,
   onSaveFailure: generatorRunSaveFailure,
   onSaveRefused: generatorRunSaveRefused,
+  onSaveSettled: generatorRunSaveSettled,
+  readConversation: currentConversationIdentity,
   storage: sessionStorage,
   sessionKey: PERSIST_LAST_RUN_KEY,
 });
@@ -134,9 +151,11 @@ generatorEdit = generatorEditCreate({
   requestSave: function () {
     return generatorRun.save();
   },
+  requestCommit: confirmConversationEdit,
   requestRewind: generatorEditRequestRewind,
   requestResume: generatorEditRequestResume,
   requestSubstitute: generatorEditRequestSubstitute,
+  canEditConversation: activeRunCanEdit,
 });
 var generatorSocket = generatorSocketCreate({
   onOpen: generatorSocketOpened,
@@ -151,6 +170,7 @@ var generatorSocket = generatorSocketCreate({
 var isGenerating = false;
 var saveCheckTimer = null;
 var modelReady = false;
+var conversationCompletion = Promise.resolve(true);
 
 // Every controller keeps its mutable state in its factory closure.
 // This composition root retains only page-wide generation and boot
@@ -470,6 +490,7 @@ function adoptResidentWorker(worker) {
 // page is describing a worker that no longer exists, so it cannot be
 // left here indefinitely on the chance that a request completes.
 var RESCUE_SAVE_TIMEOUT_MS = 8000;
+var RESCUE_NOTICE_KEY = "diffusion_rescue_notice";
 
 // Save an unsaved run, then reload onto the model that is actually
 // resident.
@@ -487,28 +508,94 @@ var RESCUE_SAVE_TIMEOUT_MS = 8000;
 // already does with an unsaved run. An unwanted run can be deleted
 // from Analytics; a lost one cannot be recovered.
 function rescueRunThenReload() {
-  if (
-    generatorRun.saved()
-    || generatorRun.frameCount() === 0
-    || !generatorRun.finalText()
-  ) {
+  if (generatorEdit.editing()) {
+    generatorEdit.exit();
+  }
+  var shouldSave = !generatorRun.saved()
+    && generatorRun.frameCount() > 0
+    && Boolean(generatorRun.finalText());
+  if (shouldSave) {
+    generatorChrome.startRunStatus(
+      "Saving run before reloading"
+    );
+  }
+  var save = shouldSave
+    ? generatorRun.save()
+    : generatorRun.flushSave();
+  var work = Promise.all([
+    conversationCompletion,
+    generatorEdit.flushConfirmation(),
+    save,
+  ]).then(function (results) {
+    return conversationClient.flush().then(function () {
+      return (
+        results[0] !== false
+        && results[1] !== false
+        && results[2] !== false
+      );
+    });
+  }).then(function (success) {
+    return { finished: true, success: success };
+  }, function (error) {
+    return {
+      finished: true,
+      success: false,
+      error: error,
+    };
+  });
+  var timeoutId = null;
+  var timeout = new Promise(function (resolve) {
+    timeoutId = setTimeout(function () {
+      resolve({ finished: false, success: false });
+    }, RESCUE_SAVE_TIMEOUT_MS);
+  });
+  Promise.race([work, timeout]).then(function (outcome) {
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+    }
+    if (!outcome.success) {
+      var reason = outcome.finished
+        ? "conversation bookkeeping failed"
+        : "conversation bookkeeping timed out";
+      persistRescueNotice(
+        outcome.finished
+          ? "The run or its conversation link could not be fully"
+            + " saved before reload. Check Analytics and the"
+            + " transcript."
+          : "Reload happened before run and conversation saving"
+            + " finished. Check Analytics and the transcript."
+      );
+      console.warn(
+        "Reloading after rescue save, but " + reason + ".",
+        outcome.error || ""
+      );
+    }
     location.reload();
+  });
+}
+
+function persistRescueNotice(message) {
+  try {
+    sessionStorage.setItem(RESCUE_NOTICE_KEY, message);
+  } catch (_error) {
+    // The console warning remains if storage is unavailable.
+  }
+}
+
+function showRescueNotice() {
+  var message = "";
+  try {
+    message = sessionStorage.getItem(RESCUE_NOTICE_KEY) || "";
+    sessionStorage.removeItem(RESCUE_NOTICE_KEY);
+  } catch (_error) {
     return;
   }
-  generatorChrome.startRunStatus(
-    "Saving run before reloading"
-  );
-  var timeout = new Promise(function (resolve) {
-    setTimeout(resolve, RESCUE_SAVE_TIMEOUT_MS);
-  });
-  Promise.race([generatorRun.save(), timeout]).then(
-    function () {
-      location.reload();
-    },
-    function () {
-      location.reload();
-    }
-  );
+  if (message) {
+    generatorChrome.setMessage(
+      message,
+      { color: "var(--danger)", clearColorAfterMs: 8000 }
+    );
+  }
 }
 
 // The status bar's step reading, in one place.
@@ -694,10 +781,18 @@ function toggleTpsMode() {
 // every other stop arrives as a cancelled ``done`` and goes through
 // handleDone, which has the run's own text and token to record too.
 function enterInterruptedState() {
+  var editing = generatorEdit.editing();
   setGenerating(false);
   generatorEdit.interruptStream();
   generatorChrome.endRunStatus();
   var hasFrames = generatorRun.interruptConnection();
+  if (!editing) {
+    queueConversationAssistant({
+      text: generatorRun.finalText() || "",
+      partial: true,
+      status: "disconnected",
+    });
+  }
   generatorEdit.refreshLocks();
   generatorChrome.setMessage(
     "Stopped: lost the connection mid-run."
@@ -717,6 +812,7 @@ function enterInterruptedState() {
 }
 
 function handleDone(data) {
+  var editing = generatorEdit.editing();
   setGenerating(false);
   generatorChrome.endRunStatus();
   // A resume that sent nothing changed nothing, on either side. The
@@ -733,6 +829,13 @@ function handleDone(data) {
   var completed = generatorRun.finish(data);
   var terminalMessage =
     completed.interrupted ? "Stopped." : "Done.";
+  if (!editing) {
+    queueConversationAssistant({
+      text: generatorRun.finalText() || "",
+      partial: completed.interrupted,
+      status: completed.interrupted ? "cancelled" : "completed",
+    });
+  }
   // The chip is still fading as the line fills in beneath it, so
   // ease the row's new shape instead of snapping the chip sideways.
   generatorChrome.setMessage(terminalMessage);
@@ -815,15 +918,24 @@ function sendComposerCount(payload) {
   if (!composerCountReady()) {
     return;
   }
-  generatorSocket.send(payload);
+  var messages = conversationStateMessages(
+    conversationState, payload.text
+  );
+  if (messages === null || conversationState.conversation === null) {
+    generatorSocket.send(payload);
+    return;
+  }
+  var structured = Object.assign({}, messages, {
+    type: "count_prompt",
+    thinking: payload.thinking,
+    request_id: payload.request_id,
+    output_reserve: Math.max(1, composerOutputBudget()),
+  });
+  generatorSocket.send(structured);
 }
 
 function submitComposer() {
-  // Enter runs a generation. A finalized edit stays locked until
-  // the explicit New Conversation action clears the active turn.
-  if (!generatorRun.editedSaved()) {
-    startGeneration();
-  }
+  startGeneration();
 }
 
 function composerDraftChanged() {
@@ -862,7 +974,7 @@ function applySettings() {
 // The composer action has two jobs: Stop while a run is in flight,
 // and Generate at rest. Starting over has its own toolbar button.
 function currentGenerateLabel() {
-  return isGenerating ? "Stop" : "Generate";
+  return isGenerating ? "Stop" : "Send";
 }
 
 function updateGenerateButton() {
@@ -872,15 +984,15 @@ function updateGenerateButton() {
   } else {
     btnGenerate.classList.remove("is-stop");
     btnGenerate.disabled =
-      generatorRun.saving()
-      || generatorRun.editedSaved()
+      conversationBusy
+      || generatorRun.saving()
       || !(
         modelReady
         && generatorModelPanel.validation().valid
       );
   }
   btnNewConversation.disabled =
-    isGenerating || generatorRun.saving();
+    conversationBusy || isGenerating || generatorRun.saving();
   updateGenerateIdleEffect();
 }
 
@@ -972,6 +1084,302 @@ function setGenerating(active) {
   generatorComposer.setDisabled(active);
   generatorModelPanel.setDisabled(active);
   generatorEdit.generationChanged(active);
+}
+
+function setConversationBusy(active) {
+  conversationBusy = active === true;
+  updateGenerateButton();
+}
+
+function renderConversation(action) {
+  var identity = generatorRun
+    ? generatorRun.conversationIdentity()
+    : null;
+  var workspaceAssistantTurnId = null;
+  if (
+    identity
+    && conversationStateCanEdit(conversationState, identity)
+  ) {
+    workspaceAssistantTurnId = identity.assistant_turn_id;
+  }
+  conversationView.render(conversationState, {
+    preserveScroll: Boolean(
+      action && action.type === "older_loaded"
+    ),
+    workspaceAssistantTurnId: workspaceAssistantTurnId,
+  });
+}
+
+function applyConversationAction(action) {
+  conversationState = conversationStateReduce(
+    conversationState, action
+  );
+  if (generatorRun) {
+    generatorRun.refreshConversation();
+  }
+  renderConversation(action);
+  persistActiveConversation();
+  if (generatorEdit) {
+    generatorEdit.refreshLocks();
+  }
+  updateGenerateButton();
+  if (
+    generatorRun
+    && generatorRun.frameCount() >= RUN_SNAPSHOT_FRAMES_MIN
+    && (!generatorEdit || generatorEdit.shouldPersistRun())
+  ) {
+    generatorRun.saveSession();
+  }
+}
+
+function persistActiveConversation() {
+  var conversation = conversationState.conversation;
+  if (conversation === null) {
+    persistSet(PERSIST_ACTIVE_CONVERSATION_KEY, "");
+    return;
+  }
+  persistSet(
+    PERSIST_ACTIVE_CONVERSATION_KEY,
+    JSON.stringify({
+      id: conversation.id,
+      revision: conversation.revision,
+    })
+  );
+}
+
+function storedActiveConversation() {
+  var raw = null;
+  try {
+    raw = localStorage.getItem(
+      PERSIST_ACTIVE_CONVERSATION_KEY
+    );
+  } catch (_error) {
+    return null;
+  }
+  if (!raw) {
+    return null;
+  }
+  try {
+    var parsed = JSON.parse(raw);
+    if (
+      parsed
+      && /^[0-9a-f]{32}$/.test(parsed.id)
+      && Number.isInteger(parsed.revision)
+      && parsed.revision > 0
+    ) {
+      return parsed;
+    }
+  } catch (_error) {
+    // A malformed pointer is no conversation, not a legacy format.
+  }
+  persistSet(PERSIST_ACTIVE_CONVERSATION_KEY, "");
+  return null;
+}
+
+function restoreActiveConversation() {
+  var stored = storedActiveConversation();
+  renderConversation(null);
+  if (stored === null) {
+    return Promise.resolve(false);
+  }
+  return conversationClient.restore(stored.id)
+    .then(function () {
+      return true;
+    })
+    .catch(function (error) {
+      if (error && error.status === 404) {
+        applyConversationAction({ type: "clear" });
+      } else {
+        applyConversationAction({
+          type: "failed",
+          error: error,
+        });
+      }
+      return false;
+    });
+}
+
+function loadOlderConversation() {
+  conversationClient.loadOlder().catch(function (error) {
+    reportConversationFailure("Could not load older messages", error);
+  });
+}
+
+function conversationConflict() {
+  generatorChrome.setMessage(
+    "This conversation changed in another window. Its latest"
+    + " durable state has been reloaded.",
+    { color: "var(--danger)", clearColorAfterMs: 5000 }
+  );
+}
+
+function reportConversationFailure(prefix, error) {
+  var detail = error && error.message
+    ? error.message
+    : "network request failed";
+  generatorChrome.setMessage(
+    prefix + ": " + detail,
+    { color: "var(--danger)", clearColorAfterMs: 5000 }
+  );
+}
+
+function conversationPromptForSend() {
+  var conversation = conversationState.conversation;
+  if (
+    conversation
+    && conversation.pending_assistant_id !== null
+  ) {
+    var activeUser = conversationStateActiveUser(conversationState);
+    return activeUser ? activeUser.text : "";
+  }
+  return generatorComposer.trimmedValue();
+}
+
+function conversationPendingMatchesModel() {
+  var conversation = conversationState.conversation;
+  if (
+    !conversation
+    || conversation.pending_assistant_id === null
+  ) {
+    return true;
+  }
+  var assistant = conversationStateTailAssistant(
+    conversationState
+  );
+  var modelId = generatorModelPanel.activeModelId();
+  if (assistant && assistant.model_id === modelId) {
+    return true;
+  }
+  generatorChrome.setMessage(
+    "This pending response belongs to "
+    + (assistant ? assistant.model_id : "another model")
+    + ". Switch back to retry it, or start a new conversation.",
+    { color: "var(--danger)" }
+  );
+  return false;
+}
+
+function reserveConversationAssistant(prompt) {
+  var conversation = conversationState.conversation;
+  if (
+    conversation
+    && conversation.pending_assistant_id !== null
+  ) {
+    return Promise.resolve(prompt);
+  }
+  var ensure = conversation === null
+    ? conversationClient.create("New conversation")
+    : Promise.resolve(conversation);
+  return ensure.then(function () {
+    var capabilities = generatorModelPanel.capabilities();
+    return conversationClient.appendUser({
+      text: prompt,
+      modelId: generatorModelPanel.activeModelId(),
+      inputMode: capabilities.input_mode,
+      metadata: {},
+    });
+  }).then(function (result) {
+    return result.user_turn.text;
+  });
+}
+
+function currentConversationIdentity() {
+  return conversationStateIdentity(conversationState);
+}
+
+function generatorRunReadConversation() {
+  return generatorRun.conversationIdentity();
+}
+
+function activeRunCanEdit() {
+  var identity = generatorRunReadConversation();
+  if (identity === null) {
+    return conversationState.conversation === null;
+  }
+  return conversationStateCanEdit(conversationState, identity);
+}
+
+function addConversationIdentity(message) {
+  var identity = generatorRunReadConversation();
+  if (identity === null) {
+    return message;
+  }
+  message.conversation_id = identity.conversation_id;
+  message.conversation_revision =
+    identity.conversation_revision;
+  message.assistant_turn_id = identity.assistant_turn_id;
+  return message;
+}
+
+function completeConversationAssistant(result) {
+  var identity = generatorRunReadConversation();
+  if (identity === null) {
+    return Promise.resolve(false);
+  }
+  setConversationBusy(true);
+  var provenance = generatorRun.provenance();
+  var contextPack =
+    provenance && provenance.context_pack
+      ? provenance.context_pack
+      : {};
+  return conversationClient.updateAssistant({
+    assistantTurnId: identity.assistant_turn_id,
+    text: result.text,
+    partial: result.partial === true,
+    contextPack: contextPack,
+    metadata: { status: result.status },
+  }).then(function () {
+    setConversationBusy(false);
+    return true;
+  }).catch(function (error) {
+    setConversationBusy(false);
+    if (conversationAssistantMatches(identity, result)) {
+      return true;
+    }
+    reportConversationFailure(
+      "Response text could not be saved", error
+    );
+    return false;
+  });
+}
+
+function queueConversationAssistant(result) {
+  conversationCompletion = completeConversationAssistant(result);
+  return conversationCompletion;
+}
+
+function conversationAssistantMatches(identity, result) {
+  var conversation = conversationState.conversation;
+  if (!conversation || conversation.pending_assistant_id !== null) {
+    return false;
+  }
+  if (conversation.id !== identity.conversation_id) {
+    return false;
+  }
+  var assistant = conversationStateTailAssistant(conversationState);
+  if (
+    !assistant
+    || assistant.turn_id !== identity.assistant_turn_id
+  ) {
+    return false;
+  }
+  if (assistant.text !== result.text) {
+    return false;
+  }
+  if (assistant.partial !== (result.partial === true)) {
+    return false;
+  }
+  return assistant.metadata.status === result.status;
+}
+
+function confirmConversationEdit() {
+  return queueConversationAssistant({
+    text: generatorRun.finalText() || "",
+    partial: generatorRun.interrupted(),
+    status: generatorRun.interrupted()
+      ? "cancelled"
+      : "completed",
+  });
 }
 
 // Block glyphs for the optional "diffusion-style text" reveal.
@@ -1110,15 +1518,17 @@ function resetRunState() {
   generatorCanvas.reset();
   generatorReadouts.reset();
   generatorEdit.refreshLocks();
+  renderConversation(null);
   updateGenerateButton();
   setSaveAvailable(false);
 }
 
-// New Conversation resets the single active turn to a clean slate.
-// It clears the canvas and prompt while keeping history and settings.
-function startNewRun() {
+// Clear the active XAI workspace only after its durable transition
+// succeeded. A failed create or append leaves the run recoverable.
+function clearActiveRun() {
   resetRunState();
   generatorComposer.clear();
+  generatorComposer.saveDraft();
   if (thinkingPanel) {
     thinkingPanel.hidden = true;
   }
@@ -1129,6 +1539,26 @@ function startNewRun() {
   generatorChrome.showOutputPlaceholder(
     generatorModelPanel.activeDisplayName()
   );
+}
+
+function startNewRun() {
+  if (conversationBusy || isGenerating || generatorRun.saving()) {
+    return Promise.resolve(false);
+  }
+  setConversationBusy(true);
+  return conversationClient.create("New conversation")
+    .then(function () {
+      clearActiveRun();
+      return true;
+    })
+    .catch(function (error) {
+      reportConversationFailure("New conversation failed", error);
+      return false;
+    })
+    .then(function (created) {
+      setConversationBusy(false);
+      return created;
+    });
 }
 
 // Ask the worker to stop the run it is on.
@@ -1151,21 +1581,83 @@ function requestCancel() {
 
 function startGeneration() {
   if (!generatorSocket.isReady()) {
-    return;
+    return Promise.resolve(false);
+  }
+  if (conversationBusy) {
+    return Promise.resolve(false);
+  }
+  if (generatorRun.saving()) {
+    return Promise.resolve(false);
   }
   if (isGenerating) {
-    return;
+    return Promise.resolve(false);
   }
   if (!generatorModelPanel.validation().valid) {
-    return;
+    return Promise.resolve(false);
+  }
+  var conversation = conversationState.conversation;
+  if (
+    conversation
+    && conversation.pending_assistant_id !== null
+  ) {
+    return retryPendingConversation(conversation.id);
   }
 
-  var prompt = generatorComposer.trimmedValue();
+  var prompt = conversationPromptForSend();
   if (!prompt) {
     generatorChrome.setMessage("Prompt is empty.");
-    return;
+    return Promise.resolve(false);
   }
+  if (!conversationPendingMatchesModel()) {
+    return Promise.resolve(false);
+  }
+  setConversationBusy(true);
+  return reserveConversationAssistant(prompt)
+    .then(function (reservedPrompt) {
+      setConversationBusy(false);
+      return launchReservedGeneration(reservedPrompt);
+    })
+    .catch(function (error) {
+      setConversationBusy(false);
+      reportConversationFailure("Send failed", error);
+      return false;
+    });
+}
 
+function retryPendingConversation(conversationId) {
+  setConversationBusy(true);
+  return conversationClient.restore(conversationId)
+    .then(function () {
+      var conversation = conversationState.conversation;
+      if (
+        !conversation
+        || conversation.pending_assistant_id === null
+      ) {
+        setConversationBusy(false);
+        generatorChrome.setMessage(
+          "The response was already saved. Type a new message"
+          + " to continue."
+        );
+        return false;
+      }
+      var prompt = conversationPromptForSend();
+      if (!prompt || !conversationPendingMatchesModel()) {
+        setConversationBusy(false);
+        return false;
+      }
+      setConversationBusy(false);
+      return launchReservedGeneration(prompt);
+    })
+    .catch(function (error) {
+      setConversationBusy(false);
+      reportConversationFailure(
+        "Pending response could not be checked", error
+      );
+      return false;
+    });
+}
+
+function launchReservedGeneration(prompt) {
   // The first fresh run retires the Generate teaser: from now on the
   // idle diffusion cycle follows the setting.
   markGenerateTeased();
@@ -1176,6 +1668,8 @@ function startGeneration() {
   resetRunState();
   var params = generatorModelPanel.parameterValues();
   generatorRun.begin(prompt, params);
+  generatorComposer.clear();
+  generatorComposer.saveDraft();
 
   generatorCanvas.clearOutput();
   if (thinkingPanel) {
@@ -1188,9 +1682,32 @@ function startGeneration() {
 
   var payload = Object.assign({}, params);
   payload.type = "generate";
-  payload.prompt = prompt;
   payload.experimental = generatorModelPanel.experimental();
-  generatorSocket.send(payload);
+  var context = conversationStateMessages(
+    conversationState, prompt
+  );
+  if (context === null || !context.assistant_turn_id) {
+    setGenerating(false);
+    generatorChrome.endRunStatus();
+    generatorChrome.setMessage(
+      "Send failed: the assistant reservation is missing.",
+      { color: "var(--danger)" }
+    );
+    return false;
+  }
+  Object.assign(payload, context);
+  if (!generatorSocket.send(payload)) {
+    setGenerating(false);
+    generatorChrome.endRunStatus();
+    resetRunState();
+    generatorChrome.setMessage(
+      "Send failed before generation started. Press Send to retry"
+      + " the reserved response.",
+      { color: "var(--danger)" }
+    );
+    return false;
+  }
+  return true;
 }
 
 // Run serialization and save request ownership live in
@@ -1251,13 +1768,13 @@ function generatorCandidatesRequestProbe(intent) {
   if (!generatorEdit.requestAllowed()) {
     return false;
   }
-  generatorSocket.send({
+  generatorSocket.send(addConversationIdentity({
     type: "probe",
     position: intent.position,
     token_id: intent.tokenId,
     request_id: intent.requestId,
     run_token: generatorRun.runToken(),
-  });
+  }));
   return true;
 }
 
@@ -1269,10 +1786,10 @@ function generatorEditRequestRewind(intent) {
   if (!generatorSocket.isReady()) {
     return false;
   }
-  return generatorSocket.send({
+  return generatorSocket.send(addConversationIdentity({
     type: "rewind",
     run_token: intent.runToken,
-  });
+  }));
 }
 
 function generatorEditRequestResume(intent) {
@@ -1289,7 +1806,7 @@ function generatorEditRequestResume(intent) {
   if (intent.continueRun) {
     message["continue"] = true;
   }
-  return generatorSocket.send(message);
+  return generatorSocket.send(addConversationIdentity(message));
 }
 
 function generatorEditRequestSubstitute(intent) {
@@ -1303,7 +1820,7 @@ function generatorEditRequestSubstitute(intent) {
     message.typed = true;
     message.typed_text = intent.typedText;
   }
-  return generatorSocket.send(message);
+  return generatorSocket.send(addConversationIdentity(message));
 }
 
 function generatorCanvasWriteHighlight(value) {
@@ -1403,6 +1920,7 @@ function generatorRunRestoreEditArtifacts(state) {
 }
 
 function generatorRunSessionRestored() {
+  renderConversation(null);
   updateGenerateButton();
   setSaveAvailable(!generatorRun.saved());
   generatorEdit.activate();
@@ -1432,25 +1950,76 @@ function generatorRunSaveSettled() {
 }
 
 function generatorRunSaveSuccess(info) {
-  generatorRunSaveSettled();
-  btnSave.classList.add("is-saved");
-  saveCheckTimer = setTimeout(function () {
-    btnSave.classList.remove("is-saved");
-    saveCheckTimer = null;
-  }, 500);
-  generatorEdit.refreshLocks();
-  updateGenerateButton();
-  generatorChrome.showAnalyticsCue(info.runId || "");
-  generatorChrome.retireStatus(info.status);
-  generatorChrome.setMessage(
-    "Saved " + info.label + " run to " + info.result.path,
-    { color: "var(--accent)" }
+  return linkSavedRun(info).then(function (linked) {
+    btnSave.classList.add("is-saved");
+    saveCheckTimer = setTimeout(function () {
+      btnSave.classList.remove("is-saved");
+      saveCheckTimer = null;
+    }, 500);
+    generatorEdit.refreshLocks();
+    updateGenerateButton();
+    generatorChrome.showAnalyticsCue(info.runId || "");
+    generatorChrome.retireStatus(info.status);
+    if (linked) {
+      generatorChrome.setMessage(
+        "Saved " + info.label + " run to " + info.result.path,
+        { color: "var(--accent)" }
+      );
+    } else {
+      btnSave.disabled = false;
+    }
+    return linked;
+  });
+}
+
+function linkSavedRun(info) {
+  var identity = generatorRunReadConversation();
+  if (
+    identity === null
+    || !info.runId
+    || !Number.isInteger(info.revision)
+  ) {
+    return Promise.resolve(identity === null);
+  }
+  return conversationClient.linkRun({
+    assistantTurnId: identity.assistant_turn_id,
+    runId: info.runId,
+    runRevision: info.revision,
+  }).then(function () {
+    return true;
+  }).catch(function (error) {
+    if (conversationRunLinkMatches(identity, info)) {
+      return true;
+    }
+    reportConversationFailure(
+      "Run saved, but its conversation link failed", error
+    );
+    return false;
+  });
+}
+
+function conversationRunLinkMatches(identity, info) {
+  var conversation = conversationState.conversation;
+  if (!conversation || conversation.id !== identity.conversation_id) {
+    return false;
+  }
+  var assistant = conversationStateTailAssistant(conversationState);
+  if (
+    !assistant
+    || assistant.turn_id !== identity.assistant_turn_id
+  ) {
+    return false;
+  }
+  var link = assistant.run_link;
+  return Boolean(
+    link
+    && link.run_id === info.runId
+    && link.revision === info.revision
   );
 }
 
 function generatorRunSaveFailure(info) {
   btnSave.classList.remove("is-saving", "is-saved");
-  generatorRunSaveSettled();
   btnSave.disabled = false;
   generatorChrome.retireStatus(info.status);
   generatorChrome.setMessage(
@@ -1484,6 +2053,7 @@ btnNewConversation.addEventListener("click", function () {
 });
 btnSave.addEventListener("click", saveRun);
 
+conversationView.wire();
 generatorComposer.wire();
 generatorModelPanel.wire();
 generatorChrome.wire();
@@ -1564,6 +2134,10 @@ function applyModelInfo(info) {
 }
 
 function finishBoot() {
+  restoreActiveConversation().then(finishGeneratorBoot);
+}
+
+function finishGeneratorBoot() {
   var restored = false;
   try {
     restored = restoreSessionState();
@@ -1575,6 +2149,7 @@ function finishBoot() {
       generatorModelPanel.activeDisplayName()
     );
   }
+  showRescueNotice();
   generatorSocket.connect();
 }
 

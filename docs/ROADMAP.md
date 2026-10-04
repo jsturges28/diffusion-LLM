@@ -29,6 +29,13 @@ suite. One model is resident at a time, each in the virtual environment
 that matches its `transformers` version, because they need
 incompatible ones.
 
+The generator now carries durable bounded conversations. Conversation
+turns are append-oriented on disk and CAS-guarded across supervisors;
+the browser holds four 50-turn pages, while inference packs an exact
+recent suffix under a provisional per-model context policy. Only the
+tail assistant owns live XAI state, and saved runs link back to it
+without changing Analytics' one-row-per-run catalog.
+
 The audit remediation campaign that ran from 2026-08-10 is complete except
 for a short remainder, tracked finding by finding in
 `docs/audit/IMPLEMENTATION_LEDGER.md`. A second audit followed on
@@ -641,6 +648,24 @@ expensive to rediscover. These are not backlog items: each one is either a
 line drawn deliberately, or a trap a future change will otherwise walk into.
 They moved here from `docs/HANDOFF.md` when `META-01` reduced it to a cold-start
 page.
+
+**Conversation text is durable; XAI artifacts remain explicit and
+tail-owned.** Recorded 2026-10-04, when multi-turn chat shipped.
+
+A past assistant turn needs little memory to remain useful: text, model,
+partial status, context attestation and an optional saved-run link. Frames,
+token records and candidates are orders of magnitude larger and already
+have a deliberate persistence boundary, Save Run. Keeping those artifacts
+for every turn would silently turn chatting into auto-save and make browser
+memory grow with the conversation.
+
+The chosen split is therefore strict. The browser caches at most 200
+compact turns and evicts oldest whole exchanges. The active tail assistant
+alone owns the run controller and can be edited. Sending another user turn
+freezes its predecessor, releases the heavy state, and labels an unsaved
+predecessor Text only. A saved predecessor links to its existing Analytics
+row. There is no second conversation-shaped run catalog and no migration
+of legacy snapshots.
 
 **The Analytics table wants roving tabindex, and has not got it.**
 Recorded 2026-09-02, after the keyboard work made everything else on

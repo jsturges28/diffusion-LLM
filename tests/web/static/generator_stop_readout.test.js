@@ -140,7 +140,12 @@ function streaming(frames, options) {
       .querySelector("#param-" + name)
       .value = String(value);
   }
-  context.startGeneration();
+  context.resetRunState();
+  context.generatorRun.begin(
+    "explain yeast",
+    context.generatorModelPanel.parameterValues()
+  );
+  context.setGenerating(true);
   frames.forEach((frame, index) => {
     context.handleFrame(frame.type ? frame : frameOf(frame, index));
   });

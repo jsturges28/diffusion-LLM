@@ -98,6 +98,41 @@ def test_the_retry_answers_with_what_an_edit_needs_next(
     assert second["revision"] == 2
 
 
+def test_save_endpoint_records_conversation_location(
+    tmp_path: Path,
+    client: TestClient,
+) -> None:
+    result = _save(
+        client,
+        conversation_id="a" * 32,
+        assistant_turn_id="00000004",
+        turn_index=4,
+    )
+    metadata = json.loads(
+        (tmp_path / result["run_id"] / "metadata.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert metadata["conversation_id"] == "a" * 32
+    assert metadata["assistant_turn_id"] == "00000004"
+    assert metadata["turn_index"] == 4
+
+
+def test_save_endpoint_refuses_partial_conversation_location(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/api/save",
+        json=_payload(
+            conversation_id="a" * 32,
+            assistant_turn_id="00000004",
+        ),
+    )
+
+    assert response.status_code == 422
+
+
 def test_the_second_save_writes_rather_than_shortcutting(
     tmp_path: Path, client: TestClient
 ) -> None:

@@ -66,6 +66,9 @@ UI_STATE_KEYS: Dict[str, int] = {
     "diffusion_prompt_history": 262_144,
     "diffusion_generate_teased": 64,
     "diffusion_download_toast_corner": 32,
+    # The durable conversation the generator restores, as a compact
+    # JSON object carrying its id and last observed revision.
+    "diffusion_active_conversation": 512,
     # Overlay drawer vertical offset, one key per page: the two
     # drawers sit in containers of different heights, so a shared
     # offset would land sensibly on at most one of them. A plain

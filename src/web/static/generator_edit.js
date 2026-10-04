@@ -63,10 +63,15 @@ function generatorEditCreate(options) {
   var primaryStateChanged =
     requiredCallback("primaryStateChanged");
   var requestSave = requiredCallback("requestSave");
+  var requestCommit = requiredCallback("requestCommit");
   var requestRewind = requiredCallback("requestRewind");
   var requestResume = requiredCallback("requestResume");
   var requestSubstitute =
     requiredCallback("requestSubstitute");
+  var canEditConversation =
+    typeof options.canEditConversation === "function"
+      ? options.canEditConversation
+      : function () { return true; };
 
   var outputArea = requiredElement("output-area");
   var scrubberSection =
@@ -150,6 +155,8 @@ function generatorEditCreate(options) {
   var positionsReadSource = null;
   var positionsReadSnapshot = Object.freeze({});
   var segmentStartsReadSnapshot = Object.freeze([]);
+  var confirmPending = false;
+  var confirmPromise = null;
   var wired = false;
 
   function capabilities() {
@@ -367,6 +374,7 @@ function generatorEditCreate(options) {
     pendingResume = null;
     isResuming = false;
     randomizeInitialFrame = null;
+    confirmPending = false;
     guidedEditControls.hidden = true;
     scrubberSlider.disabled = false;
     scrubberSlider.min = "0";
@@ -810,9 +818,13 @@ function generatorEditCreate(options) {
   }
 
   function exit() {
+    if (confirmPending) {
+      return false;
+    }
     restorePreEditCheckpoint();
     resetGuidedMode();
     activate();
+    return true;
   }
 
   function renoiseNote() {
@@ -1210,13 +1222,53 @@ function generatorEditCreate(options) {
   }
 
   function confirm() {
-    requestSave();
-    resetGuidedMode();
-    activate();
+    if (confirmPending || run.saving()) {
+      return Promise.resolve(false);
+    }
+    confirmPending = true;
+    setSavingControls(true);
+    var committedSuccessfully = false;
+    var operation = requestCommit().then(function (committed) {
+      if (!committed) {
+        return false;
+      }
+      committedSuccessfully = true;
+      return requestSave();
+    }).then(function (saved) {
+      confirmPending = false;
+      if (!committedSuccessfully) {
+        setSavingControls(false);
+        return false;
+      }
+      resetGuidedMode();
+      activate();
+      if (!saved) {
+        setSaveAvailable(true);
+      }
+      return saved;
+    }).catch(function (error) {
+      confirmPending = false;
+      setSavingControls(false);
+      if (committedSuccessfully) {
+        resetGuidedMode();
+        activate();
+        setSaveAvailable(true);
+      }
+      var message = error && error.message
+        ? error.message
+        : "unknown error";
+      setStatus("Confirm failed: " + message);
+      return false;
+    });
+    confirmPromise = operation.then(function (confirmed) {
+      confirmPromise = null;
+      return confirmed;
+    });
+    return confirmPromise;
   }
 
   function retry() {
-    if (editRequestRefused()) {
+    if (confirmPending || editRequestRefused()) {
       return false;
     }
     var substitution = supportsSubstitution();
@@ -1315,6 +1367,13 @@ function generatorEditCreate(options) {
   }
 
   function editBlockReason() {
+    if (!canEditConversation()) {
+      return (
+        "Only the latest response in the active conversation can"
+        + " be edited. Continue from that response or start a new"
+        + " conversation."
+      );
+    }
     return runPhasesEditBlock(run.editIdentity());
   }
 
@@ -1348,12 +1407,12 @@ function generatorEditCreate(options) {
       setButtonLocked(
         btnEditFrames,
         "This run already has a saved edit."
-        + " Generate again to edit a new run."
+        + " Send another message to edit a new response."
       );
       setButtonLocked(
         btnWhatIf,
         "This run already has a saved edit."
-        + " Generate again to try another branch."
+        + " Send another message to try another branch."
       );
       return;
     }
@@ -1442,6 +1501,12 @@ function generatorEditCreate(options) {
 
   function shouldPersistRun() {
     return runPhase.mode === RUN_PHASE_IDLE;
+  }
+
+  function flushConfirmation() {
+    return confirmPromise === null
+      ? Promise.resolve(true)
+      : confirmPromise;
   }
 
   function copyEdits(edits) {
@@ -1564,6 +1629,7 @@ function generatorEditCreate(options) {
       return runPhasesKeepsWork(runPhase);
     },
     shouldPersistRun: shouldPersistRun,
+    flushConfirmation: flushConfirmation,
     blockReason: editBlockReason,
     runIsMultiCanvas: function () {
       return run.frameIsMultiCanvas();

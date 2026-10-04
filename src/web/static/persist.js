@@ -28,6 +28,7 @@ var PERSIST_KEYS = [
   "diffusion_prompt_history",
   "diffusion_generate_teased",
   "diffusion_download_toast_corner",
+  "diffusion_active_conversation",
   // One per page: the two drawers sit in containers of different
   // heights, so a shared offset would land sensibly on at most one.
   "diffusion_overlay_drawer_top_generator",
@@ -45,13 +46,12 @@ var PERSIST_KEYS = [
 var PERSIST_PUT_DEBOUNCE_MS = 250;
 var persistPutTimers = {};
 
-// Written straight out, no debounce. Empty now that collections have
-// their own endpoints: they were the one value here that could not
-// be recomputed, so the 250 ms during which a change existed only in
-// this tab was a window worth not having. Kept as a list rather than
-// deleted because the reasoning applies to the next such value, and
-// because the branch it drives in persistSet is one line.
-var PERSIST_IMMEDIATE_KEYS = [];
+// Written straight out, no debounce. The active conversation is user
+// intent rather than a cache: losing the last 250 ms of a window
+// switch could reopen the wrong transcript after a close.
+var PERSIST_IMMEDIATE_KEYS = [
+  "diffusion_active_conversation",
+];
 
 // Values whose PUT is still waiting on a timer, so the flush below
 // can send them when the page is going away.
@@ -325,6 +325,8 @@ function persistIsNewRun(runId) {
 // know the other's storage.
 
 var PERSIST_LAST_RUN_KEY = "diffusion_last_run";
+var PERSIST_ACTIVE_CONVERSATION_KEY =
+  "diffusion_active_conversation";
 
 function persistClearLastRun() {
   try {

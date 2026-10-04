@@ -202,7 +202,7 @@ test("the terminal frame's envelope replaces it", () => {
   assert.deepEqual(held(context), terminal(LLADA));
 });
 
-test("the next Generate starts without one", () => {
+test("the next run starts without one", () => {
   const context = runOn(LLADA);
   context.handleFrame(snapshotFrame(0, opening(LLADA)));
   context.handleDone({
@@ -211,7 +211,7 @@ test("the next Generate starts without one", () => {
     provenance: terminal(LLADA),
   });
 
-  context.startGeneration();
+  context.resetRunState();
 
   assert.equal(context.generatorRun.provenance(), null);
 });

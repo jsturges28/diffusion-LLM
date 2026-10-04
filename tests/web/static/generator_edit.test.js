@@ -151,6 +151,8 @@ function harness(settings) {
     resumes: [],
     substitutions: [],
     saves: 0,
+    commits: 0,
+    canEdit: true,
   };
   const canvas = {
     activate() {},
@@ -192,6 +194,11 @@ function harness(settings) {
     primaryStateChanged() {},
     requestSave: () => {
       external.saves += 1;
+      return Promise.resolve(true);
+    },
+    requestCommit: () => {
+      external.commits += 1;
+      return Promise.resolve(true);
     },
     requestRewind: (intent) => {
       external.rewinds.push(host(intent));
@@ -205,6 +212,7 @@ function harness(settings) {
       external.substitutions.push(host(intent));
       return true;
     },
+    canEditConversation: () => external.canEdit,
   });
   return { edit, run, external, elements };
 }
@@ -342,6 +350,19 @@ test("a saved edit locks both counterfactual entries", () => {
     assert.equal(button.classList.contains("is-locked"), true);
     assert.match(button.title, /already has a saved edit/);
   }
+});
+
+test("a frozen conversation response refuses editing clearly", () => {
+  const { edit, external, elements } = harness();
+  external.canEdit = false;
+
+  edit.refreshLocks();
+  assert.equal(edit.enterFrames(), false);
+  assert.match(
+    elements.get("btn-edit-frames").title,
+    /latest response/
+  );
+  assert.equal(edit.phaseState().mode, null);
 });
 
 test("a stop before the first resumed frame rolls back", () => {

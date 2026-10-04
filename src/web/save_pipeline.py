@@ -82,6 +82,9 @@ class SavePipelineContext:
 # added a signal to the client and forgot the server" into a run saved
 # without it and an HTTP 200 saying otherwise.
 STRICT = ConfigDict(extra="forbid")
+CONVERSATION_ID_PATTERN = r"^[0-9a-f]{32}$"
+ASSISTANT_TURN_ID_PATTERN = r"^[0-9]{8}$"
+CONVERSATION_TURN_INDEX_MAX = 1_000_000
 
 
 class RemaskEdit(BaseModel):
@@ -317,12 +320,26 @@ class SaveRunRequest(BaseModel):
         default=None, max_length=IDENTIFIER_CHARS_MAX
     )
     expected_revision: Optional[int] = Field(default=None, ge=0)
+    conversation_id: Optional[str] = Field(
+        default=None,
+        pattern=CONVERSATION_ID_PATTERN,
+    )
+    assistant_turn_id: Optional[str] = Field(
+        default=None,
+        pattern=ASSISTANT_TURN_ID_PATTERN,
+    )
+    turn_index: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=CONVERSATION_TURN_INDEX_MAX,
+    )
     prompt_len: Optional[int] = Field(default=None, ge=0)
     partial: bool = False
 
     @model_validator(mode="after")
     def _within_bounds(self) -> "SaveRunRequest":
         _check_run_bounds(self)
+        _check_conversation_metadata(self)
         return self
 
     def normalized(self) -> "SaveRunRequest":
@@ -351,6 +368,47 @@ class SaveRunRequest(BaseModel):
 
 # A field as a refusal names it, and what it holds, if anything.
 CountedField = Tuple[str, Optional[Sized]]
+
+
+def _check_conversation_metadata(body: SaveRunRequest) -> None:
+    """Require one coherent optional durable-turn location."""
+    fields = (
+        body.conversation_id,
+        body.assistant_turn_id,
+        body.turn_index,
+    )
+    present = tuple(value is not None for value in fields)
+    if any(present) and not all(present):
+        raise ValueError(
+            "conversation_id, assistant_turn_id and turn_index"
+            " must be supplied together"
+        )
+    if not all(present):
+        return
+    assert body.assistant_turn_id is not None
+    assert body.turn_index is not None
+    if int(body.assistant_turn_id) != body.turn_index:
+        raise ValueError(
+            "assistant_turn_id does not match turn_index"
+        )
+    _check_attested_conversation(body)
+
+
+def _check_attested_conversation(body: SaveRunRequest) -> None:
+    provenance = body.provenance
+    if provenance is None or provenance.context_pack is None:
+        return
+    attested = provenance.context_pack.conversation
+    if attested is None:
+        return
+    if (
+        attested.conversation_id != body.conversation_id
+        or attested.assistant_turn_id != body.assistant_turn_id
+    ):
+        raise ValueError(
+            "save conversation metadata differs from the worker"
+            " attestation"
+        )
 
 
 def _check_run_bounds(body: SaveRunRequest) -> None:
@@ -579,6 +637,21 @@ def _resources_metadata(
     return dict(provenance.resources)
 
 
+def _conversation_metadata(
+    body: SaveRunRequest,
+) -> Dict[str, Any]:
+    """The optional durable conversation location for one run."""
+    if body.conversation_id is None:
+        return {}
+    assert body.assistant_turn_id is not None
+    assert body.turn_index is not None
+    return {
+        "conversation_id": body.conversation_id,
+        "assistant_turn_id": body.assistant_turn_id,
+        "turn_index": body.turn_index,
+    }
+
+
 _OPTIONAL_METADATA_FIELDS = (
     "elapsed_seconds",
     "per_frame_elapsed",
@@ -666,6 +739,7 @@ def _build_metadata(
         ]
     if body.partial:
         metadata["partial"] = True
+    metadata.update(_conversation_metadata(body))
     if body.frame_positions:
         metadata[run_store.FRAME_SHAPE_KEY] = (
             run_store.FRAME_SHAPE_APPEND

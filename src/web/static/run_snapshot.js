@@ -26,6 +26,12 @@ var RUN_SNAPSHOT_FRAMES_MIN = 2;
 var RUN_SNAPSHOT_FIELDS = [
   "model",
   "device",
+  "conversationId",
+  "conversationRevision",
+  "assistantTurnId",
+  "conversationTurnIndex",
+  "conversationTurnVersion",
+  "conversationTailText",
   "prompt",
   "runPrompt",
   "finalText",
@@ -228,6 +234,30 @@ function runSnapshotState(source, frames) {
 // whatever it happened to be.
 function runSnapshotFacts(source) {
   return {
+    conversationId:
+      typeof source.conversationId === "string"
+        ? source.conversationId
+        : null,
+    conversationRevision:
+      Number.isInteger(source.conversationRevision)
+        ? source.conversationRevision
+        : null,
+    assistantTurnId:
+      typeof source.assistantTurnId === "string"
+        ? source.assistantTurnId
+        : null,
+    conversationTurnIndex:
+      Number.isInteger(source.conversationTurnIndex)
+        ? source.conversationTurnIndex
+        : null,
+    conversationTurnVersion:
+      Number.isInteger(source.conversationTurnVersion)
+        ? source.conversationTurnVersion
+        : null,
+    conversationTailText:
+      typeof source.conversationTailText === "string"
+        ? source.conversationTailText
+        : null,
     finalText: source.finalText || "",
     runPrompt: runSnapshotRunPrompt(source),
     params: source.params || null,

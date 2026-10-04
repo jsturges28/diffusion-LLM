@@ -36,6 +36,11 @@ function generatorRunCreate(options) {
   var onSaveSuccess = requiredCallback("onSaveSuccess");
   var onSaveFailure = requiredCallback("onSaveFailure");
   var onSaveRefused = requiredCallback("onSaveRefused");
+  var onSaveSettled = requiredCallback("onSaveSettled");
+  var readConversation =
+    typeof options.readConversation === "function"
+      ? options.readConversation
+      : function () { return null; };
 
   if (!options.storage) {
     throw new TypeError(
@@ -63,6 +68,7 @@ function generatorRunCreate(options) {
 
   var runPrompt = null;
   var runParams = null;
+  var runConversation = null;
   var finalText = null;
   var promptLength = null;
   var provenance = null;
@@ -79,6 +85,7 @@ function generatorRunCreate(options) {
   var savedRunId = null;
   var savedRevision = null;
   var saving = false;
+  var savePending = null;
 
   var frameOffset = 0;
   var elapsedOffset = 0;
@@ -91,6 +98,7 @@ function generatorRunCreate(options) {
     originalCandidates = null;
     runPrompt = null;
     runParams = null;
+    runConversation = null;
     finalText = null;
     promptLength = null;
     provenance = null;
@@ -121,6 +129,7 @@ function generatorRunCreate(options) {
     }
     runPrompt = prompt;
     runParams = copyObject(params);
+    runConversation = conversationState();
   }
 
   function adoptProvenance(data) {
@@ -545,6 +554,7 @@ function generatorRunCreate(options) {
     };
     addFrameFields(payload);
     addMeasuredFacts(payload);
+    addConversationFields(payload);
     addCandidatesFields(payload);
     if (edit.remaskEdits.length > 0) {
       addEditedFields(payload, edit.remaskEdits);
@@ -581,6 +591,16 @@ function generatorRunCreate(options) {
     if (runToken) {
       payload.run_token = runToken;
     }
+  }
+
+  function addConversationFields(payload) {
+    var identity = runConversation;
+    if (identity === null) {
+      return;
+    }
+    payload.conversation_id = identity.conversationId;
+    payload.assistant_turn_id = identity.assistantTurnId;
+    payload.turn_index = identity.turnIndex;
   }
 
   function addCandidatesFields(payload) {
@@ -743,8 +763,8 @@ function generatorRunCreate(options) {
   }
 
   function save() {
-    if (saving) {
-      return Promise.resolve();
+    if (savePending !== null) {
+      return savePending;
     }
     if (frameCount() === 0 || !finalText) {
       return refuseSave(
@@ -754,7 +774,7 @@ function generatorRunCreate(options) {
     if (frameLacksDetail()) {
       return refuseSave(
         "This run came back without its per-token detail and"
-        + " cannot be saved in full. Generate it again to save"
+        + " cannot be saved in full. Send it again to save"
         + " it."
       );
     }
@@ -767,40 +787,56 @@ function generatorRunCreate(options) {
       label: label,
     });
     var payload = buildSavePayload();
-    return requestSave("/api/save", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+    var request = Promise.resolve().then(function () {
+      return requestSave("/api/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
     }).then(function (response) {
       return response.json();
     }).then(function (result) {
-      saveResult(result, wasEdited, label, status);
+      return saveResult(result, wasEdited, label, status);
     }).catch(function (error) {
-      saveFailed(error.message, label, status);
+      return saveFailed(error.message, label, status);
     });
+    savePending = request.then(
+      function (result) {
+        saving = false;
+        savePending = null;
+        onSaveSettled();
+        return result;
+      },
+      function (error) {
+        saving = false;
+        savePending = null;
+        onSaveSettled();
+        throw error;
+      }
+    );
+    return savePending;
   }
 
   function refuseSave(message) {
     onSaveRefused(message);
-    return Promise.resolve();
+    return Promise.resolve(false);
   }
 
   function saveResult(result, wasEdited, label, status) {
-    saving = false;
     if (!result.success) {
       onSaveFailure({
         label: label,
         message: result.message || "unknown",
         status: status,
       });
-      return;
+      return false;
     }
     saved = true;
     if (wasEdited) {
       editedSaved = true;
     }
     adoptSaveIdentity(result);
-    onSaveSuccess({
+    var success = onSaveSuccess({
       edited: wasEdited,
       label: label,
       result: result,
@@ -808,16 +844,25 @@ function generatorRunCreate(options) {
       revision: savedRevision,
       status: status,
     });
-    saveSession();
+    return Promise.resolve(success).then(function (followup) {
+      saveSession();
+      return followup !== false;
+    });
   }
 
   function saveFailed(message, label, status) {
-    saving = false;
     onSaveFailure({
       label: label,
       message: message,
       status: status,
     });
+    return false;
+  }
+
+  function flushSave() {
+    return savePending === null
+      ? Promise.resolve(true)
+      : savePending;
   }
 
   function adoptSaveIdentity(result) {
@@ -850,9 +895,28 @@ function generatorRunCreate(options) {
     var composer = composerState();
     var chrome = chromeState();
     var edit = editState();
+    var conversation = runConversation;
     return {
       model: model.id,
       device: model.device,
+      conversationId: conversation === null
+        ? null
+        : conversation.conversationId,
+      conversationRevision: conversation === null
+        ? null
+        : conversation.conversationRevision,
+      assistantTurnId: conversation === null
+        ? null
+        : conversation.assistantTurnId,
+      conversationTurnIndex: conversation === null
+        ? null
+        : conversation.turnIndex,
+      conversationTurnVersion: conversation === null
+        ? null
+        : conversation.assistantTurnVersion,
+      conversationTailText: conversation === null
+        ? null
+        : conversation.assistantText,
       prompt: composer.draft,
       runPrompt: runPrompt,
       finalText: finalText,
@@ -899,8 +963,55 @@ function generatorRunCreate(options) {
     if (restored === null) {
       return false;
     }
+    if (!conversationSnapshotMatches(restored)) {
+      clearSession();
+      return false;
+    }
     applyRestored(restored);
     return true;
+  }
+
+  function conversationSnapshotMatches(restored) {
+    if (!restored.conversationId) {
+      // A snapshot from before conversations shipped remains a
+      // legacy single-prompt run until the next Send.
+      return true;
+    }
+    var current = conversationState();
+    if (current === null) {
+      return false;
+    }
+    return (
+      restored.conversationId === current.conversationId
+      && restored.assistantTurnId === current.assistantTurnId
+      && restored.conversationRevision
+        === current.conversationRevision
+      && restored.conversationTurnIndex === current.turnIndex
+      && restored.conversationTurnVersion
+        === current.assistantTurnVersion
+      && restored.conversationTailText === current.assistantText
+    );
+  }
+
+  function restoredConversation(restored) {
+    if (
+      !restored.conversationId
+      || !restored.assistantTurnId
+      || !Number.isInteger(restored.conversationRevision)
+      || !Number.isInteger(restored.conversationTurnIndex)
+      || !Number.isInteger(restored.conversationTurnVersion)
+      || typeof restored.conversationTailText !== "string"
+    ) {
+      return null;
+    }
+    return {
+      conversationId: restored.conversationId,
+      conversationRevision: restored.conversationRevision,
+      assistantTurnId: restored.assistantTurnId,
+      turnIndex: restored.conversationTurnIndex,
+      assistantTurnVersion: restored.conversationTurnVersion,
+      assistantText: restored.conversationTailText,
+    };
   }
 
   function applyRestored(restored) {
@@ -912,6 +1023,7 @@ function generatorRunCreate(options) {
     originalCandidates = restored.originalCandidates;
     runPrompt = restored.runPrompt;
     runParams = restored.params;
+    runConversation = restoredConversation(restored);
     finalText = restored.finalText;
     promptLength = restored.promptLen;
     provenance = restored.provenance;
@@ -1010,6 +1122,83 @@ function generatorRunCreate(options) {
       );
     }
     return { remaskEdits: copyEdits(state.remaskEdits) };
+  }
+
+  function conversationState() {
+    var state = readConversation();
+    if (state === null || state === undefined) {
+      return null;
+    }
+    if (!state || typeof state !== "object") {
+      throw new TypeError(
+        "generatorRun conversation identity must be an object"
+      );
+    }
+    var conversationId = state.conversation_id;
+    var assistantTurnId = state.assistant_turn_id;
+    var revision = state.conversation_revision;
+    var turnIndex = state.turn_index;
+    var turnVersion = state.assistant_turn_version;
+    var assistantText = state.assistant_text;
+    if (
+      typeof conversationId !== "string"
+      || typeof assistantTurnId !== "string"
+      || !Number.isInteger(revision)
+      || !Number.isInteger(turnIndex)
+      || !Number.isInteger(turnVersion)
+      || typeof assistantText !== "string"
+    ) {
+      throw new TypeError(
+        "generatorRun conversation identity is incomplete"
+      );
+    }
+    return {
+      conversationId: conversationId,
+      conversationRevision: revision,
+      assistantTurnId: assistantTurnId,
+      turnIndex: turnIndex,
+      assistantTurnVersion: turnVersion,
+      assistantText: assistantText,
+    };
+  }
+
+  function refreshConversation() {
+    if (runConversation === null) {
+      return false;
+    }
+    var current = conversationState();
+    if (current === null) {
+      return false;
+    }
+    if (
+      current.conversationId !== runConversation.conversationId
+      || current.assistantTurnId !== runConversation.assistantTurnId
+    ) {
+      return false;
+    }
+    if (
+      current.assistantText !== runConversation.assistantText
+      && current.assistantText !== finalText
+    ) {
+      return false;
+    }
+    runConversation = current;
+    return true;
+  }
+
+  function conversationIdentity() {
+    if (runConversation === null) {
+      return null;
+    }
+    return {
+      conversation_id: runConversation.conversationId,
+      conversation_revision: runConversation.conversationRevision,
+      assistant_turn_id: runConversation.assistantTurnId,
+      turn_index: runConversation.turnIndex,
+      assistant_turn_version:
+        runConversation.assistantTurnVersion,
+      assistant_text: runConversation.assistantText,
+    };
   }
 
   function copyEdits(edits) {
@@ -1147,6 +1336,8 @@ function generatorRunCreate(options) {
     candidateRecord: candidateRecord,
     candidatesEmpty: candidatesEmpty,
     parameters: runParameters,
+    conversationIdentity: conversationIdentity,
+    refreshConversation: refreshConversation,
     finalText: function () {
       return finalText;
     },
@@ -1191,6 +1382,7 @@ function generatorRunCreate(options) {
     },
     buildSavePayload: buildSavePayload,
     save: save,
+    flushSave: flushSave,
     saveSession: saveSession,
     restoreSession: restoreSession,
     clearSession: clearSession,

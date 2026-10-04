@@ -80,7 +80,8 @@ in an analytics suite.
 - **Frontend** (shared, schema-driven, no framework or bundler):
   `src/web/static/` holds `menu`, `index`/`app`, `analytics`, `settings` and
   `vision`, plus `overlays.js` for the shared visuals and settings model and
-  `persist.js` for durable UI state; a page loads only the modules it calls.
+  `persist.js` for durable UI state; `conversation_state`, `_client` and
+  `_view` own the generator's bounded durable transcript.
   Analytics reads runs via `overlay_series.js`, draws with `line_charts.js` and
   `token_viewer.js` on `chart_support.js`; `detail_requests.js` fences fetches.
   Chart libraries and webfont are vendored in `static/vendor/` for offline use.
@@ -180,20 +181,11 @@ predate the campaign and have never been validated.
 
 ## Where to pick up
 
-**Mamba-3** shipped as the fourth model on 2026-09-28, on our own PyTorch
-(`src/inference/mamba3.py`) held to upstream's references in
-`reference/mamba3/`. Its hardware checks have passed but for downloading
-it on a machine that has never fetched it (manual item 330). The
-reasoning, including why the tokenizer comes from SmolLM3 and why What If
-replays, is under the Mamba-3 direction in `docs/ROADMAP.md`. **Top-k for
-the diffusion models** followed on 2026-09-28 as the candidate popover,
-which follows the scrubber and pages between an edited run's two runs,
-and on 2026-09-29 as the flicker, a Settings choice that cycles each
-unsettled position through those candidates on a finished run. The
-**revision glow** and the **Revisions** overlay, which mark DiffusionGemma
-changing its mind, shipped on 2026-10-01, and the **adaptive-stopping
-readout** on 2026-10-02: its two stop thresholds became parameters, and a
-readout beside the metrics strip shows how far each canvas is from
-stopping. Work in progress follows the second audit's ledger; the next
-feature comes from the backlog in `docs/ROADMAP.md` (frame-linked line
-charts, per-run notes), which also carries the settled decisions.
+**Durable bounded chat** is the newest surface. Conversations live under
+the shared data root, use CAS revisions across windows, restore their
+newest 50-turn page, and keep at most 200 compact turns in browser memory.
+Only the active tail owns frames and edit tools; older responses keep text
+and link a run only when it was explicitly saved. Exact context packing
+drops oldest whole exchanges and attests absolute omitted-turn counts.
+Hardware and display checks start at manual item 419. The next feature
+comes from the backlog in `docs/ROADMAP.md`.

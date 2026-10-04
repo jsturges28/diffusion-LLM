@@ -677,6 +677,31 @@ def test_duplicate_run_link_is_an_idempotent_noop(
     assert duplicate == linked
 
 
+def test_revising_assistant_text_clears_its_old_run_link(
+    tmp_path: Path,
+) -> None:
+    _created, appended, completed = _ready_pair(tmp_path)
+    linked = store.set_run_link(
+        tmp_path,
+        completed.manifest.id,
+        appended.assistant_turn.turn_id,
+        expected_revision=completed.manifest.revision,
+        run_link=store.RunLink("2026-01-01_llada", 1),
+    )
+
+    revised = store.update_assistant(
+        tmp_path,
+        linked.manifest.id,
+        linked.turn.turn_id,
+        expected_revision=linked.manifest.revision,
+        text="Edited answer",
+        partial=False,
+    )
+
+    assert revised.turn.text == "Edited answer"
+    assert revised.turn.run_link is None
+
+
 def test_pending_assistant_cannot_link_a_run(
     tmp_path: Path,
 ) -> None:

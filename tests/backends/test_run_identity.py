@@ -151,6 +151,66 @@ def test_the_holder_of_the_token_is_admitted() -> None:
     backend.check_run_token({"run_token": token})
 
 
+def _finish_conversation_run(backend: _Backend) -> str:
+    backend.begin_run(
+        context_pack={
+            "conversation": {
+                "conversation_id": "a" * 32,
+                "conversation_revision": 2,
+                "assistant_turn_id": "00000002",
+            }
+        }
+    )
+    backend.last_run_state = {"prompt": "question"}
+    return backend.run_token
+
+
+def test_conversation_run_requires_its_retained_turn_owner() -> None:
+    backend = _Backend()
+    token = _finish_conversation_run(backend)
+
+    backend.check_run_token(
+        {
+            "run_token": token,
+            "conversation_id": "a" * 32,
+            "conversation_revision": 9,
+            "assistant_turn_id": "00000002",
+        }
+    )
+
+
+def test_conversation_run_refuses_missing_turn_owner() -> None:
+    backend = _Backend()
+    token = _finish_conversation_run(backend)
+
+    with pytest.raises(StaleRunError, match="identify"):
+        backend.check_run_token({"run_token": token})
+
+
+@pytest.mark.parametrize(
+    ("conversation_id", "assistant_turn_id"),
+    [
+        ("b" * 32, "00000002"),
+        ("a" * 32, "00000004"),
+    ],
+)
+def test_conversation_run_refuses_another_turn(
+    conversation_id: str,
+    assistant_turn_id: str,
+) -> None:
+    backend = _Backend()
+    token = _finish_conversation_run(backend)
+
+    with pytest.raises(StaleRunError, match="not the conversation"):
+        backend.check_run_token(
+            {
+                "run_token": token,
+                "conversation_id": conversation_id,
+                "assistant_turn_id": assistant_turn_id,
+            }
+        )
+
+
 def test_a_superseded_token_is_refused() -> None:
     backend = _Backend()
     stale = _finish_run(backend, "one")

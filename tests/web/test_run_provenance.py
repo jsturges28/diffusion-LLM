@@ -320,6 +320,62 @@ def test_a_legacy_save_has_no_context_pack_metadata() -> None:
     assert "context_pack" not in meta["context"]
 
 
+def test_conversation_location_round_trips_into_metadata() -> None:
+    meta = _build_metadata(
+        _request(
+            conversation_id="a" * 32,
+            assistant_turn_id="00000004",
+            turn_index=4,
+        )
+    )
+
+    assert meta["conversation_id"] == "a" * 32
+    assert meta["assistant_turn_id"] == "00000004"
+    assert meta["turn_index"] == 4
+
+
+def test_partial_conversation_location_is_refused() -> None:
+    with pytest.raises(ValueError, match="supplied together"):
+        _request(
+            conversation_id="a" * 32,
+            assistant_turn_id="00000004",
+        )
+
+
+def test_conversation_turn_id_must_match_its_index() -> None:
+    with pytest.raises(ValueError, match="turn_index"):
+        _request(
+            conversation_id="a" * 32,
+            assistant_turn_id="00000004",
+            turn_index=6,
+        )
+
+
+def test_client_conversation_must_match_worker_attestation() -> None:
+    packed = {
+        "included_turn_ids": ["00000003"],
+        "first_included_index": 2,
+        "omitted_turn_count": 2,
+        "prompt_token_count": 12,
+        "output_reserve": 64,
+        "requested_total_budget": 4096,
+        "effective_total_budget": 4096,
+        "conversation": {
+            "conversation_id": "a" * 32,
+            "conversation_revision": 3,
+            "assistant_turn_id": "00000004",
+        },
+    }
+
+    with pytest.raises(ValueError, match="worker attestation"):
+        _request(
+            conversation_id="b" * 32,
+            assistant_turn_id="00000004",
+            turn_index=4,
+            provenance=_provenance(context_pack=packed),
+        )
+
+
 # -- the label follows the frames --
 
 

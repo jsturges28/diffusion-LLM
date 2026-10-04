@@ -400,6 +400,7 @@ var tokenViewer = tokenViewerCreate({
 });
 
 var chartCompareConv = null;
+var linkedRunOpened = false;
 
 var COMPARE_COLORS = [
   "#00ff41", "#00aaff", "#ff9f1c",
@@ -1991,6 +1992,16 @@ function renderRunMeta(run) {
       + escHtml(String(modelName))
       + '</span></div>';
   }
+  if (run.conversation_id) {
+    html += metaRowHtml(
+      "Conversation", String(run.conversation_id)
+    );
+  }
+  if (Number.isInteger(run.turn_index)) {
+    html += metaRowHtml(
+      "Assistant turn", String(run.turn_index)
+    );
+  }
 
   // Stated only for a run that was stopped, so its absence keeps
   // meaning "finished" for every run saved before this existed.
@@ -2798,6 +2809,7 @@ function renderFromState(runs, collections) {
   updateBulkActions();
   renderCollectionTabs();
   renderTable();
+  openLinkedRun();
 }
 
 function loadAndRender() {
@@ -2815,7 +2827,20 @@ function loadAndRender() {
     updateBulkActions();
     renderCollectionTabs();
     renderTable();
+    openLinkedRun();
   });
+}
+
+function openLinkedRun() {
+  if (linkedRunOpened) {
+    return;
+  }
+  var runId = new URLSearchParams(location.search).get("run");
+  if (!runId || !findRun(runId)) {
+    return;
+  }
+  linkedRunOpened = true;
+  showDetail(runId);
 }
 
 // ---- Delete a run ----

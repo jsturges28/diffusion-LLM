@@ -170,13 +170,13 @@ function runPhasesEditing(phase) {
 // it, which is not what happened.
 var RUN_EDIT_BLOCKED_LOST_CONNECTION =
   "This run lost its connection mid-run, so it can be saved but"
-  + " not edited. Generate again to edit.";
+  + " not edited. Send it again to edit.";
 // A run made by a worker that is no longer resident (`A2-LIFE-03`):
 // the same model loaded again, by another page of the app or after a
 // restart, holds none of the runs the first one did.
 var RUN_EDIT_BLOCKED_REPLACED =
   "The model has been reloaded since this run was made, so it can"
-  + " be saved but not edited. Generate again to edit.";
+  + " be saved but not edited. Send it again to edit.";
 
 // `run` is { lostConnection, madeBy, resident }: whether the run lost
 // its connection, the worker that made it, and the worker the socket

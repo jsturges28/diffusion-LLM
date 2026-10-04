@@ -51,6 +51,9 @@ const GENERATOR_SCRIPTS = [
   "run_frames.js",
   "run_candidates.js",
   "run_snapshot.js",
+  "conversation_state.js",
+  "conversation_client.js",
+  "conversation_view.js",
   "generator_run.js",
   "generator_socket.js",
   "candidate_flicker.js",
@@ -626,6 +629,159 @@ function inertFetch(calls) {
   };
 }
 
+// A complete-enough durable conversation API for generator tests
+// whose subject is not HTTP. The real client is strict, so returning
+// `{}` for these new boot and Send requests would make every older
+// full-page test fail before it reached the behavior it owns.
+function conversationFetch(baseFetch) {
+  let serial = 0;
+  let conversation = null;
+  let turns = [];
+
+  function response(body, status) {
+    const code = status || 200;
+    return Promise.resolve({
+      ok: code >= 200 && code < 300,
+      status: code,
+      json: () => Promise.resolve(body),
+      text: () => Promise.resolve(JSON.stringify(body)),
+    });
+  }
+
+  function manifest() {
+    const tail = turns[turns.length - 1] || null;
+    const pending = tail
+      && tail.role === "assistant"
+      && tail.version === 1
+      ? tail.turn_id
+      : null;
+    return {
+      schema_version: 1,
+      id: conversation.id,
+      title: "New conversation",
+      revision: conversation.revision,
+      created_at: conversation.created_at,
+      updated_at: conversation.created_at,
+      turn_count: turns.length,
+      tail_role: tail ? tail.role : null,
+      tail_turn_id: tail ? tail.turn_id : null,
+      tail_version: tail ? tail.version : null,
+      pending_assistant_id: pending,
+    };
+  }
+
+  function makeTurn(index, role, text, body) {
+    const assistant = role === "assistant";
+    return {
+      schema_version: 1,
+      conversation_id: conversation.id,
+      conversation_revision: conversation.revision,
+      turn_id: String(index).padStart(8, "0"),
+      index,
+      version: 1,
+      role,
+      created_at: conversation.created_at,
+      updated_at: conversation.created_at,
+      text,
+      partial: assistant,
+      model_id: assistant ? body.model_id : null,
+      input_mode: assistant ? body.input_mode : null,
+      context_pack: {},
+      metadata: {},
+      run_link: null,
+    };
+  }
+
+  function createConversation() {
+    serial += 1;
+    conversation = {
+      id: serial.toString(16).padStart(32, "0"),
+      revision: 1,
+      created_at: "2026-10-04T00:00:00Z",
+    };
+    turns = [];
+    return response({ conversation: manifest() }, 201);
+  }
+
+  function appendTurn(body) {
+    const index = turns.length + 1;
+    conversation.revision += 1;
+    const user = makeTurn(index, "user", body.text, body);
+    const assistant = makeTurn(index + 1, "assistant", "", body);
+    user.conversation_revision = conversation.revision;
+    assistant.conversation_revision = conversation.revision;
+    turns.push(user, assistant);
+    return response({
+      conversation: manifest(),
+      user_turn: user,
+      assistant_turn: assistant,
+    }, 201);
+  }
+
+  function updateAssistant(body, runLink) {
+    const assistant = turns[turns.length - 1];
+    conversation.revision += 1;
+    assistant.version += 1;
+    assistant.conversation_revision = conversation.revision;
+    if (runLink) {
+      assistant.run_link = {
+        run_id: body.run_id,
+        revision: body.run_revision,
+      };
+    } else {
+      assistant.text = body.text;
+      assistant.partial = body.partial;
+      assistant.context_pack = body.context_pack;
+      assistant.metadata = body.metadata;
+    }
+    return response({
+      conversation: manifest(),
+      turn: assistant,
+    });
+  }
+
+  return function (url, init) {
+    const text = String(url);
+    const path = text.split("?")[0];
+    const method = (init && init.method) || "GET";
+    if (!path.startsWith("/api/conversations")) {
+      return baseFetch(url, init);
+    }
+    const body = init && init.body ? JSON.parse(init.body) : {};
+    if (path === "/api/conversations" && method === "POST") {
+      return createConversation();
+    }
+    if (conversation === null) {
+      return response({
+        error: "not found",
+        reason: "not_found",
+      }, 404);
+    }
+    if (path.endsWith("/metadata") && method === "GET") {
+      return response({ conversation: manifest() });
+    }
+    if (path.endsWith("/turns") && method === "GET") {
+      return response({
+        conversation_id: conversation.id,
+        revision: conversation.revision,
+        turns: turns.slice(-50),
+        next_before: null,
+        has_more: false,
+      });
+    }
+    if (path.endsWith("/turns") && method === "POST") {
+      return appendTurn(body);
+    }
+    if (path.endsWith("/run") && method === "PUT") {
+      return updateAssistant(body, true);
+    }
+    if (path.includes("/turns/") && method === "PUT") {
+      return updateAssistant(body, false);
+    }
+    return response({});
+  };
+}
+
 function unref(handle) {
   if (handle && typeof handle.unref === "function") {
     handle.unref();
@@ -701,7 +857,11 @@ function loadPage(options) {
     // every test over a request none of them made. Records what was
     // asked for, so a test that does care can read it back or pass
     // its own `fetchImpl`.
-    fetch: settings.fetchImpl || inertFetch(fetched),
+    fetch: settings.conversationApi === false
+      ? (settings.fetchImpl || inertFetch(fetched))
+      : conversationFetch(
+        settings.fetchImpl || inertFetch(fetched)
+      ),
     // Inert by default, and inert rather than absent on purpose: a
     // page opens its socket during boot, so throwing here would fail
     // every test for a connection none of them drive. Records what
@@ -719,7 +879,7 @@ function loadPage(options) {
     location: {
       protocol: "http:",
       host: "test",
-      search: "",
+      search: settings.locationSearch || "",
       href: "",
       pathname: "/",
       reload() {},

@@ -104,6 +104,78 @@ def test_oldest_complete_exchanges_are_dropped() -> None:
     assert packed.manifest.omitted_turn_count == 2
 
 
+def test_a_bounded_candidate_tail_reports_absolute_indices() -> None:
+    packed = _pack(
+        _messages(2),
+        requested_total_budget=40,
+        candidate_turn_offset=150,
+    )
+
+    assert packed.manifest.first_included_index == 152
+    assert packed.manifest.omitted_turn_count == 152
+
+
+def test_parse_accepts_an_absolute_candidate_offset() -> None:
+    messages, conversation = parse_messages(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "question",
+                    "turn_id": "00000199",
+                }
+            ],
+            "candidate_turn_offset": 198,
+            "conversation_id": "a" * 32,
+            "conversation_revision": 101,
+            "assistant_turn_id": "00000200",
+        }
+    )
+
+    assert messages[-1].turn_id == "00000199"
+    assert conversation is not None
+
+
+@pytest.mark.parametrize("offset", [-2, 1, True, "2"])
+def test_invalid_candidate_offsets_are_refused(
+    offset: object,
+) -> None:
+    with pytest.raises(ContextRequestError):
+        parse_messages(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "question",
+                        "turn_id": "00000003",
+                    }
+                ],
+                "candidate_turn_offset": offset,
+            }
+        )
+
+
+def test_candidate_location_ends_before_reserved_assistant() -> None:
+    with pytest.raises(ContextRequestError) as raised:
+        parse_messages(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "question",
+                        "turn_id": "00000003",
+                    }
+                ],
+                "candidate_turn_offset": 0,
+                "conversation_id": "a" * 32,
+                "conversation_revision": 3,
+                "assistant_turn_id": "00000004",
+            }
+        )
+
+    assert raised.value.code == ERROR_MALFORMED_MESSAGES
+
+
 def test_the_pending_user_is_kept_on_the_smallest_suffix() -> None:
     packed = _pack(
         _messages(3),

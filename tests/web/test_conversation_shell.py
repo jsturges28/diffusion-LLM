@@ -1,4 +1,4 @@
-"""The generator's single-turn conversation shell is wired whole.
+"""The generator's bounded conversation shell is wired whole.
 
 Strategy: inspect the shipped page, its page-local styles, controller
 lookups, and the two user-facing manuals. Browser-module tests drive
@@ -6,9 +6,9 @@ the behavior; these checks cover what their synthetic DOM cannot see:
 containment, source order, native disclosure semantics, and asset
 wiring.
 
-Passing proves the page has an empty future transcript mount without
-claiming multi-turn behavior, keeps the current XAI tools together,
-keeps composition together, and exposes every static controller id.
+Passing proves transcript, active XAI workspace, and composer have
+separate owners, keep reading and keyboard order, and expose every
+static controller id.
 """
 
 from __future__ import annotations
@@ -100,15 +100,21 @@ def test_shell_regions_are_in_conversation_order() -> None:
     assert positions == sorted(positions)
 
 
-def test_the_transcript_mount_is_deliberately_empty() -> None:
-    """No transcript turn has shipped ahead of a protocol for it."""
+def test_the_transcript_mount_has_bounded_native_controls() -> None:
     block = _block(
         _html(), "conversation-transcript", "section"
     )
-    inner = block[block.index(">") + 1 : block.rindex("</section")]
+    required = {
+        "btn-load-older",
+        "conversation-empty",
+        "conversation-status",
+        "conversation-turns",
+    }
 
-    assert re.search(r"<[a-zA-Z]", inner) is None
-    assert "data-turn" not in _html()
+    assert required <= _ids(block)
+    assert 'role="log"' in block
+    assert 'aria-live="polite"' in block
+    assert "Load older messages" in block
 
 
 def test_the_active_workspace_owns_every_xai_surface() -> None:
@@ -166,6 +172,7 @@ def test_new_actions_are_native_buttons_with_names() -> None:
     html = _html()
     for element_id in (
         "btn-new-conversation",
+        "btn-load-older",
         "btn-save",
         "btn-generate",
     ):
@@ -176,6 +183,7 @@ def test_new_actions_are_native_buttons_with_names() -> None:
         assert 'type="button"' in tag.group(0), element_id
 
     assert "New Conversation" in html
+    assert ">Send<" in re.sub(r"\s+", "", html)
     assert 'aria-label="Save Run"' in html
 
 
@@ -226,3 +234,5 @@ def test_help_and_guide_name_the_moved_workflow() -> None:
         assert "Run settings" in text
         assert "Save Run" in text
         assert "New Conversation" in text
+        assert "Load older messages" in text
+        assert "Text only" in text

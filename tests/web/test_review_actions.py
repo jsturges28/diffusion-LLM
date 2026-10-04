@@ -113,8 +113,9 @@ def test_the_status_line_still_names_the_frame() -> None:
 def test_confirm_does_not_read_the_scrubber() -> None:
     """It saves the whole run and then moves the scrubber itself, so
     the frame you are looking at cannot change what is written."""
-    body = _region("function confirm()", 200)
+    body = _region("function confirm()", 900)
 
+    assert "requestCommit()" in body
     assert "requestSave()" in body
     assert "activate()" in body
     assert "currentFrame" not in body

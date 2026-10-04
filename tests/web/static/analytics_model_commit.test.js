@@ -125,3 +125,56 @@ test("the model metadata includes the commit row", () => {
 
   assert.ok(html.indexOf("Model commit") >= 0);
 });
+
+test("conversation location reaches the detail metadata", () => {
+  const { context } = page();
+
+  const html = context.renderRunMeta({
+    run_id: "r1",
+    backend: "smollm3",
+    conversation_id: "a".repeat(32),
+    assistant_turn_id: "00000004",
+    turn_index: 4,
+  });
+
+  assert.ok(html.indexOf("Conversation") >= 0);
+  assert.ok(html.indexOf("a".repeat(32)) >= 0);
+  assert.ok(html.indexOf("Assistant turn") >= 0);
+  assert.ok(html.indexOf(">4<") >= 0);
+});
+
+test("an Analytics run link opens that run", async () => {
+  const fetchImpl = (url) => {
+    const text = String(url);
+    let body = {};
+    if (text === "/api/ui-state") {
+      body = {};
+    } else if (text === "/api/analytics/runs") {
+      body = [{ run_id: "linked", prompt: "question" }];
+    } else if (text.includes("/metadata")) {
+      body = { run_id: "linked", prompt: "question" };
+    } else if (text.includes("/metrics")) {
+      body = { run_id: "linked", convergence: [] };
+    } else if (text.includes("/frames")) {
+      body = { run_id: "linked", frames: [] };
+    }
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve(body),
+      text: () => Promise.resolve(JSON.stringify(body)),
+    });
+  };
+  const loaded = loadPage({
+    scripts: ANALYTICS_SCRIPTS,
+    fetchImpl,
+    locationSearch: "?run=linked",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(
+    loaded.registry.get("detail-modal").open,
+    true
+  );
+  assert.equal(loaded.context.activeRunId, "linked");
+});

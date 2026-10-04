@@ -68,6 +68,7 @@ function harness(results) {
       },
     },
     edit: { remaskEdits: [] },
+    conversation: null,
     restoredComposer: null,
     restoredChrome: null,
     restoredEdit: null,
@@ -124,6 +125,10 @@ function harness(results) {
     onSaveRefused: (message) => {
       external.lifecycle.push("refused:" + message);
     },
+    onSaveSettled: () => {
+      external.lifecycle.push("settled");
+    },
+    readConversation: () => external.conversation,
     storage: storage,
     sessionKey: "last-run",
   });
@@ -151,6 +156,17 @@ function snapshotFrame(index, text) {
     revealed: [0],
     elapsed: (index + 1) / 10,
   };
+}
+
+function conversationIdentity(overrides) {
+  return Object.assign({
+    conversation_id: "a".repeat(32),
+    conversation_revision: 2,
+    assistant_turn_id: "00000002",
+    turn_index: 2,
+    assistant_turn_version: 1,
+    assistant_text: "",
+  }, overrides || {});
 }
 
 function appendFrame(index, text) {
@@ -254,6 +270,21 @@ test("the save payload preserves the run record shape", () => {
   assert.equal("partial" in payload, false);
 });
 
+test("a conversation-bound run saves its durable turn location", () => {
+  const { run, external } = harness();
+  external.conversation = conversationIdentity();
+  run.begin("what ran", { steps: 2 });
+  run.appendFrame(snapshotFrame(0, "a"));
+  run.appendFrame(snapshotFrame(1, "b"));
+  finish(run, "finished");
+
+  const payload = run.buildSavePayload();
+
+  assert.equal(payload.conversation_id, "a".repeat(32));
+  assert.equal(payload.assistant_turn_id, "00000002");
+  assert.equal(payload.turn_index, 2);
+});
+
 test("a session snapshot round trips through private state", () => {
   const { run, external } = harness();
   run.begin("what ran", { steps: 2 });
@@ -278,6 +309,75 @@ test("a session snapshot round trips through private state", () => {
   assert.equal(external.restoredComposer.draft, "draft for next run");
   assert.equal(external.restoredChrome.thinking, "reasoning");
   assert.equal(external.restoredEdit.remaskEdits.length, 1);
+});
+
+test("session snapshots bind the active run to its conversation", () => {
+  const { run, external, storage } = harness();
+  external.conversation = conversationIdentity();
+  run.begin("what ran", { steps: 2 });
+  run.appendFrame(snapshotFrame(0, "a"));
+  run.appendFrame(snapshotFrame(1, "b"));
+  finish(run, "finished");
+  external.conversation.conversation_revision = 3;
+  external.conversation.assistant_turn_version = 2;
+  external.conversation.assistant_text = "finished";
+  assert.equal(run.refreshConversation(), true);
+
+  assert.equal(run.saveSession(), true);
+  const stored = JSON.parse(storage.getItem("last-run"));
+  assert.equal(stored.conversationId, "a".repeat(32));
+  assert.equal(stored.conversationRevision, 3);
+  assert.equal(stored.assistantTurnId, "00000002");
+
+  run.reset();
+  assert.equal(run.restoreSession(), true);
+  assert.equal(
+    run.conversationIdentity().assistant_turn_id,
+    "00000002"
+  );
+});
+
+test("a snapshot from another conversation is retired", () => {
+  const { run, external, storage } = harness();
+  external.conversation = conversationIdentity();
+  run.begin("what ran", { steps: 2 });
+  run.appendFrame(snapshotFrame(0, "a"));
+  run.appendFrame(snapshotFrame(1, "b"));
+  finish(run, "finished");
+  assert.equal(run.saveSession(), true);
+  run.reset();
+  external.conversation = conversationIdentity({
+    conversation_id: "b".repeat(32),
+    conversation_revision: 1,
+  });
+
+  assert.equal(run.restoreSession(), false);
+  assert.equal(storage.getItem("last-run"), null);
+});
+
+test("a stale same-tail snapshot is retired", () => {
+  const { run, external, storage } = harness();
+  external.conversation = conversationIdentity();
+  run.begin("what ran", { steps: 2 });
+  run.appendFrame(snapshotFrame(0, "a"));
+  run.appendFrame(snapshotFrame(1, "old answer"));
+  finish(run, "old answer");
+  external.conversation = conversationIdentity({
+    conversation_revision: 3,
+    assistant_turn_version: 2,
+    assistant_text: "old answer",
+  });
+  assert.equal(run.refreshConversation(), true);
+  assert.equal(run.saveSession(), true);
+  run.reset();
+  external.conversation = conversationIdentity({
+    conversation_revision: 4,
+    assistant_turn_version: 3,
+    assistant_text: "new answer",
+  });
+
+  assert.equal(run.restoreSession(), false);
+  assert.equal(storage.getItem("last-run"), null);
 });
 
 test(
@@ -320,8 +420,10 @@ test(
     assert.deepEqual(external.lifecycle, [
       "start:original",
       "success:run-a",
+      "settled",
       "start:edited",
       "success:run-a",
+      "settled",
     ]);
   }
 );

@@ -165,6 +165,7 @@ test("the composed context readout uses the boot window",
       bootState: bootState(),
       fetchImpl: recordingFetch([]),
     });
+    await Promise.resolve();
     const socket =
       FakeSocket.opened[FakeSocket.opened.length - 1];
     const input = page.registry.get("prompt-input");

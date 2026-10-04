@@ -65,7 +65,7 @@ Browser (shared frontend)
   |  /ws + /api
   v
 Supervisor  (.venv, no torch/transformers)
-  - static assets + Analytics API + Save endpoint
+  - static assets + conversation, Analytics and Save APIs
   - Model Manager: spawns/stops one worker, VRAM pre-flight,
     host-wide lease so two instances cannot both load
   - /ws bidirectional proxy to the active worker
@@ -156,6 +156,14 @@ whatever directory you start from. Point elsewhere with
 `--results-dir`.
 
 ## What works
+
+Durable, bounded multi-turn conversations across every model. The
+generator restores the active conversation and newest page, loads
+older text in 50-turn pages, and keeps at most 200 compact turns in the
+browser. Inference packs the newest exact whole exchanges that fit,
+reports omitted earlier turns, and sends Mamba-3 the same chronology as
+raw completion text. Earlier responses retain text; only an explicitly
+saved response retains and links its XAI run.
 
 Diffusion generation for both diffusion models, streamed frame by
 frame, with a scrubber over the full history. Autoregressive and
