@@ -26,13 +26,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 INDEX = REPO_ROOT / "src" / "web" / "static" / "index.html"
 GUIDE = REPO_ROOT / "docs" / "GUIDE.md"
 
-# A ratchet, set just above today's largest panel (1,855 words) with
-# room for a feature or two. The whole modal was 11,282 words in one
-# scrolling body; the point of bounding each panel rather than the
-# total is that the total can hold steady while one panel quietly eats
-# everything. Lower it when a split makes room, the way the lint
-# baseline works. Do not raise it to make a paragraph fit.
-PANEL_WORD_BUDGET = 2_200
+# A ratchet, set just above the largest panel (1,664 words when it was
+# last lowered) with room for a feature or two. The whole modal was
+# 11,282 words in one scrolling body; the point of bounding each panel
+# rather than the total is that the total can hold steady while one
+# panel quietly eats everything. Lower it when a split makes room,
+# the way the lint baseline works. Do not raise it to make a paragraph
+# fit.
+PANEL_WORD_BUDGET = 2_000
 
 
 def _help_markup() -> str:
