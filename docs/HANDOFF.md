@@ -81,8 +81,8 @@ in an analytics suite.
   `src/web/static/` holds `menu`, `index`/`app`, `analytics`, `settings` and
   `vision`, plus `overlays.js` for the shared visuals and settings model and
   `persist.js` for durable UI state; a page loads only the modules it calls.
-  Analytics reads runs through `overlay_series.js`, draws its line charts with
-  `line_charts.js` on `chart_support.js`; `detail_requests.js` fences fetches.
+  Analytics reads runs via `overlay_series.js`, draws with `line_charts.js` and
+  `token_viewer.js` on `chart_support.js`; `detail_requests.js` fences fetches.
   Chart libraries and webfont are vendored in `static/vendor/` for offline use.
 - **Analytics reads** are split by cost: `/api/analytics/runs` carries only
   what the table draws (about 326 bytes a run), and the prompt, parameters

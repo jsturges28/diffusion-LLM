@@ -17,9 +17,9 @@ reasoning in `docs/ROADMAP.md`, and git history keeps the rest.
 ownership, was validated as a whole by the two-supervisor passes confirmed
 for items 310 to 314, 389 to 396, 400 to 404 and 405. Stage 3, extracting
 owners, is under way: `A2-ORG-01`, `A2-ORG-02`, `A2-DEPS-01`, `A2-ORG-03`
-and `A2-ORG-05` are done, and `A2-ORG-04` has its token viewer left, its
-line charts confirmed with item 410. The report's Sequencing section orders
-the rest, and its Combinations to avoid bind every pass.
+and `A2-ORG-05` are done, and `A2-ORG-04`, the last finding open, waits on
+item 411 for its token viewer, its line charts confirmed with item 410. The
+report's Combinations to avoid still bind every pass.
 
 ## How to work a finding
 
@@ -62,7 +62,7 @@ Decisions saying why.
 | A2-ORG-02 | 3 | done | `c3c007f` | | |
 | A2-DEPS-01 | 3 | done | `2a6e87d` | 406 | |
 | A2-ORG-03 | 3 | done | `a4ff5e5` | 407 | |
-| A2-ORG-04 | 3 | ready | `64281e2`, `548f022`, `634d628`, `4e44daa`, `e45d161` | 408, 410 | |
+| A2-ORG-04 | 3 | needs hardware | `64281e2`, `548f022`, `634d628`, `4e44daa`, `e45d161`, `c532bff`, `d7f2e6a`, `44f212d` | 408, 410, 411 | |
 | A2-ORG-05 | 3 | done | `23cc75a`, `d13cdc2` | 409 | |
 
 ## Decisions
@@ -112,8 +112,8 @@ Each settled with the maintainer during remediation.
 - `A2-ORG-03`'s codec is `run_snapshot.js`. Storage and every write to page
   state stay in `app.js`, and the stored keys are unchanged.
 - `A2-ORG-04` is taken in slices: one script list per page, the frame and
-  signal adapter, then the line charts' controller, `line_charts.js`, which
-  the page creates and mediates. The token viewer and entropy chart remain.
+  signal adapter, then two controllers the page creates and mediates,
+  `line_charts.js` and `token_viewer.js`, which owns the crossfade.
 - `A2-ORG-05` gave persistence, activation progress and reduced motion
   modules of their own; the settings model stays with the glow code.
 
@@ -143,8 +143,8 @@ Not findings, and each its own slice when taken.
 ## Baselines
 
 At the audit on 2026-10-01: 2,456 Python tests, 816 browser tests, and no
-Ruff findings. On 2026-10-03, after `A2-ORG-04`'s line charts: 2,655 Python
-tests passing and 6 skipped, 970 browser tests, no Ruff findings, and 34
+Ruff findings. On 2026-10-03, after `A2-ORG-04`'s token viewer: 2,662 Python
+tests passing and 6 skipped, 986 browser tests, no Ruff findings, and 34
 warnings, down from 92 before the lifespan move. One of the 34 is torch
 failing to start CUDA in the agent sandbox, which a machine with a working
 GPU does not raise.

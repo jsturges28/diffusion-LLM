@@ -317,6 +317,9 @@ kept when these were written:
 - **410**: confirmed on 2026-10-03: Analytics' line charts through their
   controller, after the 2026-10 audit's `A2-ORG-04` moved them into
   `line_charts.js`.
+- **411**: **outstanding**: Analytics' token viewer and entropy chart after
+  the 2026-10 audit's `A2-ORG-04` moved them into a controller of their own,
+  `token_viewer.js`.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -4817,3 +4820,45 @@ same in a real engine, with Chart.js drawing.
       loading. None of the first run's charts are left under the
       second's title, and every eye is open again.
     - Compare two runs. The compare panel draws both.
+
+## Analytics' token viewer through its controller
+
+From 2026-10-03 the Analytics detail panel's token viewer is
+`token_viewer.js`, which the page creates once (`A2-ORG-04`): the tokens at
+the scrubbed frame under each overlay, the candidate popover, the metrics
+strip and stopping readout above them, the crossfade between an edited run
+and the run it branched from, and the entropy chart, which follows the
+scrubber and lights the token under its bar. The crossfade is the viewer's
+now, and the line charts follow it through the page. What the viewer draws
+is tested against the controller alone in
+`tests/web/static/token_viewer.test.js`; this is the same in a real engine,
+with Chart.js drawing.
+
+411. **The token viewer behaves as it did.** In the desktop app, and then
+    in the browser launcher, open Analytics:
+    - Open a saved LLaDA run. Scrub with the slider and the arrows: the
+      tokens and the entropy bars move together. Choose each overlay in
+      the drawer in turn, and each draws as it did. Hover a token: the
+      strip reads its position, confidence and entropy, and on a run
+      saved with candidates they pop over it. The entropy chart's eye
+      hides its tooltip box and brings it back, and its zoom works.
+    - Click the drawer's handle to close and open it, drag it to a new
+      height, and turn its highlight checkbox on. Reload the page and
+      open the run again: the drawer is where you left it and the
+      hover highlight is still on.
+    - Open an edited LLaDA run. Drag the crossfade: the tokens, the
+      entropy bars and the line charts move together. Choose Diff vs
+      Original and move its two sliders. Hover a bar on the entropy
+      chart: its token lights in both layers, and the strip reads it.
+    - Open a DiffusionGemma run and scrub to a commit frame. Hovering a
+      token reads its canvas's last draft, "entropy as of step N", and
+      the stopping readout above the canvas follows the scrub.
+    - Open a SmolLM3 run. The drawer offers no Commit Order, and
+      scrubbing back fades the entropy bars past the scrubbed frame.
+    - Open a Mamba-3 run and choose Forgetting. The tokens recolor, and
+      a hover reads "Forgetting:" and its value in the strip.
+    - Open one run and then another before the first has finished
+      loading. None of the first run's tokens, bars or crossfade are
+      left under the second's title.
+    - With a run open, compare two runs. The compare panel draws both,
+      and opening a run afterwards shows only that run's tokens.
