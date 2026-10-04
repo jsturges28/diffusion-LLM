@@ -13,8 +13,8 @@
 // it never made, or a resume appending to frames it did not branch
 // from, which is the kind of wrong answer that looks right.
 //
-// The four full workflows at the top are the point of the file. They
-// are transcribed from the call sites rather than invented, so if the
+// The full workflows at the top are the point of the file. They are
+// transcribed from the call sites rather than invented, so if the
 // table is wrong they fail here rather than on a GPU.
 //
 // Run with: node --test tests/web/static/
@@ -90,6 +90,37 @@ test("editing another frame loops back to edit", () => {
   api.runPhasesEnter(phase, "edit");
 
   assert.equal(phase.mode, "edit");
+});
+
+test("a resume stopped before a frame goes back to choice", () => {
+  // Resume to End, stopped before the branch sent anything. The
+  // worker keeps the run it had, so the page goes back to where the
+  // resume was sent from rather than on to review.
+  const api = load();
+  const phase = api.runPhasesCreate();
+  walk(api, phase, ["select", "edit", "choice"]);
+  phase.guidedAction = "end";
+  api.runPhasesEnter(phase, "generating");
+
+  phase.guidedAction = null;
+  api.runPhasesEnter(phase, "choice");
+
+  assert.equal(phase.mode, "choice");
+});
+
+test("Run to Here stopped that way returns to its target", () => {
+  const api = load();
+  const phase = api.runPhasesCreate();
+  walk(api, phase, ["select", "edit", "choice", "select_target"]);
+  phase.guidedAction = "another";
+  phase.targetFrame = 12;
+  api.runPhasesEnter(phase, "generating");
+
+  phase.guidedAction = null;
+  phase.targetFrame = null;
+  api.runPhasesEnter(phase, "select_target");
+
+  assert.equal(phase.mode, "select_target");
 });
 
 test("what if runs straight from substitute to generating", () => {

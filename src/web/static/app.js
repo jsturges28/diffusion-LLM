@@ -485,6 +485,11 @@ var PROMPT_HISTORY_DELETE_ARMED_LABEL =
 // incomplete run.
 var preEditSnapshot = null;
 var scrubberMinFrame = 0;
+// What a resume in flight cut, and where it was sent from, kept
+// until it ends. See captureResumeCut.
+var pendingResume = null;
+var RESUME_STOPPED_BEFORE_FRAME =
+  "Stopped before the edit produced a frame. The run is unchanged.";
 
 // The step total this run reports, or null for an adaptive-stopping
 // model that has none. Read off every frame and previously discarded,
@@ -2533,6 +2538,7 @@ function toggleTpsMode() {
 function enterInterruptedState() {
   setGenerating(false);
   isResuming = false;
+  pendingResume = null;
   endRunStatus();
   runInterrupted = true;
   runLostConnection = true;
@@ -2561,9 +2567,18 @@ function enterInterruptedState() {
 }
 
 function handleDone(data) {
+  var resumed = pendingResume;
+  pendingResume = null;
   setGenerating(false);
   isResuming = false;
   endRunStatus();
+  // A resume that sent nothing changed nothing, on either side. The
+  // rest of this is skipped on purpose: the thinking panel is what
+  // Save reads, and this frame's empty thinking would clear it.
+  if (resumeStoppedBeforeAFrame(resumed, data)) {
+    landBeforeResume(resumed);
+    return;
+  }
   // A stopped run is still a run: it keeps its frames, its scrubber
   // and its edit tools. What it must not do is claim it finished,
   // because the text simply ends either way and nothing else on
@@ -6901,6 +6916,7 @@ function resetGuidedMode() {
   runPhasesReset(runPhase);
   hideAltsPopover();
   preEditSnapshot = null;
+  pendingResume = null;
   randomizeInitFrame = null;
   guidedEditControls.hidden = true;
   scrubberSlider.disabled = false;
@@ -7416,6 +7432,7 @@ function doGuidedResume(action) {
   var positions = lastEdit.token_positions;
   var frameIndex = lastEdit.frame_index;
 
+  pendingResume = captureResumeCut(frameIndex);
   remaskEdits.push({
     frame_index: frameIndex,
     token_positions: positions.slice(),
@@ -7456,6 +7473,84 @@ function doGuidedResume(action) {
   }
 
   ws.send(JSON.stringify(message));
+}
+
+// What a resume is about to cut, and where it is being sent from.
+// A resume stopped before it sends a frame has changed nothing on
+// the worker, which keeps the run it had, so the page puts this
+// back and returns there (landBeforeResume) rather than staying cut
+// back to the edited frame, where Confirm would save the run that
+// way. Only a Stop is answered this way: a connection lost before
+// the first frame is still handled by enterInterruptedState, which
+// drops the copy.
+function captureResumeCut(cutAt) {
+  var mode = runPhase.mode;
+  if (mode !== RUN_PHASE_CHOICE && mode !== RUN_PHASE_SELECT_TARGET) {
+    throw new Error("a resume is sent from choice or a target");
+  }
+  var perFrame = {};
+  var keys = Object.keys(perFrameRemasked);
+  for (var i = 0; i < keys.length; i++) {
+    perFrame[keys[i]] = Object.assign({}, perFrameRemasked[keys[i]]);
+  }
+  return {
+    cutAt: cutAt,
+    frames: runFramesSnapshot(runFrames),
+    candidates: runCandidates,
+    frameOffset: resumeFrameOffset,
+    elapsedOffset: resumeElapsedOffset,
+    finalText: lastFinalText,
+    interrupted: runInterrupted,
+    remaskEditsLen: remaskEdits.length,
+    mode: mode,
+    frame: currentScrubFrame,
+    minFrame: scrubberMinFrame,
+    remasked: Object.assign({}, remaskedPositions),
+    perFrame: perFrame,
+  };
+}
+
+// Whether the resume that just ended sent nothing before its Stop:
+// cancelled, with the run still at the length it was cut to.
+function resumeStoppedBeforeAFrame(resumed, data) {
+  if (resumed === null) {
+    return false;
+  }
+  if (data.cancelled !== true) {
+    return false;
+  }
+  return runFramesLength(runFrames) === resumed.cutAt;
+}
+
+// Put back what the resume cut and return to where it was sent from:
+// the run whole, the locked edit and its selection in place, ready to
+// resume again or exit.
+function landBeforeResume(saved) {
+  runFramesRestore(runFrames, saved.frames);
+  runCandidates = saved.candidates;
+  resumeFrameOffset = saved.frameOffset;
+  resumeElapsedOffset = saved.elapsedOffset;
+  lastFinalText = saved.finalText;
+  runInterrupted = saved.interrupted;
+  remaskEdits.length = saved.remaskEditsLen;
+  invalidateRunMemos();
+
+  runPhase.guidedAction = null;
+  runPhase.targetFrame = null;
+  if (saved.mode === RUN_PHASE_CHOICE) {
+    runPhasesEnter(runPhase, RUN_PHASE_CHOICE);
+  } else {
+    runPhasesEnter(runPhase, RUN_PHASE_SELECT_TARGET);
+  }
+  scrubberMinFrame = saved.minFrame;
+  remaskedPositions = saved.remasked;
+  perFrameRemasked = saved.perFrame;
+  scrubberActive = true;
+  setScrubberVisible(true);
+  navigateToFrame(saved.frame);
+  statusRowReflow(function () {
+    statusMessage.textContent = RESUME_STOPPED_BEFORE_FRAME;
+  });
 }
 
 function handleGuidedDone() {
@@ -8058,6 +8153,7 @@ function resetRunState() {
   lastSavedRunId = null;
   lastSavedRevision = null;
   isResuming = false;
+  pendingResume = null;
   resumeFrameOffset = 0;
   resumeElapsedOffset = 0;
   updateEditFramesLock();

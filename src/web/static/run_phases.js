@@ -54,7 +54,16 @@ var RUN_PHASE_TRANSITIONS = {
   choice: [RUN_PHASE_SELECT_TARGET, RUN_PHASE_GENERATING],
   select_target: [RUN_PHASE_GENERATING],
   substitute: [RUN_PHASE_GENERATING],
-  generating: [RUN_PHASE_EDIT, RUN_PHASE_REVIEW],
+  // Edit after Run to Here and review after Resume to End. Back to
+  // the phase a resume was sent from when it stops before sending a
+  // frame, because the worker then keeps the run it had and so does
+  // the page.
+  generating: [
+    RUN_PHASE_EDIT,
+    RUN_PHASE_REVIEW,
+    RUN_PHASE_CHOICE,
+    RUN_PHASE_SELECT_TARGET,
+  ],
   // Only by reset, which Confirm does after saving and Retry does
   // before starting the session again.
   review: [],
