@@ -29,6 +29,7 @@ STATIC = (
     Path(__file__).resolve().parents[2] / "src" / "web" / "static"
 )
 APP_JS = STATIC / "app.js"
+RUN_JS = STATIC / "generator_run.js"
 INDEX_HTML = STATIC / "index.html"
 
 
@@ -46,17 +47,26 @@ def _region(anchor: str, chars: int) -> str:
     return source[start : start + chars]
 
 
+def _run_region(anchor: str, chars: int) -> str:
+    source = RUN_JS.read_text(encoding="utf-8")
+    start = source.find(anchor)
+    assert start != -1, (
+        f"anchor {anchor!r} is gone from generator_run.js;"
+        " update this test rather than deleting it"
+    )
+    return source[start : start + chars]
+
+
 # -- who may start a save --
 
 
-def test_only_two_places_call_a_save() -> None:
-    """Confirm and the rescue. The Save button is the third trigger
-    and passes the function by reference, so it is counted by its own
-    test below rather than here."""
+def test_only_three_places_start_a_save() -> None:
+    """The page adapter, Confirm and the rescue. The adapter is the
+    function the Save button receives by reference."""
     source = _app()
-    calls = re.findall(r"(?<!function )saveRun\(\)", source)
+    calls = re.findall(r"generatorRun\.save\(\)", source)
 
-    assert len(calls) == 2
+    assert len(calls) == 3
 
 
 def test_the_save_button_is_one_of_them() -> None:
@@ -65,7 +75,9 @@ def test_the_save_button_is_one_of_them() -> None:
 
 def test_confirming_an_edit_is_one_of_them() -> None:
     """Confirm is itself a save, so it is not an implicit one."""
-    assert "saveRun()" in _region("function confirmGuidedEdit()", 400)
+    assert "generatorRun.save()" in _region(
+        "function confirmGuidedEdit()", 400
+    )
 
 
 def test_the_rescue_is_the_third() -> None:
@@ -73,7 +85,7 @@ def test_the_rescue_is_the_third() -> None:
     run cannot survive it, and the alternative is losing it."""
     region = _region("function rescueRunThenReload()", 700)
 
-    assert "saveRun()" in region
+    assert "generatorRun.save()" in region
 
 
 # -- and who may not --
@@ -134,17 +146,17 @@ def test_a_run_without_its_detail_is_refused() -> None:
     and the timings but no per-token detail. Saving it would write
     that hollowed-out version permanently, in place of the run that
     was on screen before the navigation."""
-    region = _region("function saveRun()", 1400)
+    region = _run_region("function save()", 1400)
 
-    assert "runFramesLackDetail(runFrames)" in region
+    assert "frameLacksDetail()" in region
 
 
 def test_the_refusal_comes_before_the_request() -> None:
     """Checked with the other reasons not to save, not after the
     payload has been built and posted."""
-    region = _region("function saveRun()", 6000)
-    guard = region.find("runFramesLackDetail(runFrames)")
-    post = region.find('fetch("/api/save"')
+    region = _run_region("function save()", 2600)
+    guard = region.find("frameLacksDetail()")
+    post = region.find('requestSave("/api/save"')
 
     assert guard != -1
     assert post != -1
@@ -154,6 +166,6 @@ def test_the_refusal_comes_before_the_request() -> None:
 def test_the_refusal_says_why() -> None:
     """A save that silently does nothing is worse than one that
     writes the wrong thing, because nothing tells the user either."""
-    region = _region("function saveRun()", 1400)
+    region = _run_region("function save()", 1400)
 
     assert "cannot be saved in full" in region

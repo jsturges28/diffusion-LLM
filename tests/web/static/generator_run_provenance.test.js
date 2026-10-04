@@ -158,7 +158,7 @@ function appendFrame(index, provenance) {
 // The envelope the page holds, copied out of the vm's realm so a deep
 // comparison judges its content rather than which realm built it.
 function held(context) {
-  const value = context.lastRunProvenance;
+  const value = context.generatorRun.provenance();
   return value === null ? null : JSON.parse(JSON.stringify(value));
 }
 
@@ -213,7 +213,7 @@ test("the next Generate starts without one", () => {
 
   context.startGeneration();
 
-  assert.equal(context.lastRunProvenance, null);
+  assert.equal(context.generatorRun.provenance(), null);
 });
 
 test("an envelope that is not an object is ignored", () => {

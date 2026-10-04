@@ -93,7 +93,7 @@ def test_the_message_names_the_run() -> None:
     region = _region("function rewindWorkerRun()", 700)
 
     assert 'type: "rewind"' in region
-    assert "run_token: activeRunToken" in region
+    assert "run_token: generatorRun.runToken()" in region
 
 
 def test_it_is_skipped_without_a_run_to_name() -> None:
@@ -101,7 +101,7 @@ def test_it_is_skipped_without_a_run_to_name() -> None:
     retained run to rewind either."""
     region = _region("function rewindWorkerRun()", 700)
 
-    assert "if (!activeRunToken)" in region
+    assert "if (!generatorRun.runToken())" in region
 
 
 def test_it_is_skipped_on_a_closed_socket() -> None:

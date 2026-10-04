@@ -70,7 +70,9 @@ def test_neither_reveal_is_behind_the_frame_check() -> None:
     the branch, not inside it. Both orders contain both lines, so
     position is the only thing that distinguishes them."""
     body = _review_case()
-    gate = body.find("currentScrubFrame === runFramesLength(")
+    gate = body.find(
+        "currentScrubFrame === generatorRun.frameCount()"
+    )
     confirm = body.find("btnConfirmEdit.hidden = false")
     retry = body.find("btnRetryEdit.hidden = false")
 
@@ -84,7 +86,9 @@ def test_continue_is_not_behind_the_frame_check_either() -> None:
     frame is on screen, so it is revealed with the other two, for a
     stopped branch only."""
     body = _review_case()
-    gate = body.find("currentScrubFrame === runFramesLength(")
+    gate = body.find(
+        "currentScrubFrame === generatorRun.frameCount()"
+    )
     reveal = body.find(
         "btnContinueEdit.hidden = !reviewCanContinue()"
     )
@@ -110,7 +114,7 @@ def test_confirm_does_not_read_the_scrubber() -> None:
     the frame you are looking at cannot change what is written."""
     body = _region("function confirmGuidedEdit()", 200)
 
-    assert "saveRun()" in body
+    assert "generatorRun.save()" in body
     assert "activateScrubber()" in body
     assert "currentScrubFrame" not in body
 
@@ -123,7 +127,7 @@ def test_confirm_lands_on_the_last_frame_by_itself() -> None:
     body = _region("function activateScrubber()", 300)
 
     assert (
-        "currentScrubFrame = runFramesLength(runFrames) - 1" in body
+        "currentScrubFrame = generatorRun.frameCount() - 1" in body
     )
 
 

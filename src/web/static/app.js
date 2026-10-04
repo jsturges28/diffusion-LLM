@@ -56,6 +56,26 @@ var generatorChrome = generatorChromeCreate({
   revealText: denoiseReveal,
   cancelReveal: cancelDenoise,
 });
+var generatorRun = generatorRunCreate({
+  readModel: generatorRunReadModel,
+  readComposer: generatorRunReadComposer,
+  restoreComposer: generatorRunRestoreComposer,
+  readChrome: generatorRunReadChrome,
+  restoreChrome: generatorRunRestoreChrome,
+  readEditArtifacts: generatorRunReadEditArtifacts,
+  restoreEditArtifacts: generatorRunRestoreEditArtifacts,
+  invalidateRender: invalidateRunMemos,
+  onSessionRestored: generatorRunSessionRestored,
+  requestSave: function (url, init) {
+    return fetch(url, init);
+  },
+  onSaveStart: generatorRunSaveStart,
+  onSaveSuccess: generatorRunSaveSuccess,
+  onSaveFailure: generatorRunSaveFailure,
+  onSaveRefused: generatorRunSaveRefused,
+  storage: sessionStorage,
+  sessionKey: PERSIST_LAST_RUN_KEY,
+});
 
 // Scrubber DOM refs.
 var scrubberSection =
@@ -121,8 +141,8 @@ var runBlendInput =
 // "diff". effectiveColorMode drops a selection the run cannot draw.
 var overlayMode = "none";
 // Memoized per-run commit steps (position index -> settle step),
-// null until first needed and invalidated whenever runFrames.tokens
-// is replaced (new run, resume, or session restore).
+// null until first needed and invalidated whenever the frame tokens
+// are replaced (new run, resume, or session restore).
 var commitSteps = null;
 // The same for the retained pre-edit run, needed because the ghost
 // layer of a crossfade settles its positions on its own schedule and
@@ -200,90 +220,13 @@ var shuffleLabel =
 
 var ws = null;
 var isGenerating = false;
-var isSaving = false;
 var saveCheckTimer = null;
 var modelReady = false;
 var reconnectDelay = RECONNECT_DELAY_MS;
 var reconnectTimer = null;
 
-// Accumulated data for the most recent completed run: six arrays
-// indexed by frame, held as one thing so that appending, truncating,
-// snapshotting and serialising cannot reach some of them and miss
-// the rest. See run_frames.js, which owns every operation on them
-// and the invariant that ties their lengths together.
-//
-// `revealed` is how many positions each frame produced, from the
-// sampler's reveal signal. Kept per frame rather than as a running
-// total so the footer can report the last step as well as the run
-// average.
-//
-// Never reassigned: the family is mutated in place so that a
-// reference taken anywhere stays valid.
-var runFrames = runFramesCreate();
-// The prompt and parameters the run was generated from, captured as
-// Generate sends them. Never read back from the form afterwards: the
-// box is free for browsing history and drafting the next prompt, the
-// parameters can change before an edit is resumed, and neither the
-// resume nor a What If branch sends either one, so the form stops
-// describing the run the moment it finishes.
-var lastRunPrompt = null;
-var lastRunParams = null;
-var lastFinalText = null;
-// Tokens the last run's templated prompt occupied, as the sampler
-// reported it on the done frame, or null when it reported none. Saved
-// with the run so the record is a measurement rather than the
-// readout's count of whatever is in the box at save time.
-var lastRunPromptLen = null;
-// Which run the worker is holding state for, as it named that run on
-// the terminal frame. One worker serves every window and keeps
-// exactly one run, so a second window generating replaces the state
-// behind this page's still-visible output. Sent back on resume,
-// substitution and probe, where being answered from the wrong run is
-// worse than being refused: the shapes can agree by accident and the
-// result then looks like a valid answer to the wrong question. Empty
-// until a run finishes here.
-var activeRunToken = "";
-// The worker the socket reaches, as the supervisor named it on the
-// latest resident frame, and the worker that made the run on screen.
-// The token above cannot tell a replaced worker from its own before
-// a request is refused; these can, from the moment the socket opens
-// (`A2-LIFE-03`). The second rides the session snapshot, so a run
-// whose model was reloaded during a trip to Analytics comes back
-// locked rather than live. Empty while unknown: before the first
-// frame, from a supervisor that names no workers, or for a run
-// restored from a snapshot older than the names.
-var residentWorker = "";
-var runWorker = "";
-// What the worker attested about itself on the done frame: which
-// model and checkpoint, the device it actually loaded onto, its
-// library versions, and its tokenizer. Held here and submitted with
-// the save so the record describes the run, not whichever model the
-// supervisor happens to have resident when Save is clicked. Two
-// windows share one supervisor, so those differ more easily than it
-// sounds. Null for a run that finished before this existed.
-var lastRunProvenance = null;
-var originalRun = originalRunCreate();
-// The pre-edit run's own signals, captured once when the first run
-// completes. Timing and mean confidence could in principle be
-// recovered from the saved frames, but the candidate sets cannot:
-// doSubstitute truncates positionAlts at the edit and the branch
-// overwrites the rest, so this is the only chance to keep them.
-
-// Per-position competing candidates, indexed by token position (not
-// by frame): a position's candidate set is fixed the moment it is
-// sampled, so each arrives once, on the frame that introduces it.
-// Empty unless the model's Alternatives capture was enabled.
-var positionAlts = [];
-// A diffusion run's candidates, per captured frame rather than per
-// position, since a diffusion position is re-decided at every step.
-// Arrives in one message as the run ends; see run_candidates.js.
-// Replaced rather than mutated, so a snapshot can hold a reference.
-var runCandidates = runCandidatesCreate();
-// The pre-edit run's, frozen when the run first finishes, beside the
-// baseline itself, so an edited run's popover can page back to what
-// the original was weighing. Until an edit replaces the live store
-// the two names hold one object. Null before the first finish.
-var originalCandidates = null;
+// generator_run.js owns every mutable fact and store about the run
+// on screen. This file keeps view state, edit phases and transport.
 // Position whose candidate popover is open, or null when closed.
 // The page names the run it reads, "original" or "edited", and is
 // null where there is only one set to show, as on an unedited run.
@@ -357,34 +300,6 @@ var remaskEdits = [];
 // from where it started; see run_phases.js, which owns the
 // table. Never reassigned.
 var runPhase = runPhasesCreate();
-// True once an edited run has been saved. Locks Edit Frames for the
-// current run (until the next Generate) so a run cannot accrue a
-// second, conflicting saved edit.
-var editedRunSaved = false;
-// True when the run on screen was stopped rather than finished:
-// Stop was pressed, or the socket dropped mid-run. It stays
-// scrubbable and savable, and the flag travels with the save so the
-// stored record says so too. Without it a truncated run reads
-// exactly like a complete one, on screen and in Analytics.
-var runInterrupted = false;
-// True when that stop was the socket dropping rather than Stop. No
-// terminal frame named the run the worker holds, so the run cannot be
-// edited, and its edit tools say so instead of being refused as if
-// another run had replaced it.
-var runLostConnection = false;
-// True once the current run has been saved at least once. Read by
-// Confirm to decide whether it is replacing a run the user already
-// filed or writing this generation for the first time.
-var runSaved = false;
-// Folder id of this run's last save. An edited/bundled save reuses it
-// so the pre-edit run is replaced (one Analytics row) rather than
-// duplicated.
-var lastSavedRunId = null;
-// The revision that save produced, quoted back when replacing it. The
-// server refuses a replacement whose base has moved on, which is what
-// stops a second window's stale edit from erasing this one. Null means
-// we have not saved this run yet.
-var lastSavedRevision = null;
 // Snapshot of the complete run taken when Edit Frames is entered.
 // Partial resumes ("Run to Here") truncate the live run mid-way, so
 // exiting restores this to avoid stranding the user on an
@@ -397,21 +312,10 @@ var pendingResume = null;
 var RESUME_STOPPED_BEFORE_FRAME =
   "Stopped before the edit produced a frame. The run is unchanged.";
 
-// The step total this run reports, or null for an adaptive-stopping
-// model that has none. Read off every frame and previously discarded,
-// which is why the scrubber could not rebuild the step readout and
-// left it frozen on the run's last step.
-var lastRunTotalSteps = null;
-
-// Resume state: when resuming, incoming frames are
-// appended starting at resumeFrameOffset. The worker restarts its
-// clock for each generate/resume/substitute segment, so elapsed
-// samples from the branch are shifted by resumeElapsedOffset (the
-// elapsed value at the last frame kept) to stay cumulative and
-// aligned with the frame arrays.
+// Whether the edit phase is currently receiving a resumed stream.
+// The run controller owns the corresponding frame and elapsed
+// offsets; this boolean stays with the page's edit-phase state.
 var isResuming = false;
-var resumeFrameOffset = 0;
-var resumeElapsedOffset = 0;
 
 // ---- Background floating characters ----
 
@@ -781,7 +685,7 @@ function adoptResidentWorker(worker) {
     return;
   }
   var wasBlocked = runEditBlock() !== "";
-  residentWorker = worker;
+  generatorRun.adoptResidentWorker(worker);
   var blocked = runEditBlock();
   if (!blocked || wasBlocked) {
     updateEditFramesLock();
@@ -816,9 +720,9 @@ var RESCUE_SAVE_TIMEOUT_MS = 8000;
 // from Analytics; a lost one cannot be recovered.
 function rescueRunThenReload() {
   if (
-    runSaved
-    || runFramesLength(runFrames) === 0
-    || !lastFinalText
+    generatorRun.saved()
+    || generatorRun.frameCount() === 0
+    || !generatorRun.finalText()
   ) {
     location.reload();
     return;
@@ -829,7 +733,7 @@ function rescueRunThenReload() {
   var timeout = new Promise(function (resolve) {
     setTimeout(resolve, RESCUE_SAVE_TIMEOUT_MS);
   });
-  Promise.race([saveRun(), timeout]).then(
+  Promise.race([generatorRun.save(), timeout]).then(
     function () {
       location.reload();
     },
@@ -865,79 +769,35 @@ function stepReadout(step, canvasIndex, totalSteps, prefix) {
 // stream's frames went: after the point a resume branched from, and
 // from 0 for a fresh run.
 function handleCandidates(data) {
-  runCandidates = runCandidatesAddStream(
-    runCandidates, resumeFrameOffset, data
-  );
-}
-
-// A frame that carries the one position it added rather than the
-// whole sequence. Sent by models that only ever grow their output,
-// where a settled position never moves and the receiver holding the
-// prefix already holds everything the old snapshot restated.
-function frameIsAppend(data) {
-  return data.shape === "append";
-}
-
-// What the worker attests about the run in progress. A run's opening
-// frame carries the worker's half of it, so a run whose connection
-// drops before its terminal frame still saves as the model that drew
-// it rather than as whichever one is resident by then; the terminal
-// frame replaces it with the whole envelope, the run's cost included.
-function adoptRunProvenance(data) {
-  if (data.provenance && typeof data.provenance === "object") {
-    lastRunProvenance = data.provenance;
-  }
+  generatorRun.addCandidates(data);
 }
 
 function handleFrame(data) {
-  adoptRunProvenance(data);
-  if (frameIsAppend(data)) {
-    handleAppendFrame(data);
+  var appended;
+  try {
+    appended = generatorRun.appendFrame(data);
+  } catch (error) {
+    reportRunDesync(error);
     return;
   }
-  // Candidate sets ride only the frame that introduces their
-  // position (the frame's last token), so accumulate by position.
-  if (data.alts && data.tokens && data.tokens.length > 0) {
-    positionAlts[data.tokens.length - 1] = data.alts;
+  if (appended.append) {
+    handleAppendFrame(data, appended);
+    return;
   }
-
-  runFramesAppend(runFrames, {
-    history: data.text,
-    tokens: data.tokens || null,
-    canvasIndex:
-      typeof data.canvas_index === "number"
-        ? data.canvas_index
-        : 0,
-    meanConf:
-      typeof data.mean_conf === "number" ? data.mean_conf : null,
-    // Shifted by the pre-resume total and re-rounded to the worker's
-    // two decimals, so the series stays cumulative across segments
-    // instead of dropping back to zero at each branch.
-    //
-    // A frame with no elapsed used to append nothing here while its
-    // five siblings grew, which is the misalignment the family now
-    // refuses. It cannot happen from a real worker, since the frame
-    // streamer stamps elapsed on everything it forwards, so carrying
-    // the previous total is the reading that keeps the series
-    // monotonic in the case that does not arise.
-    elapsed:
-      typeof data.elapsed === "number"
-        ? +(data.elapsed + resumeElapsedOffset).toFixed(2)
-        : lastElapsedOr(resumeElapsedOffset),
-    revealed: data.revealed ? data.revealed.length : 0,
-  });
-
   // The token view needs per-position metadata; a model that does not
   // send it still gets the character renderer.
-  if (data.tokens) {
+  if (appended.tokens) {
     var revised = liveRevisionsAt(
-      runFramesLength(runFrames) - 1, data.tokens
+      appended.index, appended.tokens
     );
     renderLiveFrame(
-      data.tokens, data.revealed, revised, data.live_candidates
+      appended.tokens,
+      data.revealed,
+      revised,
+      data.live_candidates
     );
   } else {
-    renderFrame(data.text);
+    renderFrame(appended.text);
   }
   refreshStopReadout();
 
@@ -951,39 +811,8 @@ function handleFrame(data) {
 // canvas needs, and assembling it from the store is a slice. What
 // changed is that the slice happens here instead of arriving over
 // the wire N times.
-function handleAppendFrame(data) {
-  var position = data.index - 1;
-  if (data.alts) {
-    positionAlts[position] = data.alts;
-  }
-  try {
-    runFramesAppendPosition(runFrames, {
-      index: data.index,
-      token: data.token,
-      canvasIndex:
-        typeof data.canvas_index === "number"
-          ? data.canvas_index
-          : 0,
-      meanConf:
-        typeof data.mean_conf === "number" ? data.mean_conf : null,
-      elapsed:
-        typeof data.elapsed === "number"
-          ? +(data.elapsed + resumeElapsedOffset).toFixed(2)
-          : lastElapsedOr(resumeElapsedOffset),
-      revealed: data.revealed ? data.revealed.length : 0,
-    });
-  } catch (error) {
-    // A gap in an append stream is not survivable the way a gap in
-    // a snapshot stream was. Every later position would shift by
-    // one and the page would show fluent text the model never
-    // produced, which is the failure worth refusing outright: it
-    // looks like a result.
-    reportRunDesync(error);
-    return;
-  }
-
-  var assembled = runFramesTokensLast(runFrames);
-  renderLiveFrame(assembled, data.revealed);
+function handleAppendFrame(data, appended) {
+  renderLiveFrame(appended.tokens, data.revealed);
   updateLiveFrameStatus(data);
 }
 
@@ -1007,7 +836,7 @@ function updateLiveFrameStatus(data) {
       ? data.total_steps
       : null;
   if (!isResuming) {
-    lastRunTotalSteps = frameSteps;
+    generatorRun.setTotalSteps(frameSteps);
   }
   generatorChrome.setStep(
     stepReadout(
@@ -1040,15 +869,18 @@ function reportRunDesync(error) {
 // scrubber counts the whole run, so the array index is the step,
 // which is the same number the "Frame N / M" label beside it shows.
 function renderScrubStepReadout(index) {
-  if (lastRunTotalSteps === null
-    && runFrames.canvasIndex.length === 0) {
+  var total = generatorRun.totalSteps();
+  if (
+    total === null
+    && generatorRun.frameCanvasSeries().length === 0
+  ) {
     return;
   }
   generatorChrome.setStep(
     stepReadout(
       index,
-      runFrames.canvasIndex[index],
-      lastRunTotalSteps,
+      generatorRun.frameCanvas(index),
+      total,
       "Step "
     )
   );
@@ -1056,19 +888,18 @@ function renderScrubStepReadout(index) {
 
 // ---- Elapsed and tokens per second ----
 
-// Both readouts come off runFrames.elapsed rather than off the frame in
+// Both readouts come off the run's elapsed series, not the frame in
 // hand. data.elapsed is segment-local: after an edit the worker times
 // the branch from zero, so reading it directly made the footer's
-// Elapsed jump backwards mid-run. runFrames.elapsed is already carrying
+// Elapsed jump backwards mid-run. The controller already carries
 // the pre-edit total (see handleFrame), so its tail is the real
 // wall-clock time of everything generated so far.
 function updateRunRateFooter() {
-  var frames = runFrames.elapsed.length;
-  if (frames === 0) {
+  if (generatorRun.frameCount() === 0) {
     return;
   }
   generatorChrome.updateRateFooter({
-    elapsedSeconds: runFrames.elapsed[frames - 1],
+    elapsedSeconds: generatorRun.lastElapsed(),
     rate: currentTokensPerSecond(),
     tpsMode: appSettings.tpsMode,
   });
@@ -1079,28 +910,7 @@ function updateRunRateFooter() {
 // first frame after an edit is the second case, since it lands at the
 // pre-edit total and so shares a timestamp with the frame before it.
 function currentTokensPerSecond() {
-  var frames = runFrames.elapsed.length;
-  if (frames === 0) {
-    return null;
-  }
-  if (appSettings.tpsMode === "last") {
-    var stepSeconds = frames > 1
-      ? runFrames.elapsed[frames - 1] - runFrames.elapsed[frames - 2]
-      : runFrames.elapsed[0];
-    if (!(stepSeconds > 0)) {
-      return null;
-    }
-    return (runFrames.revealed[frames - 1] || 0) / stepSeconds;
-  }
-  var total = runFrames.elapsed[frames - 1];
-  if (!(total > 0)) {
-    return null;
-  }
-  var produced = 0;
-  for (var i = 0; i < frames; i++) {
-    produced += runFrames.revealed[i] || 0;
-  }
-  return produced / total;
+  return generatorRun.tokensPerSecond(appSettings.tpsMode);
 }
 
 function toggleTpsMode() {
@@ -1122,8 +932,7 @@ function enterInterruptedState() {
   isResuming = false;
   pendingResume = null;
   generatorChrome.endRunStatus();
-  runInterrupted = true;
-  runLostConnection = true;
+  var hasFrames = generatorRun.interruptConnection();
   updateEditFramesLock();
   generatorChrome.setMessage(
     "Stopped: lost the connection mid-run."
@@ -1131,18 +940,13 @@ function enterInterruptedState() {
   // The frames already on screen are real and worth keeping, so
   // the scrubber and Save stay available. What the run cannot do
   // is claim it finished.
-  if (runFramesLength(runFrames) > 0) {
-    // No terminal frame is coming to say what the run's text was,
-    // so it is read off the frames the page received. Without it
-    // Save, the session snapshot and the model-switch rescue all
-    // had nothing to write and declined without a word.
-    lastFinalText = runFramesLatestText(runFrames);
+  if (hasFrames) {
     setSaveAvailable(true);
     activateScrubber();
     // Kept the way a finished run is, so leaving for Analytics
     // before saving does not lose it (skip while mid guided-edit).
     if (runPhase.mode === null) {
-      saveSessionState();
+      generatorRun.saveSession();
     }
   }
 }
@@ -1165,31 +969,12 @@ function handleDone(data) {
   // because the text simply ends either way and nothing else on
   // screen says which. The flag also rides along to the save, so
   // the record cannot outlive the distinction.
-  runInterrupted = data.cancelled === true;
-  var terminalMessage = runInterrupted ? "Stopped." : "Done.";
+  var completed = generatorRun.finish(data);
+  var terminalMessage =
+    completed.interrupted ? "Stopped." : "Done.";
   // The chip is still fading as the line fills in beneath it, so
   // ease the row's new shape instead of snapping the chip sideways.
   generatorChrome.setMessage(terminalMessage);
-  if (data.final_text) {
-    lastFinalText = data.final_text;
-  }
-  if (typeof data.prompt_len === "number") {
-    lastRunPromptLen = data.prompt_len;
-  }
-  // Every terminal frame carries this, including the ones the
-  // worker synthesizes for a guided edit, so a resumed run keeps
-  // describing the worker that resumed it.
-  adoptRunProvenance(data);
-  // Stamped by the same hand and read for the same reason: which run
-  // the worker is now holding state for. Sent back on resume,
-  // substitution and probe, so a second window finishing a
-  // generation makes this page's follow-ups refused rather than
-  // answered from the run that replaced the one on screen.
-  if (typeof data.run_token === "string") {
-    activeRunToken = data.run_token;
-  }
-  // The worker that finished it is the one the socket reaches now.
-  runWorker = residentWorker;
   if (thinkingPanel && thinkingContent) {
     if (data.thinking) {
       thinkingContent.textContent = data.thinking;
@@ -1199,11 +984,6 @@ function handleDone(data) {
       thinkingContent.textContent = "";
     }
   }
-  originalRunCapture(originalRun, runFrames, positionAlts);
-  if (originalCandidates === null) {
-    originalCandidates = runCandidates;
-  }
-
   setSaveAvailable(true);
 
   if (runPhase.mode === "generating") {
@@ -1215,7 +995,7 @@ function handleDone(data) {
   // Persist the completed run so it survives navigating to
   // Analytics and back (skip while mid guided-edit).
   if (runPhase.mode === null) {
-    saveSessionState();
+    generatorRun.saveSession();
   }
 }
 
@@ -1246,7 +1026,7 @@ function handleError(data) {
   );
   // Said either way: an auxiliary failure is still worth reading, and
   // the change here is what gets undone, not what gets shown.
-  if (routed.unwindsRun && runFramesLength(runFrames) > 1) {
+  if (routed.unwindsRun && generatorRun.frameCount() > 1) {
     activateScrubber();
   }
 }
@@ -1460,7 +1240,7 @@ function liveRevisionFoldThrough(count) {
   for (var f = 0; f < count; f++) {
     fold = overlaysRevisionStep(
       fold,
-      runFramesTokensAt(runFrames, f) || [],
+      generatorRun.frameTokens(f) || [],
       runFrameCanvas(f),
       overlaysRemaskedAt(remaskEdits, f)
     ).fold;
@@ -1552,17 +1332,20 @@ function renderFinalText(text) {
 
 // Per-position commit step for the current run: the step after
 // which a position last changed to its final value. Derived
-// purely from runFrames.tokens (the final frame is ground truth), so
+// purely from the frame tokens (the final frame is ground truth), so
 // it is exact for LLaDA (resolved tokens are frozen) and a
 // "settle" proxy for DiffusionGemma. Positions still unresolved
 // at the last frame get -1 (left uncolored). Result is memoized
-// in commitSteps and invalidated whenever runFrames.tokens changes.
+// in commitSteps and invalidated whenever those tokens change.
 function computeCommitSteps() {
-  if (runFramesIsAppend(runFrames)) {
-    return overlaysAppendCommitSteps(runFrames.positions);
+  if (generatorRun.frameIsAppend()) {
+    return overlaysAppendCommitSteps(
+      generatorRun.framePositions()
+    );
   }
+  var series = generatorRun.frameTokenSeries();
   return overlaysComputeCommitSteps(
-    overlaysFrameReader(runFrames.tokens), runFrames.tokens.length
+    overlaysFrameReader(series), series.length
   );
 }
 
@@ -1570,12 +1353,13 @@ function computeCommitSteps() {
 // log so a remasked position starts over at its edit. A run that only
 // grows never revisits a position, so it has none to find.
 function computeRevisions() {
-  if (runFramesIsAppend(runFrames)) {
+  if (generatorRun.frameIsAppend()) {
     return [];
   }
+  var series = generatorRun.frameTokenSeries();
   return overlaysComputeRevisions(
-    overlaysFrameReader(runFrames.tokens),
-    runFrames.tokens.length,
+    overlaysFrameReader(series),
+    series.length,
     runFrameCanvas,
     remaskEdits
   );
@@ -1603,8 +1387,8 @@ function invalidateRunMemos() {
 // metrics strip), the remask-origin positions, and a divergence
 // summary.
 function computeDiff() {
-  var cur = runFramesTokensLast(runFrames);
-  var orig = originalRunTokensLast(originalRun);
+  var cur = generatorRun.frameTokensLast();
+  var orig = generatorRun.originalTokensLast();
   return overlaysComputeDiff(cur, orig, remaskEdits);
 }
 
@@ -1619,12 +1403,13 @@ function computeDiff() {
 function renderDiffOverlay(frameIndex) {
   flickerStop();
   var diff = currentDiffData();
-  var editedTokens = runFramesTokensAt(runFrames, frameIndex) || [];
+  var editedTokens =
+    generatorRun.frameTokens(frameIndex) || [];
   var oIdx = Math.min(
-    frameIndex, originalRunTokenFrames(originalRun) - 1
+    frameIndex, generatorRun.originalTokenFrames() - 1
   );
   var origTokens =
-    (oIdx >= 0 ? originalRunTokensAt(originalRun, oIdx) : null) || [];
+    (oIdx >= 0 ? generatorRun.originalTokens(oIdx) : null) || [];
 
   outputArea.textContent = "";
   tokenHighlightPos = null;
@@ -1679,11 +1464,13 @@ function currentDiffData() {
 function commitStepsFor(isOriginal) {
   if (isOriginal) {
     if (originalCommitSteps === null) {
-      originalCommitSteps = originalRunIsAppend(originalRun)
-        ? overlaysAppendCommitSteps(originalRun.positions)
+      var series = generatorRun.originalTokenSeries();
+      originalCommitSteps = generatorRun.originalIsAppend()
+        ? overlaysAppendCommitSteps(
+          generatorRun.originalPositions()
+        )
         : overlaysComputeCommitSteps(
-          overlaysFrameReader(originalRun.tokens),
-          originalRun.tokens.length
+          overlaysFrameReader(series), series.length
         );
     }
     return originalCommitSteps;
@@ -1712,19 +1499,24 @@ function tokenCommitStep(index, isOriginal) {
 function revisionsFor(isOriginal) {
   if (isOriginal) {
     if (originalRevisions === null) {
-      originalRevisions = originalRunIsAppend(originalRun)
+      var originalSeries =
+        generatorRun.originalTokenSeries();
+      originalRevisions = generatorRun.originalIsAppend()
         ? []
         : overlaysComputeRevisions(
-          overlaysFrameReader(originalRun.tokens),
-          originalRun.tokens.length,
+          overlaysFrameReader(originalSeries),
+          originalSeries.length,
           singleCanvas,
           []
         );
     }
     return originalRevisions;
   }
-  if (runRevisions === null
-    || runRevisions.length !== runFrames.tokens.length) {
+  var frameSeries = generatorRun.frameTokenSeries();
+  if (
+    runRevisions === null
+    || runRevisions.length !== frameSeries.length
+  ) {
     runRevisions = computeRevisions();
   }
   return runRevisions;
@@ -1747,7 +1539,8 @@ function revisionsAvailable() {
 function layerFrameFor(isOriginal) {
   if (isOriginal) {
     return Math.min(
-      currentScrubFrame, originalRunTokenFrames(originalRun) - 1
+      currentScrubFrame,
+      generatorRun.originalTokenFrames() - 1
     );
   }
   return currentScrubFrame;
@@ -1814,8 +1607,10 @@ function tokenColorAt(index, tok, isOriginal) {
     if (step === null) {
       return null;
     }
-    var frames = isOriginal ? originalRun.tokens : runFrames.tokens;
-    return commitColor(step, frames.length - 1);
+    var count = isOriginal
+      ? generatorRun.originalTokenFrames()
+      : generatorRun.frameCount();
+    return commitColor(step, count - 1);
   }
   if (mode === "revisions") {
     return revisionColor(tokenRevisionCount(index, isOriginal));
@@ -1989,9 +1784,9 @@ function updateDiffSummary() {
 // a branch to compare against the retained original run.
 function diffAvailable() {
   return (
-    originalRun.totalFrames > 0
+    generatorRun.originalCaptured()
     && remaskEdits.length > 0
-    && originalRunTokenFrames(originalRun) > 0
+    && generatorRun.originalTokenFrames() > 0
   );
 }
 
@@ -2034,7 +1829,7 @@ function entropyAvailable() {
   }
   // Anywhere in the run rather than on its latest frame alone: a
   // DiffusionGemma canvas ends on a commit, which carries none.
-  var last = runFramesLength(runFrames) - 1;
+  var last = generatorRun.frameCount() - 1;
   return runEntropyFrame(last, singleCanvas) >= 0;
 }
 
@@ -2043,11 +1838,11 @@ function entropyAvailable() {
 function runEntropyFrame(index, canvasOf) {
   return overlaysEntropyFrame(
     function (frame) {
-      return runFramesTokensAt(runFrames, frame);
+      return generatorRun.frameTokens(frame);
     },
     canvasOf,
     index,
-    runFramesIsAppend(runFrames)
+    generatorRun.frameIsAppend()
   );
 }
 
@@ -2056,11 +1851,11 @@ function runEntropyFrame(index, canvasOf) {
 function originalEntropyFrame(index) {
   return overlaysEntropyFrame(
     function (frame) {
-      return originalRunTokensAt(originalRun, frame);
+      return generatorRun.originalTokens(frame);
     },
     singleCanvas,
     index,
-    originalRunIsAppend(originalRun)
+    generatorRun.originalIsAppend()
   );
 }
 
@@ -2070,11 +1865,13 @@ function originalEntropyFrame(index) {
 function drawnEntropyFrame(isOriginal) {
   var frame = scrubberActive
     ? currentScrubFrame
-    : runFramesLength(runFrames) - 1;
+    : generatorRun.frameCount() - 1;
   if (!isOriginal) {
     return frame;
   }
-  return Math.min(frame, originalRunTokenFrames(originalRun) - 1);
+  return Math.min(
+    frame, generatorRun.originalTokenFrames() - 1
+  );
 }
 
 // What a layer's frame on screen borrows its entropy from, as
@@ -2101,8 +1898,8 @@ function entropyBorrowAt(isOriginal, frame) {
     return null;
   }
   var tokens = isOriginal
-    ? originalRunTokensAt(originalRun, source)
-    : runFramesTokensAt(runFrames, source);
+    ? generatorRun.originalTokens(source)
+    : generatorRun.frameTokens(source);
   return { step: source, tokens: tokens };
 }
 
@@ -2141,7 +1938,7 @@ function forgettingAvailable() {
 // `key`. The latest frame is enough: a position's value arrives with
 // it and never changes afterwards.
 function runCarriesTokenValue(key) {
-  var tokens = runFramesTokensLast(runFrames);
+  var tokens = generatorRun.frameTokensLast();
   if (!tokens) {
     return false;
   }
@@ -2156,20 +1953,7 @@ function runCarriesTokenValue(key) {
 // Whether any position captured competing candidates for the hover
 // popover (and, for models that support it, What If substitution).
 function alternativesAvailable() {
-  return hasAnyAlternatives(positionAlts);
-}
-
-// True when at least one position captured a candidate set. Takes
-// the array so it answers for the pre-edit run as well as the live
-// one.
-function hasAnyAlternatives(positions) {
-  for (var i = 0; i < positions.length; i++) {
-    var alts = positions[i];
-    if (alts && alts.length > 0) {
-      return true;
-    }
-  }
-  return false;
+  return generatorRun.hasAlternatives(false);
 }
 
 // The earliest position a What If branch could differ at: the
@@ -2247,8 +2031,10 @@ function altsPageable(pos) {
   if (divergence === null || pos < divergence) {
     return false;
   }
-  var original = originalRun.positionAlts[pos];
-  var edited = positionAlts[pos];
+  var original =
+    generatorRun.positionAlternatives(pos, true);
+  var edited =
+    generatorRun.positionAlternatives(pos, false);
   return !!(
     original && original.length > 0
     && edited && edited.length > 0
@@ -2283,7 +2069,7 @@ function defaultAltsPage() {
 // span. The pager reaches the pre-edit set where one was retained:
 // by position on an append run, by frame on a canvas run.
 function showAltsPopover(pos, span) {
-  if (runFramesIsAppend(runFrames)) {
+  if (generatorRun.frameIsAppend()) {
     altsPopoverPage = altsPageable(pos) ? defaultAltsPage() : null;
   } else {
     altsPopoverPage = candidatesPage();
@@ -2310,13 +2096,14 @@ function renderAltsPopover(pos, span) {
   if (!altsPopover) {
     return;
   }
-  if (!runFramesIsAppend(runFrames)) {
+  if (!generatorRun.frameIsAppend()) {
     renderCandidatesPopover(pos, span);
     return;
   }
   var original = altsPopoverPage === "original";
-  var alts = original
-    ? originalRun.positionAlts[pos] : positionAlts[pos];
+  var alts = generatorRun.positionAlternatives(
+    pos, original
+  );
   if (!alts || alts.length === 0) {
     hideAltsPopover();
     return;
@@ -2324,8 +2111,8 @@ function renderAltsPopover(pos, span) {
   // Each page marks the token its own run drew, so the Original page
   // does not mark the branch's substitution as chosen.
   var tokens = original
-    ? originalRunTokensLast(originalRun)
-    : runFramesTokensAt(runFrames, currentScrubFrame);
+    ? generatorRun.originalTokensLast()
+    : generatorRun.frameTokens(currentScrubFrame);
   var chosen = tokens && tokens[pos] ? tokens[pos].id : null;
 
   // Discarding the rows discards their pending mouseleave: a removed
@@ -2399,8 +2186,7 @@ function renderCandidatesPopover(pos, span) {
 
 // The canvas a frame belongs to, 0 for a model with only one.
 function runFrameCanvas(frame) {
-  var canvas = runFrames.canvasIndex[frame];
-  return typeof canvas === "number" ? canvas : 0;
+  return generatorRun.frameCanvas(frame);
 }
 
 // The earliest frame any edit branched at, or null on an unedited
@@ -2441,16 +2227,22 @@ function otherAltsPage(page) {
 function candidatesReading(page, pos) {
   if (page === "original") {
     var shown = Math.min(
-      currentScrubFrame, originalRunTokenFrames(originalRun) - 1
+      currentScrubFrame,
+      generatorRun.originalTokenFrames() - 1
     );
-    var kept = originalCandidates || runCandidatesCreate();
     return candidatesReadingOf(
-      runCandidatesSetAt(kept, shown, pos, singleCanvas), shown
+      generatorRun.candidateSet(
+        shown, pos, true, singleCanvas
+      ),
+      shown
     );
   }
   return candidatesReadingOf(
-    runCandidatesSetAt(
-      runCandidates, currentScrubFrame, pos, runFrameCanvas
+    generatorRun.candidateSet(
+      currentScrubFrame,
+      pos,
+      false,
+      runFrameCanvas
     ),
     currentScrubFrame
   );
@@ -2524,7 +2316,7 @@ function buildTypedEntry(pos) {
 // exact where a "looks mid-sentence" rule would only be usually
 // right, and a single backspace overrides it.
 function typedEntrySeedText(pos) {
-  var tokens = runFramesTokensAt(runFrames, currentScrubFrame);
+  var tokens = generatorRun.frameTokens(currentScrubFrame);
   var token = tokens && tokens[pos] ? tokens[pos] : null;
   var text = token && typeof token.t === "string" ? token.t : "";
   return text.charAt(0) === " " ? " " : "";
@@ -2950,7 +2742,7 @@ function requestTypedProbe() {
     position: typedEntryPos,
     token_id: typedEntryToken.id,
     request_id: typedProbeRequest,
-    run_token: activeRunToken,
+    run_token: generatorRun.runToken(),
   }));
 }
 
@@ -2964,7 +2756,9 @@ function requestTypedProbe() {
 //
 // Returns whether it answered, so the caller knows to send nothing.
 function fillMeasureFromRecord() {
-  var alts = positionAlts[typedEntryPos];
+  var alts = generatorRun.positionAlternatives(
+    typedEntryPos, false
+  );
   if (!alts) {
     return false;
   }
@@ -3131,7 +2925,7 @@ function entropyProfileFollowsFrame() {
   if (channel) {
     return (channel.axes || []).join("|") === "frame|position";
   }
-  return !runFramesIsAppend(runFrames);
+  return !generatorRun.frameIsAppend();
 }
 
 // One layer's values at the frame it is drawing, read through the
@@ -3141,8 +2935,8 @@ function entropyProfileFrameValues(isOriginal) {
   var borrow = layerEntropyBorrow(isOriginal);
   var source = borrow ? borrow.step : drawnEntropyFrame(isOriginal);
   var tokens = isOriginal
-    ? originalRunTokensAt(originalRun, source)
-    : runFramesTokensAt(runFrames, source);
+    ? generatorRun.originalTokens(source)
+    : generatorRun.frameTokens(source);
   return {
     values: entropyValuesFrom(tokens),
     asOfStep: borrow ? borrow.step : null,
@@ -3154,7 +2948,7 @@ function entropyProfileFrameValues(isOriginal) {
 // entropy never changes afterwards.
 function entropyProfileValues() {
   return entropyValuesFrom(
-    runFramesTokensLast(runFrames)
+    generatorRun.frameTokensLast()
   );
 }
 
@@ -3166,7 +2960,7 @@ function originalEntropyProfileValues() {
     return [];
   }
   return entropyValuesFrom(
-    originalRunTokensLast(originalRun)
+    generatorRun.originalTokensLast()
   );
 }
 
@@ -3282,8 +3076,8 @@ function drawEntropyProfile() {
   // On an autoregressive run frame index maps straight onto
   // position: the worker emits no leading empty canvas
   // (ar_sampler._build_frame runs after the pick is appended), so
-  // runFrames.history[k] holds k+1 tokens and the frame at k is the
-  // one that introduced position k. A diffusion run has no such
+  // Frame k holds k+1 tokens and is the frame that introduced
+  // position k. A diffusion run has no such
   // mapping, and entropyProfileLayers gives it no current column.
   //
   // The scrubber's position is carried by the bar's own opacity
@@ -3356,7 +3150,7 @@ function editMarkerColors(positions) {
   // append-shaped run leaves empty. A What If substitution puts an
   // edit on an autoregressive run, so this path is not diffusion-only
   // the way Commit Order is.
-  var maxFrame = runFramesLength(runFrames) - 1;
+  var maxFrame = generatorRun.frameCount() - 1;
   var colors = [];
   for (var i = 0; i < positions.length; i++) {
     colors.push(overlaysEditColor(marks[positions[i]], maxFrame));
@@ -3698,15 +3492,18 @@ function metricsLayered() {
 // layer buildCrossfadedLayers draws past its end.
 function metricsFrameTokens() {
   if (!scrubberActive) {
-    return runFramesTokensLast(runFrames);
+    return generatorRun.frameTokensLast();
   }
   if (!metricsHoverOriginal) {
-    return runFramesTokensAt(runFrames, currentScrubFrame) || null;
+    return generatorRun.frameTokens(currentScrubFrame);
   }
   var index = Math.min(
-    currentScrubFrame, originalRunTokenFrames(originalRun) - 1
+    currentScrubFrame,
+    generatorRun.originalTokenFrames() - 1
   );
-  return index >= 0 ? originalRunTokensAt(originalRun, index) : null;
+  return index >= 0
+    ? generatorRun.originalTokens(index)
+    : null;
 }
 
 // Assemble one reading, or null when the held position no longer
@@ -3845,16 +3642,18 @@ function stopReadoutRule() {
     return null;
   }
   var defaults = generatorModelPanel.parameterDefaults();
-  return overlaysStopRuleFrom(lastRunParams, defaults);
+  return overlaysStopRuleFrom(
+    generatorRun.parameters(), defaults
+  );
 }
 
 // The run as shown, with each resume's first frame: an edit's
 // frame_index, where the page truncated and the branch began.
 function stopReadoutRunSource() {
   return {
-    count: runFramesLength(runFrames),
+    count: generatorRun.frameCount(),
     readFrame: function (f) {
-      return runFramesTokensAt(runFrames, f);
+      return generatorRun.frameTokens(f);
     },
     canvasAt: runFrameCanvas,
     segmentStarts: remaskEdits.map(function (edit) {
@@ -3868,9 +3667,9 @@ function stopReadoutRunSource() {
 // its own.
 function stopReadoutOriginalSource() {
   return {
-    count: originalRunTokenFrames(originalRun),
+    count: generatorRun.originalTokenFrames(),
     readFrame: function (f) {
-      return originalRunTokensAt(originalRun, f);
+      return generatorRun.originalTokens(f);
     },
     canvasAt: function () {
       return 0;
@@ -4103,7 +3902,7 @@ function sendComposerCount(payload) {
 function submitComposer() {
   // Enter runs a generation; in the finalized "New Run" state it is
   // a no-op so it cannot wipe the canvas unexpectedly.
-  if (!editedRunSaved) {
+  if (!generatorRun.editedSaved()) {
     startGeneration();
   }
 }
@@ -4188,7 +3987,10 @@ function tokenClassFn(index, tok, masked) {
   if (runPhase.mode === "edit") {
     classes.push("token-clickable");
   }
-  if (runPhase.substituting && positionAlts[index]) {
+  if (
+    runPhase.substituting
+    && generatorRun.positionAlternatives(index, false)
+  ) {
     classes.push("token-substitutable");
   }
   return classes.join(" ");
@@ -4250,9 +4052,9 @@ function renderFrameWithTokensDraw(frameIndex) {
   // Leaving the live view: the mask glow this class restores is for
   // streaming only, and every branch below owns the container now.
   outputArea.classList.remove("live-tokens");
-  var tokens = runFramesTokensAt(runFrames, frameIndex);
+  var tokens = generatorRun.frameTokens(frameIndex);
   if (!tokens) {
-    renderFrame(runFramesTextAt(runFrames, frameIndex));
+    renderFrame(generatorRun.frameText(frameIndex));
     return;
   }
 
@@ -4287,9 +4089,13 @@ function renderFrameWithTokensDraw(frameIndex) {
   }
   outputArea.appendChild(fragment);
   if (candidatesCycle()) {
-    flickerStart([flickerLayer(
-      spans, tokens, runCandidates, frameIndex, runFrameCanvas
-    )], MASK_CHAR);
+    flickerStart([{
+      spans: spans,
+      tokens: tokens,
+      sets: generatorRun.candidateSets(
+        frameIndex, false, runFrameCanvas
+      ),
+    }], MASK_CHAR);
   }
 }
 
@@ -4312,18 +4118,25 @@ function startStackedFlicker(layers, frameIndex, editedTokens) {
     return;
   }
   var index = Math.min(
-    frameIndex, originalRunTokenFrames(originalRun) - 1
+    frameIndex, generatorRun.originalTokenFrames() - 1
   );
-  var originalTokens = originalRunTokensAt(originalRun, index) || [];
+  var originalTokens =
+    generatorRun.originalTokens(index) || [];
   flickerStart([
-    flickerLayer(
-      layers[0].children, originalTokens, originalCandidates, index,
-      singleCanvas
-    ),
-    flickerLayer(
-      layers[1].children, editedTokens, runCandidates, frameIndex,
-      runFrameCanvas
-    ),
+    {
+      spans: layers[0].children,
+      tokens: originalTokens,
+      sets: generatorRun.candidateSets(
+        index, true, singleCanvas
+      ),
+    },
+    {
+      spans: layers[1].children,
+      tokens: editedTokens,
+      sets: generatorRun.candidateSets(
+        frameIndex, false, runFrameCanvas
+      ),
+    },
   ], MASK_CHAR);
 }
 
@@ -4384,10 +4197,12 @@ function liveCyclingSets(live, width) {
 // rather than emptying out.
 function buildCrossfadedLayers(frameIndex, editedTokens) {
   var oIdx = Math.min(
-    frameIndex, originalRunTokenFrames(originalRun) - 1
+    frameIndex, generatorRun.originalTokenFrames() - 1
   );
   var origTokens =
-    (oIdx >= 0 ? originalRunTokensAt(originalRun, oIdx) : null) || [];
+    (oIdx >= 0
+      ? generatorRun.originalTokens(oIdx)
+      : null) || [];
   var editedTakes = overlaysEditedOwnsPointer(
     1 - runBlend, runBlend
   );
@@ -4470,8 +4285,8 @@ function renderTargetPlaceholder(frameIndex) {
   );
   outputArea.appendChild(notice);
 
-  var origTokens = originalRunTokensAt(originalRun, frameIndex);
-  var origText = originalRunTextAt(originalRun, frameIndex);
+  var origTokens = generatorRun.originalTokens(frameIndex);
+  var origText = generatorRun.originalText(frameIndex);
 
   if (origTokens || origText) {
     var wrapper = document.createElement("div");
@@ -4511,12 +4326,7 @@ function renderTargetPlaceholder(frameIndex) {
 // multi-canvas runs cannot be resumed in this version; the editing
 // UI stays hidden for them.
 function runIsMultiCanvas() {
-  for (var i = 0; i < runFrames.canvasIndex.length; i++) {
-    if (runFrames.canvasIndex[i] > 0) {
-      return true;
-    }
-  }
-  return false;
+  return generatorRun.frameIsMultiCanvas();
 }
 
 // Reflect the "already saved an edit" lock on the Edit Frames button:
@@ -4541,10 +4351,10 @@ function updateEditFramesLock() {
   setButtonUnlocked(btnContinueEdit, CONTINUE_EDIT_TITLE);
   // An edited save in flight locks too, not just a completed one:
   // confirmGuidedEdit fires the save and re-shows the buttons before
-  // its async handler can set editedRunSaved, which would otherwise
+  // its async handler can set the edited-save flag, which otherwise
   // leave a live window where a second edit could be started.
-  var locked = editedRunSaved
-    || (isSaving && remaskEdits.length > 0);
+  var locked = generatorRun.editedSaved()
+    || (generatorRun.saving() && remaskEdits.length > 0);
   if (locked) {
     setButtonLocked(
       btnEditFrames,
@@ -4580,11 +4390,7 @@ function updateEditFramesLock() {
 
 // Why the run on screen cannot be edited at all, or "" when it can.
 function runEditBlock() {
-  return runPhasesEditBlock({
-    lostConnection: runLostConnection,
-    madeBy: runWorker,
-    resident: residentWorker,
-  });
+  return runPhasesEditBlock(generatorRun.editIdentity());
 }
 
 // Whether a request about the run on screen must not be sent, saying
@@ -4624,7 +4430,9 @@ function currentGenerateLabel() {
   if (isGenerating) {
     return "Stop";
   }
-  return editedRunSaved ? "New Run" : "Generate";
+  return generatorRun.editedSaved()
+    ? "New Run"
+    : "Generate";
 }
 
 function updateGenerateButton() {
@@ -4634,16 +4442,16 @@ function updateGenerateButton() {
     // Live precisely when the old code greyed it out: a run in
     // flight is the one moment Stop means anything.
     btnGenerate.disabled = false;
-  } else if (editedRunSaved) {
+  } else if (generatorRun.editedSaved()) {
     btnGenerate.classList.remove("is-stop");
     btnGenerate.classList.add("is-new-run");
     // New Run is client-side; only a completing save should hold it.
-    btnGenerate.disabled = isSaving;
+    btnGenerate.disabled = generatorRun.saving();
   } else {
     btnGenerate.classList.remove("is-new-run");
     btnGenerate.classList.remove("is-stop");
     btnGenerate.disabled =
-      isSaving
+      generatorRun.saving()
       || !(
         modelReady
         && generatorModelPanel.validation().valid
@@ -4744,15 +4552,15 @@ function updateGenerateIdleEffect() {
 }
 
 function activateScrubber() {
-  if (runFramesLength(runFrames) < 2) {
+  if (generatorRun.frameCount() < 2) {
     return;
   }
   scrubberActive = true;
-  currentScrubFrame = runFramesLength(runFrames) - 1;
+  currentScrubFrame = generatorRun.frameCount() - 1;
 
   scrubberSlider.min = "0";
   scrubberSlider.max =
-    String(runFramesLength(runFrames) - 1);
+    String(generatorRun.frameCount() - 1);
   scrubberSlider.value =
     String(currentScrubFrame);
   scrubberSlider.disabled = false;
@@ -4819,9 +4627,9 @@ function deactivateScrubber() {
 function updateScrubberLabel() {
   var maxLabel = (
     runPhase.mode === "select_target"
-    && originalRun.totalFrames > 0
-  ) ? originalRun.totalFrames - 1
-    : runFramesLength(runFrames) - 1;
+    && generatorRun.originalCaptured()
+  ) ? generatorRun.originalTotalFrames() - 1
+    : generatorRun.frameCount() - 1;
   scrubberLabel.textContent =
     "Frame " + currentScrubFrame
     + " / " + maxLabel;
@@ -4836,9 +4644,9 @@ function navigateToFrame(index) {
   ) ? scrubberMinFrame : 0;
   var maxFrame = (
     runPhase.mode === "select_target"
-    && originalRun.totalFrames > 0
-  ) ? originalRun.totalFrames - 1
-    : runFramesLength(runFrames) - 1;
+    && generatorRun.originalCaptured()
+  ) ? generatorRun.originalTotalFrames() - 1
+    : generatorRun.frameCount() - 1;
   index = Math.max(
     minFrame,
     Math.min(index, maxFrame)
@@ -4852,7 +4660,7 @@ function navigateToFrame(index) {
 
   if (runPhase.mode === "select_target") {
     renderTargetPlaceholder(index);
-  } else if (index < runFramesLength(runFrames)) {
+  } else if (index < generatorRun.frameCount()) {
     renderFrameWithTokens(index);
   } else {
     renderTargetPlaceholder(index);
@@ -4934,7 +4742,7 @@ function clampInt(value, low, high) {
 // Frame-array indices of resolved (non-mask) tokens: the candidates
 // that can be remasked. Masked positions are never remaskable.
 function resolvedPositions(frameIndex) {
-  var tokens = runFramesTokensAt(runFrames, frameIndex);
+  var tokens = generatorRun.frameTokens(frameIndex);
   var out = [];
   if (!tokens) {
     return out;
@@ -5043,11 +4851,7 @@ function resetGuidedMode() {
 // Snapshot the current complete run before an edit session begins.
 function captureEditSnapshot() {
   preEditSnapshot = {
-    frames: runFramesSnapshot(runFrames),
-    resumeElapsedOffset: resumeElapsedOffset,
-    positionAlts: positionAlts.slice(),
-    candidates: runCandidates,
-    finalText: lastFinalText,
+    run: generatorRun.captureCheckpoint(),
     remaskEditsLen: remaskEdits.length,
   };
   rewindWorkerRun();
@@ -5071,7 +4875,7 @@ function rewindWorkerRun() {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     return;
   }
-  if (!activeRunToken) {
+  if (!generatorRun.runToken()) {
     return;
   }
   // Silently: a rewind is housekeeping nobody asked for by name.
@@ -5080,7 +4884,7 @@ function rewindWorkerRun() {
   }
   ws.send(JSON.stringify({
     type: "rewind",
-    run_token: activeRunToken,
+    run_token: generatorRun.runToken(),
   }));
 }
 
@@ -5090,16 +4894,11 @@ function restoreEditSnapshot() {
   if (!preEditSnapshot) {
     return;
   }
-  runFramesRestore(runFrames, preEditSnapshot.frames);
-  resumeElapsedOffset = preEditSnapshot.resumeElapsedOffset;
-  positionAlts = preEditSnapshot.positionAlts.slice();
-  runCandidates = preEditSnapshot.candidates;
-  lastFinalText = preEditSnapshot.finalText;
+  generatorRun.restoreCheckpoint(preEditSnapshot.run);
   // Drop any edits committed during this (now-cancelled) session.
   remaskEdits.length = Math.min(
     remaskEdits.length, preEditSnapshot.remaskEditsLen
   );
-  invalidateRunMemos();
   preEditSnapshot = null;
 }
 
@@ -5113,22 +4912,7 @@ function restoreEditSnapshot() {
 // frame arrays, which knocked the Timing chart's x axis out of step
 // with every other chart.
 function truncateRunArraysAt(offset) {
-  resumeFrameOffset = offset;
-  resumeElapsedOffset = offset > 0
-    ? (runFrames.elapsed[offset - 1] || 0)
-    : 0;
-  runFramesTruncate(runFrames, offset);
-  runCandidates = runCandidatesTruncate(runCandidates, offset);
-}
-
-// The last cumulative elapsed reading, or `fallback` when the run has
-// none yet.
-function lastElapsedOr(fallback) {
-  var series = runFrames.elapsed;
-  if (series.length === 0) {
-    return fallback;
-  }
-  return series[series.length - 1];
+  generatorRun.truncate(offset);
 }
 
 function unlockScrubberNav() {
@@ -5218,7 +5002,8 @@ function beginSubstitutionSession() {
   clearRemaskedPositions();
 
   scrubberSlider.min = "0";
-  scrubberSlider.max = String(runFramesLength(runFrames) - 1);
+  scrubberSlider.max =
+    String(generatorRun.frameCount() - 1);
   btnEditFrames.hidden = true;
   if (btnWhatIf) {
     btnWhatIf.hidden = true;
@@ -5228,13 +5013,13 @@ function beginSubstitutionSession() {
     overlaySelectGroup.hidden = true;
   }
 
-  navigateToFrame(runFramesLength(runFrames) - 1);
+  navigateToFrame(generatorRun.frameCount() - 1);
   updateGuidedUI();
 }
 
 // Commit a substitution: truncate the run at the position, then let
 // the worker regenerate from the forced token. Reuses the diffusion
-// resume splice path (resumeFrameOffset + isResuming), so handleFrame
+// controller's resume splice path, so handleFrame
 // appends the branch onto the truncation unchanged.
 // ``typedText`` is the raw string for a token the user typed, or
 // null for one the model actually offered. The worker validates the
@@ -5244,7 +5029,7 @@ function doSubstitute(position, tokenId, typedText) {
   if (!runPhase.substituting || runPhase.mode !== "substitute") {
     return;
   }
-  if (position < 0 || position >= runFramesLength(runFrames)) {
+  if (position < 0 || position >= generatorRun.frameCount()) {
     return;
   }
   if (editRequestRefused()) {
@@ -5268,8 +5053,7 @@ function doSubstitute(position, tokenId, typedText) {
   truncateRunArraysAt(position);
   // Positions from the substituted one onward are about to be
   // resampled, so their captured candidates no longer apply.
-  positionAlts.length = position;
-  invalidateRunMemos();
+  generatorRun.truncateAlternatives(position);
   isResuming = true;
 
   runPhasesEnter(runPhase, RUN_PHASE_GENERATING);
@@ -5287,7 +5071,7 @@ function doSubstitute(position, tokenId, typedText) {
     type: "substitute",
     position: position,
     token_id: tokenId,
-    run_token: activeRunToken,
+    run_token: generatorRun.runToken(),
   };
   if (typedText) {
     request.typed = true;
@@ -5323,14 +5107,15 @@ function beginEditSession() {
   // Start at frame 1: frame 0 is the fully-masked canvas with nothing
   // to remask, so it is never a useful selection. (Guarded for the
   // degenerate single-frame case.)
-  var startFrame = runFramesLength(runFrames) > 1 ? 1 : 0;
+  var startFrame = generatorRun.frameCount() > 1 ? 1 : 0;
   scrubberMinFrame = startFrame;
   runPhase.lockedEdits = [];
   runPhase.guidedAction = null;
   clearRemaskedPositions();
 
   scrubberSlider.min = String(startFrame);
-  scrubberSlider.max = String(runFramesLength(runFrames) - 1);
+  scrubberSlider.max =
+    String(generatorRun.frameCount() - 1);
   btnEditFrames.hidden = true;
   guidedEditControls.hidden = false;
   if (overlaySelectGroup) {
@@ -5457,9 +5242,9 @@ function updateGuidedUI() {
       scrubberSlider.min =
         String(scrubberMinFrame);
       scrubberSlider.max = String(
-        (originalRun.totalFrames > 0)
-          ? originalRun.totalFrames - 1
-          : runFramesLength(runFrames) - 1
+        generatorRun.originalCaptured()
+          ? generatorRun.originalTotalFrames() - 1
+          : generatorRun.frameCount() - 1
       );
       unlockScrubberNav();
       break;
@@ -5483,7 +5268,7 @@ function updateGuidedUI() {
       scrubberSlider.disabled = false;
       scrubberSlider.min = "0";
       scrubberSlider.max =
-        String(runFramesLength(runFrames) - 1);
+        String(generatorRun.frameCount() - 1);
       unlockScrubberNav();
       // Both actions stay reachable from any frame. Neither reads the
       // scrubber: Confirm saves the whole run and then jumps to the
@@ -5493,13 +5278,17 @@ function updateGuidedUI() {
       btnConfirmEdit.hidden = false;
       btnRetryEdit.hidden = false;
       btnContinueEdit.hidden = !reviewCanContinue();
-      if (currentScrubFrame === runFramesLength(runFrames) - 1) {
+      if (
+        currentScrubFrame === generatorRun.frameCount() - 1
+      ) {
         guidedEditStatus.textContent =
           reviewEndText(currentScrubFrame);
       } else {
         guidedEditStatus.textContent =
           "Reviewing frame " + currentScrubFrame + " of the "
-          + (runInterrupted ? "stopped edit" : "edited run")
+          + (generatorRun.interrupted()
+            ? "stopped edit"
+            : "edited run")
           + ". " + reviewChoices();
       }
       break;
@@ -5507,7 +5296,7 @@ function updateGuidedUI() {
 
   // A save in flight overrides the per-mode state: freeze
   // navigation until it completes.
-  if (isSaving) {
+  if (generatorRun.saving()) {
     lockScrubberNav();
     btnSelectFrame.disabled = true;
   }
@@ -5569,7 +5358,6 @@ function doGuidedResume(action) {
   remaskedPositions = {};
 
   truncateRunArraysAt(frameIndex);
-  invalidateRunMemos();
   isResuming = true;
 
   runPhasesEnter(runPhase, RUN_PHASE_GENERATING);
@@ -5594,7 +5382,7 @@ function doGuidedResume(action) {
     type: "resume",
     frame_index: frameIndex,
     remask_positions: positions,
-    run_token: activeRunToken,
+    run_token: generatorRun.runToken(),
   };
 
   if (resumeTarget !== null) {
@@ -5627,12 +5415,7 @@ function captureResumeCut(cutAt) {
   }
   return {
     cutAt: cutAt,
-    frames: runFramesSnapshot(runFrames),
-    candidates: runCandidates,
-    frameOffset: resumeFrameOffset,
-    elapsedOffset: resumeElapsedOffset,
-    finalText: lastFinalText,
-    interrupted: runInterrupted,
+    run: generatorRun.captureCheckpoint(),
     remaskEditsLen: remaskEdits.length,
     mode: mode,
     frame: currentScrubFrame,
@@ -5651,21 +5434,15 @@ function resumeStoppedBeforeAFrame(resumed, data) {
   if (data.cancelled !== true) {
     return false;
   }
-  return runFramesLength(runFrames) === resumed.cutAt;
+  return generatorRun.frameCount() === resumed.cutAt;
 }
 
 // Put back what the resume cut and return to where it was sent from:
 // the run whole, the locked edit and its selection in place, ready to
 // resume again or exit.
 function landBeforeResume(saved) {
-  runFramesRestore(runFrames, saved.frames);
-  runCandidates = saved.candidates;
-  resumeFrameOffset = saved.frameOffset;
-  resumeElapsedOffset = saved.elapsedOffset;
-  lastFinalText = saved.finalText;
-  runInterrupted = saved.interrupted;
+  generatorRun.restoreCheckpoint(saved.run);
   remaskEdits.length = saved.remaskEditsLen;
-  invalidateRunMemos();
 
   runPhase.guidedAction = null;
   runPhase.targetFrame = null;
@@ -5689,7 +5466,7 @@ function handleGuidedDone() {
   if (runPhase.guidedAction === "another") {
     var target = Math.min(
       runPhase.targetFrame,
-      runFramesLength(runFrames) - 1
+      generatorRun.frameCount() - 1
     );
 
     scrubberActive = true;
@@ -5702,7 +5479,7 @@ function handleGuidedDone() {
 
     scrubberSlider.min = String(target);
     scrubberSlider.max =
-      String(runFramesLength(runFrames) - 1);
+      String(generatorRun.frameCount() - 1);
     scrubberSlider.value = String(target);
 
     currentScrubFrame = target;
@@ -5738,9 +5515,10 @@ function enterReviewMode() {
   if (overlaySelectGroup) {
     overlaySelectGroup.hidden = true;
   }
-  currentScrubFrame = runFramesLength(runFrames) - 1;
+  currentScrubFrame = generatorRun.frameCount() - 1;
   scrubberSlider.min = "0";
-  scrubberSlider.max = String(runFramesLength(runFrames) - 1);
+  scrubberSlider.max =
+    String(generatorRun.frameCount() - 1);
   scrubberSlider.value = String(currentScrubFrame);
   scrubberSlider.disabled = false;
   unlockScrubberNav();
@@ -5753,7 +5531,7 @@ function enterReviewMode() {
 // would), then leave guided editing. The save-success handler locks
 // Edit Frames so the run cannot accrue a second, conflicting edit.
 function confirmGuidedEdit() {
-  saveRun();
+  generatorRun.save();
   resetGuidedMode();
   activateScrubber();
 }
@@ -5782,14 +5560,14 @@ function retryGuidedEdit() {
 // worker keeps no branch, and a finished branch has nothing left.
 function reviewCanContinue() {
   var capabilities = generatorModelPanel.capabilities();
-  return runInterrupted
+  return generatorRun.interrupted()
     && !!capabilities.supports_resume;
 }
 
 // Review's status line at the branch's last frame: where it stopped,
 // or that it finished.
 function reviewEndText(frame) {
-  if (runInterrupted) {
+  if (generatorRun.interrupted()) {
     return "Stopped at frame " + frame + ". " + reviewChoices();
   }
   return "Edit complete. " + reviewChoices();
@@ -5801,7 +5579,7 @@ function reviewChoices() {
     return "Continue, confirm to save it as it is, or retry"
       + " from the start.";
   }
-  if (runInterrupted) {
+  if (generatorRun.interrupted()) {
     return "Confirm to save it as it is, or retry from the start.";
   }
   return "Confirm to save, or retry from the start.";
@@ -5818,10 +5596,9 @@ function continueGuidedEdit() {
   if (editRequestRefused()) {
     return;
   }
-  var from = runFramesLength(runFrames) - 1;
+  var from = generatorRun.frameCount() - 1;
   pendingResume = captureResumeCut(from);
   truncateRunArraysAt(from);
-  invalidateRunMemos();
   isResuming = true;
   runPhase.guidedAction = "end";
   runPhasesEnter(runPhase, RUN_PHASE_GENERATING);
@@ -5837,7 +5614,7 @@ function continueGuidedEdit() {
     frame_index: from,
     remask_positions: [],
     "continue": true,
-    run_token: activeRunToken,
+    run_token: generatorRun.runToken(),
   }));
 }
 
@@ -5981,7 +5758,9 @@ function editRunLabel(fromFrame, toFrame) {
 
 function setSaveAvailable(available) {
   // Always visible; greyed out when there is nothing to save.
-  btnSave.disabled = !(available && runFramesLength(runFrames) > 0);
+  btnSave.disabled = !(
+    available && generatorRun.frameCount() > 0
+  );
 }
 
 // Clears the footer readouts only, never the stack. doSubstitute and
@@ -6002,43 +5781,18 @@ function resetRunState() {
   resetGuidedMode();
   remaskedPositions = {};
   perFrameRemasked = {};
-  runFramesClear(runFrames);
-  invalidateRunMemos();
+  generatorRun.reset();
   overlayMode = "none";
   if (overlaySelectGroup) {
     overlaySelectGroup.hidden = true;
   }
-  lastRunPrompt = null;
-  lastRunParams = null;
-  lastFinalText = null;
-  lastRunPromptLen = null;
-  lastRunTotalSteps = null;
-  lastRunProvenance = null;
-  // Retired with the rest of what the last run left behind. The
-  // worker has already discarded its side by the time a new run is
-  // under way, so a token surviving here names a run neither end
-  // holds.
-  activeRunToken = "";
-  runWorker = "";
-  originalRunClear(originalRun);
-  positionAlts = [];
-  runCandidates = runCandidatesCreate();
-  originalCandidates = null;
   entropyHoverPos = null;
   clearTokenHighlight();
   clearTokenMetrics();
   hideAltsPopover();
   remaskEdits = [];
-  editedRunSaved = false;
-  runInterrupted = false;
-  runLostConnection = false;
-  runSaved = false;
-  lastSavedRunId = null;
-  lastSavedRevision = null;
   isResuming = false;
   pendingResume = null;
-  resumeFrameOffset = 0;
-  resumeElapsedOffset = 0;
   updateEditFramesLock();
   updateGenerateButton();
   setSaveAvailable(false);
@@ -6056,7 +5810,7 @@ function startNewRun() {
   if (thinkingPanel) {
     thinkingPanel.hidden = true;
   }
-  clearSessionState();
+  generatorRun.clearSession();
   resetStatus();
   setGenerating(false);
   // Return to the pre-generation resting state.
@@ -6112,14 +5866,13 @@ function startGeneration() {
   generatorComposer.prepareGeneration(prompt);
   resetRunState();
   var params = generatorModelPanel.parameterValues();
-  lastRunPrompt = prompt;
-  lastRunParams = params;
+  generatorRun.begin(prompt, params);
 
   outputArea.textContent = "";
   if (thinkingPanel) {
     thinkingPanel.hidden = true;
   }
-  clearSessionState();
+  generatorRun.clearSession();
   resetStatus();
   setGenerating(true);
   generatorChrome.startRunStatus("Running");
@@ -6131,433 +5884,125 @@ function startGeneration() {
   ws.send(JSON.stringify(payload));
 }
 
-// Project in-memory frame token objects into the persisted record
-// shape {t, m, id, c?}. Confidence is included only when present
-// (masked positions carry none), mirroring the live protocol so a
-// saved run can drive the durable analytics overlays.
-// Return a clean List[int] of length frameCount, or null to omit it.
-// The server's canvas_index is List[int] and rejects null entries, so a
-// sparse/misaligned array (which can arise from a resumed run) must be
-// dropped rather than sent.
-function cleanCanvasIndex(arr, frameCount) {
-  if (!arr || arr.length !== frameCount) {
-    return null;
-  }
-  for (var i = 0; i < arr.length; i++) {
-    if (typeof arr[i] !== "number" || !isFinite(arr[i])) {
-      return null;
-    }
-  }
-  return arr.slice();
-}
-
-// How a run's frames go on the wire at save time.
-//
-// A snapshot run sends what it holds. An append run sends its
-// positions, and the server rebuilds the per-frame text and token
-// arrays before anything is written, so what lands on disk is
-// byte-for-byte what a snapshot run would have written. That keeps
-// the saved format, its version, and everything in Analytics out of
-// this change entirely.
-//
-// Sending the expanded form from here instead would mean building
-// the quadratic in the browser at the exact moment the run is
-// largest, which is the cost this exists to avoid: it is not the
-// storing that hurt, it is the holding.
-function addRunFrameFields(payload, frames) {
-  if (!runFramesIsAppend(frames)) {
-    payload.frames = frames.history;
-    payload.frame_tokens = tokenRecordsFrom(frames.tokens);
-    return;
-  }
-  payload.frame_positions = positionRecordsFrom(frames.positions);
-}
-
-// The same projection `tokenRecordsFrom` does, over the flat run.
-// Kept separate rather than folded in, because one takes frames of
-// tokens and the other takes tokens, and a function that accepted
-// either would have to guess which it was given.
-function positionRecordsFrom(positions) {
-  var out = [];
-  for (var i = 0; i < positions.length; i++) {
-    var token = positions[i];
-    var record = { t: token.t, m: !!token.m, id: token.id };
-    if (typeof token.c === "number") { record.c = token.c; }
-    if (typeof token.e === "number") { record.e = token.e; }
-    if (typeof token.f === "number") { record.f = token.f; }
-    out.push(record);
-  }
-  return out;
-}
-
-function tokenRecordsFrom(frames) {
-  var out = [];
-  for (var fi = 0; fi < frames.length; fi++) {
-    var ft = frames[fi];
-    if (!ft) {
-      out.push(null);
-      continue;
-    }
-    var records = [];
-    for (var ti = 0; ti < ft.length; ti++) {
-      var tok = ft[ti];
-      var record = { t: tok.t, m: !!tok.m, id: tok.id };
-      if (typeof tok.c === "number") {
-        record.c = tok.c;
-      }
-      if (typeof tok.e === "number") {
-        record.e = tok.e;
-      }
-      if (typeof tok.f === "number") {
-        record.f = tok.f;
-      }
-      records.push(record);
-    }
-    out.push(records);
-  }
-  return out;
-}
-
-// Attach the pre-edit run's own timing, confidence, and candidate
-// sets to an edited run's save. These let Analytics compare the two
-// runs on every axis rather than only on token text, and each is
-// omitted when the original never recorded it (older sessions, or
-// Alternatives left off), so the reader can tell absent from empty.
-function addOriginalRunSignals(payload) {
-  if (originalRun.elapsed.length > 0) {
-    payload.original_per_frame_elapsed =
-      originalRun.elapsed.slice();
-    payload.original_elapsed_seconds =
-      originalRun.elapsed[
-        originalRun.elapsed.length - 1
-      ];
-  }
-  if (originalRun.meanConf.length > 0) {
-    payload.original_mean_conf = originalRun.meanConf.slice();
-  }
-  var originalAlts = alternativeRecordsFrom(
-    originalRun.positionAlts
-  );
-  if (originalAlts !== null) {
-    payload.original_alternatives = originalAlts;
-  }
-  var originalCandidateRecord = candidatesRecordFrom(
-    originalCandidates
-  );
-  if (originalCandidateRecord !== null) {
-    payload.original_candidates = originalCandidateRecord;
-  }
-}
-
-// Project accumulated candidate sets into the persisted shape, one
-// entry per token position. Returns null when nothing was captured,
-// so the run simply omits alternatives.json.
-function alternativeRecordsFrom(positions) {
-  if (!hasAnyAlternatives(positions)) {
-    return null;
-  }
-  var out = [];
-  for (var i = 0; i < positions.length; i++) {
-    var alts = positions[i];
-    if (!alts || alts.length === 0) {
-      out.push(null);
-      continue;
-    }
-    var records = [];
-    for (var k = 0; k < alts.length; k++) {
-      var record = {
-        id: alts[k].id,
-        t: alts[k].t,
-        p: alts[k].p,
-      };
-      // Only the appended entry has one, and only it needs one: the
-      // rest are ranked by the order they are already stored in.
-      if (typeof alts[k].rank === "number") {
-        record.rank = alts[k].rank;
-      }
-      records.push(record);
-    }
-    out.push(records);
-  }
-  return out;
-}
-
-// A diffusion run's candidates as a save sends them, or null when
-// there are none. Thinned to the budget the server enforces, because
-// each stream arrived within it but an edited run carries several; a
-// store that cannot fit is left out rather than failing the save.
-function candidatesRecordFrom(store) {
-  if (store === null || runCandidatesIsEmpty(store)) {
-    return null;
-  }
-  var thinned = runCandidatesThin(store, RUN_CANDIDATES_BUDGET);
-  if (thinned === null || runCandidatesIsEmpty(thinned)) {
-    return null;
-  }
-  return runCandidatesToJson(thinned);
-}
-
-// The prompt a save records: the run's own. The box is only the
-// fallback for a run restored from a snapshot written before the run
-// carried its prompt, where the box text at that time is the best
-// record left of what ran.
-function runRecordPrompt() {
-  if (lastRunPrompt !== null) {
-    return lastRunPrompt;
-  }
-  return generatorComposer.trimmedValue();
-}
-
-// Returns a promise that settles when the save has finished, one way
-// or the other. Every existing caller ignores it, which is why
-// handing it back is safe; the one caller that needs it is the model
-// mismatch below, which has to let a rescue finish before it reloads
-// the page out from under it. Refusing to save resolves immediately
-// rather than rejecting: "there was nothing to save" is an answer,
-// not a failure.
+// Run serialization and save request ownership live in
+// generator_run.js. The page only supplies presentation callbacks.
 function saveRun() {
-  if (isSaving) {
-    return Promise.resolve();
-  }
-  // Said rather than swallowed: Save is offered once a run has
-  // frames, and a click that does nothing reads as a broken button.
-  if (
-    runFramesLength(runFrames) === 0
-    || !lastFinalText
-  ) {
-    saveRunRefused("This run produced nothing to save.");
-    return Promise.resolve();
-  }
-  // Saving a run that came back without its per-token detail writes
-  // that hollowed-out version permanently: no token overlay, one
-  // chart family, in place of the run that was on screen before the
-  // navigation. Refusing is the honest answer until `RUNTIME-01`
-  // makes the stored payload linear and the light restore stops
-  // happening at all.
-  if (runFramesLackDetail(runFrames)) {
-    saveRunRefused(
-      "This run came back without its per-token detail and"
-        + " cannot be saved in full. Generate it again to save"
-        + " it."
-    );
-    return Promise.resolve();
-  }
+  return generatorRun.save();
+}
 
-  isSaving = true;
+function generatorRunReadModel() {
+  return {
+    id: generatorModelPanel.activeModelId(),
+    device: generatorModelPanel.activeDevice(),
+    params: generatorModelPanel.parameterValues(),
+  };
+}
+
+function generatorRunReadComposer() {
+  return {
+    draft: generatorComposer.value(),
+    prompt: generatorComposer.trimmedValue(),
+  };
+}
+
+function generatorRunRestoreComposer(state) {
+  generatorComposer.restore(state.draft);
+}
+
+function generatorRunReadChrome() {
+  return {
+    thinking:
+      thinkingPanel && !thinkingPanel.hidden
+        ? thinkingContent.textContent
+        : "",
+    status: generatorChrome.readStatus(),
+  };
+}
+
+function generatorRunRestoreChrome(state) {
+  if (thinkingPanel && thinkingContent) {
+    if (state.thinking) {
+      thinkingContent.textContent = state.thinking;
+      thinkingPanel.hidden = false;
+    } else {
+      thinkingContent.textContent = "";
+      thinkingPanel.hidden = true;
+    }
+  }
+  generatorChrome.restoreStatus({
+    step: state.status.step,
+    elapsed: state.status.elapsed,
+    message: state.status.message,
+    rate: currentTokensPerSecond(),
+    tpsMode: appSettings.tpsMode,
+  });
+}
+
+function generatorRunReadEditArtifacts() {
+  return { remaskEdits: remaskEdits };
+}
+
+function generatorRunRestoreEditArtifacts(state) {
+  remaskEdits = state.remaskEdits;
+}
+
+function generatorRunSessionRestored() {
+  updateGenerateButton();
+  setSaveAvailable(!generatorRun.saved());
+  activateScrubber();
+}
+
+function generatorRunSaveStart(info) {
   btnSave.disabled = true;
   setSavingControls(true);
-  // Locks the edit entry points for the whole save, not just after it
-  // succeeds, so confirming an edit cannot be immediately followed by
-  // starting another one.
   updateEditFramesLock();
   if (saveCheckTimer !== null) {
     clearTimeout(saveCheckTimer);
     saveCheckTimer = null;
   }
-  // Captured now so the async success handler locks Edit Frames only
-  // when the saved run actually carried edits, and so the message
-  // below names which of the two runs is being written. A run saved
-  // from the review step carries its pre-edit self alongside the
-  // branch, so "edited" and "original" are two shapes of record
-  // rather than two runs.
-  var wasEdited = remaskEdits.length > 0;
-  var runLabel = wasEdited ? "edited" : "original";
-
   btnSave.classList.remove("is-saved");
   btnSave.classList.add("is-saving");
-  // A local, so this chip survives a run starting underneath it: a
-  // save the user starts and then a resume begun before the POST
-  // lands used to overwrite this with the resume's message.
-  var saveStatus = generatorChrome.pushStatus(
-    "Saving " + runLabel + " run"
+  return generatorChrome.pushStatus(
+    "Saving " + info.label + " run"
   );
-
-  var totalElapsed = runFrames.elapsed.length > 0
-    ? runFrames.elapsed[runFrames.elapsed.length - 1]
-    : null;
-
-  var payload = {
-    model: generatorModelPanel.activeModelId(),
-    prompt: runRecordPrompt(),
-    params:
-      lastRunParams || generatorModelPanel.parameterValues(),
-    final_text: lastFinalText,
-    elapsed_seconds: totalElapsed,
-    per_frame_elapsed: runFrames.elapsed.slice(),
-    mean_conf: runFrames.meanConf.slice(),
-  };
-  addRunFrameFields(payload, runFrames);
-
-  // The sampler's own figure, not the readout's. Omitted rather than
-  // guessed when the run reported none, so the saved run either
-  // carries a measured length or carries nothing.
-  if (lastRunPromptLen !== null) {
-    payload.prompt_len = lastRunPromptLen;
-  }
-
-  // Sent only when true, so a run saved by an older page still
-  // reads as finished rather than as unknown. This is the one fact
-  // the page cannot recover later: the text ends where it ends
-  // whether the model chose that or the user did.
-  if (runInterrupted) {
-    payload.partial = true;
-  }
-
-  // The worker's own account of what produced this run. Omitted when
-  // the run predates it, which makes the server fall back to
-  // describing whatever is resident, the way every save used to.
-  if (lastRunProvenance !== null) {
-    payload.provenance = lastRunProvenance;
-  }
-
-  // Which generation this is, so the store publishes under the run's
-  // own identity instead of under what this page happens to
-  // remember. The two differ exactly when it matters: a save whose
-  // reply never arrived, because the page navigated while it was in
-  // flight, leaves this page believing nothing was written. Sending
-  // the token means the retry lands on the run already made rather
-  // than making a second one.
-  if (activeRunToken) {
-    payload.run_token = activeRunToken;
-  }
-
-  // canvas_index must be a clean List[int] matching the frame count.
-  // If it is sparse or misaligned (e.g. a resumed run whose pre-resume
-  // indices were not restored), omit it rather than send nulls that
-  // would fail server validation and break the whole save.
-  var canvasIndexClean = cleanCanvasIndex(
-    runFrames.canvasIndex, runFramesLength(runFrames)
-  );
-  if (canvasIndexClean !== null) {
-    payload.canvas_index = canvasIndexClean;
-  }
-
-  var altRecords = alternativeRecordsFrom(positionAlts);
-  if (altRecords !== null) {
-    payload.alternatives = altRecords;
-  }
-  var candidateRecord = candidatesRecordFrom(runCandidates);
-  if (candidateRecord !== null) {
-    payload.candidates = candidateRecord;
-  }
-
-  if (remaskEdits.length > 0) {
-    payload.remask_edits = remaskEdits;
-    // Persist the pre-edit snapshot so the counterfactual diff is
-    // reviewable post-hoc (only meaningful for edited runs).
-    if (originalRunIsAppend(originalRun)) {
-      // An edited run used to pay the quadratic twice: the baseline
-      // is a frozen copy of the same frames, and on disk
-      // original_tokens.json came out nearly as large as
-      // tokens.json. It is one flat run here too.
-      if (originalRun.positions.length > 0) {
-        payload.original_frame_positions =
-          positionRecordsFrom(originalRun.positions);
-      }
-    } else if (originalRun.tokens.length > 0) {
-      payload.original_frame_tokens =
-        tokenRecordsFrom(originalRun.tokens);
-    }
-    addOriginalRunSignals(payload);
-    // Replace the pre-edit run so the bundled edited run is one
-    // Analytics row, not two. The revision says which version we
-    // believe we are replacing; the server rejects the write if
-    // something else got there first.
-    if (lastSavedRunId) {
-      payload.run_id = lastSavedRunId;
-      if (lastSavedRevision !== null) {
-        payload.expected_revision = lastSavedRevision;
-      }
-    }
-  }
-
-  return fetch("/api/save", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  })
-    .then(function (response) {
-      return response.json();
-    })
-    .then(function (result) {
-      isSaving = false;
-      btnSave.classList.remove("is-saving");
-      setSavingControls(false);
-      updateGuidedUI();
-      // Releases the in-flight lock; the success branch below
-      // re-applies it permanently once editedRunSaved is set.
-      updateEditFramesLock();
-      if (result.success) {
-        // Flash a glowing check for half a second, then revert to
-        // the (disabled) arrow. It stays disabled to prevent a
-        // duplicate save; re-enables on the next run.
-        btnSave.classList.add("is-saved");
-        saveCheckTimer = setTimeout(function () {
-          btnSave.classList.remove("is-saved");
-          saveCheckTimer = null;
-        }, 500);
-        runSaved = true;
-        if (wasEdited) {
-          editedRunSaved = true;
-        }
-        updateEditFramesLock();
-        updateGenerateButton();
-        // Point the user to where the saved run now lives. The server
-        // names the run and its revision outright; the path is still
-        // split as a fallback for the id, since the response gained
-        // run_id later than the path.
-        var savedParts = String(result.path || "").split("/");
-        lastSavedRunId =
-          result.run_id
-          || savedParts[savedParts.length - 1]
-          || null;
-        lastSavedRevision =
-          typeof result.revision === "number"
-            ? result.revision
-            : null;
-        generatorChrome.showAnalyticsCue(lastSavedRunId || "");
-        generatorChrome.retireStatus(saveStatus);
-        // The longest line the row ever shows, arriving while the
-        // save's chip is still on screen. Easing it is what keeps the
-        // chip from being flung left in a single frame.
-        generatorChrome.setMessage(
-          "Saved " + runLabel + " run to " + result.path,
-          { color: "var(--accent)" }
-        );
-        // Persist LAST, so the session captures the final run id and
-        // the "Saved ... to ..." line rather than a stale run id, and
-        // survives a round-trip to Analytics. The in-flight text is
-        // never at risk here: it lives on a chip, not in the footer.
-        saveSessionState();
-      } else {
-        btnSave.disabled = false;
-        generatorChrome.retireStatus(saveStatus);
-        generatorChrome.setMessage(
-          "Save failed: " + (result.message || "unknown"),
-          { color: "var(--danger)" }
-        );
-      }
-    })
-    .catch(function (error) {
-      isSaving = false;
-      btnSave.classList.remove("is-saving", "is-saved");
-      setSavingControls(false);
-      updateGuidedUI();
-      updateEditFramesLock();
-      btnSave.disabled = false;
-      generatorChrome.retireStatus(saveStatus);
-      generatorChrome.setMessage(
-        "Save failed: " + error.message,
-        { color: "var(--danger)" }
-      );
-    });
 }
 
-// Why a save did not happen, on the line where a save's result always
-// goes and in the color a failed one takes.
-function saveRunRefused(message) {
+function generatorRunSaveSettled() {
+  btnSave.classList.remove("is-saving");
+  setSavingControls(false);
+  updateGuidedUI();
+  updateEditFramesLock();
+}
+
+function generatorRunSaveSuccess(info) {
+  generatorRunSaveSettled();
+  btnSave.classList.add("is-saved");
+  saveCheckTimer = setTimeout(function () {
+    btnSave.classList.remove("is-saved");
+    saveCheckTimer = null;
+  }, 500);
+  updateEditFramesLock();
+  updateGenerateButton();
+  generatorChrome.showAnalyticsCue(info.runId || "");
+  generatorChrome.retireStatus(info.status);
+  generatorChrome.setMessage(
+    "Saved " + info.label + " run to " + info.result.path,
+    { color: "var(--accent)" }
+  );
+}
+
+function generatorRunSaveFailure(info) {
+  btnSave.classList.remove("is-saving", "is-saved");
+  generatorRunSaveSettled();
+  btnSave.disabled = false;
+  generatorChrome.retireStatus(info.status);
+  generatorChrome.setMessage(
+    "Save failed: " + info.message,
+    { color: "var(--danger)" }
+  );
+}
+
+function generatorRunSaveRefused(message) {
   generatorChrome.setMessage(
     message, { color: "var(--danger)" }
   );
@@ -6572,7 +6017,7 @@ btnGenerate.addEventListener(
     // and what it does cannot drift apart.
     if (isGenerating) {
       requestCancel();
-    } else if (editedRunSaved) {
+    } else if (generatorRun.editedSaved()) {
       startNewRun();
     } else {
       startGeneration();
@@ -6625,9 +6070,9 @@ btnScrubEnd.addEventListener(
   function () {
     var endFrame = (
       runPhase.mode === "select_target"
-      && originalRun.totalFrames > 0
-    ) ? originalRun.totalFrames - 1
-      : runFramesLength(runFrames) - 1;
+      && generatorRun.originalCaptured()
+    ) ? generatorRun.originalTotalFrames() - 1
+      : generatorRun.frameCount() - 1;
     navigateToFrame(endFrame);
   }
 );
@@ -6786,9 +6231,9 @@ btnEditAnother.addEventListener(
     scrubberMinFrame =
       lastEdit.frame_index + 1;
     runPhasesEnter(runPhase, RUN_PHASE_SELECT_TARGET);
-    var maxFrame = (originalRun.totalFrames > 0)
-      ? originalRun.totalFrames - 1
-      : runFramesLength(runFrames) - 1;
+    var maxFrame = generatorRun.originalCaptured()
+      ? generatorRun.originalTotalFrames() - 1
+      : generatorRun.frameCount() - 1;
     scrubberSlider.min =
       String(scrubberMinFrame);
     scrubberSlider.max = String(maxFrame);
@@ -7052,7 +6497,11 @@ window.addEventListener("resize", function () {
 document.addEventListener(
   "keydown",
   function (e) {
-    if (!scrubberActive || isGenerating || isSaving) {
+    if (
+      !scrubberActive
+      || isGenerating
+      || generatorRun.saving()
+    ) {
       return;
     }
     if (
@@ -7085,9 +6534,9 @@ document.addEventListener(
       e.preventDefault();
       var endFrame = (
         runPhase.mode === "select_target"
-        && originalRun.totalFrames > 0
-      ) ? originalRun.totalFrames - 1
-        : runFramesLength(runFrames) - 1;
+        && generatorRun.originalCaptured()
+      ) ? generatorRun.originalTotalFrames() - 1
+        : generatorRun.frameCount() - 1;
       navigateToFrame(endFrame);
     }
   }
@@ -7243,166 +6692,16 @@ allModals.forEach(function (modal) {
 // activates a model (see persistClearLastRun for why both pages do).
 var SESSION_KEY = PERSIST_LAST_RUN_KEY;
 
-// The page's run, read into the one record run_snapshot.js turns into
-// what storage is offered. Whether the run is worth keeping, and which
-// tier gives way first, are the codec's to decide.
 function saveSessionState() {
-  var chromeStatus = generatorChrome.readStatus();
-  var activeModelId = generatorModelPanel.activeModelId();
-  var activeDevice = generatorModelPanel.activeDevice();
-  sessionStoreFirstFitting(runSnapshotTiers({
-    model: activeModelId,
-    // Part of the snapshot's identity, not decoration. The same model
-    // on the other device is a different worker with its own output,
-    // and every activation path (the header selector, the menu) ends
-    // in a reload, so this is the only thing that tells a CPU/GPU
-    // switch apart from a page navigation.
-    device: activeDevice,
-    // The box's text, put back in the box; runPrompt is what ran.
-    prompt: generatorComposer.value(),
-    runPrompt: lastRunPrompt,
-    finalText: lastFinalText,
-    params: lastRunParams,
-    promptLen: lastRunPromptLen,
-    // Carried because a trip to Analytics and back is exactly the
-    // gap in which another window can switch the model. Restoring
-    // the run without it would leave the save describing the new
-    // resident model, which is the failure this whole field exists
-    // to close.
-    provenance: lastRunProvenance,
-    // Carried for the same reason as the provenance beside it, and
-    // with a sharper consequence: without it, reloading the page and
-    // then editing the restored run is refused as stale, even though
-    // the worker is still holding exactly that run. If the worker
-    // was replaced in the meantime its nonce differs and the refusal
-    // is correct, which is the whole point of carrying the token
-    // rather than a bare counter.
-    runToken: activeRunToken,
-    worker: runWorker,
-    thinking:
-      thinkingPanel && !thinkingPanel.hidden
-        ? thinkingContent.textContent
-        : "",
-    remaskEdits: remaskEdits,
-    editedRunSaved: editedRunSaved,
-    runInterrupted: runInterrupted,
-    runLostConnection: runLostConnection,
-    runSaved: runSaved,
-    lastSavedRunId: lastSavedRunId,
-    lastSavedRevision: lastSavedRevision,
-    statusStep: chromeStatus.step,
-    // Carried alongside the rendered text because scrubbing after a
-    // restore has to rebuild that text, and cannot without this.
-    lastRunTotalSteps: lastRunTotalSteps,
-    statusElapsed: chromeStatus.elapsed,
-    statusMessage: chromeStatus.message,
-    frames: runFrames,
-    positionAlts: positionAlts,
-    original: originalRun,
-    candidates: runCandidates,
-    originalCandidates: originalCandidates,
-  }));
-}
-
-// Write the first payload the sessionStorage quota accepts, or none.
-function sessionStoreFirstFitting(payloads) {
-  for (var i = 0; i < payloads.length; i++) {
-    try {
-      sessionStorage.setItem(
-        SESSION_KEY, JSON.stringify(payloads[i])
-      );
-      return;
-    } catch (_e) {
-      // Over the quota; the next payload is lighter.
-    }
-  }
-  // None fit, so the state simply will not persist.
+  return generatorRun.saveSession();
 }
 
 function clearSessionState() {
-  persistClearLastRun();
+  generatorRun.clearSession();
 }
 
 function restoreSessionState() {
-  var activeModelId = generatorModelPanel.activeModelId();
-  if (!activeModelId) {
-    return false;
-  }
-  var activeDevice = generatorModelPanel.activeDevice();
-  var stored = null;
-  try {
-    stored = sessionStorage.getItem(SESSION_KEY);
-  } catch (_e) {
-    return false;
-  }
-  var restored = runSnapshotDecode(stored, {
-    model: activeModelId,
-    device: activeDevice,
-  });
-  if (restored === null) {
-    return false;
-  }
-  restoreSessionStateApply(restored);
-  return true;
-}
-
-// What run_snapshot.js decoded, put back into the page: the run
-// first, then the controls that read it.
-function restoreSessionStateApply(restored) {
-  runFramesRestore(runFrames, restored.frames);
-  invalidateRunMemos();
-  lastFinalText = restored.finalText;
-  lastRunPrompt = restored.runPrompt;
-  lastRunParams = restored.params;
-  lastRunPromptLen = restored.promptLen;
-  activeRunToken = restored.runToken;
-  runWorker = restored.worker;
-  lastRunProvenance = restored.provenance;
-  remaskEdits = restored.remaskEdits;
-  originalRunAssign(originalRun, restored.original);
-  positionAlts = restored.positionAlts;
-  runCandidates = restored.candidates;
-  originalCandidates = restored.originalCandidates;
-  editedRunSaved = restored.editedRunSaved;
-  // Restored with the rest, or a stopped run would come back from
-  // Analytics looking complete and save itself that way.
-  runInterrupted = restored.runInterrupted;
-  runLostConnection = restored.runLostConnection;
-  runSaved = restored.runSaved;
-  lastSavedRunId = restored.lastSavedRunId;
-  lastSavedRevision = restored.lastSavedRevision;
-  updateGenerateButton();
-  if (restored.prompt) {
-    generatorComposer.restore(restored.prompt);
-  }
-
-  if (thinkingPanel && thinkingContent) {
-    if (restored.thinking) {
-      thinkingContent.textContent = restored.thinking;
-      thinkingPanel.hidden = false;
-    } else {
-      thinkingPanel.hidden = true;
-    }
-  }
-  // A run already saved (or saved+edited) has nothing left to save,
-  // so keep Save disabled; activateScrubber re-applies the Edit
-  // Frames lock from the restored editedRunSaved flag.
-  setSaveAvailable(!runSaved);
-  activateScrubber();
-
-  // Restore the footer readouts (Step / Elapsed / message) so the
-  // status bar reflects the completed run rather than resetting.
-  lastRunTotalSteps = restored.lastRunTotalSteps;
-  // Recomputed rather than replayed from stored text, so it honors
-  // the mode in effect now: the setting is global and may have been
-  // switched on another page since this run finished.
-  generatorChrome.restoreStatus({
-    step: restored.statusStep,
-    elapsed: restored.statusElapsed,
-    message: restored.statusMessage,
-    rate: currentTokensPerSecond(),
-    tpsMode: appSettings.tpsMode,
-  });
+  return generatorRun.restoreSession();
 }
 
 // ---- Boot ----

@@ -322,7 +322,8 @@ def test_the_generators_scrubbed_paths_start_the_flicker() -> None:
         "startStackedFlicker(stacked, frameIndex, editedTokens)"
     )
 
-    assert "flickerStart([flickerLayer(" in draw
+    assert "flickerStart([{" in draw
+    assert "generatorRun.candidateSets(" in draw
     assert "startStackedFlicker(stacked, frameIndex, tokens)" in draw
     assert edited_call in diff
 

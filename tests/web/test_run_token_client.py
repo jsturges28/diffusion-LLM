@@ -1,8 +1,8 @@
 """The generator keeps hold of which run the worker is serving.
 
-Strategy: source inspection of `app.js`, the approach this repo uses
-for its classic-script pages until `ORG-02` gives them a testable
-seam. The worker's half of `LIFE-01` is executed properly in
+Strategy: inspect `generator_run.js` and its app.js transport wiring.
+The controller is driven directly in `generator_run.test.js`; the
+worker's half of `LIFE-01` is executed properly in
 `tests/backends/test_run_identity.py` and
 `tests/backends/test_worker_dispatch.py`; this covers the client half,
 which had no test at all and is where the token can quietly go wrong.
@@ -29,17 +29,19 @@ APP_JS = (
     / "app.js"
 )
 SNAPSHOT_JS = APP_JS.with_name("run_snapshot.js")
+RUN_JS = APP_JS.with_name("generator_run.js")
 
 
-def _source() -> str:
-    return APP_JS.read_text(encoding="utf-8")
+def _source(path: Path = APP_JS) -> str:
+    return path.read_text(encoding="utf-8")
 
 
-def _region(anchor: str, chars: int) -> str:
-    source = _source()
+def _region(path: Path, anchor: str, chars: int) -> str:
+    source = _source(path)
     start = source.find(anchor)
     assert start != -1, (
-        f"anchor {anchor!r} is gone from app.js; update this test"
+        f"anchor {anchor!r} is gone from {path.name};"
+        " update this test"
         " rather than deleting it"
     )
     return source[start : start + chars]
@@ -51,15 +53,15 @@ def _region(anchor: str, chars: int) -> str:
 def test_a_terminal_frame_brings_the_token() -> None:
     """Stamped by the worker on every `done`, including the ones it
     synthesizes for a guided edit, so a resumed run stays namable."""
-    region = _region("function handleDone(data)", 2000)
+    region = _region(RUN_JS, "function finish(data)", 1200)
 
-    assert "activeRunToken = data.run_token" in region
+    assert "runToken = data.run_token" in region
 
 
 def test_only_a_string_is_adopted() -> None:
     """An older worker sends no token, and adopting `undefined` would
     make every later request quote the word undefined."""
-    region = _region("function handleDone(data)", 2000)
+    region = _region(RUN_JS, "function finish(data)", 1200)
 
     assert 'typeof data.run_token === "string"' in region
 
@@ -78,7 +80,7 @@ def test_every_stateful_request_quotes_it() -> None:
     """
     source = _source()
 
-    assert source.count("run_token: activeRunToken") == 5
+    assert source.count("run_token: generatorRun.runToken()") == 5
 
 
 def test_the_five_are_the_ones_we_think() -> None:
@@ -101,7 +103,9 @@ def test_the_five_are_the_ones_we_think() -> None:
         assert len(starts) == count, request
         for start in starts:
             sent = source[start : start + 400]
-            assert "run_token: activeRunToken" in sent, request
+            assert (
+                "run_token: generatorRun.runToken()" in sent
+            ), request
 
 
 # -- where it survives --
@@ -110,9 +114,9 @@ def test_the_five_are_the_ones_we_think() -> None:
 def test_a_reload_carries_it() -> None:
     """Without this the worker still holds the run, the page still
     shows it, and editing it is refused as stale."""
-    region = _region("function saveSessionState()", 2200)
+    region = _region(RUN_JS, "function sessionRecord()", 1800)
 
-    assert "runToken: activeRunToken" in region
+    assert "runToken: runToken" in region
 
 
 def test_a_restore_defaults_it_to_empty() -> None:
@@ -127,8 +131,8 @@ def test_a_restore_defaults_it_to_empty() -> None:
     )
 
     assert guarded in codec
-    assert "activeRunToken = restored.runToken;" in _region(
-        "function restoreSessionStateApply(restored)", 600
+    assert "runToken = restored.runToken;" in _region(
+        RUN_JS, "function applyRestored(restored)", 1200
     )
 
 
@@ -139,18 +143,18 @@ def test_a_fresh_run_retires_it() -> None:
     """The one this file was written for. `resetRunState` clears the
     rest of what the last run left, and the token was missed when it
     was added among those siblings."""
-    region = _region("function resetRunState()", 1600)
+    region = _region(RUN_JS, "function reset()", 1100)
 
-    assert 'activeRunToken = ""' in region
+    assert 'runToken = ""' in region
 
 
 def test_it_is_retired_beside_its_siblings() -> None:
     """Not merely present somewhere in the function: next to the other
     facts about the finished run, which is where the next person will
     look when they add the seventh."""
-    region = _region("function resetRunState()", 1600)
-    provenance = region.find("lastRunProvenance = null")
-    token = region.find('activeRunToken = ""')
+    region = _region(RUN_JS, "function reset()", 1100)
+    provenance = region.find("provenance = null")
+    token = region.find('runToken = ""')
 
     assert provenance != -1
     assert token != -1
@@ -160,6 +164,6 @@ def test_it_is_retired_beside_its_siblings() -> None:
 def test_nothing_else_writes_the_token() -> None:
     """Four writers, all covered above. A fifth means a path that
     moves the token without the run moving with it."""
-    writes = re.findall(r"\bactiveRunToken\s*=(?!=)", _source())
+    writes = re.findall(r"\brunToken\s*=(?!=)", _source(RUN_JS))
 
     assert len(writes) == 4

@@ -39,6 +39,7 @@ STATIC = (
 )
 APP_JS = STATIC / "app.js"
 SNAPSHOT_JS = STATIC / "run_snapshot.js"
+RUN_JS = STATIC / "generator_run.js"
 
 # How the snapshot codec reads the step total back.
 TOTAL_READ = 'typeof source.lastRunTotalSteps === "number"'
@@ -50,6 +51,10 @@ def _app() -> str:
 
 def _snapshot() -> str:
     return SNAPSHOT_JS.read_text(encoding="utf-8")
+
+
+def _run() -> str:
+    return RUN_JS.read_text(encoding="utf-8")
 
 
 def _region(anchor: str, chars: int) -> str:
@@ -99,7 +104,7 @@ def test_both_frame_shapes_reach_the_live_path() -> None:
     other's."""
     for handler in (
         "function handleFrame(data)",
-        "function handleAppendFrame(data)",
+        "function handleAppendFrame(data, appended)",
     ):
         assert "updateLiveFrameStatus(data);" in _region(
             handler, 2000
@@ -111,7 +116,7 @@ def test_the_scrubber_uses_it() -> None:
 
     assert "generatorChrome.setStep(" in body
     assert "stepReadout(" in body
-    assert "runFrames.canvasIndex[index]" in body
+    assert "generatorRun.frameCanvas(index)" in body
 
 
 def test_navigating_repaints_the_readout() -> None:
@@ -144,10 +149,8 @@ def test_nothing_else_formats_the_reading() -> None:
 def test_the_step_total_is_captured() -> None:
     """It was read off every frame and thrown away, which is why the
     scrubber could not rebuild the reading."""
-    source = _app()
-
-    assert "var lastRunTotalSteps = null;" in source
-    assert "lastRunTotalSteps =" in _region(
+    assert "var totalSteps = null;" in _run()
+    assert "generatorRun.setTotalSteps(frameSteps)" in _region(
         "function updateLiveFrameStatus(data)", 900
     )
 
@@ -161,7 +164,7 @@ def test_a_resume_does_not_claim_the_run_total() -> None:
     """
     body = _region("function updateLiveFrameStatus(data)", 900)
     guarded = body.find("if (!isResuming) {")
-    written = body.find("lastRunTotalSteps = frameSteps;")
+    written = body.find("generatorRun.setTotalSteps(frameSteps);")
 
     assert guarded != -1, "the run total is written unguarded"
     assert written != -1
@@ -183,7 +186,7 @@ def test_the_live_line_reads_the_frame_not_the_run() -> None:
 def test_the_scrubber_reads_the_run_not_the_frame() -> None:
     body = _region("function renderScrubStepReadout(index)", 700)
 
-    assert "lastRunTotalSteps" in body
+    assert "generatorRun.totalSteps()" in body
     assert "frameSteps" not in body
 
 
@@ -198,19 +201,21 @@ def test_substitution_counts_as_a_resume() -> None:
 
 
 def test_a_fresh_run_clears_it() -> None:
-    body = _region("function resetRunState()", 1500)
+    source = _run()
+    start = source.index("function reset()")
+    body = source[start : start + 1500]
 
-    assert "lastRunTotalSteps = null;" in body
+    assert "totalSteps = null;" in body
 
 
 def test_it_survives_a_trip_to_analytics() -> None:
     """Carried by the page's record, read back by the snapshot codec,
     and applied by the page."""
-    source = _app()
+    source = _run()
 
-    assert "lastRunTotalSteps: lastRunTotalSteps," in source
+    assert "lastRunTotalSteps: totalSteps," in source
     assert TOTAL_READ in _snapshot()
-    assert "lastRunTotalSteps = restored.lastRunTotalSteps;" in source
+    assert "totalSteps = restored.lastRunTotalSteps;" in source
 
 
 def test_an_adaptive_model_restores_as_having_no_total() -> None:

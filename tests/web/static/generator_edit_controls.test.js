@@ -203,7 +203,7 @@ async function finishedRun(worker) {
     prompt_len: 12,
     run_token: TOKEN,
   });
-  assert.equal(context.runFramesLength(context.runFrames), 4);
+  assert.equal(context.generatorRun.frameCount(), 4);
   return run;
 }
 
@@ -380,7 +380,7 @@ test("Continue carries the branch on without an edit", async () => {
   });
   assert.equal(run.context.remaskEdits.length, 1);
   assert.equal(run.context.runPhase.mode, "generating");
-  assert.equal(run.context.runFramesLength(run.context.runFrames), 2);
+  assert.equal(run.context.generatorRun.frameCount(), 2);
 });
 
 test("and the branch it carries on lands in review", async () => {
@@ -394,7 +394,7 @@ test("and the branch it carries on lands in review", async () => {
   run.context.handleDone(finishedDone("abc"));
 
   assert.equal(run.context.runPhase.mode, "review");
-  assert.equal(run.context.runFramesLength(run.context.runFrames), 4);
+  assert.equal(run.context.generatorRun.frameCount(), 4);
   assert.equal(run.context.remaskEdits.length, 1);
   assert.equal(continueHidden(run), true);
 });
@@ -414,7 +414,7 @@ test("a Continue stopped at once changes nothing", async () => {
   });
 
   assert.equal(run.context.runPhase.mode, "review");
-  assert.equal(run.context.runFramesLength(run.context.runFrames), 3);
+  assert.equal(run.context.generatorRun.frameCount(), 3);
   assert.equal(continueHidden(run), false);
   assert.equal(
     run.registry.get("status-message").textContent, UNCHANGED

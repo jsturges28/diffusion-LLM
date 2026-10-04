@@ -83,7 +83,9 @@ function descendants(node) {
 test("an append branch has a baseline to compare against", () => {
   const { context } = branchedRun();
 
-  assert.equal(context.originalRun.tokens.length, 0);
+  assert.equal(
+    context.generatorRun.originalTokenSeries().length, 0
+  );
   assert.equal(context.diffAvailable(), true);
 });
 

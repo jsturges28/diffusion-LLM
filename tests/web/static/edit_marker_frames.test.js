@@ -209,7 +209,7 @@ test("a marker takes the ramp at its own frame", () => {
     { frame_index: 1, token_positions: [0] },
     { frame_index: 4, token_positions: [3] },
   ]);
-  const last = context.runFramesLength(context.runFrames) - 1;
+  const last = context.generatorRun.frameCount() - 1;
 
   const colors = context.editMarkerColors([0, 3]);
 

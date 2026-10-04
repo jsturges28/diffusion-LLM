@@ -136,7 +136,7 @@ async function finishedRun() {
     prompt_len: 12,
     run_token: TOKEN,
   });
-  assert.equal(context.runFramesLength(context.runFrames), 4);
+  assert.equal(context.generatorRun.frameCount(), 4);
   return { context, registry, socket: FakeSocket.opened[mark] };
 }
 
@@ -184,14 +184,14 @@ test("a stopped Resume to End puts the run back", async () => {
   const run = await finishedRun();
   lockedEditAt(run, 2);
   press(run, "btn-resume-end");
-  assert.equal(run.context.runFramesLength(run.context.runFrames), 2);
+  assert.equal(run.context.generatorRun.frameCount(), 2);
 
   stoppedBeforeAFrame(run);
 
-  assert.equal(run.context.runFramesLength(run.context.runFrames), 4);
-  assert.equal(run.context.lastFinalText, "abc");
+  assert.equal(run.context.generatorRun.frameCount(), 4);
+  assert.equal(run.context.generatorRun.finalText(), "abc");
   assert.equal(run.context.remaskEdits.length, 0);
-  assert.equal(run.context.runInterrupted, false);
+  assert.equal(run.context.generatorRun.interrupted(), false);
   assert.equal(statusLine(run), UNCHANGED);
 });
 
@@ -252,7 +252,7 @@ test("a stopped Run to Here goes back to its target", async () => {
 
   stoppedBeforeAFrame(run);
 
-  assert.equal(run.context.runFramesLength(run.context.runFrames), 4);
+  assert.equal(run.context.generatorRun.frameCount(), 4);
   assert.equal(run.context.runPhase.mode, "select_target");
   assert.equal(run.context.runPhase.targetFrame, null);
   assert.equal(run.context.runPhase.guidedAction, null);
@@ -282,7 +282,7 @@ test("a resume stopped after a frame keeps its branch", async () => {
     run_token: TOKEN,
   });
 
-  assert.equal(run.context.runFramesLength(run.context.runFrames), 3);
+  assert.equal(run.context.generatorRun.frameCount(), 3);
   assert.equal(run.context.runPhase.mode, "review");
   assert.equal(run.context.remaskEdits.length, 1);
   assert.equal(statusLine(run), "Stopped.");

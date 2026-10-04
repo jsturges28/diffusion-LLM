@@ -275,7 +275,7 @@ test("a run stopped with Stop stays editable", async () => {
 test("the lock comes back from a trip to Analytics", async () => {
   const { context, registry } = await cutOffLlada();
   const button = registry.get("btn-edit-frames");
-  context.runLostConnection = false;
+  context.generatorRun.reset();
   context.setButtonUnlocked(button, "");
 
   assert.equal(context.restoreSessionState(), true);
@@ -289,7 +289,7 @@ test("a resume already composed is refused before the run is cut", async () => {
   // buttons. The request must not go, and the frames must not be cut
   // back for a branch that will never arrive.
   const { context, registry, socket } = await cutOffLlada();
-  const frames = context.runFramesLength(context.runFrames);
+  const frames = context.generatorRun.frameCount();
   context.runPhase.mode = "choice";
   context.runPhase.lockedEdits.push({
     frame_index: 0,
@@ -298,20 +298,20 @@ test("a resume already composed is refused before the run is cut", async () => {
 
   context.doGuidedResume("end");
 
-  assert.equal(context.runFramesLength(context.runFrames), frames);
+  assert.equal(context.generatorRun.frameCount(), frames);
   assert.deepEqual(stateful(socket), []);
   assert.match(registry.get("status-message").textContent, LOST);
 });
 
 test("a substitution already chosen is refused before the run is cut", async () => {
   const { context, socket } = await cutOffSmol();
-  const frames = context.runFramesLength(context.runFrames);
+  const frames = context.generatorRun.frameCount();
   context.runPhase.mode = "substitute";
   context.runPhase.substituting = true;
 
   context.doSubstitute(0, 7, null);
 
-  assert.equal(context.runFramesLength(context.runFrames), frames);
+  assert.equal(context.generatorRun.frameCount(), frames);
   assert.deepEqual(stateful(socket), []);
 });
 
@@ -322,7 +322,10 @@ test("nor is a probe or a rewind sent once the page reconnects", async () => {
   const { context } = await cutOffSmol();
   const reconnected = new OpenSocket("ws://test/ws");
   context.ws = reconnected;
-  context.activeRunToken = "a3f9c1:1";
+  context.generatorRun.finish({
+    final_text: " Yeast eats",
+    run_token: "a3f9c1:1",
+  });
   context.typedEntryToken = { id: 7, t: " ale" };
   context.typedEntryPos = 0;
 
@@ -405,8 +408,7 @@ test("a locked run sends nothing to the worker that replaced it", async () => {
 // again to say which worker it now reaches.
 function returnFromAnalytics(run) {
   const button = run.registry.get("btn-edit-frames");
-  run.context.runWorker = "";
-  run.context.residentWorker = "";
+  run.context.generatorRun.reset();
   run.context.setButtonUnlocked(button, "");
   assert.equal(run.context.restoreSessionState(), true);
   return button;

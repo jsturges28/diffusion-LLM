@@ -154,7 +154,7 @@ test("a declaration of another shape is refused", () => {
 test("each token is coloured by its own value", () => {
   const context = generator([FORGETTING], true);
   context.overlayMode = "forgetting";
-  const token = context.runFrames.positions[1];
+  const token = context.generatorRun.framePositions()[1];
 
   assert.equal(
     context.tokenColorAt(1, token, false),
@@ -168,7 +168,7 @@ test("each token is coloured by its own value", () => {
 
 test("the strip reads the value while the overlay is on", () => {
   const context = generator([FORGETTING], true);
-  const token = context.runFrames.positions[1];
+  const token = context.generatorRun.framePositions()[1];
 
   context.overlayMode = "forgetting";
   assert.equal(context.metricsExtra(1, token), "Forgetting: 0.310");
@@ -180,7 +180,7 @@ test("a save keeps every token's value", () => {
   const context = generator([FORGETTING], true);
 
   const records = host(
-    context.positionRecordsFrom(context.runFrames.positions)
+    context.generatorRun.buildSavePayload().frame_positions
   );
 
   assert.deepEqual(records.map((record) => record.f), VALUES);
@@ -190,7 +190,7 @@ test("a run without the value saves no key for it", () => {
   const context = generator([], false);
 
   const records = host(
-    context.positionRecordsFrom(context.runFrames.positions)
+    context.generatorRun.buildSavePayload().frame_positions
   );
 
   for (const record of records) {
@@ -200,12 +200,24 @@ test("a run without the value saves no key for it", () => {
 
 test("per-frame records keep the value too", () => {
   const { context } = loadPage({});
-  const frames = [
-    [{ t: "a", m: false, id: 1, c: 0.5, f: 0.2 }],
-    null,
-  ];
+  context.handleFrame({
+    index: 0,
+    text: "a",
+    tokens: [
+      { t: "a", m: false, id: 1, c: 0.5, f: 0.2 },
+    ],
+    elapsed: 0.1,
+  });
+  context.handleFrame({
+    index: 1,
+    text: "ab",
+    tokens: null,
+    elapsed: 0.2,
+  });
 
-  const records = host(context.tokenRecordsFrom(frames));
+  const records = host(
+    context.generatorRun.buildSavePayload().frame_tokens
+  );
 
   assert.equal(records[0][0].f, 0.2);
   assert.equal(records[1], null);

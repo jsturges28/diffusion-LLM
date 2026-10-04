@@ -380,9 +380,19 @@ test("where the favoured run has nothing, the popover stays closed", () => {
 });
 
 test("an edited run without its baseline has one page", () => {
-  // With no original to crossfade to, one run is on screen.
+  // A quota-light restore carries no baseline token detail, so there
+  // is only one run on screen even though the edit log survives.
   const { context, registry } = editedRun();
-  context.originalRunClear(context.originalRun);
+  context.saveSessionState();
+  const storage = context.sessionStorage;
+  const stored = JSON.parse(
+    storage.getItem(context.SESSION_KEY)
+  );
+  delete stored.originalFrameTokens;
+  delete stored.originalFrameHistory;
+  storage.setItem(context.SESSION_KEY, JSON.stringify(stored));
+  context.generatorRun.reset();
+  assert.equal(context.restoreSessionState(), true);
   context.runBlend = 0.2;
 
   const popover = popoverAt(context, registry, 3, 1);
@@ -476,7 +486,10 @@ test("a resume's candidates land after the point it branched from", () => {
   assert.equal(stepLabel(popover), "Step 3");
   assert.deepEqual(rowIds(popover), [101, 7]);
   assert.deepEqual(
-    Array.from(context.runCandidates.segments), [0, 2]
+    Array.from(
+      context.generatorRun.candidateSegments(false)
+    ),
+    [0, 2]
   );
 });
 
@@ -542,20 +555,25 @@ test("Retry brings the run's candidates back", () => {
   context.restoreEditSnapshot();
 
   assert.deepEqual(
-    Array.from(context.runCandidates.frames), [1, 3, 4]
+    Array.from(context.generatorRun.candidateFrames(false)),
+    [1, 3, 4]
   );
-  assert.deepEqual(Array.from(context.runCandidates.segments), [0]);
+  assert.deepEqual(
+    Array.from(context.generatorRun.candidateSegments(false)),
+    [0]
+  );
 });
 
 test("the session snapshot carries the candidates", () => {
   const { context } = finishedRun();
   context.saveSessionState();
-  context.runCandidates = context.runCandidatesCreate();
+  context.generatorRun.reset();
 
   assert.equal(context.restoreSessionState(), true);
 
   assert.deepEqual(
-    Array.from(context.runCandidates.frames), [1, 3, 4]
+    Array.from(context.generatorRun.candidateFrames(false)),
+    [1, 3, 4]
   );
 });
 
@@ -573,27 +591,37 @@ test("candidates over the quota give way to per-token detail", () => {
     write(key, value);
   };
   context.saveSessionState();
-  context.runCandidates = context.runCandidatesCreate();
+  context.generatorRun.reset();
 
   assert.equal(context.restoreSessionState(), true);
 
-  assert.ok(context.runCandidatesIsEmpty(context.runCandidates));
-  assert.equal(context.runFrames.tokens.length, STEPS + 1);
+  assert.equal(context.generatorRun.candidatesEmpty(false), true);
+  assert.equal(
+    context.generatorRun.frameTokenSeries().length,
+    STEPS + 1
+  );
 });
 
 test("the snapshot keeps both runs' candidates", () => {
   const { context } = editedRun();
   context.saveSessionState();
-  context.runCandidates = context.runCandidatesCreate();
-  context.originalCandidates = null;
+  context.generatorRun.reset();
 
   assert.equal(context.restoreSessionState(), true);
 
-  const original = context.originalCandidates;
-  assert.deepEqual(Array.from(original.frames), [1, 3, 4]);
-  assert.deepEqual(Array.from(original.segments), [0]);
   assert.deepEqual(
-    Array.from(context.runCandidates.segments), [0, 2]
+    Array.from(context.generatorRun.candidateFrames(true)),
+    [1, 3, 4]
+  );
+  assert.deepEqual(
+    Array.from(context.generatorRun.candidateSegments(true)),
+    [0]
+  );
+  assert.deepEqual(
+    Array.from(
+      context.generatorRun.candidateSegments(false)
+    ),
+    [0, 2]
   );
 });
 
@@ -605,11 +633,14 @@ test("an unedited run's snapshot writes its candidates once", () => {
   const written = JSON.parse(
     context.sessionStorage.getItem(context.SESSION_KEY)
   );
-  context.originalCandidates = null;
+  context.generatorRun.reset();
 
   assert.equal("originalCandidates" in written, false);
   assert.equal(context.restoreSessionState(), true);
-  assert.equal(context.originalCandidates, context.runCandidates);
+  assert.deepEqual(
+    context.generatorRun.candidateRecord(true),
+    context.generatorRun.candidateRecord(false)
+  );
 });
 
 test("over the quota, the pre-edit candidates give way first", () => {
@@ -629,7 +660,10 @@ test("over the quota, the pre-edit candidates give way first", () => {
   assert.equal(context.restoreSessionState(), true);
 
   assert.deepEqual(
-    Array.from(context.runCandidates.segments), [0, 2]
+    Array.from(
+      context.generatorRun.candidateSegments(false)
+    ),
+    [0, 2]
   );
   context.runBlend = 0.2;
   assert.equal(popoverAt(context, registry, 3, 1).hidden, true);

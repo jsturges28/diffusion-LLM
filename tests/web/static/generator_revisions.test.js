@@ -259,7 +259,7 @@ test("scrubbing back counts only what had happened by then", () => {
 test("the strip reads the count while the overlay is on", () => {
   const { context } = finishedRun(REVISING);
   context.navigateToFrame(6);
-  const token = context.runFrames.tokens[6][0];
+  const token = context.generatorRun.frameTokens(6)[0];
 
   context.overlayMode = "revisions";
   assert.equal(context.metricsExtra(0, token), "Revisions: 2");
@@ -530,12 +530,12 @@ test("a cut drops the live fold", () => {
   assert.equal(context.liveRevisionFold, null);
 });
 
-test("a cut nobody reported still rebuilds the fold", () => {
+test("a controller cut rebuilds the fold", () => {
   // The fold read all seven frames, so position 0 last held 30.
-  // Cut back to four frames without a word, the next frame settling
-  // it on 20 matches what frame 3 held: not a revision.
+  // Cutting through the run owner invalidates it; the next frame
+  // settling on 20 matches what frame 3 held: not a revision.
   const { context } = finishedRun(REVISING);
-  context.runFramesTruncate(context.runFrames, 4);
+  context.generatorRun.truncate(4);
 
   context.handleFrame(frameOf(REVISING[3], 4, REVISING.length - 1));
 

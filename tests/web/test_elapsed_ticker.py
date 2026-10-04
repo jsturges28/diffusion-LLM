@@ -33,6 +33,7 @@ STATIC = (
 )
 APP_JS = STATIC / "app.js"
 CHROME_JS = STATIC / "generator_chrome.js"
+RUN_JS = STATIC / "generator_run.js"
 
 
 def _source(path: Path = CHROME_JS) -> str:
@@ -88,7 +89,7 @@ def test_a_frame_stamps_the_worker_value() -> None:
     page = _region("function updateRunRateFooter()", 500, APP_JS)
     chrome = _region("function updateRateFooter(state)", 700)
 
-    assert "elapsedSeconds: runFrames.elapsed[frames - 1]" in page
+    assert "elapsedSeconds: generatorRun.lastElapsed()" in page
     assert "elapsedStampSeconds = state.elapsedSeconds" in chrome
     assert "elapsedStampAt = Date.now()" in chrome
 
@@ -182,7 +183,7 @@ def test_the_rate_still_moves_only_on_a_frame() -> None:
 
 def test_the_rate_reads_the_worker_series_not_a_clock() -> None:
     """What keeps the footer and the Analytics chart agreeing."""
-    body = _region("function currentTokensPerSecond()", 900, APP_JS)
+    body = _region("function tokensPerSecond(mode)", 900, RUN_JS)
 
-    assert "runFrames.elapsed" in body
+    assert "frames.elapsed" in body
     assert "Date.now()" not in body

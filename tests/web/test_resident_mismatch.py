@@ -31,6 +31,7 @@ STATIC = (
     Path(__file__).resolve().parents[2] / "src" / "web" / "static"
 )
 APP_JS = STATIC / "app.js"
+RUN_JS = STATIC / "generator_run.js"
 MENU_JS = STATIC / "menu.js"
 
 
@@ -118,7 +119,7 @@ def test_an_unsaved_run_is_saved_before_the_reload() -> None:
         APP_JS, "function rescueRunThenReload()", 1200
     )
 
-    save = region.find("saveRun()")
+    save = region.find("generatorRun.save()")
     reload_call = region.find("location.reload()", save)
 
     assert save != -1
@@ -126,14 +127,14 @@ def test_an_unsaved_run_is_saved_before_the_reload() -> None:
 
 
 def test_a_saved_run_reloads_without_saving_again() -> None:
-    """`runSaved` is the guard, so a mismatch after a normal save
-    does not file a duplicate."""
+    """The controller's saved flag keeps a normal save from filing a
+    duplicate."""
     region = _region(
         APP_JS, "function rescueRunThenReload()", 1200
     )
 
-    guard = region.find("runSaved")
-    save = region.find("saveRun()")
+    guard = region.find("generatorRun.saved()")
+    save = region.find("generatorRun.save()")
 
     assert guard != -1
     assert guard < save
@@ -163,10 +164,10 @@ def test_a_failed_save_still_reloads() -> None:
 def test_save_hands_back_a_promise() -> None:
     """What makes the rescue orderable at all. Its other callers
     ignore the result, which is why returning it is safe."""
-    region = _region(APP_JS, "function saveRun()", 900)
+    region = _region(RUN_JS, "function save()", 1700)
 
     assert "Promise.resolve()" in region
-    assert "return fetch(\"/api/save\"" in _source(APP_JS)
+    assert 'return requestSave("/api/save"' in _source(RUN_JS)
 
 
 # -- the menu's cancel --

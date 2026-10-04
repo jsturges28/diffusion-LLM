@@ -125,7 +125,31 @@ function runThrough(words, options) {
 }
 
 function frames(context) {
-  return context.runFrames;
+  const run = context.generatorRun;
+  const count = run.frameCount();
+  const history = [];
+  const tokens = [];
+  for (let index = 0; index < count; index++) {
+    history.push(run.frameText(index));
+    tokens.push(run.frameTokens(index));
+  }
+  return {
+    shape: run.frameIsAppend() ? "append" : "snapshot",
+    count: count,
+    positions: run.framePositions(),
+    history: history,
+    tokens: tokens,
+    canvasIndex: run.frameCanvasSeries(),
+    meanConf: run.frameMeanConfidenceSeries(),
+    elapsed: run.frameElapsedSeries(),
+    revealed: run.frameRevealedSeries(),
+  };
+}
+
+function captureOriginal(context) {
+  context.generatorRun.finish({
+    final_text: WORDS.join(""),
+  });
 }
 
 // -- what the page retains while a run streams --
@@ -186,8 +210,9 @@ test("candidates are kept by position, not by frame", () => {
   // reader could reasonably assume alts ride the frames.
   const { context } = runThrough(WORDS, { alts: true });
 
-  assert.equal(context.positionAlts.length, WORDS.length);
-  assert.equal(context.positionAlts[3][0].t, " other");
+  const alternatives =
+    context.generatorRun.positionAlternatives(3, false);
+  assert.equal(alternatives[0].t, " other");
 });
 
 // -- what scrubbing reads back --
@@ -237,37 +262,39 @@ test("navigating sets the scrub position the renderers read", () => {
 test("the baseline freezes the run at first completion", () => {
   const { context } = runThrough(WORDS);
 
-  context.originalRunCapture(
-    context.originalRun, context.runFrames, context.positionAlts
-  );
+  captureOriginal(context);
 
-  assert.equal(context.originalRun.totalFrames, WORDS.length);
-  assert.equal(context.originalRun.tokens.length, WORDS.length);
+  assert.equal(
+    context.generatorRun.originalTotalFrames(), WORDS.length
+  );
+  assert.equal(
+    context.generatorRun.originalTokenFrames(), WORDS.length
+  );
 });
 
 test("the baseline is a second copy of the same quadratic", () => {
   // Why an edited run pays twice: original_tokens.json is nearly as
   // large as tokens.json on disk.
   const { context } = runThrough(WORDS);
-  context.originalRunCapture(
-    context.originalRun, context.runFrames, context.positionAlts
-  );
+  captureOriginal(context);
 
-  const counts = context.originalRun.tokens.map((t) => t.length);
+  const counts = context.generatorRun
+    .originalTokenSeries()
+    .map((tokens) => tokens.length);
 
   assert.deepEqual(Array.from(counts), [1, 2, 3, 4, 5, 6]);
 });
 
 test("the baseline does not move when the live run is cut", () => {
   const { context } = runThrough(WORDS);
-  context.originalRunCapture(
-    context.originalRun, context.runFrames, context.positionAlts
+  captureOriginal(context);
+
+  context.generatorRun.truncate(3);
+
+  assert.equal(
+    context.generatorRun.originalTotalFrames(), WORDS.length
   );
-
-  context.runFramesTruncate(context.runFrames, 3);
-
-  assert.equal(context.originalRun.totalFrames, WORDS.length);
-  assert.equal(context.runFrames.tokens.length, 3);
+  assert.equal(context.generatorRun.frameCount(), 3);
 });
 
 // -- what a save would carry --
@@ -275,7 +302,8 @@ test("the baseline does not move when the live run is cut", () => {
 test("the save payload carries one record set per frame", () => {
   const { context } = runThrough(WORDS);
 
-  const records = context.tokenRecordsFrom(context.runFrames.tokens);
+  const records =
+    context.generatorRun.buildSavePayload().frame_tokens;
 
   assert.equal(records.length, WORDS.length);
   assert.deepEqual(
@@ -286,7 +314,8 @@ test("the save payload carries one record set per frame", () => {
 test("a saved record keeps text, id, confidence and entropy", () => {
   const { context } = runThrough(WORDS);
 
-  const records = context.tokenRecordsFrom(context.runFrames.tokens);
+  const records =
+    context.generatorRun.buildSavePayload().frame_tokens;
   const first = records[0][0];
 
   assert.equal(first.t, "The");
@@ -301,8 +330,9 @@ test("the payload's totals match the retained run", () => {
   // many text frames as token frames, each the right length.
   const { context } = runThrough(WORDS);
 
-  const records = context.tokenRecordsFrom(context.runFrames.tokens);
-  const texts = context.runFrames.history;
+  const records =
+    context.generatorRun.buildSavePayload().frame_tokens;
+  const texts = frames(context).history;
 
   assert.equal(records.length, texts.length);
   for (let index = 0; index < texts.length; index++) {
@@ -318,7 +348,7 @@ test("the payload's totals match the retained run", () => {
 test("cutting the run shortens every array together", () => {
   const { context } = runThrough(WORDS);
 
-  context.runFramesTruncate(context.runFrames, 3);
+  context.generatorRun.truncate(3);
   const held = frames(context);
 
   assert.equal(context.runFramesAligned(held), true);
@@ -331,7 +361,7 @@ test("a cut run continues from where it was cut", () => {
   // frames from the worker. The append path has to behave the same,
   // since the seed frame becomes one appended token.
   const { context } = runThrough(WORDS);
-  context.runFramesTruncate(context.runFrames, 3);
+  context.generatorRun.truncate(3);
 
   context.handleFrame(snapshotFrame(4, [
     "The", " cat", " sat", " down",
@@ -363,17 +393,13 @@ test("an append run reads back the same frames", () => {
 
   for (let index = 0; index < WORDS.length; index++) {
     assert.deepEqual(
-      hostCopy(
-        appendRun.runFramesTokensAt(appendRun.runFrames, index)
-      ),
-      hostCopy(
-        snapshotRun.runFramesTokensAt(snapshotRun.runFrames, index)
-      ),
+      hostCopy(appendRun.generatorRun.frameTokens(index)),
+      hostCopy(snapshotRun.generatorRun.frameTokens(index)),
       `frame ${index} tokens`
     );
     assert.equal(
-      appendRun.runFramesTextAt(appendRun.runFrames, index),
-      snapshotRun.runFramesTextAt(snapshotRun.runFrames, index),
+      appendRun.generatorRun.frameText(index),
+      snapshotRun.generatorRun.frameText(index),
       `frame ${index} text`
     );
   }
@@ -385,22 +411,23 @@ test("an append run keeps one record per token, not per frame", () => {
   // cost six.
   const { context } = streamAppend(WORDS);
 
-  assert.equal(context.runFrames.positions.length, WORDS.length);
-  assert.equal(context.runFrames.tokens.length, 0);
-  assert.equal(context.runFrames.history.length, 0);
+  assert.equal(
+    context.generatorRun.framePositions().length, WORDS.length
+  );
+  assert.equal(
+    context.generatorRun.frameTokenSeries().length, 0
+  );
 });
 
 test("an append run still counts its frames", () => {
   const { context } = streamAppend(WORDS);
 
-  assert.equal(
-    context.runFramesLength(context.runFrames), WORDS.length
-  );
+  assert.equal(context.generatorRun.frameCount(), WORDS.length);
 });
 
 test("an append run's scalars stay per frame", () => {
   const { context } = streamAppend(WORDS);
-  const held = context.runFrames;
+  const held = frames(context);
 
   assert.equal(context.runFramesAligned(held), true);
   assert.deepEqual(
@@ -411,8 +438,9 @@ test("an append run's scalars stay per frame", () => {
 test("an append run's candidates still land by position", () => {
   const { context } = streamAppend(WORDS, { alts: true });
 
-  assert.equal(context.positionAlts.length, WORDS.length);
-  assert.equal(context.positionAlts[3][0].t, " other");
+  const alternatives =
+    context.generatorRun.positionAlternatives(3, false);
+  assert.equal(alternatives[0].t, " other");
 });
 
 test("an append run builds the same save records", () => {
@@ -422,50 +450,42 @@ test("an append run builds the same save records", () => {
   const snapshotRun = runThrough(WORDS).context;
   const appendRun = streamAppend(WORDS).context;
 
-  const expected = snapshotRun.tokenRecordsFrom(
-    snapshotRun.runFrames.tokens
-  );
-  const built = [];
-  for (let index = 0; index < WORDS.length; index++) {
-    built.push(
-      appendRun.runFramesTokensAt(appendRun.runFrames, index)
-    );
-  }
+  const expected =
+    snapshotRun.generatorRun.buildSavePayload().frame_tokens;
+  const built =
+    appendRun.generatorRun.buildSavePayload().frame_positions;
 
   assert.deepEqual(
-    hostCopy(appendRun.tokenRecordsFrom(built)), hostCopy(expected)
+    hostCopy(built), hostCopy(expected[expected.length - 1])
   );
 });
 
-test("an append run survives a session round trip whole", () => {
+test("an append run survives a controller snapshot whole", () => {
   // The failure this retires. A long run used to exceed the storage
   // quota, fall back to a light payload, and come back with no
   // hover, no candidates and no entropy. There is no light payload
   // for an append run because the full one is already linear.
   const { context } = streamAppend(WORDS);
+  const checkpoint =
+    context.generatorRun.captureCheckpoint();
 
-  const written = context.runFramesToJson(context.runFrames);
-  const read = context.runFramesFromJson(
-    JSON.parse(JSON.stringify(written))
-  );
+  context.generatorRun.reset();
+  context.generatorRun.restoreCheckpoint(checkpoint);
 
-  assert.equal(context.runFramesLackDetail(read), false);
+  assert.equal(context.generatorRun.frameLacksDetail(), false);
   assert.equal(
-    context.runFramesTextAt(read, 5), "The cat sat on the mat"
+    context.generatorRun.frameText(5), "The cat sat on the mat"
   );
 });
 
-test("a light field set still carries an append run whole", () => {
-  // The quota fallback asks for three fields. An append run answers
-  // with everything anyway, because dropping its positions would
-  // drop the run.
+test("the append save payload carries the run whole", () => {
+  // The flat positions are the whole run rather than a light form,
+  // so saving never expands the quadratic in the browser.
   const { context } = streamAppend(WORDS);
 
-  const light = context.runFramesToJson(
-    context.runFrames, ["history", "elapsed", "revealed"]
-  );
+  const stored = context.generatorRun.buildSavePayload();
 
-  assert.equal(light.framePositions.length, WORDS.length);
+  assert.equal(stored.frame_positions.length, WORDS.length);
 });
 
 // -- substitution: cut the run, then splice --
@@ -484,9 +504,9 @@ test("an append run can be cut and continued", () => {
     appendFrame(3, ["The", " cat", " ran"])
   );
 
-  assert.equal(context.runFramesLength(context.runFrames), 3);
+  assert.equal(context.generatorRun.frameCount(), 3);
   assert.equal(
-    context.runFramesTextAt(context.runFrames, 2), "The cat ran"
+    context.generatorRun.frameText(2), "The cat ran"
   );
 });
 
@@ -497,12 +517,12 @@ test("cutting an append run leaves no phantom frames", () => {
   const { context } = streamAppend(WORDS);
 
   context.truncateRunArraysAt(2);
-  const held = context.runFrames;
+  const held = frames(context);
 
   assert.equal(held.count, 2);
   assert.equal(held.positions.length, 2);
-  assert.equal(held.history.length, 0);
-  assert.equal(held.tokens.length, 0);
+  assert.equal(held.history.length, 2);
+  assert.equal(held.tokens.length, 2);
   assert.equal(context.runFramesAligned(held), true);
 });
 
@@ -510,7 +530,7 @@ test("a cut append run keeps its scalars in step", () => {
   const { context } = streamAppend(WORDS);
 
   context.truncateRunArraysAt(2);
-  const held = context.runFrames;
+  const held = frames(context);
 
   assert.equal(held.elapsed.length, 2);
   assert.equal(held.revealed.length, 2);
@@ -522,16 +542,16 @@ test("a cut run's baseline still reads the original", () => {
   // What the Original/Edited comparison depends on: the branch
   // shortens the live run and the baseline must not move with it.
   const { context } = streamAppend(WORDS);
-  context.originalRunCapture(
-    context.originalRun, context.runFrames, context.positionAlts
-  );
+  captureOriginal(context);
 
   context.truncateRunArraysAt(2);
   context.handleFrame(appendFrame(3, ["The", " cat", " ran"]));
 
-  assert.equal(context.originalRun.totalFrames, WORDS.length);
   assert.equal(
-    context.originalRunTextAt(context.originalRun, 5),
+    context.generatorRun.originalTotalFrames(), WORDS.length
+  );
+  assert.equal(
+    context.generatorRun.originalText(5),
     "The cat sat on the mat"
   );
 });
@@ -540,17 +560,15 @@ test("an edit session can be abandoned and the run restored", () => {
   // Retry and Exit both roll back to the pre-edit snapshot, which
   // now has to carry the positions as well as the scalars.
   const { context } = streamAppend(WORDS);
-  const before = context.runFramesSnapshot(context.runFrames);
+  const before = context.generatorRun.captureCheckpoint();
 
   context.truncateRunArraysAt(2);
   context.handleFrame(appendFrame(3, ["The", " cat", " ran"]));
-  context.runFramesRestore(context.runFrames, before);
+  context.generatorRun.restoreCheckpoint(before);
 
+  assert.equal(context.generatorRun.frameCount(), WORDS.length);
   assert.equal(
-    context.runFramesLength(context.runFrames), WORDS.length
-  );
-  assert.equal(
-    context.runFramesTextAt(context.runFrames, 5),
+    context.generatorRun.frameText(5),
     "The cat sat on the mat"
   );
 });
@@ -566,7 +584,7 @@ test("a gap in the stream stops the run", () => {
 
   context.handleFrame(appendFrame(3, WORDS));
 
-  assert.equal(context.runFramesLength(context.runFrames), 1);
+  assert.equal(context.generatorRun.frameCount(), 1);
 });
 
 test("a gap says so rather than failing silently", () => {
@@ -589,5 +607,5 @@ test("a repeated frame is a gap too", () => {
 
   context.handleFrame(appendFrame(2, WORDS));
 
-  assert.equal(context.runFramesLength(context.runFrames), 2);
+  assert.equal(context.generatorRun.frameCount(), 2);
 });

@@ -238,45 +238,53 @@ function edit(context) {
 // What a trip to Analytics and back leaves: the stores as the
 // snapshot restores them.
 function restore(context) {
-  context.runCandidates = context.runCandidatesCreate();
-  context.originalCandidates = null;
+  context.generatorRun.reset();
   assert.equal(context.restoreSessionState(), true);
 }
 
 // A store in full, as a save would send it, so "kept" means every
 // set came back as it was rather than merely that frames did.
-function storeText(context, store) {
-  return JSON.stringify(context.runCandidatesToJson(store));
+function storeText(context, original) {
+  return JSON.stringify(
+    context.generatorRun.candidateRecord(original)
+  );
 }
 
 test("a default-sized run keeps its candidates", () => {
   const { context } = desktopPage();
   generate(context);
-  const before = storeText(context, context.runCandidates);
+  const before = storeText(context, false);
 
   restore(context);
 
-  assert.equal(context.runCandidates.frames.length, STEPS);
-  assert.equal(storeText(context, context.runCandidates), before);
+  assert.equal(
+    context.generatorRun.candidateFrames(false).length,
+    STEPS
+  );
+  assert.equal(storeText(context, false), before);
 });
 
 test("an edited one keeps both runs' candidates", () => {
   const { context } = desktopPage();
   generate(context);
   edit(context);
-  const live = storeText(context, context.runCandidates);
-  const original = storeText(context, context.originalCandidates);
+  const live = storeText(context, false);
+  const original = storeText(context, true);
 
   restore(context);
 
   assert.deepEqual(
-    Array.from(context.runCandidates.segments), [0, EDIT_FRAME]
+    Array.from(
+      context.generatorRun.candidateSegments(false)
+    ),
+    [0, EDIT_FRAME]
   );
-  assert.equal(context.originalCandidates.frames.length, STEPS);
-  assert.equal(storeText(context, context.runCandidates), live);
   assert.equal(
-    storeText(context, context.originalCandidates), original
+    context.generatorRun.candidateFrames(true).length,
+    STEPS
   );
+  assert.equal(storeText(context, false), live);
+  assert.equal(storeText(context, true), original);
 });
 
 test("the fixture is the size of the run it models", () => {

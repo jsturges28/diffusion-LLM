@@ -256,9 +256,7 @@ test("it survives a trip to Analytics and back", async () => {
   // The snapshot is written as the run stops, so leaving for
   // Analytics before saving does not lose it or its provenance.
   const { context, saved } = await interruptedLlada();
-  context.lastFinalText = null;
-  context.runInterrupted = false;
-  context.lastRunProvenance = null;
+  context.generatorRun.reset();
 
   assert.equal(context.restoreSessionState(), true);
   await context.saveRun();

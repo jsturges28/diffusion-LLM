@@ -51,6 +51,7 @@ const GENERATOR_SCRIPTS = [
   "run_frames.js",
   "run_candidates.js",
   "run_snapshot.js",
+  "generator_run.js",
   "candidate_flicker.js",
   "run_phases.js",
   "download_client.js",

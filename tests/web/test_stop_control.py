@@ -32,10 +32,15 @@ STATIC = (
 APP_JS = STATIC / "app.js"
 INDEX_HTML = STATIC / "index.html"
 SNAPSHOT_JS = STATIC / "run_snapshot.js"
+RUN_JS = STATIC / "generator_run.js"
 
 
 def _app() -> str:
     return APP_JS.read_text(encoding="utf-8")
+
+
+def _run() -> str:
+    return RUN_JS.read_text(encoding="utf-8")
 
 
 def _region(anchor: str, chars: int) -> str:
@@ -103,7 +108,7 @@ def test_the_click_handler_follows_the_same_order() -> None:
 
     assert "requestCancel()" in body
     assert body.index("isGenerating") < body.index(
-        "editedRunSaved"
+        "generatorRun.editedSaved()"
     )
 
 
@@ -111,10 +116,11 @@ def test_the_click_handler_follows_the_same_order() -> None:
 
 
 def test_the_terminal_frame_is_read_for_the_stopped_flag() -> None:
-    body = _region("function handleDone(data)", 900)
+    body = _run()
+    done = _region("function handleDone(data)", 900)
 
     assert "data.cancelled === true" in body
-    assert '"Stopped."' in body
+    assert '"Stopped."' in done
 
 
 def test_losing_the_socket_reaches_the_stopped_state() -> None:
@@ -126,7 +132,7 @@ def test_losing_the_socket_reaches_the_stopped_state() -> None:
     interrupted = _region(
         "function enterInterruptedState()", 900
     )
-    assert "runInterrupted = true;" in interrupted
+    assert "generatorRun.interruptConnection()" in interrupted
     assert "setGenerating(false);" in interrupted
 
 
@@ -139,27 +145,29 @@ def test_a_stopped_run_keeps_its_frames() -> None:
 
 
 def test_the_save_carries_the_stopped_flag() -> None:
-    source = _app()
+    source = _run()
 
     assert "payload.partial = true;" in source
-    assert "if (runInterrupted) {" in source
+    assert "if (interrupted) {" in source
 
 
 def test_the_flag_survives_a_trip_to_analytics() -> None:
     """Otherwise a stopped run returns looking complete. The snapshot
     codec reads the flag back; the page applies it."""
-    source = _app()
+    source = _run()
     codec = SNAPSHOT_JS.read_text(encoding="utf-8")
 
-    assert "runInterrupted: runInterrupted," in source
+    assert "runInterrupted: interrupted," in source
     assert "runInterrupted: !!source.runInterrupted," in codec
-    assert "runInterrupted = restored.runInterrupted;" in source
+    assert "interrupted = restored.runInterrupted;" in source
 
 
 def test_a_fresh_run_clears_the_flag() -> None:
-    body = _region("function resetRunState()", 1400)
+    source = _run()
+    start = source.index("function reset()")
+    body = source[start : start + 1400]
 
-    assert "runInterrupted = false;" in body
+    assert "interrupted = false;" in body
 
 
 # -- the in-app docs keep up --
