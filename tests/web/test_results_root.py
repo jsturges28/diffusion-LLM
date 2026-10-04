@@ -25,6 +25,7 @@ import pytest
 from starlette.testclient import TestClient
 
 import src.web.server as server
+from src.web import run_store
 from src.web.data_root import (
     RESULTS_DIR_ENV,
     resolve_results_dir,
@@ -130,7 +131,7 @@ def test_the_default_root_displays_as_a_short_path() -> None:
     """"results/..." is what the status line and the delete dialog
     have always said, and it should stay that way by default."""
     assert (
-        server._display_run_path(server.RESULTS_DIR)
+        run_store.display_path(server.RESULTS_DIR, server.REPO_ROOT)
         == "results"
     )
 
@@ -143,7 +144,7 @@ def test_an_outside_root_displays_in_full(
     explicit alternate data root must be isolated and named"."""
     outside = tmp_path / "elsewhere"
 
-    shown = server._display_run_path(outside)
+    shown = run_store.display_path(outside, server.REPO_ROOT)
 
     assert shown == str(outside)
     assert shown.startswith("/")

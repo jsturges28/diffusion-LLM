@@ -29,7 +29,6 @@ from typing import (
     List,
     Optional,
     Set,
-    Tuple,
 )
 
 import websockets
@@ -53,37 +52,15 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 
-from src.analytics.metrics import (
-    CONVERGENCE_BASIS_CHARACTERS,
-    CONVERGENCE_BASIS_SETTLEMENT,
-    CONVERGENCE_BASIS_TOKENS,
-    UnsupportedRunVersionError,
-    canvas_boundaries,
-    compute_convergence,
-    convergence_from_positions,
-    convergence_from_records,
-    convergence_from_settlement,
-    list_runs,
-    load_run_frames,
-    load_run_metadata,
-    masks_are_real,
-    read_frame_texts,
-    records_match_frames,
-    run_schema_version,
-    tokens_produced_series,
-    total_elapsed_seconds,
-)
+from src.analytics.metrics import list_runs
 from src.backends.protocol import (
     ERROR_NO_MODEL_ACTIVE,
     ERROR_SCOPE_FATAL,
     ERROR_WORKER_UNREACHABLE,
-    SAVED_MODEL_TYPE_AUTOREGRESSIVE,
     ModelInfo,
-    ParamSpec,
     is_hub_checkpoint,
     wire_error,
 )
-from src.backends.params import ParamValue, coerce, default_of
 from src.backends.registry import (
     DEFAULT_MODEL,
     REGISTRY,
@@ -101,6 +78,7 @@ from src.inference.vision_geometry import (
     MIN_DIMENSION as VISION_MIN_DIMENSION,
     geometry as vision_image_geometry,
 )
+from src.web import analytics_api
 from src.web import collections as collection_ops
 from src.web import model_manager
 from src.web import run_store
@@ -185,6 +163,27 @@ app = FastAPI(title="Diffusion LLM Visualizer", lifespan=_lifespan)
 # Ahead of every route, so a save past its ceiling is refused before
 # Starlette reads the body it would otherwise parse whole.
 app.add_middleware(BodyLimit)
+
+
+def _current_results_dir() -> Path:
+    """Read the live root so tests and embeddings can replace it."""
+    return RESULTS_DIR
+
+
+def _current_gpu_name() -> Optional[str]:
+    """Probe through the module so replacements remain visible."""
+    return model_manager.gpu_name()
+
+
+app.include_router(
+    analytics_api.create_analytics_router(
+        analytics_api.AnalyticsApiDependencies(
+            results_dir=_current_results_dir,
+            repo_root=REPO_ROOT,
+            gpu_name=_current_gpu_name,
+        )
+    )
+)
 
 
 # -- Model API --
@@ -634,11 +633,6 @@ async def websocket_proxy(browser: WebSocket) -> None:
 # -- Save endpoint (model-agnostic) --
 
 
-def _display_run_path(run_dir: Path) -> str:
-    """Run folder as written in the repo, for UI status copy."""
-    return run_store.display_path(run_dir, REPO_ROOT)
-
-
 def _current_save_model_facts() -> save_pipeline.CurrentModelFacts:
     """Snapshot resident facts used by legacy save requests."""
     return save_pipeline.CurrentModelFacts(
@@ -742,7 +736,7 @@ async def save_run(
     return JSONResponse(content={"success": True, **saved})
 
 
-# -- Analytics endpoints --
+# -- Vision endpoints --
 
 
 @app.get("/api/vision/encoders")
@@ -850,605 +844,6 @@ async def vision_geometry(
             "total_tokens": image.total_tokens,
         },
     })
-
-
-@app.get("/api/analytics/runs")
-async def analytics_list_runs() -> JSONResponse:
-    runs = await asyncio.to_thread(list_runs, RESULTS_DIR)
-    return JSONResponse(content=runs)
-
-
-# How many runs one comparison may carry. The chart is a legend and
-# a handful of lines; past this it is unreadable before it is slow,
-# and the list used to be unbounded, so a crafted request could ask
-# the server to read the whole archive in one breath.
-COMPARE_RUNS_MAX = 12
-
-# Parameters a legend label may name before it stops being a label.
-COMPARE_LABEL_PARAMS_MAX = 3
-
-# What became of one selection. Every id gets exactly one of these,
-# which is the difference from silently returning fewer lines than
-# the user asked for.
-COMPARE_STATUS_DATA = "data"
-COMPARE_STATUS_UNAVAILABLE = "unavailable"
-COMPARE_STATUS_ERROR = "error"
-
-# Why a selection carries no data. Separate from the message so the
-# browser can group or style them without matching on prose.
-COMPARE_NOT_FOUND = "not_found"
-COMPARE_INVALID_ID = "invalid_id"
-COMPARE_UNSUPPORTED = "unsupported_version"
-COMPARE_UNREADABLE = "unreadable"
-COMPARE_NO_CURVE = "no_curve"
-
-COMPARE_REASONS = (
-    COMPARE_NOT_FOUND,
-    COMPARE_INVALID_ID,
-    COMPARE_UNSUPPORTED,
-    COMPARE_UNREADABLE,
-    COMPARE_NO_CURVE,
-)
-
-assert COMPARE_RUNS_MAX > 1, "a comparison needs two runs"
-assert len(set(COMPARE_REASONS)) == len(COMPARE_REASONS)
-
-
-def _compute_run_metrics(run_id: str) -> Dict[str, Any]:
-    # Through the store's resolver like every other run-id endpoint.
-    # This one used to join the path unguarded, so a crafted id could
-    # walk out of the data root while its three siblings refused.
-    run_dir = run_store.resolve_run_dir(RESULTS_DIR, run_id)
-    meta = load_run_metadata(run_dir)
-    # Which file holds the frames is the schema version's business,
-    # so the check for its absence belongs to the reader too.
-    frames = read_frame_texts(run_dir, meta)
-    convergence, basis, produced_from = _run_convergence(
-        run_dir, frames, meta.get("canvas_index")
-    )
-
-    result: Dict[str, Any] = {
-        "run_id": run_id,
-        "convergence": convergence,
-        # Named so the chart can caption a weaker measure rather than
-        # present it as the stronger one.
-        "convergence_basis": basis,
-        "total_frames": len(frames),
-        # Carried so compare can decide what a run can contribute
-        # without consulting the catalog. The browser used to look
-        # this up in its in-memory run list, which coupled the two
-        # endpoints for one string.
-        "model_type": str(
-            meta.get("model_type", "diffusion")
-        ),
-        # What to call this run's model in prose. The convergence
-        # caption names it, and only the server can turn a registry
-        # id into something worth reading. Falls back to the id, so
-        # a run from a model this build no longer knows still reads
-        # as itself rather than as nothing.
-        "model_label": _model_label(meta),
-    }
-    for key in (
-        "per_frame_elapsed",
-        "elapsed_seconds",
-        "remask_edits",
-        "mean_conf",
-        "original_per_frame_elapsed",
-        "original_elapsed_seconds",
-        "original_mean_conf",
-    ):
-        if key in meta:
-            result[key] = meta[key]
-    # Same repair list_runs applies, so the two endpoints cannot
-    # disagree about how long an edited run took.
-    repaired = total_elapsed_seconds(
-        meta.get("per_frame_elapsed")
-    )
-    if repaired is not None:
-        result["elapsed_seconds"] = repaired
-    canvas_index = meta.get("canvas_index")
-    if canvas_index:
-        result["canvas_boundaries"] = canvas_boundaries(
-            canvas_index
-        )
-    # Computed here rather than in the browser because it needs the
-    # canvas each frame belongs to, and getting it wrong is invisible:
-    # the old client-side version read plausibly and undercounted a
-    # whole committed canvas.
-    #
-    # Fed the sampler's own resolution counts, which is not always the
-    # series above. The two charts answer different questions: how
-    # settled the canvas is, and how fast the model produced. Only the
-    # second has a live counterpart, and the generator's footer counts
-    # what the sampler emitted, so feeding this the settlement series
-    # would make the same run read as two speeds again.
-    result["tokens_produced"] = tokens_produced_series(
-        produced_from, canvas_index
-    )
-    return result
-
-
-def _model_label(meta: Dict[str, Any]) -> str:
-    """The display name for the model that produced a run."""
-    backend = str(meta.get("backend", ""))
-    entry = REGISTRY.get(backend)
-    if entry is None:
-        return backend
-    return entry.display_name
-
-
-def _run_convergence(
-    run_dir: Path,
-    frames: List[str],
-    canvas_index: Any = None,
-) -> Tuple[List[Dict[str, Any]], str, List[Dict[str, Any]]]:
-    """A run's convergence series, how it was measured, and the
-    series the throughput chart should count from.
-
-    Three measures, and which one a run gets is a property of the run
-    rather than a preference. Where the mask is a real token the flag
-    is ground truth and is used. Where the sampler inferred it from a
-    position holding still, the flag overstates badly, so agreement
-    with what the canvas committed is used instead. A run that saved
-    no usable records falls back to counting mask glyphs against
-    characters, which is roughly a tenth of the archive here.
-
-    The third return value exists because the throughput chart must
-    keep counting what the sampler resolved even when the convergence
-    chart stops. Only throughput has a live counterpart, and the
-    generator's footer counts the sampler's own reveals, so the two
-    would disagree again if this handed back the settlement series.
-
-    A malformed token stream falls back rather than raising. The
-    weaker curve is worth more than no page, and the basis says which
-    one the reader is looking at.
-    """
-    try:
-        loaded = load_run_frames(run_dir)
-    except (ValueError, OSError):
-        logger.warning(
-            "token records unreadable for %s; counting characters",
-            run_dir.name,
-        )
-        loaded = None
-
-    if loaded is not None and loaded.get("records_available"):
-        positions = loaded.get("positions")
-        if positions is not None and len(positions) == len(frames):
-            # A run that only grows has no masked position and
-            # nothing behind the newest one moves, so its curve
-            # follows from the count alone. Taken before the branches
-            # below because those exist to tell apart two ways a
-            # position can change, and here none of them do.
-            by_count = convergence_from_positions(len(positions))
-            return (
-                by_count, CONVERGENCE_BASIS_TOKENS, by_count
-            )
-        token_frames = loaded.get("frames")
-        if records_match_frames(token_frames, len(frames)):
-            by_mask = convergence_from_records(token_frames)
-            if masks_are_real(token_frames):
-                return (
-                    by_mask, CONVERGENCE_BASIS_TOKENS, by_mask
-                )
-            return (
-                convergence_from_settlement(
-                    token_frames, canvas_index
-                ),
-                CONVERGENCE_BASIS_SETTLEMENT,
-                by_mask,
-            )
-    by_chars = compute_convergence(frames)
-    return (by_chars, CONVERGENCE_BASIS_CHARACTERS, by_chars)
-
-
-def _unsupported_version_response(
-    exc: UnsupportedRunVersionError,
-) -> JSONResponse:
-    """Answer a run this build cannot read with a plain explanation.
-
-    Separate from the generic malformed-run 400 so the browser can
-    say "update the app" rather than "this run is broken". The run is
-    almost certainly fine; this build is the old one.
-    """
-    return JSONResponse(
-        status_code=400,
-        content={
-            "error": (
-                "This run was saved by a newer version of the app"
-                f" (format {exc.version}), which this build cannot"
-                " read. Update to open it."
-            ),
-            "unsupported_version": True,
-        },
-    )
-
-
-@app.get("/api/analytics/runs/{run_id}/metrics")
-async def analytics_run_metrics(run_id: str) -> JSONResponse:
-    try:
-        result = await asyncio.to_thread(
-            _compute_run_metrics, run_id
-        )
-    except FileNotFoundError as exc:
-        return JSONResponse(
-            status_code=404, content={"error": str(exc)}
-        )
-    except UnsupportedRunVersionError as exc:
-        return _unsupported_version_response(exc)
-    except ValueError as exc:
-        return JSONResponse(
-            status_code=400, content={"error": str(exc)}
-        )
-    return JSONResponse(content=result)
-
-
-@app.get("/api/analytics/runs/{run_id}/metadata")
-async def analytics_run_metadata(run_id: str) -> JSONResponse:
-    """Everything about one run that the catalog no longer carries.
-
-    The list used to hand back whole metadata files, so the detail
-    panel could build its rows from a row it already had. It cannot
-    any more, and that is the point: the list pays for every run and
-    this pays for the one the user opened.
-    """
-    try:
-        meta = await asyncio.to_thread(_run_metadata, run_id)
-    except FileNotFoundError as exc:
-        return JSONResponse(
-            status_code=404, content={"error": str(exc)}
-        )
-    except UnsupportedRunVersionError as exc:
-        return _unsupported_version_response(exc)
-    except ValueError as exc:
-        return JSONResponse(
-            status_code=400, content={"error": str(exc)}
-        )
-    return JSONResponse(content=meta)
-
-
-def _run_metadata(run_id: str) -> Dict[str, Any]:
-    """One run's full metadata, guarded like every other read."""
-    run_dir = run_store.resolve_run_dir(RESULTS_DIR, run_id)
-    meta = load_run_metadata(run_dir)
-    # The version is checked here rather than trusted, so a run this
-    # build cannot read is refused instead of rendered from fields it
-    # does not understand.
-    run_schema_version(meta)
-    # Both are computed rather than stored, and the detail panel
-    # shows them, so they travel with the metadata rather than
-    # leaving the panel to work out which run list to consult.
-    meta["has_diff"] = (
-        run_dir / "original_tokens.json"
-    ).is_file()
-    repaired = total_elapsed_seconds(
-        meta.get("per_frame_elapsed")
-    )
-    if repaired is not None:
-        meta["elapsed_seconds"] = repaired
-    return meta
-
-
-def _compute_run_frames(run_id: str) -> Dict[str, Any]:
-    """Load durable token streams for the overlay viewer.
-
-    Kept separate from ``_compute_run_metrics`` because token streams
-    are large; the analytics UI fetches this only when a run's overlay
-    viewer opens.
-    """
-    run_dir = run_store.resolve_run_dir(RESULTS_DIR, run_id)
-    meta = load_run_metadata(run_dir)
-    data = load_run_frames(run_dir)
-    # A run that only grows goes out flat and the page rebuilds each
-    # frame as a prefix, which is the same slice the generator does
-    # live. At 2,048 tokens that is the difference between a 123 MiB
-    # download and under a megabyte, and it is the download rather
-    # than the file that the reader waits on.
-    #
-    # Old runs get it too when their frames turn out to be prefixes,
-    # though only for the wire: the file still has to be parsed to
-    # discover that, so an old long run is quicker to draw and no
-    # quicker to open.
-    positions = data["positions"]
-    return {
-        "run_id": run_id,
-        "frames": None if positions is not None else data["frames"],
-        "positions": positions,
-        "original_frames": (
-            None
-            if data["original_positions"] is not None
-            else data["original_frames"]
-        ),
-        "original_positions": data["original_positions"],
-        "records_available": data["records_available"],
-        "alternatives": data["alternatives"],
-        "alternatives_available": data[
-            "alternatives_available"
-        ],
-        "original_alternatives": data[
-            "original_alternatives"
-        ],
-        "candidates": data["candidates"],
-        "original_candidates": data["original_candidates"],
-        "remask_edits": meta.get("remask_edits", []),
-        "canvas_index": meta.get("canvas_index"),
-        "stop_rule": _stop_rule(meta),
-        # What each signal varies over, as the run declared it, so
-        # the page reads a channel by its axes. None for a run saved
-        # before manifests, which the page reads as it always has.
-        "signals": meta.get(run_store.SIGNALS_KEY),
-    }
-
-
-# The parameters a model that stops adaptively declares, and that a
-# saved run's rule is read back from. The step budget rides along
-# because the readout's verdict on a committed canvas compares its
-# length with it.
-STOP_RULE_PARAMS: Tuple[str, ...] = (
-    "confidence_threshold",
-    "stability_threshold",
-    "max_denoising_steps",
-)
-
-
-def _stop_rule(
-    meta: Dict[str, Any],
-) -> Optional[Dict[str, ParamValue]]:
-    """The stopping rule a saved run ran under, or None.
-
-    None for a model that does not stop adaptively, which is how the
-    Analytics page knows to offer neither the readout nor the
-    Stopping chart. Each value comes from the run's own parameters,
-    held to the experimental bounds, the widest a run could have
-    used. One that is missing or malformed takes the registry
-    default, so a run saved before the rule was a parameter reads as
-    0.005 and 1: what the checkpoint applied to it.
-    """
-    entry = REGISTRY.get(str(meta.get("backend", "")))
-    if entry is None:
-        return None
-    if not entry.capabilities.adaptive_stopping:
-        return None
-    saved = meta.get("params")
-    if not isinstance(saved, dict):
-        saved = {}
-    specs = {spec.name: spec for spec in entry.param_specs}
-    rule: Dict[str, ParamValue] = {}
-    for name in STOP_RULE_PARAMS:
-        assert name in specs, (
-            f"{entry.id} stops adaptively without {name}"
-        )
-        rule[name] = _stop_rule_value(specs[name], saved.get(name))
-    return rule
-
-
-def _stop_rule_value(spec: ParamSpec, given: Any) -> ParamValue:
-    """One saved value of the rule, or its default."""
-    default = default_of(spec, device=None)
-    if given is None:
-        return default
-    try:
-        return coerce(spec, given, device=None, experimental=True)
-    except ValueError:
-        return default
-
-
-@app.get("/api/analytics/runs/{run_id}/frames")
-async def analytics_run_frames(run_id: str) -> JSONResponse:
-    try:
-        result = await asyncio.to_thread(
-            _compute_run_frames, run_id
-        )
-    except FileNotFoundError as exc:
-        return JSONResponse(
-            status_code=404, content={"error": str(exc)}
-        )
-    except UnsupportedRunVersionError as exc:
-        return _unsupported_version_response(exc)
-    except ValueError as exc:
-        return JSONResponse(
-            status_code=400, content={"error": str(exc)}
-        )
-    return JSONResponse(content=result)
-
-
-@app.get("/api/analytics/compare")
-async def analytics_compare(ids: str = "") -> JSONResponse:
-    """Compare a bounded set of runs, accounting for every one.
-
-    The contract is that a selection is never silently dropped. Each
-    id comes back as exactly one record saying what happened to it,
-    because a chart with fewer lines than the user ticked, and
-    nothing explaining which are missing, is worse than an error.
-    """
-    run_ids = _compare_selection(ids)
-    if len(run_ids) == 0:
-        return JSONResponse(
-            status_code=400,
-            content={"error": "ids parameter is required"},
-        )
-    if len(run_ids) > COMPARE_RUNS_MAX:
-        return JSONResponse(
-            status_code=400,
-            content={
-                "error": (
-                    f"Compare accepts up to {COMPARE_RUNS_MAX}"
-                    f" runs; {len(run_ids)} were selected."
-                )
-            },
-        )
-    results = [
-        await _compare_one(run_id) for run_id in run_ids
-    ]
-    assert len(results) == len(run_ids), "one record per id"
-    return JSONResponse(content=results)
-
-
-def _compare_selection(ids: str) -> List[str]:
-    """The ids to compare: trimmed, non-empty, first occurrence.
-
-    Deduplicated because the same run twice is one line drawn twice,
-    and it would otherwise count against the cap below while adding
-    nothing.
-    """
-    seen: Set[str] = set()
-    ordered: List[str] = []
-    for raw in ids.split(","):
-        run_id = raw.strip()
-        if not run_id:
-            continue
-        if run_id in seen:
-            continue
-        seen.add(run_id)
-        ordered.append(run_id)
-    return ordered
-
-
-async def _compare_one(run_id: str) -> Dict[str, Any]:
-    """One selection's outcome: data, unavailable, or an error.
-
-    Every failure is caught here rather than escaping. The batch used
-    to survive only the two exception types it named, so a run whose
-    frames were corrupt in an unanticipated way took down the whole
-    comparison, including the runs that were fine.
-    """
-    try:
-        record = await asyncio.to_thread(
-            _compute_run_metrics, run_id
-        )
-    except run_store.RunNotFoundError:
-        return _compare_error(
-            run_id, COMPARE_NOT_FOUND, "This run no longer exists."
-        )
-    except run_store.InvalidRunIdError:
-        return _compare_error(
-            run_id, COMPARE_INVALID_ID, "Not a valid run id."
-        )
-    except UnsupportedRunVersionError:
-        return _compare_error(
-            run_id,
-            COMPARE_UNSUPPORTED,
-            "Saved by a newer version of this app.",
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("compare failed for %s", run_id)
-        return _compare_error(
-            run_id, COMPARE_UNREADABLE, f"Could not be read: {exc}"
-        )
-
-    record["status"] = COMPARE_STATUS_DATA
-    record["label"] = _compare_label(run_id)
-    if (
-        record.get("model_type")
-        == SAVED_MODEL_TYPE_AUTOREGRESSIVE
-    ):
-        # Real run, no comparable curve: an autoregressive run has no
-        # masked canvas to converge. Said out loud rather than
-        # dropped, which is what the chart used to do.
-        record["status"] = COMPARE_STATUS_UNAVAILABLE
-        record["reason"] = COMPARE_NO_CURVE
-        record["message"] = (
-            "Autoregressive runs have no convergence curve."
-        )
-    return record
-
-
-def _compare_error(
-    run_id: str, reason: str, message: str
-) -> Dict[str, Any]:
-    """One refused selection, in the shape the chart legend reads."""
-    assert reason in COMPARE_REASONS, reason
-    return {
-        "run_id": run_id,
-        "status": COMPARE_STATUS_ERROR,
-        "reason": reason,
-        "message": message,
-        # Kept so the legend can name the run it could not draw.
-        "label": run_id,
-    }
-
-
-def _compare_label(run_id: str) -> str:
-    """A legend label built from the model's own parameters.
-
-    The browser used to assemble this from ``steps``, ``gen_length``
-    and ``block_length``, which only LLaDA has, so a DiffusionGemma
-    or SmolLM3 run was labelled with the word ``undefined`` three
-    times. The registry knows each model's parameters and what to
-    call them, and only the server can read the registry, so the
-    label is built here.
-    """
-    try:
-        run_dir = run_store.resolve_run_dir(RESULTS_DIR, run_id)
-        meta = load_run_metadata(run_dir)
-    except (ValueError, OSError):
-        return run_id
-
-    entry = REGISTRY.get(str(meta.get("backend", "")))
-    if entry is None:
-        return run_id
-
-    params = meta.get("params")
-    if not isinstance(params, dict):
-        return entry.display_name
-
-    parts: List[str] = []
-    for spec in entry.param_specs:
-        if len(parts) >= COMPARE_LABEL_PARAMS_MAX:
-            break
-        if spec.name not in params:
-            continue
-        parts.append(f"{spec.label}={params[spec.name]}")
-    if not parts:
-        return entry.display_name
-    return entry.display_name + " " + " ".join(parts)
-
-
-@app.get("/api/analytics/system")
-async def analytics_system_info() -> JSONResponse:
-    """GPU name and data root for the analytics UI.
-
-    The GPU name because the supervisor has no torch. The data root
-    because the delete confirmation used to spell it ``results/``
-    from a hardcoded string, which stopped being true the moment
-    the root became configurable, and a dialog about permanent
-    deletion is the worst place to name the wrong directory.
-    """
-    return JSONResponse(
-        content={
-            "gpu_name": model_manager.gpu_name(),
-            "results_dir": _display_run_path(RESULTS_DIR),
-        }
-    )
-
-
-def _delete_run_blocking(run_id: str) -> None:
-    """Delete one saved run directory under the data root."""
-    run_store.delete(RESULTS_DIR, run_id)
-
-
-@app.delete("/api/analytics/runs/{run_id}")
-async def analytics_delete_run(run_id: str) -> JSONResponse:
-    try:
-        await asyncio.to_thread(_delete_run_blocking, run_id)
-    except FileNotFoundError as exc:
-        return JSONResponse(
-            status_code=404,
-            content={"success": False, "message": str(exc)},
-        )
-    except ValueError as exc:
-        return JSONResponse(
-            status_code=400,
-            content={"success": False, "message": str(exc)},
-        )
-    except OSError as exc:
-        logger.exception("failed to delete run %s", run_id)
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "message": str(exc)},
-        )
-    logger.info("deleted run %s", run_id)
-    return JSONResponse(content={"success": True})
 
 
 # -- Durable UI state (origin-independent frontend preferences) --
@@ -2080,7 +1475,9 @@ def _analytics_boot_state() -> Dict[str, Any]:
         "collections": collection_ops.decode(
             ui_state.get(COLLECTIONS_KEY)
         ),
-        "results_dir": _display_run_path(RESULTS_DIR),
+        "results_dir": run_store.display_path(
+            RESULTS_DIR, REPO_ROOT
+        ),
     }
 
 

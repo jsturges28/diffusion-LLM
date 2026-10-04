@@ -5,8 +5,8 @@ joins the relative ``RESULTS_DIR`` and stays relative; an edited save
 updates the original in place via ``_existing_run_dir``, which must
 ``resolve()`` for its traversal guard and so hands back an absolute
 path. Reporting either raw made one save read "results/..." and the
-next "/home/you/.../results/...". ``_display_run_path`` normalizes
-both at the single point they meet.
+next "/home/you/.../results/...". ``run_store.display_path``
+normalizes both at the single point they meet.
 
 These tests feed it the shapes each branch produces, plus a path
 outside the repo, and assert the two in-repo forms collapse to one
@@ -19,7 +19,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.web.server import REPO_ROOT, _display_run_path
+from src.web import run_store
+from src.web.server import REPO_ROOT
 
 RUN_NAME = "2026-08-03_02-45-12_HuggingFaceTB_SmolLM3-3B"
 
@@ -28,14 +29,18 @@ def test_relative_path_is_returned_unchanged() -> None:
     """The fresh-save branch's shape is already what we want."""
     relative = Path("results") / RUN_NAME
 
-    assert _display_run_path(relative) == f"results/{RUN_NAME}"
+    assert run_store.display_path(
+        relative, REPO_ROOT
+    ) == f"results/{RUN_NAME}"
 
 
 def test_absolute_path_inside_repo_is_shortened() -> None:
     """The in-place-update branch's shape collapses to match it."""
     absolute = REPO_ROOT / "results" / RUN_NAME
 
-    assert _display_run_path(absolute) == f"results/{RUN_NAME}"
+    assert run_store.display_path(
+        absolute, REPO_ROOT
+    ) == f"results/{RUN_NAME}"
 
 
 def test_both_branches_agree() -> None:
@@ -43,7 +48,9 @@ def test_both_branches_agree() -> None:
     relative = Path("results") / RUN_NAME
     absolute = REPO_ROOT / "results" / RUN_NAME
 
-    assert _display_run_path(relative) == _display_run_path(absolute)
+    assert run_store.display_path(
+        relative, REPO_ROOT
+    ) == run_store.display_path(absolute, REPO_ROOT)
 
 
 def test_path_outside_repo_falls_back_to_full_path(
@@ -56,12 +63,16 @@ def test_path_outside_repo_falls_back_to_full_path(
     """
     outside = tmp_path / "results" / RUN_NAME
 
-    assert _display_run_path(outside) == str(outside)
+    assert run_store.display_path(
+        outside, REPO_ROOT
+    ) == str(outside)
 
 
 def test_repo_root_itself_is_the_boundary() -> None:
     """The valid/invalid edge: the root is in, its parent is out."""
     outside = REPO_ROOT.parent
 
-    assert _display_run_path(REPO_ROOT) == "."
-    assert _display_run_path(outside) == str(outside)
+    assert run_store.display_path(REPO_ROOT, REPO_ROOT) == "."
+    assert run_store.display_path(
+        outside, REPO_ROOT
+    ) == str(outside)

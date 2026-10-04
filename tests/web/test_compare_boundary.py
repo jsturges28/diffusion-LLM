@@ -33,7 +33,7 @@ from typing import Any, Dict, List
 import pytest
 from starlette.testclient import TestClient
 
-from src.web import server
+from src.web import analytics_api, server
 
 MASK = "\u2591"
 
@@ -204,23 +204,29 @@ def test_duplicates_are_collapsed(client: TestClient) -> None:
 def test_too_many_runs_are_refused_with_a_reason(
     client: TestClient,
 ) -> None:
-    ids = [f"run-{i}" for i in range(server.COMPARE_RUNS_MAX + 1)]
+    ids = [
+        f"run-{i}"
+        for i in range(analytics_api.COMPARE_RUNS_MAX + 1)
+    ]
 
     response = _compare(client, ids)
 
     assert response.status_code == 400
-    assert str(server.COMPARE_RUNS_MAX) in (
+    assert str(analytics_api.COMPARE_RUNS_MAX) in (
         response.json()["error"]
     )
 
 
 def test_the_cap_itself_is_allowed(client: TestClient) -> None:
     # The boundary, from the inside: one fewer than the refusal.
-    ids = [f"run-{i}" for i in range(server.COMPARE_RUNS_MAX)]
+    ids = [
+        f"run-{i}"
+        for i in range(analytics_api.COMPARE_RUNS_MAX)
+    ]
 
     results = _ok(client, ids)
 
-    assert len(results) == server.COMPARE_RUNS_MAX
+    assert len(results) == analytics_api.COMPARE_RUNS_MAX
 
 
 def test_an_empty_selection_is_refused(
