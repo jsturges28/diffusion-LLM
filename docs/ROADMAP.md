@@ -32,8 +32,8 @@ incompatible ones.
 The audit remediation campaign that ran from 2026-08-10 is complete except
 for a short remainder, tracked finding by finding in
 `docs/audit/IMPLEMENTATION_LEDGER.md`. A second audit followed on
-2026-10-01, and its remediation is under way in
-`docs/audit/IMPLEMENTATION_LEDGER_2026-10.md`. Every accepted direction
+2026-10-01, and all 21 of its findings were done by 2026-10-03, as
+`docs/audit/IMPLEMENTATION_LEDGER_2026-10.md` records. Every accepted direction
 below has shipped, the revision glow last on 2026-10-01, and the next is to
 be chosen from the backlog.
 

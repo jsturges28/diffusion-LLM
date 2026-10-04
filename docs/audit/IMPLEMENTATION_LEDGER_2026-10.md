@@ -13,13 +13,12 @@ first ledger reached 3,899 lines because every session appended its story to
 it. Here a finding gets one row and a decision one line, with any longer
 reasoning in `docs/ROADMAP.md`, and git history keeps the rest.
 
-**As of 2026-10-03**, Stages 1 and 2 are done. Stage 2, cross-supervisor
-ownership, was validated as a whole by the two-supervisor passes confirmed
-for items 310 to 314, 389 to 396, 400 to 404 and 405. Stage 3, extracting
-owners, is under way: `A2-ORG-01`, `A2-ORG-02`, `A2-DEPS-01`, `A2-ORG-03`
-and `A2-ORG-05` are done, and `A2-ORG-04`, the last finding open, waits on
-item 411 for its token viewer, its line charts confirmed with item 410. The
-report's Combinations to avoid still bind every pass.
+**As of 2026-10-03**, all three stages are done, and with them all 21
+findings. Stage 2, cross-supervisor ownership, was validated as a whole by
+the two-supervisor passes confirmed for items 310 to 314, 389 to 396, 400 to
+404 and 405. Stage 3, extracting owners, closed with `A2-ORG-04`'s token
+viewer, confirmed with item 411. The open rows under Raised during
+remediation remain, each its own slice when taken.
 
 ## How to work a finding
 
@@ -62,7 +61,7 @@ Decisions saying why.
 | A2-ORG-02 | 3 | done | `c3c007f` | | |
 | A2-DEPS-01 | 3 | done | `2a6e87d` | 406 | |
 | A2-ORG-03 | 3 | done | `a4ff5e5` | 407 | |
-| A2-ORG-04 | 3 | needs hardware | `64281e2`, `548f022`, `634d628`, `4e44daa`, `e45d161`, `c532bff`, `d7f2e6a`, `44f212d` | 408, 410, 411 | |
+| A2-ORG-04 | 3 | done | `64281e2`, `548f022`, `634d628`, `4e44daa`, `e45d161`, `c532bff`, `d7f2e6a`, `44f212d` | 408, 410, 411 | |
 | A2-ORG-05 | 3 | done | `23cc75a`, `d13cdc2` | 409 | |
 
 ## Decisions

@@ -317,9 +317,9 @@ kept when these were written:
 - **410**: confirmed on 2026-10-03: Analytics' line charts through their
   controller, after the 2026-10 audit's `A2-ORG-04` moved them into
   `line_charts.js`.
-- **411**: **outstanding**: Analytics' token viewer and entropy chart after
-  the 2026-10 audit's `A2-ORG-04` moved them into a controller of their own,
-  `token_viewer.js`.
+- **411**: confirmed on 2026-10-03: Analytics' token viewer and entropy chart
+  through their controller, after the 2026-10 audit's `A2-ORG-04` moved them
+  into `token_viewer.js`.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer

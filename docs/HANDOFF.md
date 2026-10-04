@@ -102,11 +102,11 @@ in an analytics suite.
 
 ## Where things stand
 
-**A second audit is being worked through.** Its 21 findings are in
-`docs/audit/AUDIT_REPORT_2026-10.md` and their state is in
-`docs/audit/IMPLEMENTATION_LEDGER_2026-10.md`: Stages 1 and 2 are done, and
-Stage 3, extracting owners, is under way. Read the ledger first, then only
-the findings you touch. **The first campaign is
+**A second audit has been worked through.** Its 21 findings, in
+`docs/audit/AUDIT_REPORT_2026-10.md`, are all done, and
+`docs/audit/IMPLEMENTATION_LEDGER_2026-10.md` names the commits and decisions
+behind each, with what was raised along the way, some of it still open. Read
+it before changing what a finding touched. **The first campaign is
 complete except for a short remainder**, listed at the top of
 `docs/audit/IMPLEMENTATION_LEDGER.md`: three findings waiting on hardware,
 `ORG-02`'s module conversion deferred with its reason, and `ROADMAP-04`
