@@ -20,6 +20,7 @@ import logging
 import os
 import re
 import subprocess
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import (
@@ -36,6 +37,7 @@ from typing import (
 
 import websockets
 from fastapi import (
+    BackgroundTasks,
     FastAPI,
     Request,
     WebSocket,
@@ -1563,8 +1565,30 @@ def _dump_candidates(
     return candidates.model_dump(exclude_none=True)
 
 
-def _save_run_blocking(body: SaveRunRequest) -> Dict[str, Any]:
-    """Publish a run and describe it back to the client.
+@dataclass(frozen=True)
+class RunPreview:
+    """Everything drawing a saved run's preview needs, taken when the
+    run was saved.
+
+    Complete and frozen because the draw runs after the reply, when
+    the request is gone and the run may already have moved on. The
+    revision is what ``run_store.publish_preview`` checks against.
+    """
+
+    root: Path
+    run_id: str
+    revision: int
+    frames: Tuple[str, ...]
+    prompt: str
+    model_label: Optional[str]
+    model_type: str
+
+
+def _save_run_blocking(
+    body: SaveRunRequest,
+) -> Tuple[Dict[str, Any], RunPreview]:
+    """Publish a run, describe it back to the client, and say what
+    its preview will show.
 
     Returns the id and revision as well as the display path, because
     an edited run has to be able to replace what it just saved, and
@@ -1576,6 +1600,7 @@ def _save_run_blocking(body: SaveRunRequest) -> Dict[str, Any]:
 
     Expanded first, on this thread, because rebuilding a long run's
     frames is real work and the event loop is not where it belongs.
+    The preview is not drawn here; see ``save_run``.
     """
     body = body.normalized()
     bundle = _build_bundle(body)
@@ -1587,43 +1612,42 @@ def _save_run_blocking(body: SaveRunRequest) -> Dict[str, Any]:
         expected_revision=body.expected_revision,
         run_token=body.run_token,
     )
-    run_dir = RESULTS_DIR / run_id
-
-    # After publication, deliberately. The GIF is a derivative, and a
-    # failure rendering one must not cost the user the run's text and
-    # token data.
-    try:
-        _render_run_gif(body, bundle.metadata, run_dir)
-    except Exception:  # noqa: BLE001
-        logger.exception(
-            "GIF rendering failed for %s; run is saved", run_id
-        )
-
-    return {
-        "path": _display_run_path(run_dir),
+    reply = {
+        "path": _display_run_path(RESULTS_DIR / run_id),
         "run_id": run_id,
         "revision": revision,
     }
+    preview = _run_preview(
+        body, bundle.metadata, run_id=run_id, revision=revision
+    )
+    return reply, preview
 
 
-def _render_run_gif(
+def _run_preview(
     body: SaveRunRequest,
     metadata: Dict[str, Any],
-    run_dir: Path,
-) -> None:
-    """Draw the run's preview, labelled with the model that ran it.
+    *,
+    run_id: str,
+    revision: int,
+) -> RunPreview:
+    """What to draw for a run just saved, labelled with the model
+    that ran it.
 
     Reads the label out of the metadata that was just written rather
     than off the request, so the picture and the record cannot
     disagree about which model this was; `DATA-04` may have preferred
     the worker's word over the client's claim.
     """
+    assert body.frames, "the request is normalized before it is saved"
+    assert revision >= 1, "a published run has a revision"
     model_id = str(metadata.get("backend", ""))
     entry = REGISTRY.get(model_id)
-    history_to_gif(
-        body.frames,
-        run_dir / "diffusion.gif",
-        header_text=body.prompt,
+    return RunPreview(
+        root=RESULTS_DIR,
+        run_id=run_id,
+        revision=revision,
+        frames=tuple(body.frames),
+        prompt=body.prompt,
         model_label=(
             entry.display_name if entry else model_id or None
         ),
@@ -1631,6 +1655,60 @@ def _render_run_gif(
             metadata.get("model_type", "diffusion")
         ),
     )
+
+
+def _render_run_gif(preview: RunPreview, path: Path) -> None:
+    """Draw a run's preview to ``path``, which takes seconds for a
+    long run."""
+    history_to_gif(
+        list(preview.frames),
+        path,
+        header_text=preview.prompt,
+        model_label=preview.model_label,
+        model_type=preview.model_type,
+    )
+
+
+def _draw_preview(preview: RunPreview) -> None:
+    """Draw a saved run's preview, then publish it into the run.
+
+    Drawn aside, in the staging area, and published only while the
+    run is still the revision drawn: a run replaced or deleted during
+    the draw has moved on, and its folder is no longer this picture's
+    to write. A failure costs only the preview, because the run was
+    published before this began.
+    """
+    staged = run_store.preview_staging_path(
+        preview.root, preview.run_id, preview.revision
+    )
+    try:
+        _render_run_gif(preview, staged)
+        published = run_store.publish_preview(
+            preview.root,
+            preview.run_id,
+            revision=preview.revision,
+            staged=staged,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "GIF rendering failed for %s; run is saved",
+            preview.run_id,
+        )
+        staged.unlink(missing_ok=True)
+        return
+    if published:
+        logger.info(
+            "drew the preview for %s at revision %d",
+            preview.run_id,
+            preview.revision,
+        )
+    else:
+        logger.info(
+            "dropped the preview for %s: revision %d was replaced"
+            " or deleted while it was drawn",
+            preview.run_id,
+            preview.revision,
+        )
 
 
 @app.exception_handler(RequestValidationError)
@@ -1675,9 +1753,20 @@ def _first_problem(exc: RequestValidationError) -> str:
 
 
 @app.post("/api/save")
-async def save_run(body: SaveRunRequest) -> JSONResponse:
+async def save_run(
+    body: SaveRunRequest, background_tasks: BackgroundTasks
+) -> JSONResponse:
+    """Publish a run, answer, and only then draw its preview.
+
+    The preview is a derivative of a run already published, and
+    drawing a long one takes seconds that the page should not wait
+    through to be told its run is safe. A background task draws it
+    after the response is sent.
+    """
     try:
-        saved = await asyncio.to_thread(_save_run_blocking, body)
+        saved, preview = await asyncio.to_thread(
+            _save_run_blocking, body
+        )
     except run_store.RevisionConflictError as exc:
         # Someone else wrote this run since the client last read it.
         # A conflict, not a failure: the client can reload and decide.
@@ -1697,6 +1786,7 @@ async def save_run(body: SaveRunRequest) -> JSONResponse:
             status_code=500,
             content={"success": False, "message": str(exc)},
         )
+    background_tasks.add_task(_draw_preview, preview)
     logger.info("saved run to %s", saved["path"])
     return JSONResponse(content={"success": True, **saved})
 

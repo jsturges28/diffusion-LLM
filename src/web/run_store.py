@@ -56,6 +56,11 @@ HISTORY_NAME = "history.txt"
 # per-frame counts, which is what the schema version is for.
 FRAMES_NAME = "frames.jsonl"
 
+# The run's animated preview. Not part of the bundle: drawing a long
+# run takes seconds, so it is drawn after the run is published and
+# comes in by a way of its own, ``publish_preview``.
+PREVIEW_NAME = "diffusion.gif"
+
 # Optional per-run signal files, keyed by the bundle attribute that
 # supplies them. The order is fixed so a bundle is written the same
 # way every time, which is what lets a test inject a failure at a
@@ -357,7 +362,9 @@ def publish(root: Path, run_id: str, staging: Path) -> Path:
     still a single atomic rename.
 
     Any file left from a previous bundle is removed first, so a
-    replacement cannot inherit a sidecar the new one omitted.
+    replacement cannot inherit a sidecar the new one omitted. That
+    includes the previous revision's preview, which
+    ``publish_preview`` brings back once the new one is drawn.
     """
     if not (staging / METADATA_NAME).is_file():
         raise RunNotFoundError(
@@ -462,7 +469,8 @@ def _destination(
 
 
 # Guards resolve-identity-then-publish, within that
-# read-revision-then-publish, and the rename that deletes a run. Held
+# read-revision-then-publish, the rename that deletes a run, and the
+# revision check before a preview is moved into its run. Held
 # through a sidecar in the data root, because every supervisor using
 # that root must take the same one: the browser launcher and the
 # desktop app are two of them, and a lock that lived in one process
@@ -699,6 +707,57 @@ def find_run_by_token(root: Path, token: str) -> Optional[str]:
         if raw.get(RUN_TOKEN_KEY) == token:
             return run_id
     return None
+
+
+def preview_staging_path(
+    root: Path, run_id: str, revision: int
+) -> Path:
+    """Where a run's preview is drawn before it is published.
+
+    In the staging area, so a draw that never finishes is inert in the
+    way an abandoned bundle is, and on the run's filesystem, so that
+    publishing it is one rename. Private to one draw, for the reason
+    ``stage`` gives: two draws of one run must not share a file. Only
+    a path; the drawer makes its directory, as it would for any path.
+    """
+    assert run_id, "a preview belongs to a run"
+    assert Path(run_id).name == run_id, "a run id is one name"
+    assert revision >= 1, "only a published run has a preview"
+    name = f"{run_id}.{revision}.{uuid4().hex}.gif"
+    return root / STAGING_DIR_NAME / name
+
+
+def publish_preview(
+    root: Path, run_id: str, *, revision: int, staged: Path
+) -> bool:
+    """Move a drawn preview into its run, or discard it.
+
+    Published only while the run is still the revision that was
+    drawn, checked under the lock every save and delete takes, so the
+    run cannot move on between the check and the rename. ``publish``
+    empties a run's folder whenever the run is replaced, and a draw of
+    the old revision finishing after that would otherwise land in the
+    new revision's folder. A run deleted meanwhile has no folder left.
+
+    True when the preview was published. Either way the staged file
+    is gone afterwards.
+    """
+    assert revision >= 1, "only a published run has a preview"
+    assert staged.parent == root / STAGING_DIR_NAME, "drawn aside"
+    with _PUBLISH_LOCK.held(root):
+        if _current_revision(root, run_id) == revision:
+            staged.replace(root / run_id / PREVIEW_NAME)
+            return True
+    staged.unlink(missing_ok=True)
+    return False
+
+
+def _current_revision(root: Path, run_id: str) -> Optional[int]:
+    """The run's revision, or None once it no longer exists."""
+    try:
+        return read_revision(root, run_id)
+    except RunNotFoundError:
+        return None
 
 
 def delete(root: Path, run_id: str) -> None:

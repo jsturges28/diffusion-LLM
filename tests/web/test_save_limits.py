@@ -404,7 +404,7 @@ def test_the_longest_smollm3_run_is_saved(
     model whose largest run is cheap enough to send whole. Its
     preview is skipped: drawn once the run is published, it is not
     what is bounded here, and it is most of what such a save costs."""
-    monkeypatch.setattr(server, "_render_run_gif", _no_preview)
+    monkeypatch.setattr(server, "_draw_preview", _no_preview)
     positions = run_bounds("smollm3").positions_max
     body = _payload(
         model="smollm3",
