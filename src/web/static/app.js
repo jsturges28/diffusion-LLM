@@ -2,9 +2,6 @@
 
 "use strict";
 
-// Unresolved-token glyph; set from the active model.
-var MASK_CHAR = "\u2591"; // ░
-
 // ---- DOM refs ----
 
 var btnGenerate =
@@ -60,7 +57,7 @@ var generatorRun = generatorRunCreate({
   restoreChrome: generatorRunRestoreChrome,
   readEditArtifacts: generatorRunReadEditArtifacts,
   restoreEditArtifacts: generatorRunRestoreEditArtifacts,
-  invalidateRender: invalidateRunMemos,
+  invalidateRender: invalidateGeneratorCanvas,
   onSessionRestored: generatorRunSessionRestored,
   requestSave: function (url, init) {
     return fetch(url, init);
@@ -71,6 +68,20 @@ var generatorRun = generatorRunCreate({
   onSaveRefused: generatorRunSaveRefused,
   storage: sessionStorage,
   sessionKey: PERSIST_LAST_RUN_KEY,
+});
+var generatorCanvas = generatorCanvasCreate({
+  run: generatorRun,
+  readModel: generatorCanvasReadModel,
+  readSettings: generatorCanvasReadSettings,
+  readEdit: generatorCanvasReadEdit,
+  readReducedMotion: prefersReducedMotion,
+  writeHighlight: generatorCanvasWriteHighlight,
+  startCandidates: flickerStart,
+  stopCandidates: flickerStop,
+  onOutputReset: generatorCanvasOutputReset,
+  onRender: generatorCanvasRendered,
+  onOverlayChanged: generatorCanvasOverlayChanged,
+  onLayerChanged: generatorCanvasLayerChanged,
 });
 var generatorSocket = generatorSocketCreate({
   onOpen: generatorSocketOpened,
@@ -101,21 +112,6 @@ var btnEditFrames =
   document.getElementById("btn-edit-frames");
 var btnWhatIf =
   document.getElementById("btn-what-if");
-var overlaySelectGroup =
-  document.getElementById("overlay-select-group");
-var overlayDrawerHandle =
-  document.getElementById("overlay-drawer-handle");
-var overlaySelectMount =
-  document.getElementById("overlay-select-mount");
-var overlayHighlightCheckbox =
-  document.getElementById("overlay-highlight-tokens");
-var overlaySelect = null;
-var diffSummary =
-  document.getElementById("diff-summary");
-var commitLegend =
-  document.getElementById("commit-legend");
-var revisionLegend =
-  document.getElementById("revision-legend");
 var altsPopover =
   document.getElementById("token-alts-popover");
 var entropyProfileRow =
@@ -127,54 +123,6 @@ var entropyProfileReadout =
 var tokenMetricsStrip =
   document.getElementById("token-metrics");
 var stopReadout = document.getElementById("stop-readout");
-var diffOverlayControls =
-  document.getElementById("diff-overlay-controls");
-var diffOriginalSlider =
-  document.getElementById("diff-original-opacity");
-var diffEditedSlider =
-  document.getElementById("diff-edited-opacity");
-var diffBlendToggle =
-  document.getElementById("diff-blend-toggle");
-var runBlendRow =
-  document.getElementById("run-blend-row");
-var runBlendInput =
-  document.getElementById("run-blend");
-// Active visual overlay chosen in the picker: "none" | "conf"
-// (heatmap) | "entropy" | "forgetting" | "commit" | "revisions" |
-// "diff". effectiveColorMode drops a selection the run cannot draw.
-var overlayMode = "none";
-// Memoized per-run commit steps (position index -> settle step),
-// null until first needed and invalidated whenever the frame tokens
-// are replaced (new run, resume, or session restore).
-var commitSteps = null;
-// The same for the retained pre-edit run, needed because the ghost
-// layer of a crossfade settles its positions on its own schedule and
-// would be quietly wrong colored by the branch's.
-var originalCommitSteps = null;
-// Memoized intervention diff (branch vs original final frame),
-// null until needed and invalidated alongside commitSteps.
-var diffData = null;
-// Every frame's revised positions, for the live run and for the
-// retained pre-edit run, memoized and invalidated like the commit
-// steps. The counts each layer paints are kept for the frame they
-// were counted at, since every token of a render asks for one.
-var runRevisions = null;
-var originalRevisions = null;
-var revisionCounts = { original: null, branch: null };
-// What each layer's frame on screen borrows its entropy from, one
-// slot per layer as {frame, borrow}, invalidated like the commit
-// steps. A commit carries no entropy, and every token of a render
-// asks for the draft it reads instead.
-var entropyBorrowSlots = { edited: null, original: null };
-// Diff-overlay layer opacities (0-100) and the "difference" blend
-// toggle, controlled by the sliders shown in the overlay drawer.
-var diffOriginalOpacity = 50;
-var diffEditedOpacity = 100;
-var diffBlend = false;
-// The run crossfade, from 0 (the retained pre-edit run) to 1 (the
-// branch). Governs the stacked token layers and the entropy strip in
-// every overlay except Diff, which keeps its own two sliders.
-var runBlend = 1;
 
 // Guided edit mode DOM refs.
 var guidedEditControls =
@@ -353,25 +301,6 @@ function spawnFloaters() {
 spawnFloaters();
 
 // ---- Model + schema-driven parameter panel ----
-
-function setMaskChar() {
-  var capabilities = generatorModelPanel.capabilities();
-  if (capabilities.unresolved_char) {
-    MASK_CHAR = capabilities.unresolved_char;
-  }
-}
-
-// An append-only model streams a growing left-to-right sequence
-// instead of denoising a masked canvas, so the canvas affordances
-// (Diff overlay, Commit Order, convergence) are gated off for it.
-//
-// Generation shape rather than family: a state-space model appends
-// too, so gating on the family would offer it denoising controls it
-// has no masked positions for.
-function isAppendOnly() {
-  var capabilities = generatorModelPanel.capabilities();
-  return capabilities.generation_shape === "append_only";
-}
 
 // The boot path raises the same overlay without going through
 // switchModel, so until now nothing polled for progress there: the
@@ -745,17 +674,13 @@ function handleFrame(data) {
   // The token view needs per-position metadata; a model that does not
   // send it still gets the character renderer.
   if (appended.tokens) {
-    var revised = liveRevisionsAt(
-      appended.index, appended.tokens
-    );
-    renderLiveFrame(
+    generatorCanvas.renderLiveFrame(
       appended.tokens,
       data.revealed,
-      revised,
       data.live_candidates
     );
   } else {
-    renderFrame(appended.text);
+    generatorCanvas.renderTextFrame(appended.text);
   }
   refreshStopReadout();
 
@@ -770,7 +695,9 @@ function handleFrame(data) {
 // changed is that the slice happens here instead of arriving over
 // the wire N times.
 function handleAppendFrame(data, appended) {
-  renderLiveFrame(appended.tokens, data.revealed);
+  generatorCanvas.renderLiveFrame(
+    appended.tokens, data.revealed, null
+  );
   updateLiveFrameStatus(data);
 }
 
@@ -991,923 +918,6 @@ function handleError(data) {
 
 // ---- Rendering ----
 
-// Live rendering keeps one span per token position and updates those
-// spans in place. The character-by-character renderer below it is
-// still the fallback, but it rebuilt the whole output every step: at
-// LLaDA's default length that is several hundred inline boxes torn
-// down and laid out again per frame, where a token view needs a
-// constant ~160 and touches only the ones that actually changed.
-var liveTokenSpans = [];
-
-// One hook, and deliberately only one. Mask opacity is not an
-// overlay: it is how a mask reports the model's confidence in the
-// token it is about to become, so it belongs to the streaming view
-// as much as to the scrubbed one. When the span renderer replaced
-// the character renderer this was left off to keep that refactor
-// visually neutral, which meant the grading existed only when
-// scrubbing back and the canvas stayed flat while it was actually
-// being written, exactly when the reading is most interesting.
-//
-// The other three hooks stay off, and not by oversight. colorFor
-// would have nothing to do, because the overlay drawer is hidden
-// until the scrubber activates, so Heatmap and Entropy cannot be
-// chosen mid-run. maskedFor and classFor serve remask selection,
-// which is unreachable while a run is in flight.
-//
-// revealMask is a value rather than a hook, and loadSettings writes
-// the user's preference over the default here at boot.
-//
-// The metrics strip still reads these tokens: it works off
-// data-pos, which every span carries.
-var LIVE_TOKEN_OPTIONS = {
-  revealMask: false,
-  opacityFor: tokenOpacityFn,
-};
-
-function renderLiveFrame(tokens, revealed, revised, live) {
-  flickerStop();
-  outputArea.classList.remove("token-layers");
-  outputArea.classList.add("live-tokens");
-  // Reuse only while our spans are still the ones on the page. Any
-  // other render path wipes the container, which detaches them, so
-  // reading the parent back is what keeps this self-healing instead
-  // of depending on every one of those paths to tell us.
-  var reusable = liveTokenSpans.length === tokens.length
-    && liveTokenSpans.length > 0
-    && liveTokenSpans[0].parentNode === outputArea;
-  if (reusable) {
-    for (var i = 0; i < tokens.length; i++) {
-      overlaysSyncTokenSpan(
-        liveTokenSpans[i], i, tokens[i], MASK_CHAR,
-        LIVE_TOKEN_OPTIONS
-      );
-    }
-  } else {
-    rebuildLiveTokens(tokens);
-  }
-  markTokenBirths(revealed);
-  markTokenRevisions(revised);
-  // A held pointer keeps reading the same position while the text
-  // under it resolves, so the strip has to follow the frame.
-  refreshTokenMetrics();
-  startLiveCycling(tokens, live);
-}
-
-function rebuildLiveTokens(tokens) {
-  var fragment = document.createDocumentFragment();
-  liveTokenSpans = new Array(tokens.length);
-  for (var i = 0; i < tokens.length; i++) {
-    var span = overlaysBuildTokenSpan(
-      i, tokens[i], MASK_CHAR, LIVE_TOKEN_OPTIONS
-    );
-    liveTokenSpans[i] = span;
-    fragment.appendChild(span);
-  }
-  // The spans the queue was tracking are about to be detached, so
-  // their glows end here whether or not they had finished.
-  tokenBirthQueue = [];
-  outputArea.textContent = "";
-  outputArea.appendChild(fragment);
-}
-
-// ---- Birth glow ----
-
-// A token flashes once, at apex, the instant it is denoised. Capped
-// because a low-step LLaDA run reveals a couple of dozen positions in
-// one frame, and each is a blurred repaint region on a renderer with
-// a documented history of struggling with exactly that. Past the cap
-// the oldest flash is cut short, which is invisible in practice: it
-// is already most of the way decayed.
-//
-// The cap has to follow the fade rather than being fixed. How many
-// tokens glow at once is roughly the generation rate times the fade,
-// so a long fade at autoregressive speeds would otherwise have the
-// queue, not the timer, decide when a flash ends: the trail would
-// stop growing exactly when the user lengthened it, and its tail
-// would look cut rather than faded.
-//
-// The rate ceiling is picked so the 500ms default lands on 48, which
-// is what this was before it became a function of the fade.
-var TOKEN_BIRTH_RATE_CEILING = 96;
-var TOKEN_BIRTH_CONCURRENT_MIN = 48;
-var TOKEN_BIRTH_CONCURRENT_MAX = 192;
-var TOKEN_BIRTH_ANIMATION = "token-birth";
-var TOKEN_REVISION_ANIMATION = "token-revision";
-var tokenBirthQueue = [];
-var tokenBirthMaxConcurrent = TOKEN_BIRTH_CONCURRENT_MIN;
-// What the frames streamed so far hand the next one when it is
-// checked for revisions, and how many frames that is.
-var liveRevisionFold = null;
-var liveRevisionFrames = 0;
-
-// Set the live canvas' glow to the active model class' preferences,
-// and size the concurrency cap to the fade it asks for. Called once
-// per page load: a model switch ends in location.reload(), so the
-// active model cannot change under a live canvas.
-function applyTokenBirthGlow() {
-  // Family, not generation shape: the glow pairs are per model class,
-  // so a state-space model gets its own rather than borrowing the
-  // autoregressive one because it happens to append.
-  var capabilities = generatorModelPanel.capabilities();
-  var family = capabilities.family;
-  var glow = overlaysGlowFor(appSettings, family);
-  overlaysApplyGlowVars(
-    outputArea, glow.brightness, glow.fadeMs
-  );
-  tokenBirthMaxConcurrent = tokenBirthConcurrentCap(glow.fadeMs);
-}
-
-function tokenBirthConcurrentCap(fadeMs) {
-  var expected = Math.round(
-    (fadeMs / 1000) * TOKEN_BIRTH_RATE_CEILING
-  );
-  if (expected < TOKEN_BIRTH_CONCURRENT_MIN) {
-    return TOKEN_BIRTH_CONCURRENT_MIN;
-  }
-  if (expected > TOKEN_BIRTH_CONCURRENT_MAX) {
-    return TOKEN_BIRTH_CONCURRENT_MAX;
-  }
-  return expected;
-}
-
-function markTokenBirths(revealed) {
-  if (!revealed || revealed.length === 0) {
-    return;
-  }
-  if (!appSettings.tokenBirthGlow) {
-    return;
-  }
-  if (prefersReducedMotion()) {
-    return;
-  }
-  for (var i = 0; i < revealed.length; i++) {
-    var span = liveTokenSpans[revealed[i]];
-    if (span) {
-      startTokenGlow(span, "data-born", "data-revised");
-    }
-  }
-}
-
-// ---- Revision glow ----
-
-// The birth glow's sibling: a position that settles on a different
-// token from the one it last settled on flashes cyan, as a new token
-// flashes white. Marked after the births, because the queue drops its
-// oldest flash first, so in a frame that overflows it the revisions,
-// the rarer and more telling mark, are the flashes that survive.
-function markTokenRevisions(revised) {
-  if (!revised || revised.length === 0) {
-    return;
-  }
-  if (!appSettings.revisionGlow) {
-    return;
-  }
-  if (prefersReducedMotion()) {
-    return;
-  }
-  for (var i = 0; i < revised.length; i++) {
-    var span = liveTokenSpans[revised[i]];
-    if (span) {
-      startTokenGlow(span, "data-revised", "data-born");
-    }
-  }
-}
-
-// The positions a streamed frame revised. The fold is rebuilt from
-// the kept frames whenever it has not read exactly the frames before
-// this one, which is the state a new run, a resume's cut and a
-// restore all leave, so none of them has to remember to reset it.
-function liveRevisionsAt(index, tokens) {
-  if (liveRevisionFold === null || liveRevisionFrames !== index) {
-    liveRevisionFold = liveRevisionFoldThrough(index);
-  }
-  var step = overlaysRevisionStep(
-    liveRevisionFold,
-    tokens,
-    runFrameCanvas(index),
-    overlaysRemaskedAt(remaskEdits, index)
-  );
-  liveRevisionFold = step.fold;
-  liveRevisionFrames = index + 1;
-  return step.revised;
-}
-
-// The fold after the run's first `count` frames.
-function liveRevisionFoldThrough(count) {
-  var fold = overlaysRevisionFold();
-  for (var f = 0; f < count; f++) {
-    fold = overlaysRevisionStep(
-      fold,
-      generatorRun.frameTokens(f) || [],
-      runFrameCanvas(f),
-      overlaysRemaskedAt(remaskEdits, f)
-    ).fold;
-  }
-  return fold;
-}
-
-// Flash `span` by setting `attribute`, through the one queue both
-// glows share: the cap bounds blurred repaint regions, and a cyan one
-// costs what a white one does.
-function startTokenGlow(span, attribute, other) {
-  if (span.hasAttribute(attribute)) {
-    // Already mid-flash. Restarting the animation would need a
-    // forced reflow per span, which is the cost this whole path
-    // exists to avoid, and a token that is already glowing looks
-    // the same either way.
-    return;
-  }
-  if (span.hasAttribute(other)) {
-    // The newer event wins. Both rules set the animation, so the
-    // older flash would otherwise replay once the newer one ended.
-    endTokenGlow(span);
-  }
-  span.setAttribute(attribute, "");
-  tokenBirthQueue.push(span);
-  while (tokenBirthQueue.length > tokenBirthMaxConcurrent) {
-    endTokenGlow(tokenBirthQueue[0]);
-  }
-}
-
-// End whichever flash `span` is showing, and take it off the queue.
-function endTokenGlow(span) {
-  span.removeAttribute("data-born");
-  span.removeAttribute("data-revised");
-  var at = tokenBirthQueue.indexOf(span);
-  if (at !== -1) {
-    tokenBirthQueue.splice(at, 1);
-  }
-}
-
-// Delegated: animationend bubbles, so one listener on the container
-// serves every span and none of them needs its own.
-function onTokenGlowEnd(e) {
-  if (e.animationName !== TOKEN_BIRTH_ANIMATION
-    && e.animationName !== TOKEN_REVISION_ANIMATION) {
-    return;
-  }
-  endTokenGlow(e.target);
-}
-
-function renderFrame(text) {
-  flickerStop();
-  outputArea.classList.remove("token-layers");
-  outputArea.classList.remove("live-tokens");
-  var fragment =
-    document.createDocumentFragment();
-  for (var i = 0; i < text.length; i++) {
-    var ch = text[i];
-    if (ch === MASK_CHAR) {
-      var span = document.createElement("span");
-      span.className = "char-mask";
-      span.textContent = ch;
-      fragment.appendChild(span);
-    } else if (ch === "\n") {
-      fragment.appendChild(
-        document.createTextNode("\n")
-      );
-    } else {
-      var span2 = document.createElement("span");
-      span2.className = "char-resolved";
-      span2.textContent = ch;
-      fragment.appendChild(span2);
-    }
-  }
-  outputArea.textContent = "";
-  outputArea.appendChild(fragment);
-}
-
-function renderFinalText(text) {
-  outputArea.classList.remove("live-tokens");
-  outputArea.textContent = "";
-  var span = document.createElement("span");
-  span.className = "char-resolved";
-  span.textContent = text;
-  outputArea.appendChild(span);
-}
-
-// heatColor now lives in overlays.js (shared with Analytics).
-
-// Per-position commit step for the current run: the step after
-// which a position last changed to its final value. Derived
-// purely from the frame tokens (the final frame is ground truth), so
-// it is exact for LLaDA (resolved tokens are frozen) and a
-// "settle" proxy for DiffusionGemma. Positions still unresolved
-// at the last frame get -1 (left uncolored). Result is memoized
-// in commitSteps and invalidated whenever those tokens change.
-function computeCommitSteps() {
-  if (generatorRun.frameIsAppend()) {
-    return overlaysAppendCommitSteps(
-      generatorRun.framePositions()
-    );
-  }
-  var series = generatorRun.frameTokenSeries();
-  return overlaysComputeCommitSteps(
-    overlaysFrameReader(series), series.length
-  );
-}
-
-// Every frame's revised positions for the current run, with its edit
-// log so a remasked position starts over at its edit. A run that only
-// grows never revisits a position, so it has none to find.
-function computeRevisions() {
-  if (generatorRun.frameIsAppend()) {
-    return [];
-  }
-  var series = generatorRun.frameTokenSeries();
-  return overlaysComputeRevisions(
-    overlaysFrameReader(series),
-    series.length,
-    runFrameCanvas,
-    remaskEdits
-  );
-}
-
-// Drop every memo derived from the frame arrays. Called wherever
-// those arrays are replaced or truncated, in one place so the memos
-// can never fall out of step with each other.
-function invalidateRunMemos() {
-  commitSteps = null;
-  originalCommitSteps = null;
-  diffData = null;
-  runRevisions = null;
-  originalRevisions = null;
-  revisionCounts = { original: null, branch: null };
-  liveRevisionFold = null;
-  entropyBorrowSlots = { edited: null, original: null };
-}
-
-// commitColor now lives in overlays.js (shared with Analytics).
-
-// Compare the branch's final frame against the retained original
-// run's final frame, position-aligned on the shared canvas. Returns
-// per-position change flags, the original display text (for the
-// metrics strip), the remask-origin positions, and a divergence
-// summary.
-function computeDiff() {
-  var cur = generatorRun.frameTokensLast();
-  var orig = generatorRun.originalTokensLast();
-  return overlaysComputeDiff(cur, orig, remaskEdits);
-}
-
-// diffColor and the layered-diff builder now live in overlays.js
-// (shared with Analytics).
-
-// Draw the original and edited runs at the current frame as two
-// stacked layers (independent opacity + optional difference blend)
-// so overlaps and divergences can be compared directly. The layer
-// construction is shared via overlaysBuildDiffLayers; this wrapper
-// resolves the per-frame tokens and owns the output container.
-function renderDiffOverlay(frameIndex) {
-  flickerStop();
-  var diff = currentDiffData();
-  var editedTokens =
-    generatorRun.frameTokens(frameIndex) || [];
-  var oIdx = Math.min(
-    frameIndex, generatorRun.originalTokenFrames() - 1
-  );
-  var origTokens =
-    (oIdx >= 0 ? generatorRun.originalTokens(oIdx) : null) || [];
-
-  outputArea.textContent = "";
-  tokenHighlightPos = null;
-  outputArea.classList.add("token-layers");
-  var layered = overlaysBuildDiffLayers(
-    origTokens,
-    editedTokens,
-    diff,
-    {
-      originalOpacity: diffOriginalOpacity,
-      editedOpacity: diffEditedOpacity,
-      blend: diffBlend,
-      revealMask: overlaysDrawsGuess(appSettings),
-      opacityFor: tokenOpacityFn,
-    },
-    MASK_CHAR
-  );
-  // Taken before the append, which empties the fragment.
-  var stacked = [layered.children[0], layered.children[1]];
-  outputArea.appendChild(layered);
-  startStackedFlicker(stacked, frameIndex, editedTokens);
-}
-
-// Which coloring paints tokens: the overlay picker's selection, or
-// none. Commit Order and Revisions are diffusion-only and omitted
-// from the picker for AR runs; the guard keeps a stale selection
-// from tinting them.
-function effectiveColorMode() {
-  if (overlayMode === "commit" && isAppendOnly()) {
-    return "none";
-  }
-  if (overlayMode === "revisions" && isAppendOnly()) {
-    return "none";
-  }
-  return overlayMode;
-}
-
-// The divergence map, computed on first use and memoized. Both the
-// diff coloring and the strip's diff line need it, so the lazy build
-// lives here rather than in each.
-function currentDiffData() {
-  if (diffData === null) {
-    diffData = computeDiff();
-  }
-  return diffData;
-}
-
-// Commit steps for whichever of the two runs a layer is drawing,
-// memoized separately. The runs settle their positions on different
-// schedules, so the ghost layer painted from the branch's would
-// misreport every position past the edit.
-function commitStepsFor(isOriginal) {
-  if (isOriginal) {
-    if (originalCommitSteps === null) {
-      var series = generatorRun.originalTokenSeries();
-      originalCommitSteps = generatorRun.originalIsAppend()
-        ? overlaysAppendCommitSteps(
-          generatorRun.originalPositions()
-        )
-        : overlaysComputeCommitSteps(
-          overlaysFrameReader(series), series.length
-        );
-    }
-    return originalCommitSteps;
-  }
-  if (commitSteps === null) {
-    commitSteps = computeCommitSteps();
-  }
-  return commitSteps;
-}
-
-// Which step resolved a position under the Commit Order overlay, or
-// null where the run recorded none.
-function tokenCommitStep(index, isOriginal) {
-  var step = commitStepsFor(isOriginal)[index];
-  if (typeof step !== "number" || step < 0) {
-    return null;
-  }
-  return step;
-}
-
-// Revisions for whichever of the two runs a layer is drawing. The
-// pre-edit run carries no edits of its own, and an edited run never
-// spans more than one canvas. The live run's memo is also checked
-// against its frame count, so one taken while the run was still
-// growing can never outlive the frames it was counted from.
-function revisionsFor(isOriginal) {
-  if (isOriginal) {
-    if (originalRevisions === null) {
-      var originalSeries =
-        generatorRun.originalTokenSeries();
-      originalRevisions = generatorRun.originalIsAppend()
-        ? []
-        : overlaysComputeRevisions(
-          overlaysFrameReader(originalSeries),
-          originalSeries.length,
-          singleCanvas,
-          []
-        );
-    }
-    return originalRevisions;
-  }
-  var frameSeries = generatorRun.frameTokenSeries();
-  if (
-    runRevisions === null
-    || runRevisions.length !== frameSeries.length
-  ) {
-    runRevisions = computeRevisions();
-  }
-  return runRevisions;
-}
-
-// Whether the Revisions overlay would paint anything: a diffusion run
-// that revised at least one position. Asked of the frames rather
-// than the model, so it is offered exactly where there is something
-// to see.
-function revisionsAvailable() {
-  if (isAppendOnly()) {
-    return false;
-  }
-  return overlaysHasRevisions(revisionsFor(false));
-}
-
-// The frame a layer shows: the scrubbed frame for the branch, and
-// that frame clamped to the pre-edit run's length for the original,
-// as buildCrossfadedLayers draws it.
-function layerFrameFor(isOriginal) {
-  if (isOriginal) {
-    return Math.min(
-      currentScrubFrame,
-      generatorRun.originalTokenFrames() - 1
-    );
-  }
-  return currentScrubFrame;
-}
-
-// How many times each position of a layer had been revised by the
-// frame that layer shows.
-function revisionCountsFor(isOriginal) {
-  var layer = isOriginal ? "original" : "branch";
-  var frame = layerFrameFor(isOriginal);
-  var held = revisionCounts[layer];
-  if (held === null || held.frame !== frame) {
-    held = {
-      frame: frame,
-      counts: overlaysRevisionCounts(
-        revisionsFor(isOriginal),
-        frame,
-        isOriginal ? singleCanvas : runFrameCanvas
-      ),
-    };
-    revisionCounts[layer] = held;
-  }
-  return held.counts;
-}
-
-// One position's count under the Revisions overlay. Nothing while a
-// run streams: the overlay counts up to the scrubbed frame, and
-// mid-stream that frame belongs to the run being replaced.
-function tokenRevisionCount(index, isOriginal) {
-  if (isGenerating) {
-    return 0;
-  }
-  var count = revisionCountsFor(isOriginal)[index];
-  return typeof count === "number" ? count : 0;
-}
-
-// The active overlay's color for one resolved token, or null to let
-// the token's own class color it. Kept separate from the line the
-// same overlay contributes to the metrics strip (metricsExtra), which
-// is read on hover rather than baked into the span.
-function tokenColorAt(index, tok, isOriginal) {
-  var mode = effectiveColorMode();
-  if (mode === "conf") {
-    if (typeof tok.c !== "number") {
-      return null;
-    }
-    return heatColor(tok.c);
-  }
-  if (mode === "entropy") {
-    var entropy = tokenEntropyReading(index, tok, isOriginal).value;
-    if (entropy === null) {
-      return null;
-    }
-    return entropyColor(entropy);
-  }
-  if (mode === "forgetting") {
-    if (typeof tok.f !== "number") {
-      return null;
-    }
-    return forgettingColor(tok.f);
-  }
-  if (mode === "commit") {
-    var step = tokenCommitStep(index, isOriginal);
-    if (step === null) {
-      return null;
-    }
-    var count = isOriginal
-      ? generatorRun.originalTokenFrames()
-      : generatorRun.frameCount();
-    return commitColor(step, count - 1);
-  }
-  if (mode === "revisions") {
-    return revisionColor(tokenRevisionCount(index, isOriginal));
-  }
-  if (mode === "diff") {
-    var diff = currentDiffData();
-    if (diff.origins[index]) {
-      return "#ff8a3d";
-    }
-    return diffColor(!!diff.changed[index]);
-  }
-  return null;
-}
-
-// The per-token hover highlight, independent of any coloring overlay.
-// Its control is the overlay drawer's checkbox rather than a Settings
-// row, so it sits next to the tokens it acts on; the value is still
-// persisted (and shared with Analytics) through the settings blob.
-function updateHoverHighlight() {
-  if (overlayHighlightCheckbox) {
-    overlayHighlightCheckbox.checked = appSettings.highlightTokens;
-  }
-  if (!outputArea) {
-    return;
-  }
-  outputArea.classList.toggle(
-    "token-hover-highlight",
-    appSettings.highlightTokens
-  );
-}
-
-function onOverlayHighlightToggle() {
-  appSettings.highlightTokens = overlayHighlightCheckbox.checked;
-  overlaysWriteHighlightTokens(appSettings.highlightTokens);
-  updateHoverHighlight();
-}
-
-// Select the active visual overlay from the picker and re-render.
-function setOverlayMode(mode) {
-  overlayMode = mode;
-  updateDiffSummary();
-  updateDiffOverlayControls();
-  updateRunBlendControls();
-  updateOverlayLegends();
-  hideAltsPopover();
-  if (scrubberActive) {
-    renderFrameWithTokens(currentScrubFrame);
-  }
-}
-
-// Each legend in the status bar shows only while its overlay is the
-// active selection: the early-to-late gradient for Commit Order, the
-// three steps for Revisions.
-function updateOverlayLegends() {
-  if (commitLegend) {
-    commitLegend.hidden = overlayMode !== "commit";
-  }
-  if (revisionLegend) {
-    revisionLegend.hidden = overlayMode !== "revisions";
-  }
-}
-
-// The Original/Edited opacity sliders + blend toggle only apply to
-// the diff overlay, so they show only while it is selected.
-function updateDiffOverlayControls() {
-  if (!diffOverlayControls) {
-    return;
-  }
-  diffOverlayControls.hidden = !(
-    overlayMode === "diff" && diffAvailable() && runPhase.mode === null
-  );
-}
-
-// The run crossfade is the other overlays' answer to the diff
-// sliders, so the two rows are mutually exclusive: whichever one
-// governs the layers currently on screen is the one that shows.
-function updateRunBlendControls() {
-  if (!runBlendRow) {
-    return;
-  }
-  runBlendRow.hidden = !(
-    overlayMode !== "diff" && runBlendActive()
-  );
-}
-
-// Back to the branch at full opacity. Called per run, so a resumed
-// branch opens on itself rather than on the previous mix.
-function resetRunBlend() {
-  runBlend = 1;
-  if (runBlendInput) {
-    runBlendInput.value = "100";
-  }
-  updateRunBlendControls();
-}
-
-// Restyle the stacked layers in place. Rebuilding them would mean
-// several hundred spans per slider step, and would drop the
-// candidate popover mid-drag. Diff mode is left alone: its own two
-// sliders own the layers there.
-function onRunBlendInput() {
-  runBlend = Number(runBlendInput.value) / 100;
-  if (overlayMode !== "diff") {
-    applyRunBlendToLayers();
-  }
-  // Gated rather than drawn directly: the strip must stay hidden for
-  // a run that carries no entropy at all.
-  updateEntropyProfileVisibility();
-  refreshTokenMetricsLayer();
-}
-
-function applyRunBlendToLayers() {
-  var original =
-    outputArea.querySelector(".token-layer-original");
-  var edited =
-    outputArea.querySelector(".token-layer-edited");
-  if (!original || !edited) {
-    return;
-  }
-  original.style.opacity = String(1 - runBlend);
-  edited.style.opacity = String(runBlend);
-  overlaysApplyLayerPointers(
-    outputArea, 1 - runBlend, runBlend
-  );
-}
-
-// Which run the crossfade currently favors. Drives the entropy
-// strip's readout and the candidate popover's opening page, so both
-// agree with the tokens the user is actually reading.
-function runBlendFavorsOriginal() {
-  return runBlend < 0.5;
-}
-
-// Reset the diff-overlay sliders/blend to defaults (called per run).
-function resetDiffOverlay() {
-  diffOriginalOpacity = 50;
-  diffEditedOpacity = 100;
-  diffBlend = false;
-  if (diffOriginalSlider) {
-    diffOriginalSlider.value = "50";
-  }
-  if (diffEditedSlider) {
-    diffEditedSlider.value = "100";
-  }
-  if (diffBlendToggle) {
-    diffBlendToggle.checked = false;
-  }
-}
-
-// Show the "diverged N/total" readout while the diff overlay is on.
-function updateDiffSummary() {
-  if (!diffSummary) {
-    return;
-  }
-  if (overlayMode !== "diff") {
-    diffSummary.hidden = true;
-    return;
-  }
-  var diff = currentDiffData();
-  var total = diff.totalCount;
-  var changed = diff.changedCount;
-  var pct = total > 0
-    ? Math.round((changed / total) * 100)
-    : 0;
-  diffSummary.textContent =
-    "Diverged " + changed + "/" + total
-    + " (" + pct + "%)";
-  diffSummary.hidden = false;
-}
-
-// The intervention diff only makes sense once a resume has produced
-// a branch to compare against the retained original run.
-function diffAvailable() {
-  return (
-    generatorRun.originalCaptured()
-    && remaskEdits.length > 0
-    && generatorRun.originalTokenFrames() > 0
-  );
-}
-
-// Shapes the per-position entropy strip can draw. A model declaring
-// anything else has a channel this build has no view for, which is a
-// different thing from a run that captured none.
-var ENTROPY_SHAPES = ["position", "frame|position"];
-
-// The active model's declared channel of this name, or null. Read
-// off capabilities rather than off the run, because a view has to be
-// offered or withheld before the first frame arrives, and provenance
-// turns up with that frame at the earliest.
-function declaredChannel(name) {
-  var signals =
-    generatorModelPanel.capabilities().signals || [];
-  for (var i = 0; i < signals.length; i++) {
-    if (signals[i] && signals[i].name === name) {
-      return signals[i];
-    }
-  }
-  return null;
-}
-
-// Whether the run carries per-token entropy this build can draw.
-//
-// Still gated on the data, so a model that starts emitting `e`
-// without declaring it keeps working, which is how autoregressive
-// runs behaved before any of this existed. The declaration is
-// consulted only to withhold the strip from a shape it would
-// misrepresent: a canvas-level or frame-only entropy has no
-// per-position bars to draw, and drawing them anyway would invent a
-// reading rather than admit there is none.
-function entropyAvailable() {
-  var channel = declaredChannel("entropy");
-  if (channel) {
-    var shape = (channel.axes || []).join("|");
-    if (ENTROPY_SHAPES.indexOf(shape) === -1) {
-      return false;
-    }
-  }
-  // Anywhere in the run rather than on its latest frame alone: a
-  // DiffusionGemma canvas ends on a commit, which carries none.
-  var last = generatorRun.frameCount() - 1;
-  return runEntropyFrame(last, singleCanvas) >= 0;
-}
-
-// The frame whose entropy describes frame `index` of the run on
-// screen, or -1 (see overlaysEntropyFrame).
-function runEntropyFrame(index, canvasOf) {
-  return overlaysEntropyFrame(
-    function (frame) {
-      return generatorRun.frameTokens(frame);
-    },
-    canvasOf,
-    index,
-    generatorRun.frameIsAppend()
-  );
-}
-
-// The same for the retained pre-edit run, which is single-canvas,
-// since only those can be edited.
-function originalEntropyFrame(index) {
-  return overlaysEntropyFrame(
-    function (frame) {
-      return generatorRun.originalTokens(frame);
-    },
-    singleCanvas,
-    index,
-    generatorRun.originalIsAppend()
-  );
-}
-
-// The frame a layer is drawing: the scrubbed one while the scrubber
-// owns the view, else the newest, with the pre-edit run clamped to
-// its own last frame.
-function drawnEntropyFrame(isOriginal) {
-  var frame = scrubberActive
-    ? currentScrubFrame
-    : generatorRun.frameCount() - 1;
-  if (!isOriginal) {
-    return frame;
-  }
-  return Math.min(
-    frame, generatorRun.originalTokenFrames() - 1
-  );
-}
-
-// What a layer's frame on screen borrows its entropy from, as
-// {step, tokens}, or null when it carries its own or there is none
-// to borrow. Held in one slot per layer, so the tokens of a render
-// share a lookup; cleared with the other run memos.
-function layerEntropyBorrow(isOriginal) {
-  var key = isOriginal ? "original" : "edited";
-  var frame = drawnEntropyFrame(isOriginal);
-  var slot = entropyBorrowSlots[key];
-  if (slot !== null && slot.frame === frame) {
-    return slot.borrow;
-  }
-  var borrow = entropyBorrowAt(isOriginal, frame);
-  entropyBorrowSlots[key] = { frame: frame, borrow: borrow };
-  return borrow;
-}
-
-function entropyBorrowAt(isOriginal, frame) {
-  var source = isOriginal
-    ? originalEntropyFrame(frame)
-    : runEntropyFrame(frame, runFrameCanvas);
-  if (source < 0 || source === frame) {
-    return null;
-  }
-  var tokens = isOriginal
-    ? generatorRun.originalTokens(source)
-    : generatorRun.frameTokens(source);
-  return { step: source, tokens: tokens };
-}
-
-// A drawn token's entropy, as {value, asOfStep}: its own, or on a
-// commit the value its canvas's last draft held at that position,
-// with the draft's step.
-function tokenEntropyReading(index, tok, isOriginal) {
-  if (tok && typeof tok.e === "number") {
-    return { value: tok.e, asOfStep: null };
-  }
-  var borrow = layerEntropyBorrow(isOriginal);
-  var other = borrow && borrow.tokens ? borrow.tokens[index] : null;
-  if (other && typeof other.e === "number") {
-    return { value: other.e, asOfStep: borrow.step };
-  }
-  return { value: null, asOfStep: null };
-}
-
-// Whether the run carries per-token forgetting to colour by. Unlike
-// entropy there are no runs from before the declaration to keep
-// working, so this one requires it: the model has to say it reports
-// one value per position, and the run has to carry it. A model with
-// no recurrent state declares nothing, and the option never appears.
-function forgettingAvailable() {
-  var channel = declaredChannel("forgetting");
-  if (!channel) {
-    return false;
-  }
-  if ((channel.axes || []).join("|") !== "position") {
-    return false;
-  }
-  return runCarriesTokenValue("f");
-}
-
-// Whether any token in the run's latest frame carries a number under
-// `key`. The latest frame is enough: a position's value arrives with
-// it and never changes afterwards.
-function runCarriesTokenValue(key) {
-  var tokens = generatorRun.frameTokensLast();
-  if (!tokens) {
-    return false;
-  }
-  for (var i = 0; i < tokens.length; i++) {
-    if (tokens[i] && typeof tokens[i][key] === "number") {
-      return true;
-    }
-  }
-  return false;
-}
-
 // Whether any position captured competing candidates for the hover
 // popover (and, for models that support it, What If substitution).
 function alternativesAvailable() {
@@ -2020,7 +1030,9 @@ function buildAltsRows(alts, chosenId) {
 // either way, so the midpoint picks a default rather than gating
 // access.
 function defaultAltsPage() {
-  return runBlendFavorsOriginal() ? "original" : "edited";
+  return generatorCanvas.blendFavorsOriginal()
+    ? "original"
+    : "edited";
 }
 
 // Show the candidate popover for a token position, anchored to its
@@ -2166,7 +1178,10 @@ function editDivergenceFrame() {
 // on an unedited run, or while an edit phase has the crossfade off.
 function candidatesPage() {
   var divergence = editDivergenceFrame();
-  if (!runBlendActive() || divergence === null) {
+  if (
+    !generatorCanvas.blendActive()
+    || divergence === null
+  ) {
     return null;
   }
   return currentScrubFrame >= divergence ? defaultAltsPage() : null;
@@ -2825,101 +1840,10 @@ function redrawTypedEntry() {
 
 // ---- Per-position entropy profile ----
 
-function entropyValuesFrom(tokens) {
-  if (!tokens) {
-    return [];
-  }
-  var values = [];
-  for (var i = 0; i < tokens.length; i++) {
-    var tok = tokens[i];
-    values.push(
-      typeof tok.e === "number" ? tok.e : 0
-    );
-  }
-  return values;
-}
-
-// What the entropy profile draws, as {values, original, current,
-// filled, asOfStep, originalAsOfStep}.
-//
-// A position decided once, the way an autoregressive run decides
-// them, reads its value off the final frame, and the scrubbed frame
-// marks its own column and fades the ones it has not reached: frame k
-// is the frame that introduced position k. A diffusion position is
-// re-decided at every step, so there the profile reads the frame
-// under the scrubber, a commit through its canvas's last draft, and
-// because every position exists at every frame, nothing fades and no
-// column is the scrubber's own.
+// The canvas owns which frame and comparison layer supply entropy.
+// This page owns only the chart geometry and hover readout.
 function entropyProfileLayers() {
-  if (!entropyProfileFollowsFrame()) {
-    return {
-      values: entropyProfileValues(),
-      original: originalEntropyProfileValues(),
-      current: currentScrubFrame,
-      filled: currentScrubFrame,
-      asOfStep: null,
-      originalAsOfStep: null,
-    };
-  }
-  var edited = entropyProfileFrameValues(false);
-  var original = runBlendActive()
-    ? entropyProfileFrameValues(true)
-    : { values: [], asOfStep: null };
-  return {
-    values: edited.values,
-    original: original.values,
-    current: -1,
-    filled: -1,
-    asOfStep: edited.asOfStep,
-    originalAsOfStep: original.asOfStep,
-  };
-}
-
-// Whether the profile reads the frame under the scrubber, which the
-// model's declared axes decide. A run with no declaration is read by
-// its stream, as Analytics reads a run saved before manifests.
-function entropyProfileFollowsFrame() {
-  var channel = declaredChannel("entropy");
-  if (channel) {
-    return (channel.axes || []).join("|") === "frame|position";
-  }
-  return !generatorRun.frameIsAppend();
-}
-
-// One layer's values at the frame it is drawing, read through the
-// frame whose entropy describes it. A frame with none and nothing to
-// borrow keeps its own positions, at zero, so the strip holds still.
-function entropyProfileFrameValues(isOriginal) {
-  var borrow = layerEntropyBorrow(isOriginal);
-  var source = borrow ? borrow.step : drawnEntropyFrame(isOriginal);
-  var tokens = isOriginal
-    ? generatorRun.originalTokens(source)
-    : generatorRun.frameTokens(source);
-  return {
-    values: entropyValuesFrom(tokens),
-    asOfStep: borrow ? borrow.step : null,
-  };
-}
-
-// The autoregressive reading: entropy per position, off the final
-// frame's token records, since each position is sampled once and its
-// entropy never changes afterwards.
-function entropyProfileValues() {
-  return entropyValuesFrom(
-    generatorRun.frameTokensLast()
-  );
-}
-
-// The same for the retained pre-edit run, so the crossfade can mix
-// the two profiles. Empty unless a branch exists to compare against,
-// which collapses the strip back to a single series.
-function originalEntropyProfileValues() {
-  if (!runBlendActive()) {
-    return [];
-  }
-  return entropyValuesFrom(
-    generatorRun.originalTokensLast()
-  );
+  return generatorCanvas.entropyProfile();
 }
 
 // How many columns the strip spans: the longer of the two runs, so
@@ -2948,34 +1872,8 @@ function entropyProfileColumnsOf(layers) {
 // intervention) and it is written down here because it is a property
 // of the log, not of this function.
 //
-// Held rather than rebuilt because the token layer asks about every
-// position it draws, and a diffusion remask can hold dozens against
-// a canvas of hundreds. The memo keys on the log's identity and its
-// length, which between them cover every way it changes: a push and
-// the rollback's truncation move the length, and a new run or a
-// restored session replaces the array outright.
-var editedMarksCache = { log: null, count: -1, marks: {} };
-
 function editedPositionMarks() {
-  if (
-    editedMarksCache.log === remaskEdits
-    && editedMarksCache.count === remaskEdits.length
-  ) {
-    return editedMarksCache.marks;
-  }
-  var marks = {};
-  for (var e = 0; e < remaskEdits.length; e++) {
-    var group = remaskEdits[e].token_positions || [];
-    for (var p = 0; p < group.length; p++) {
-      marks[group[p]] = remaskEdits[e].frame_index;
-    }
-  }
-  editedMarksCache = {
-    log: remaskEdits,
-    count: remaskEdits.length,
-    marks: marks,
-  };
-  return marks;
+  return generatorCanvas.editedPositionMarks();
 }
 
 // Whether a position was touched by an edit. A separate predicate
@@ -3069,7 +1967,7 @@ function drawEntropyProfile() {
   if (paired) {
     drawEntropyProfileSeries(ctx, layout, {
       values: original,
-      alpha: 1 - runBlend,
+      alpha: 1 - generatorCanvas.blend(),
       // The scrubber indexes the branch, so the pre-edit run gets no
       // current-position emphasis of its own. It shares the branch's
       // filled boundary, though: the positions align, so a column
@@ -3081,7 +1979,7 @@ function drawEntropyProfile() {
   }
   drawEntropyProfileSeries(ctx, layout, {
     values: values,
-    alpha: paired ? runBlend : 1,
+    alpha: paired ? generatorCanvas.blend() : 1,
     current: current,
     filled: layers.filled,
   });
@@ -3089,7 +1987,8 @@ function drawEntropyProfile() {
 
   // The glow and the readout speak for one run, so they follow
   // whichever the crossfade is favoring.
-  var readsOriginal = paired && runBlendFavorsOriginal();
+  var readsOriginal =
+    paired && generatorCanvas.blendFavorsOriginal();
   layout.values = readsOriginal ? original : values;
   drawEntropyProfileGlow(ctx, layout);
   updateEntropyReadout(
@@ -3418,29 +2317,14 @@ function refreshTokenMetricsLayer() {
 // span, so it falls back to whichever layer takes the pointer, which
 // is the one the user could have hovered instead.
 function metricsLayerIsOriginal(target) {
-  if (target && target.closest) {
-    var layer = target.closest(".token-layer");
-    if (layer) {
-      return layer.classList.contains("token-layer-original");
-    }
-  }
-  if (!metricsLayered()) {
-    return false;
-  }
-  if (overlayMode === "diff") {
-    return !overlaysEditedOwnsPointer(
-      diffOriginalOpacity, diffEditedOpacity
-    );
-  }
-  return !overlaysEditedOwnsPointer(1 - runBlend, runBlend);
+  return generatorCanvas.layerIsOriginal(target);
 }
 
-// Whether both runs are on the canvas together. runBlendActive() is
-// the crossfade's own gate, but it is only ever consulted from
-// renderFrameWithTokens, so it can read true while the live view is
-// on screen; the live view is never layered.
+// Whether both runs are on the canvas together. The controller owns
+// the view mode as well as the comparison gate, so a live canvas is
+// never reported as layered.
 function metricsLayered() {
-  return scrubberActive && runBlendActive();
+  return generatorCanvas.layersActive();
 }
 
 // The tokens the canvas is currently drawing for the hovered layer:
@@ -3449,19 +2333,7 @@ function metricsLayered() {
 // pre-edit run clamps to its own final frame, matching the ghost
 // layer buildCrossfadedLayers draws past its end.
 function metricsFrameTokens() {
-  if (!scrubberActive) {
-    return generatorRun.frameTokensLast();
-  }
-  if (!metricsHoverOriginal) {
-    return generatorRun.frameTokens(currentScrubFrame);
-  }
-  var index = Math.min(
-    currentScrubFrame,
-    generatorRun.originalTokenFrames() - 1
-  );
-  return index >= 0
-    ? generatorRun.originalTokens(index)
-    : null;
+  return generatorCanvas.drawnTokens(metricsHoverOriginal);
 }
 
 // Assemble one reading, or null when the held position no longer
@@ -3482,13 +2354,15 @@ function buildTokenMetricsReading() {
   var tok = tokens[index];
   var remasked = remaskedPositions[index] === true;
   var masked = !tok || !!tok.m || remasked;
-  var entropy = tokenEntropyReading(index, tok, metricsHoverOriginal);
+  var entropy = generatorCanvas.entropyReading(
+    index, tok, metricsHoverOriginal
+  );
   return {
     position: index,
     total: tokens.length,
     tokenText: tok ? tok.t : "",
     masked: masked,
-    maskChar: MASK_CHAR,
+    maskChar: generatorCanvas.maskChar(),
     confidence: metricsConfidence(tok, masked, remasked),
     entropy: entropy.value,
     extra: overlaysEntropyNote(
@@ -3516,29 +2390,9 @@ function metricsConfidence(tok, masked, remasked) {
 // The overlay-specific line, the one part of the reading that depends
 // on which coloring is active.
 function metricsExtra(index, tok) {
-  var mode = effectiveColorMode();
-  if (mode === "forgetting") {
-    return overlaysForgettingReading(tok);
-  }
-  if (mode === "commit") {
-    var step = tokenCommitStep(index, metricsHoverOriginal);
-    return step === null ? "" : "Resolved at step: " + step;
-  }
-  if (mode === "revisions") {
-    return overlaysRevisionReading(
-      tokenRevisionCount(index, metricsHoverOriginal)
-    );
-  }
-  if (mode === "diff" && diffAvailable()) {
-    var diff = currentDiffData();
-    if (diff.origins[index]) {
-      return "(remasked here)";
-    }
-    if (diff.changed[index]) {
-      return "was: " + diff.origText[index];
-    }
-  }
-  return "";
+  return generatorCanvas.tokenExtra(
+    index, tok, metricsHoverOriginal
+  );
 }
 
 // Named only while both runs are on the canvas together. With one run
@@ -3686,12 +2540,7 @@ function setEntropyProfileVisible(visible) {
 // Whether the active model declares a per-position entropy, in a
 // shape the row can draw.
 function entropyDeclared() {
-  var channel = declaredChannel("entropy");
-  if (!channel) {
-    return false;
-  }
-  var shape = (channel.axes || []).join("|");
-  return ENTROPY_SHAPES.indexOf(shape) !== -1;
+  return generatorCanvas.entropyDeclared();
 }
 
 function entropyProfileShowing() {
@@ -3708,113 +2557,14 @@ function updateEntropyProfileVisibility() {
   if (!entropyProfileRow) {
     return;
   }
-  if (!scrubberActive || !entropyAvailable()) {
+  if (
+    !scrubberActive
+    || !generatorCanvas.entropyAvailable()
+  ) {
     setEntropyProfileVisible(false);
     return;
   }
   drawEntropyProfile();
-}
-
-// Slide the overlay drawer open or closed and flip the handle glyph
-// (pointing left to invite opening, right to push it back in).
-function setOverlayDrawerOpen(open) {
-  if (!overlaySelectGroup) {
-    return;
-  }
-  overlaySelectGroup.classList.toggle("open", open);
-  if (overlayDrawerHandle) {
-    overlayDrawerHandle.textContent = open ? "\u203a" : "\u2039";
-    overlayDrawerHandle.title = open
-      ? "Collapse overlay options"
-      : "Overlay options";
-  }
-}
-
-// (Re)build the top-right overlay picker. "Diff vs Original" is
-// always listed but disabled until a resume branch exists. Rebuilt
-// only when that availability flips (to refresh the disabled state).
-function buildOverlaySelect() {
-  if (!overlaySelectMount) {
-    return;
-  }
-  var hasDiff = diffAvailable();
-  var hasEntropy = entropyAvailable();
-  var hasForgetting = forgettingAvailable();
-  var hasRevisions = revisionsAvailable();
-  if (overlayMode === "diff" && !hasDiff) {
-    overlayMode = "none";
-  }
-  if (overlayMode === "entropy" && !hasEntropy) {
-    overlayMode = "none";
-  }
-  if (overlayMode === "forgetting" && !hasForgetting) {
-    overlayMode = "none";
-  }
-  if (overlayMode === "revisions" && !hasRevisions) {
-    overlayMode = "none";
-  }
-  // Commit Order is diffusion-only; drop a stale selection for AR runs.
-  if (overlayMode === "commit" && isAppendOnly()) {
-    overlayMode = "none";
-  }
-  // Keep the legends in sync with the (possibly reset) mode on every
-  // (re)build or reuse, not just on an explicit picker change.
-  updateOverlayLegends();
-  // Rebuilt unconditionally. This used to be skipped when the option
-  // set was unchanged, not as an optimisation but because every
-  // createCustomSelect leaked a document listener; the widget owns
-  // one listener for the page now, so a rebuild costs nothing to
-  // remember.
-  var options = [
-    { value: "none", label: "None" },
-    { value: "conf", label: "Heatmap" },
-  ];
-  // Entropy answers a different question than the confidence
-  // Heatmap: how undecided the model was over the whole vocabulary,
-  // not how likely the token it chose was.
-  if (hasEntropy) {
-    options.push({ value: "entropy", label: "Entropy" });
-  }
-  // What reading each token erased from a state-space model's state:
-  // a question about the model's memory rather than its choice, so it
-  // sits beside Entropy rather than replacing either.
-  if (hasForgetting) {
-    options.push({ value: "forgetting", label: "Forgetting" });
-  }
-  // Commit Order tints by resolution step, which a left-to-right model
-  // does not have (its commit order is just position order), so it
-  // stays diffusion-only.
-  if (!isAppendOnly()) {
-    options.push({ value: "commit", label: "Commit Order" });
-  }
-  // How often each position changed its mind, listed only for a run
-  // that revised something: DiffusionGemma, today. Beside Commit
-  // Order, since both read the run's frames rather than a token.
-  if (hasRevisions) {
-    options.push({ value: "revisions", label: "Revisions" });
-  }
-  // Diff needs a branch to compare against. Diffusion runs list it
-  // up front (disabled until Edit Frames produces one); autoregressive
-  // runs list it only once a What If substitution has, since there is
-  // no equivalent standing invitation for them.
-  if (!isAppendOnly() || hasDiff) {
-    options.push({
-      value: "diff",
-      label: "Diff vs Original",
-      disabled: !hasDiff,
-      title: hasDiff
-        ? undefined
-        : "Edit and resume a run (via Edit Frames) to"
-          + " compare it against the original.",
-    });
-  }
-  overlaySelectMount.innerHTML = "";
-  overlaySelect = createCustomSelect(options, overlayMode);
-  overlaySelectMount.appendChild(overlaySelect);
-  sizeCustomSelect(overlaySelect);
-  overlaySelect.addEventListener("change", function () {
-    setOverlayMode(overlaySelect.value);
-  });
 }
 
 // Prompt composition lives in generator_composer.js. The page passes
@@ -3882,396 +2632,17 @@ function modelPanelParametersChanged() {
 // happen there and are picked up here on the next load (hydrate).
 function loadSettings() {
   appSettings = parseSettings(localStorage.getItem(SETTINGS_KEY));
-  // The live options are one shared object rebuilt per run rather
-  // than per frame, so the setting is copied in here, where the rest
-  // of the preferences land, instead of being read inside the render
-  // loop for every position on every step.
-  LIVE_TOKEN_OPTIONS.revealMask = overlaysDrawsGuess(appSettings);
 }
 
 // Apply the (saved) settings to the live app: hover highlight and any
 // active token coloring.
 function applySettings() {
-  updateHoverHighlight();
+  generatorCanvas.applySettings();
   // Toggling the effect starts/stops the Generate idle cycle live.
   updateGenerateIdleEffect();
   // Restart the collapsed device ticker so the GPU-ticker toggle takes
   // effect immediately.
   generatorModelPanel.refreshSelector();
-  if (scrubberActive) {
-    renderFrameWithTokens(currentScrubFrame);
-  }
-}
-
-// Token-level rendering for scrubber mode.
-// Each token is a clickable span; resolved tokens
-// can be clicked to toggle remasking.
-//
-// The confidence-to-opacity curve itself is overlaysMaskOpacity in
-// overlays.js, shared with Analytics so the same mask reads the same
-// on both pages.
-
-// A user-remasked position draws the mask glyph even though its
-// token is still resolved: the selection is a statement about what
-// the next run will redraw, not about what this frame holds.
-function tokenMaskedFn(index) {
-  return remaskedPositions[index] === true;
-}
-
-// Beyond token-mask / token-resolved, a span can be a remask
-// selection, or invite the click that makes one, or invite the hover
-// that opens its candidates. The latter two are edit-mode
-// affordances, so they never appear on a stacked layer.
-// The two orange marks are different claims and must not be confused.
-// token-remasked means "selected, about to be redrawn", which is true
-// for the length of one edit; token-edited means "this run was
-// intervened here", which stays true for as long as the run exists.
-// The in-edit selection wins where they overlap, since it is the one
-// the user is acting on.
-function tokenClassFn(index, tok, masked) {
-  if (remaskedPositions[index] === true) {
-    return "token-remasked";
-  }
-  if (masked) {
-    return "";
-  }
-  var classes = [];
-  if (positionWasEdited(editedPositionMarks(), index)) {
-    classes.push("token-edited");
-  }
-  if (runPhase.mode === "edit") {
-    classes.push("token-clickable");
-  }
-  if (
-    runPhase.substituting
-    && generatorRun.positionAlternatives(index, false)
-  ) {
-    classes.push("token-substitutable");
-  }
-  return classes.join(" ");
-}
-
-// Mask opacity tracks the model's live predicted confidence for the
-// position. A remask selection is held fully opaque instead, so it
-// reads as a choice rather than as one more low-confidence mask.
-function tokenOpacityFn(index, tok, masked) {
-  if (!masked || remaskedPositions[index] === true) {
-    return null;
-  }
-  if (!tok) {
-    return MASK_OPACITY_FLOOR;
-  }
-  return overlaysMaskOpacity(tok.c);
-}
-
-function tokenColorFn(isOriginal) {
-  return function (index, tok) {
-    if (!tok || tok.m || remaskedPositions[index] === true) {
-      return null;
-    }
-    return tokenColorAt(index, tok, isOriginal);
-  };
-}
-
-// The full callback set for one layer drawn from either the branch or
-// the retained pre-edit run.
-function tokenLayerOptions(isOriginal) {
-  return {
-    maskChar: MASK_CHAR,
-    revealMask: overlaysDrawsGuess(appSettings),
-    maskedFor: tokenMaskedFn,
-    classFor: tokenClassFn,
-    opacityFor: tokenOpacityFn,
-    colorFor: tokenColorFn(isOriginal),
-  };
-}
-
-// Whether the run crossfade governs the token view: only once a
-// branch exists to compare against, and never mid-edit, where the
-// tokens are a target for clicks rather than something to read.
-function runBlendActive() {
-  return diffAvailable() && runPhase.mode === null;
-}
-
-// Draw a scrubbed frame and re-read the metrics strip. The strip
-// refresh is here rather than at the two dozen call sites because
-// every one of them is a reason a stationary pointer now points at
-// something else: a new frame, a new overlay, a new remask.
-function renderFrameWithTokens(frameIndex) {
-  renderFrameWithTokensDraw(frameIndex);
-  refreshTokenMetrics();
-}
-
-function renderFrameWithTokensDraw(frameIndex) {
-  flickerStop();
-  // Leaving the live view: the mask glow this class restores is for
-  // streaming only, and every branch below owns the container now.
-  outputArea.classList.remove("live-tokens");
-  var tokens = generatorRun.frameTokens(frameIndex);
-  if (!tokens) {
-    renderFrame(generatorRun.frameText(frameIndex));
-    return;
-  }
-
-  // Diff overlay takes over rendering (two stacked layers of its
-  // own, under two independent opacity sliders).
-  if (overlayMode === "diff" && runBlendActive()) {
-    renderDiffOverlay(frameIndex);
-    return;
-  }
-
-  tokenHighlightPos = null;
-  outputArea.textContent = "";
-  if (runBlendActive()) {
-    outputArea.classList.add("token-layers");
-    var layered = buildCrossfadedLayers(frameIndex, tokens);
-    // Taken before the append, which empties the fragment.
-    var stacked = [layered.children[0], layered.children[1]];
-    outputArea.appendChild(layered);
-    startStackedFlicker(stacked, frameIndex, tokens);
-    return;
-  }
-
-  outputArea.classList.remove("token-layers");
-  var options = tokenLayerOptions(false);
-  var fragment = document.createDocumentFragment();
-  var spans = [];
-  for (var i = 0; i < tokens.length; i++) {
-    spans.push(
-      overlaysBuildTokenSpan(i, tokens[i], MASK_CHAR, options)
-    );
-    fragment.appendChild(spans[i]);
-  }
-  outputArea.appendChild(fragment);
-  if (candidatesCycle()) {
-    flickerStart([{
-      spans: spans,
-      tokens: tokens,
-      sets: generatorRun.candidateSets(
-        frameIndex, false, runFrameCanvas
-      ),
-    }], MASK_CHAR);
-  }
-}
-
-// Whether a scrubbed frame's unsettled positions cycle through their
-// candidates: the choice is made, the run has finished rather than
-// streaming, and no edit phase has made the canvas a click target.
-// Reduced motion is answered where the cycling starts.
-function candidatesCycle() {
-  return appSettings.unsettledShows === "candidates"
-    && scrubberActive
-    && !isGenerating
-    && runPhase.mode === null;
-}
-
-// Cycle both stacked layers, each with its own run's candidates at
-// the frame it shows: the pre-edit run's for the original layer,
-// clamped as that layer is, and the live store for the branch.
-function startStackedFlicker(layers, frameIndex, editedTokens) {
-  if (!candidatesCycle()) {
-    return;
-  }
-  var index = Math.min(
-    frameIndex, generatorRun.originalTokenFrames() - 1
-  );
-  var originalTokens =
-    generatorRun.originalTokens(index) || [];
-  flickerStart([
-    {
-      spans: layers[0].children,
-      tokens: originalTokens,
-      sets: generatorRun.candidateSets(
-        index, true, singleCanvas
-      ),
-    },
-    {
-      spans: layers[1].children,
-      tokens: editedTokens,
-      sets: generatorRun.candidateSets(
-        frameIndex, false, runFrameCanvas
-      ),
-    },
-  ], MASK_CHAR);
-}
-
-// While DiffusionGemma streams, each frame carries the sets of the
-// positions that changed on it, and those positions cycle until the
-// next frame lands, which renderLiveFrame stops first. LLaDA sends
-// none: its frames come about twenty-five a second, too quickly for a
-// cycle to read, so its guesses change in place instead.
-function startLiveCycling(tokens, live) {
-  if (appSettings.unsettledShows !== "candidates") {
-    return;
-  }
-  var sets = liveCyclingSets(live, tokens.length);
-  if (sets === null) {
-    return;
-  }
-  flickerStart([{
-    spans: liveTokenSpans,
-    tokens: tokens,
-    sets: sets,
-  }], MASK_CHAR);
-}
-
-// A frame's sets by position, or null where it carries none or they
-// do not describe this canvas. A payload whose lists disagree, or
-// that names a position the canvas lacks, is dropped whole rather
-// than cycled at the wrong place.
-function liveCyclingSets(live, width) {
-  if (!live || !Array.isArray(live.positions)) {
-    return null;
-  }
-  if (!Array.isArray(live.sets)) {
-    return null;
-  }
-  if (live.positions.length !== live.sets.length) {
-    return null;
-  }
-  var sets = [];
-  for (var at = 0; at < width; at++) {
-    sets.push(null);
-  }
-  for (var i = 0; i < live.positions.length; i++) {
-    var position = live.positions[i];
-    if (!Number.isInteger(position)) {
-      return null;
-    }
-    if (position < 0 || position >= width) {
-      return null;
-    }
-    sets[position] = live.sets[i];
-  }
-  return sets;
-}
-
-// The pre-edit run and the branch drawn on top of each other, mixed
-// by the run crossfade. The original layer clamps to its final frame
-// past its own end, so a branch that outran it keeps a stable ghost
-// rather than emptying out.
-function buildCrossfadedLayers(frameIndex, editedTokens) {
-  var oIdx = Math.min(
-    frameIndex, generatorRun.originalTokenFrames() - 1
-  );
-  var origTokens =
-    (oIdx >= 0
-      ? generatorRun.originalTokens(oIdx)
-      : null) || [];
-  var editedTakes = overlaysEditedOwnsPointer(
-    1 - runBlend, runBlend
-  );
-
-  var fragment = document.createDocumentFragment();
-  var origOptions = tokenLayerOptions(true);
-  origOptions.layerClass = "token-layer-original";
-  origOptions.opacity = 1 - runBlend;
-  origOptions.interactive = !editedTakes;
-  fragment.appendChild(
-    overlaysBuildTokenLayer(origTokens, origOptions)
-  );
-
-  var editOptions = tokenLayerOptions(false);
-  editOptions.layerClass = "token-layer-edited";
-  editOptions.opacity = runBlend;
-  editOptions.interactive = editedTakes;
-  fragment.appendChild(
-    overlaysBuildTokenLayer(editedTokens, editOptions)
-  );
-  return fragment;
-}
-
-function renderTargetPlaceholder(frameIndex) {
-  flickerStop();
-  outputArea.classList.remove("token-layers");
-  outputArea.classList.remove("live-tokens");
-  outputArea.textContent = "";
-  // Nothing on this view is a token, so a held pointer reads nothing.
-  refreshTokenMetrics();
-
-  var editedFrames = [];
-  for (
-    var ei = 0; ei < runPhase.lockedEdits.length; ei++
-  ) {
-    editedFrames.push(
-      runPhase.lockedEdits[ei].frame_index
-    );
-  }
-  if (editedFrames.length === 0) {
-    editedFrames.push(scrubberMinFrame);
-  }
-
-  var frameList = "";
-  if (editedFrames.length === 1) {
-    frameList = "Frame " + editedFrames[0];
-  } else if (editedFrames.length === 2) {
-    frameList =
-      "Frames " + editedFrames[1]
-      + " and " + editedFrames[0];
-  } else {
-    frameList = "Frames ";
-    for (
-      var fi = editedFrames.length - 1;
-      fi >= 0; fi--
-    ) {
-      if (fi === 0) {
-        frameList += "and " + editedFrames[fi];
-      } else {
-        frameList += editedFrames[fi] + ", ";
-      }
-    }
-  }
-
-  var notice = document.createElement("span");
-  notice.className = "preview-notice";
-
-  var label = document.createElement("span");
-  label.className = "preview-frame-label";
-  label.textContent = "Frame " + frameIndex;
-
-  notice.appendChild(label);
-  notice.appendChild(
-    document.createTextNode(
-      " will be generated. "
-      + "Output will diverge from this "
-      + "preview based on edits to "
-      + frameList + "."
-    )
-  );
-  outputArea.appendChild(notice);
-
-  var origTokens = generatorRun.originalTokens(frameIndex);
-  var origText = generatorRun.originalText(frameIndex);
-
-  if (origTokens || origText) {
-    var wrapper = document.createElement("div");
-    wrapper.className = "preview-content";
-
-    if (origTokens) {
-      // The shared builder rather than spans by hand, so the mask
-      // reveal reaches this view too. It is a still of the pre-edit
-      // run, and a setting that applied everywhere except the one
-      // place you compare against would be the confusing kind of
-      // gap. .preview-content is pointer-events: none, so the
-      // data-pos the builder adds stays inert here.
-      var previewOptions = {
-        revealMask: overlaysDrawsGuess(appSettings),
-      };
-      for (var i = 0; i < origTokens.length; i++) {
-        wrapper.appendChild(
-          overlaysBuildTokenSpan(
-            i, origTokens[i], MASK_CHAR, previewOptions
-          )
-        );
-      }
-    } else {
-      var textSpan = document.createElement("span");
-      textSpan.className = "char-resolved";
-      textSpan.textContent = origText;
-      wrapper.appendChild(textSpan);
-    }
-    outputArea.appendChild(wrapper);
-  }
 }
 
 // ---- Scrubber ----
@@ -4535,17 +2906,7 @@ function activateScrubber() {
     );
   }
   updateEditFramesLock();
-  overlayMode = "none";
-  resetDiffOverlay();
-  resetRunBlend();
-  buildOverlaySelect();
-  if (overlaySelectGroup) {
-    overlaySelectGroup.hidden = false;
-  }
-  setOverlayDrawerOpen(false);
-  updateDiffSummary();
-  updateDiffOverlayControls();
-  updateRunBlendControls();
+  generatorCanvas.activate();
   guidedEditControls.hidden = true;
   clearRemaskedPositions();
   unlockScrubberNav();
@@ -4567,16 +2928,13 @@ function deactivateScrubber() {
   scrubberActive = false;
   setScrubberVisible(false);
   guidedEditControls.hidden = true;
-  if (overlaySelectGroup) {
-    overlaySelectGroup.hidden = true;
-  }
+  generatorCanvas.deactivate();
   setEntropyProfileVisible(false);
   entropyHoverPos = null;
   clearTokenHighlight();
   clearTokenMetrics();
   hideAltsPopover();
   clearRemaskedPositions();
-  flickerStop();
 }
 
 function updateScrubberLabel() {
@@ -4588,6 +2946,24 @@ function updateScrubberLabel() {
   scrubberLabel.textContent =
     "Frame " + currentScrubFrame
     + " / " + maxLabel;
+}
+
+function renderTargetFrame(frameIndex) {
+  var editedFrames = [];
+  for (
+    var index = 0;
+    index < runPhase.lockedEdits.length;
+    index++
+  ) {
+    editedFrames.push(
+      runPhase.lockedEdits[index].frame_index
+    );
+  }
+  generatorCanvas.renderTargetPlaceholder({
+    frameIndex: frameIndex,
+    editedFrames: editedFrames,
+    minimumFrame: scrubberMinFrame,
+  });
 }
 
 function navigateToFrame(index) {
@@ -4614,11 +2990,11 @@ function navigateToFrame(index) {
   restoreFrameSelections(index);
 
   if (runPhase.mode === "select_target") {
-    renderTargetPlaceholder(index);
+    renderTargetFrame(index);
   } else if (index < generatorRun.frameCount()) {
-    renderFrameWithTokens(index);
+    generatorCanvas.renderFrame(index);
   } else {
-    renderTargetPlaceholder(index);
+    renderTargetFrame(index);
   }
   refreshStopReadout();
   // The token spans were just replaced, so any open popover now
@@ -4673,7 +3049,7 @@ function toggleRemaskPosition(pos) {
     remaskedPositions[pos] = true;
   }
   saveFrameSelections(currentScrubFrame);
-  renderFrameWithTokens(currentScrubFrame);
+  generatorCanvas.renderFrame(currentScrubFrame);
   updateGuidedUI();
 }
 
@@ -4769,7 +3145,7 @@ function shuffleRemasks() {
     remaskedPositions[candidates[k]] = true;
   }
   saveFrameSelections(currentScrubFrame);
-  renderFrameWithTokens(currentScrubFrame);
+  generatorCanvas.renderFrame(currentScrubFrame);
   updateGuidedUI();
 }
 
@@ -4964,9 +3340,7 @@ function beginSubstitutionSession() {
     btnWhatIf.hidden = true;
   }
   guidedEditControls.hidden = false;
-  if (overlaySelectGroup) {
-    overlaySelectGroup.hidden = true;
-  }
+  generatorCanvas.deactivate();
 
   navigateToFrame(generatorRun.frameCount() - 1);
   updateGuidedUI();
@@ -5073,9 +3447,7 @@ function beginEditSession() {
     String(generatorRun.frameCount() - 1);
   btnEditFrames.hidden = true;
   guidedEditControls.hidden = false;
-  if (overlaySelectGroup) {
-    overlaySelectGroup.hidden = true;
-  }
+  generatorCanvas.deactivate();
 
   navigateToFrame(startFrame);
   updateGuidedUI();
@@ -5112,8 +3484,7 @@ function updateGuidedUI() {
   // controls, so keep them hidden whenever a run is being edited
   // (runPhase.mode !== null); both updates restore the right one on exit
   // once runPhase.mode is null again.
-  updateDiffOverlayControls();
-  updateRunBlendControls();
+  generatorCanvas.refreshControls();
 
   // Reset every phase button first so no stale state can survive a
   // transition (including the exit back to runPhase.mode === null). Only
@@ -5259,7 +3630,7 @@ function updateGuidedUI() {
 
 function selectCurrentFrame() {
   runPhasesEnter(runPhase, RUN_PHASE_EDIT);
-  renderFrameWithTokens(currentScrubFrame);
+  generatorCanvas.renderFrame(currentScrubFrame);
   updateGuidedUI();
 }
 
@@ -5428,9 +3799,7 @@ function handleGuidedDone() {
     setScrubberVisible(true);
     guidedEditControls.hidden = false;
     btnEditFrames.hidden = true;
-    if (overlaySelectGroup) {
-      overlaySelectGroup.hidden = true;
-    }
+    generatorCanvas.deactivate();
 
     scrubberSlider.min = String(target);
     scrubberSlider.max =
@@ -5445,7 +3814,7 @@ function handleGuidedDone() {
     perFrameRemasked = {};
 
     updateScrubberLabel();
-    renderFrameWithTokens(target);
+    generatorCanvas.renderFrame(target);
     updateGuidedUI();
   } else {
     enterReviewMode();
@@ -5467,9 +3836,7 @@ function enterReviewMode() {
   setScrubberVisible(true);
   guidedEditControls.hidden = false;
   btnEditFrames.hidden = true;
-  if (overlaySelectGroup) {
-    overlaySelectGroup.hidden = true;
-  }
+  generatorCanvas.deactivate();
   currentScrubFrame = generatorRun.frameCount() - 1;
   scrubberSlider.min = "0";
   scrubberSlider.max =
@@ -5478,7 +3845,7 @@ function enterReviewMode() {
   scrubberSlider.disabled = false;
   unlockScrubberNav();
   updateScrubberLabel();
-  renderFrameWithTokens(currentScrubFrame);
+  generatorCanvas.renderFrame(currentScrubFrame);
   updateGuidedUI();
 }
 
@@ -5681,7 +4048,7 @@ function denoiseDissolve(el, onDone) {
       if (chars[i] === " ") {
         out += " ";
       } else if (i < masked) {
-        out += MASK_CHAR;
+        out += generatorCanvas.maskChar();
       } else {
         out += chars[i];
       }
@@ -5737,21 +4104,18 @@ function resetRunState() {
   remaskedPositions = {};
   perFrameRemasked = {};
   generatorRun.reset();
-  overlayMode = "none";
-  if (overlaySelectGroup) {
-    overlaySelectGroup.hidden = true;
-  }
+  remaskEdits = [];
+  generatorCanvas.reset();
+  generatorCanvas.deactivate();
   entropyHoverPos = null;
   clearTokenHighlight();
   clearTokenMetrics();
   hideAltsPopover();
-  remaskEdits = [];
   isResuming = false;
   pendingResume = null;
   updateEditFramesLock();
   updateGenerateButton();
   setSaveAvailable(false);
-  flickerStop();
   refreshStopReadout();
 }
 
@@ -5820,7 +4184,7 @@ function startGeneration() {
   var params = generatorModelPanel.parameterValues();
   generatorRun.begin(prompt, params);
 
-  outputArea.textContent = "";
+  generatorCanvas.clearOutput();
   if (thinkingPanel) {
     thinkingPanel.hidden = true;
   }
@@ -5840,6 +4204,58 @@ function startGeneration() {
 // generator_run.js. The page only supplies presentation callbacks.
 function saveRun() {
   return generatorRun.save();
+}
+
+function invalidateGeneratorCanvas() {
+  if (generatorCanvas) {
+    generatorCanvas.invalidate();
+  }
+}
+
+function generatorCanvasReadModel() {
+  var capabilities = generatorModelPanel.capabilities();
+  return {
+    capabilities: capabilities,
+    maskChar: capabilities.unresolved_char || "\u2591",
+  };
+}
+
+function generatorCanvasReadSettings() {
+  return appSettings;
+}
+
+function generatorCanvasReadEdit() {
+  return {
+    remaskEdits: remaskEdits,
+    remaskedPositions: remaskedPositions,
+    mode: runPhase.mode,
+    substituting: runPhase.substituting,
+    generating: isGenerating,
+  };
+}
+
+function generatorCanvasWriteHighlight(value) {
+  appSettings.highlightTokens = value;
+  overlaysWriteHighlightTokens(value);
+}
+
+function generatorCanvasOutputReset() {
+  tokenHighlightPos = null;
+}
+
+function generatorCanvasRendered() {
+  refreshTokenMetrics();
+}
+
+function generatorCanvasOverlayChanged() {
+  hideAltsPopover();
+}
+
+function generatorCanvasLayerChanged(change) {
+  if (change.profile && scrubberActive) {
+    updateEntropyProfileVisibility();
+  }
+  refreshTokenMetricsLayer();
 }
 
 function generatorRunReadModel() {
@@ -5981,6 +4397,7 @@ btnSave.addEventListener("click", saveRun);
 generatorComposer.wire();
 generatorModelPanel.wire();
 generatorChrome.wire();
+generatorCanvas.wire();
 
 // Scrubber event listeners.
 //
@@ -6029,78 +4446,6 @@ btnScrubEnd.addEventListener(
   }
 );
 
-// The shared helper owns the handle click as well as the drag, so
-// this binds none of its own (see overlaysMakeDrawerDraggable).
-overlaysMakeDrawerDraggable({
-  group: overlaySelectGroup,
-  handle: overlayDrawerHandle,
-  container: document.getElementById("output-section"),
-  storageKey: "diffusion_overlay_drawer_top_generator",
-  onToggle: setOverlayDrawerOpen,
-});
-
-if (overlayHighlightCheckbox) {
-  overlayHighlightCheckbox.addEventListener(
-    "change", onOverlayHighlightToggle
-  );
-}
-
-// Diff-overlay opacity sliders update the live layers directly;
-// the blend toggle re-renders (it changes the original layer's
-// coloring as well as the blend mode).
-if (diffOriginalSlider) {
-  diffOriginalSlider.addEventListener("input", function () {
-    diffOriginalOpacity = parseInt(
-      diffOriginalSlider.value, 10
-    );
-    var layer = outputArea.querySelector(
-      ".token-layer-original"
-    );
-    if (layer) {
-      layer.style.opacity = String(diffOriginalOpacity / 100);
-    }
-    applyDiffLayerPointers();
-  });
-}
-
-if (diffEditedSlider) {
-  diffEditedSlider.addEventListener("input", function () {
-    diffEditedOpacity = parseInt(
-      diffEditedSlider.value, 10
-    );
-    var layer = outputArea.querySelector(
-      ".token-layer-edited"
-    );
-    if (layer) {
-      layer.style.opacity = String(diffEditedOpacity / 100);
-    }
-    applyDiffLayerPointers();
-  });
-}
-
-// Hand the pointer to whichever layer a drag just made the more
-// opaque, so hover and the candidate popover follow the layer the
-// user is reading.
-function applyDiffLayerPointers() {
-  overlaysApplyLayerPointers(
-    outputArea, diffOriginalOpacity, diffEditedOpacity
-  );
-  refreshTokenMetricsLayer();
-}
-
-if (diffBlendToggle) {
-  diffBlendToggle.addEventListener("change", function () {
-    diffBlend = diffBlendToggle.checked;
-    if (scrubberActive && overlayMode === "diff") {
-      renderFrameWithTokens(currentScrubFrame);
-    }
-  });
-}
-
-if (runBlendInput) {
-  runBlendInput.addEventListener("input", onRunBlendInput);
-}
-
 // Guided edit mode event listeners.
 btnEditFrames.addEventListener(
   "click", enterRemaskMode
@@ -6140,7 +4485,7 @@ btnClearGuided.addEventListener(
   function () {
     remaskedPositions = {};
     delete perFrameRemasked[currentScrubFrame];
-    renderFrameWithTokens(currentScrubFrame);
+    generatorCanvas.renderFrame(currentScrubFrame);
     updateGuidedUI();
   }
 );
@@ -6225,10 +4570,6 @@ btnContinueEdit.addEventListener(
 
 btnExitEdit.addEventListener(
   "click", exitRemaskMode
-);
-
-outputArea.addEventListener(
-  "animationend", onTokenGlowEnd
 );
 
 // Token click delegation on the output area.
@@ -6690,8 +5031,7 @@ function applyModelInfo(info) {
   // class. Outside the guard above because it falls back to the
   // diffusion pair, which is the right reading when the active
   // model could not be identified at all.
-  applyTokenBirthGlow();
-  setMaskChar();
+  generatorCanvas.applyModel();
   // Same reason: whether the entropy row is reserved or absent
   // depends on the model, and the markup starts it absent.
   setEntropyProfileVisible(false);
@@ -6731,7 +5071,7 @@ function boot() {
   loadSettings();
   generatorComposer.boot();
   generatorChrome.boot();
-  updateHoverHighlight();
+  generatorCanvas.applySettings();
   overlaysBuildTokenMetrics(tokenMetricsStrip);
   overlaysBuildStopReadout(stopReadout);
   var inlined = bootModelInfo();

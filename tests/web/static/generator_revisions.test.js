@@ -158,7 +158,11 @@ function finishedRun(specs) {
 
 // The values the overlay picker lists, as a finished run built it.
 function pickerValues(context) {
-  const list = context.overlaySelect.children.find(
+  const mount = context.document.getElementById(
+    "overlay-select-mount"
+  );
+  const select = mount.children[mount.children.length - 1];
+  const list = select.children.find(
     (child) => child.tag === "ul"
   );
   return list.children.map((item) => item.getAttribute("data-value"));
@@ -178,6 +182,13 @@ function drawnSpans(element) {
   return spans;
 }
 
+function liveSpans(context) {
+  const output = context.document.getElementById("output-area");
+  const spans = drawnSpans(output);
+  const count = context.generatorRun.frameTokensLast().length;
+  return spans.slice(spans.length - count);
+}
+
 // -- when it is offered --
 
 test("a revising run offers Revisions, after Commit Order", () => {
@@ -185,7 +196,7 @@ test("a revising run offers Revisions, after Commit Order", () => {
 
   const values = pickerValues(context);
 
-  assert.equal(context.revisionsAvailable(), true);
+  assert.equal(context.generatorCanvas.revisionsAvailable(), true);
   assert.equal(
     values.indexOf("revisions"), values.indexOf("commit") + 1
   );
@@ -194,7 +205,7 @@ test("a revising run offers Revisions, after Commit Order", () => {
 test("a run that never revised is not offered it", () => {
   const { context } = finishedRun(SETTLING);
 
-  assert.equal(context.revisionsAvailable(), false);
+  assert.equal(context.generatorCanvas.revisionsAvailable(), false);
   assert.ok(!pickerValues(context).includes("revisions"));
 });
 
@@ -202,7 +213,7 @@ test("a run that only appends never paints it", () => {
   // A stale selection from a diffusion run must not tint a run that
   // appends: there is no canvas for a position to change on.
   const { context } = finishedRun(REVISING);
-  context.overlayMode = "revisions";
+  context.generatorCanvas.setOverlayMode("revisions");
   context.generatorModelPanel.configure({
     models: [{
       id: "append",
@@ -217,8 +228,9 @@ test("a run that only appends never paints it", () => {
     active_device: "cpu",
   });
 
-  assert.equal(context.effectiveColorMode(), "none");
-  assert.equal(context.revisionsAvailable(), false);
+  context.generatorCanvas.rebuildOverlaySelect();
+  assert.equal(context.generatorCanvas.overlayMode(), "none");
+  assert.equal(context.generatorCanvas.revisionsAvailable(), false);
 });
 
 // -- what it paints --
@@ -237,7 +249,7 @@ test("tokens are tinted by their count at the scrubbed frame", () => {
   context.navigateToFrame(6);
 
   const colors = colorsDrawnBy(registry, () => {
-    context.setOverlayMode("revisions");
+    context.generatorCanvas.setOverlayMode("revisions");
   });
 
   assert.deepEqual(colors, [
@@ -247,7 +259,7 @@ test("tokens are tinted by their count at the scrubbed frame", () => {
 
 test("scrubbing back counts only what had happened by then", () => {
   const { context, registry } = finishedRun(REVISING);
-  context.setOverlayMode("revisions");
+  context.generatorCanvas.setOverlayMode("revisions");
 
   const colors = colorsDrawnBy(registry, () => {
     context.navigateToFrame(4);
@@ -261,10 +273,10 @@ test("the strip reads the count while the overlay is on", () => {
   context.navigateToFrame(6);
   const token = context.generatorRun.frameTokens(6)[0];
 
-  context.overlayMode = "revisions";
+  context.generatorCanvas.setOverlayMode("revisions");
   assert.equal(context.metricsExtra(0, token), "Revisions: 2");
   assert.equal(context.metricsExtra(2, token), "");
-  context.overlayMode = "conf";
+  context.generatorCanvas.setOverlayMode("conf");
   assert.equal(context.metricsExtra(0, token), "");
 });
 
@@ -273,22 +285,22 @@ test("the legend shows only while Revisions is selected", () => {
   const revision = registry.get("revision-legend");
   const commit = registry.get("commit-legend");
 
-  context.setOverlayMode("revisions");
+  context.generatorCanvas.setOverlayMode("revisions");
   assert.equal(revision.hidden, false);
   assert.equal(commit.hidden, true);
 
-  context.setOverlayMode("commit");
+  context.generatorCanvas.setOverlayMode("commit");
   assert.equal(revision.hidden, true);
   assert.equal(commit.hidden, false);
 });
 
 test("a stale selection is dropped when the run has none", () => {
   const { context } = finishedRun(SETTLING);
-  context.overlayMode = "revisions";
+  context.generatorCanvas.setOverlayMode("revisions");
 
-  context.buildOverlaySelect();
+  context.generatorCanvas.rebuildOverlaySelect();
 
-  assert.equal(context.overlayMode, "none");
+  assert.equal(context.generatorCanvas.overlayMode(), "none");
 });
 
 test("nothing is counted while a run streams", () => {
@@ -297,25 +309,26 @@ test("nothing is counted while a run streams", () => {
   // not read a count from it.
   const { context } = finishedRun(REVISING);
   context.navigateToFrame(6);
-  context.overlayMode = "revisions";
-  assert.equal(context.tokenRevisionCount(0, false), 2);
+  context.generatorCanvas.setOverlayMode("revisions");
+  assert.equal(context.generatorCanvas.revisionCount(0, false), 2);
 
   context.isGenerating = true;
 
-  assert.equal(context.tokenRevisionCount(0, false), 0);
+  assert.equal(context.generatorCanvas.revisionCount(0, false), 0);
 });
 
 test("a memo taken while the run grew is not kept", () => {
   const { context } = streaming(REVISING.slice(0, 4));
-  assert.equal(context.revisionsFor(false).length, 4);
+  context.isGenerating = false;
+  assert.equal(context.generatorCanvas.revisionCount(0, false), 1);
 
+  context.isGenerating = true;
   REVISING.slice(4).forEach((spec, at) => {
     context.handleFrame(frameOf(spec, 4 + at, REVISING.length - 1));
   });
 
-  const revisions = context.revisionsFor(false);
-  assert.equal(revisions.length, REVISING.length);
-  assert.deepEqual([...revisions[6]], [0]);
+  context.isGenerating = false;
+  assert.equal(context.generatorCanvas.revisionCount(0, false), 2);
 });
 
 // -- an edited run: each layer counts its own run --
@@ -341,7 +354,7 @@ function editedRun() {
   const { context } = page;
   context.remaskEdits = [{ frame_index: 4, token_positions: [2] }];
   context.truncateRunArraysAt(4);
-  context.invalidateRunMemos();
+  context.generatorCanvas.invalidate();
   context.isResuming = true;
   BRANCH.forEach((spec, at) => {
     context.handleFrame(frameOf(spec, at, BRANCH.length));
@@ -352,7 +365,9 @@ function editedRun() {
 
 function countsAt(context, isOriginal) {
   return [0, 1, 2, 3].map(
-    (index) => context.tokenRevisionCount(index, isOriginal)
+    (index) => context.generatorCanvas.revisionCount(
+      index, isOriginal
+    )
   );
 }
 
@@ -383,19 +398,25 @@ test("the original layer holds its last frame past its end", () => {
 });
 
 test("each crossfade layer is painted from its own counts", () => {
-  const { context } = editedRun();
+  const { context, registry } = editedRun();
   context.navigateToFrame(6);
-  context.overlayMode = "revisions";
-  const token = settled(99);
+  context.generatorCanvas.setOverlayMode("revisions");
+  registry.get("output-area").children = [];
+  context.generatorCanvas.renderFrame(6);
+  const colors = drawnSpans(
+    registry.get("output-area")
+  ).map((span) => span.style.color);
 
-  assert.equal(
-    context.tokenColorAt(1, token, true), context.revisionColor(1)
-  );
-  assert.equal(context.tokenColorAt(1, token, false), null);
-  assert.equal(
-    context.tokenColorAt(3, token, false), context.revisionColor(1)
-  );
-  assert.equal(context.tokenColorAt(3, token, true), null);
+  assert.deepEqual(colors, [
+    context.revisionColor(2),
+    context.revisionColor(1),
+    "",
+    "",
+    context.revisionColor(1),
+    "",
+    "",
+    context.revisionColor(1),
+  ]);
 });
 
 // -- the live glow --
@@ -424,7 +445,7 @@ function prefersStill() {
 
 test("a streamed revision flashes cyan, and a birth white", () => {
   const { context } = streaming(REVISING.slice(0, 4));
-  const spans = context.liveTokenSpans;
+  const spans = liveSpans(context);
 
   assert.deepEqual(flashes(spans[0]), CYAN);
   assert.deepEqual(flashes(spans[3]), WHITE);
@@ -440,14 +461,14 @@ test("a return to the token it held does not flash", () => {
   ];
   const { context } = streaming(returning);
 
-  assert.deepEqual(flashes(context.liveTokenSpans[0]), DARK);
+  assert.deepEqual(flashes(liveSpans(context)[0]), DARK);
 });
 
 test("the setting off leaves revisions dark, births lit", () => {
   const { context } = streaming(REVISING.slice(0, 4), (page) => {
     page.appSettings.revisionGlow = false;
   });
-  const spans = context.liveTokenSpans;
+  const spans = liveSpans(context);
 
   assert.equal(spans[0].hasAttribute("data-revised"), false);
   assert.equal(spans[3].hasAttribute("data-born"), true);
@@ -457,52 +478,81 @@ test("reduced motion flashes nothing", () => {
   const { context } = streaming(REVISING.slice(0, 4), (page) => {
     page.matchMedia = prefersStill;
   });
-  const spans = context.liveTokenSpans;
+  const spans = liveSpans(context);
 
   assert.deepEqual(flashes(spans[0]), DARK);
   assert.deepEqual(flashes(spans[3]), DARK);
 });
 
 test("a full queue keeps the frame's revisions", () => {
-  // Frame 3 has one birth and one revision. With room for a single
-  // flash, the revision, marked last, is the one left glowing.
-  const { context } = streaming(REVISING.slice(0, 4), (page) => {
-    page.tokenBirthMaxConcurrent = 1;
-  });
-  const spans = context.liveTokenSpans;
-
+  // The default cap is 48. This frame births 49 positions and then
+  // marks a revision, so the oldest births are the ones discarded.
+  const unsettled = Array.from(
+    { length: 50 }, (_, index) => changing(index + 1)
+  );
+  const first = unsettled.slice();
+  first[0] = settled(10);
+  const changingAgain = first.slice();
+  changingAgain[0] = changing(20);
+  const final = Array.from(
+    { length: 50 }, (_, index) => settled(index + 30)
+  );
+  const revealed = Array.from(
+    { length: 49 }, (_, index) => index + 1
+  );
+  const { context } = streaming([
+    { tokens: unsettled, revealed: [] },
+    { tokens: first, revealed: [0] },
+    { tokens: changingAgain, revealed: [] },
+    { tokens: final, revealed: revealed },
+  ]);
+  const spans = liveSpans(context);
+  const glowing = spans.filter((span) => (
+    span.hasAttribute("data-born")
+    || span.hasAttribute("data-revised")
+  ));
   assert.deepEqual(flashes(spans[0]), CYAN);
-  assert.deepEqual(flashes(spans[3]), DARK);
-  assert.equal(context.tokenBirthQueue.length, 1);
+  assert.deepEqual(flashes(spans[1]), DARK);
+  assert.deepEqual(flashes(spans[49]), WHITE);
+  assert.equal(glowing.length, 48);
 });
 
 test("a newer flash on a span replaces the older one", () => {
-  const { context, document } = streaming([]);
-  const span = document.createElement("span");
+  const page = streaming([
+    { tokens: [changing(1)], revealed: [] },
+    { tokens: [settled(10)], revealed: [0] },
+  ]);
+  const span = liveSpans(page.context)[0];
+  span.parent = page.registry.get("output-area");
+  page.context.handleFrame(frameOf(
+    { tokens: [changing(20)], revealed: [] }, 2, 3
+  ));
+  page.context.handleFrame(frameOf(
+    { tokens: [settled(20)], revealed: [] }, 3, 3
+  ));
 
-  context.startTokenGlow(span, "data-born", "data-revised");
-  context.startTokenGlow(span, "data-revised", "data-born");
   assert.deepEqual(flashes(span), CYAN);
-  assert.equal(context.tokenBirthQueue.length, 1);
-
-  // A birth on the next canvas, over a revision still glowing.
-  context.startTokenGlow(span, "data-born", "data-revised");
-  assert.deepEqual(flashes(span), WHITE);
-  assert.equal(context.tokenBirthQueue.length, 1);
 });
 
 test("a flash that ends leaves the queue", () => {
-  const { context, document } = streaming([]);
-  const span = document.createElement("span");
-  context.startTokenGlow(span, "data-revised", "data-born");
+  const { context, registry } = streaming([
+    { tokens: [changing(1)], revealed: [] },
+    { tokens: [settled(10)], revealed: [0] },
+  ]);
+  const span = liveSpans(context)[0];
+  const output = registry.get("output-area");
 
-  context.onTokenGlowEnd({ animationName: "other", target: span });
-  assert.equal(span.hasAttribute("data-revised"), true);
+  output.dispatch("animationend", {
+    animationName: "other",
+    target: span,
+  });
+  assert.equal(span.hasAttribute("data-born"), true);
 
-  const ended = { animationName: "token-revision", target: span };
-  context.onTokenGlowEnd(ended);
-  assert.equal(span.hasAttribute("data-revised"), false);
-  assert.equal(context.tokenBirthQueue.length, 0);
+  output.dispatch("animationend", {
+    animationName: "token-birth",
+    target: span,
+  });
+  assert.equal(span.hasAttribute("data-born"), false);
 });
 
 test("a resume's remasked position is born live, not revised", () => {
@@ -510,24 +560,20 @@ test("a resume's remasked position is born live, not revised", () => {
   const { context } = page;
   context.remaskEdits = [{ frame_index: 4, token_positions: [2] }];
   context.truncateRunArraysAt(4);
-  context.invalidateRunMemos();
+  context.generatorCanvas.invalidate();
   context.isResuming = true;
 
   context.handleFrame(frameOf(BRANCH[0], 0, BRANCH.length));
   context.handleFrame(frameOf(BRANCH[1], 1, BRANCH.length));
-  assert.deepEqual(flashes(context.liveTokenSpans[2]), WHITE);
+  assert.deepEqual(flashes(liveSpans(context)[2]), WHITE);
 
   context.handleFrame(frameOf(BRANCH[2], 2, BRANCH.length));
-  assert.deepEqual(flashes(context.liveTokenSpans[3]), CYAN);
+  assert.deepEqual(flashes(liveSpans(context)[3]), CYAN);
 });
 
-test("a cut drops the live fold", () => {
+test("the live revision fold stays private", () => {
   const { context } = streaming(REVISING);
-  assert.notEqual(context.liveRevisionFold, null);
-
-  context.invalidateRunMemos();
-
-  assert.equal(context.liveRevisionFold, null);
+  assert.equal(context.liveRevisionFold, undefined);
 });
 
 test("a controller cut rebuilds the fold", () => {
@@ -540,7 +586,7 @@ test("a controller cut rebuilds the fold", () => {
   context.handleFrame(frameOf(REVISING[3], 4, REVISING.length - 1));
 
   assert.equal(
-    context.liveTokenSpans[0].hasAttribute("data-revised"), false
+    liveSpans(context)[0].hasAttribute("data-revised"), false
   );
 });
 
@@ -550,14 +596,14 @@ test("a rebuilt fold still starts a remasked position over", () => {
   const { context } = finishedRun(REVISING);
   context.remaskEdits = [{ frame_index: 4, token_positions: [2] }];
   context.truncateRunArraysAt(4);
-  context.invalidateRunMemos();
+  context.generatorCanvas.invalidate();
   context.handleFrame(frameOf(BRANCH[0], 0, BRANCH.length));
 
-  context.invalidateRunMemos();
+  context.generatorCanvas.invalidate();
   context.handleFrame(frameOf(BRANCH[1], 1, BRANCH.length));
 
   assert.equal(
-    context.liveTokenSpans[2].hasAttribute("data-revised"), false
+    liveSpans(context)[2].hasAttribute("data-revised"), false
   );
 });
 
@@ -573,6 +619,6 @@ test("a new run is checked against its own frames only", () => {
   });
 
   assert.equal(
-    context.liveTokenSpans[0].hasAttribute("data-revised"), false
+    liveSpans(context)[0].hasAttribute("data-revised"), false
   );
 });

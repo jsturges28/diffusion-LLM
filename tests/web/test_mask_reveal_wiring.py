@@ -45,7 +45,7 @@ STATIC = (
 SETTING = "unsettledShows"
 FLAG = "revealMask"
 HOOK = "opacityFor"
-GENERATOR_GUESS = f"{FLAG}: overlaysDrawsGuess(appSettings)"
+GENERATOR_GUESS = f"{FLAG}: overlaysDrawsGuess(settingsState())"
 ANALYTICS_GUESS = f"{FLAG}: overlaysDrawsGuess(analyticsSettings)"
 
 
@@ -87,7 +87,9 @@ def test_the_scrubbed_and_crossfaded_layers_ask_for_it() -> None:
     """One options builder serves the single scrubbed layer and both
     layers of the run crossfade, so they cannot disagree."""
     body = _region(
-        "app.js", "function tokenLayerOptions(isOriginal)", 400
+        "generator_canvas.js",
+        "function tokenLayerOptions(isOriginal)",
+        700,
     )
 
     assert GENERATOR_GUESS in body
@@ -97,7 +99,9 @@ def test_the_diff_overlay_asks_for_it() -> None:
     """Its two layers are built by a different shared function, and
     it is the one view where a reveal on one layer and glyphs on the
     other would be actively misleading."""
-    body = _region("app.js", "function renderDiffOverlay(", 900)
+    body = _region(
+        "generator_canvas.js", "function renderDiffOverlay(", 1200
+    )
 
     assert GENERATOR_GUESS in body
 
@@ -108,7 +112,9 @@ def test_the_edit_preview_asks_for_it() -> None:
     setting would have been silently absent from the one view you
     compare a branch against."""
     body = _region(
-        "app.js", "function renderTargetPlaceholder(frameIndex)", 3000
+        "generator_canvas.js",
+        "function renderTargetPlaceholder(state)",
+        3000,
     )
 
     assert GENERATOR_GUESS in body
@@ -120,7 +126,9 @@ def test_the_preview_no_longer_decides_the_glyph_itself() -> None:
     two owners of the same decision, which is how the first one
     drifted."""
     body = _region(
-        "app.js", "function renderTargetPlaceholder(frameIndex)", 3000
+        "generator_canvas.js",
+        "function renderTargetPlaceholder(state)",
+        3000,
     )
 
     assert "tok.m ? MASK_CHAR : tok.t" not in body
@@ -132,13 +140,18 @@ def test_the_preview_no_longer_decides_the_glyph_itself() -> None:
 def test_the_generators_live_and_scrubbed_paths_grade() -> None:
     """The two that always did. Pinned alongside the two that did
     not, so the set is readable in one place."""
-    live = _region("app.js", "var LIVE_TOKEN_OPTIONS", 120)
+    live = _region(
+        "generator_canvas.js", "var liveTokenOptions", 120
+    )
     scrubbed = _region(
-        "app.js", "function tokenLayerOptions(isOriginal)", 400
+        "generator_canvas.js",
+        "function tokenLayerOptions(isOriginal)",
+        700,
     )
 
-    assert f"{HOOK}: tokenOpacityFn" in live
-    assert f"{HOOK}: tokenOpacityFn" in scrubbed
+    assert f"{HOOK}: tokenOpacity" in live
+    assert f"{HOOK}:" in scrubbed
+    assert "tokenOpacityWithEdit(" in scrubbed
 
 
 def test_the_generators_diff_overlay_grades() -> None:
@@ -146,9 +159,11 @@ def test_the_generators_diff_overlay_grades() -> None:
     returns null for a masked position specifically to keep the mask
     identical to the single-layer paths. Without the curve it was
     the only view where a mask meant nothing."""
-    body = _region("app.js", "function renderDiffOverlay(", 900)
+    body = _region(
+        "generator_canvas.js", "function renderDiffOverlay(", 1200
+    )
 
-    assert f"{HOOK}: tokenOpacityFn" in body
+    assert f"{HOOK}: tokenOpacity" in body
 
 
 # -- analytics --
@@ -222,7 +237,9 @@ def test_a_hole_is_faint_rather_than_solid_on_both_pages() -> None:
     two are one line apart in the same function and easy to conflate,
     which is exactly what happened when the floor moved."""
     generator = _region(
-        "app.js", "function tokenOpacityFn(index, tok, masked)", 400
+        "generator_canvas.js",
+        "function tokenOpacityWithEdit(",
+        500,
     )
     analytics = _region(
         "token_viewer.js",
@@ -230,9 +247,10 @@ def test_a_hole_is_faint_rather_than_solid_on_both_pages() -> None:
         430,
     )
 
-    for body in (generator, analytics):
-        assert "if (!tok) {" in body
-        assert "return MASK_OPACITY_FLOOR;" in body
+    assert "if (!token) {" in generator
+    assert "return MASK_OPACITY_FLOOR;" in generator
+    assert "if (!tok) {" in analytics
+    assert "return MASK_OPACITY_FLOOR;" in analytics
 
 
 def test_the_shared_diff_builder_forwards_the_hook() -> None:
@@ -302,7 +320,11 @@ def test_one_helper_reads_the_choice_for_the_builder() -> None:
 
     assert 'settings.unsettledShows !== "glyph"' in helper
     for script in (
-        "app.js", "analytics.js", "token_viewer.js", "settings.js"
+        "app.js",
+        "generator_canvas.js",
+        "analytics.js",
+        "token_viewer.js",
+        "settings.js",
     ):
         assert "revealMaskCandidate" not in _source(script)
     assert _source("overlays.js").count("revealMaskCandidate") == 1
@@ -315,17 +337,20 @@ def test_the_generators_scrubbed_paths_start_the_flicker() -> None:
     """The single scrubbed layer, the run crossfade and the diff
     overlay: the three places the reveal already reached after a
     run, and so the three a cycling position has to reach."""
-    draw = _function("app.js", "function renderFrameWithTokensDraw(")
-    diff = _function("app.js", "function renderDiffOverlay(")
-
-    edited_call = (
-        "startStackedFlicker(stacked, frameIndex, editedTokens)"
+    draw = _function(
+        "generator_canvas.js", "function renderTokenFrame("
+    )
+    stacked = _function(
+        "generator_canvas.js", "function renderCrossfadedFrame("
+    )
+    diff = _function(
+        "generator_canvas.js", "function renderDiffOverlay("
     )
 
-    assert "flickerStart([{" in draw
-    assert "generatorRun.candidateSets(" in draw
-    assert "startStackedFlicker(stacked, frameIndex, tokens)" in draw
-    assert edited_call in diff
+    assert "startSingleFlicker(" in draw
+    assert "startStackedFlicker(" in stacked
+    assert "startStackedFlicker(" in diff
+    assert "stacked, frameIndex, editedTokens" in diff
 
 
 def test_every_other_generator_render_stops_it() -> None:
@@ -333,22 +358,23 @@ def test_every_other_generator_render_stops_it() -> None:
     leaves it stepping spans nobody can see, until a tick notices."""
     for anchor in (
         "function renderLiveFrame(",
-        "function renderFrame(text)",
-        "function renderTargetPlaceholder(frameIndex)",
-        "function renderFrameWithTokensDraw(",
-        "function renderDiffOverlay(",
-        "function resetRunState()",
-        "function deactivateScrubber()",
+        "function drawText(",
+        "function renderFrame(frameIndex)",
+        "function renderTargetPlaceholder(state)",
+        "function releaseOutput()",
     ):
-        assert "flickerStop();" in _function("app.js", anchor), anchor
+        body = _function("generator_canvas.js", anchor)
+        assert "stopCandidates();" in body, anchor
 
 
 def test_the_generator_cycles_after_a_run_outside_edits() -> None:
-    guard = _function("app.js", "function candidatesCycle()")
+    guard = _function(
+        "generator_canvas.js", "function candidatesCycle()"
+    )
 
-    assert 'appSettings.unsettledShows === "candidates"' in guard
-    assert "scrubberActive" in guard
-    assert "runPhase.mode === null" in guard
+    assert 'settingsState().unsettledShows === "candidates"' in guard
+    assert 'viewMode === "scrub"' in guard
+    assert "edit.mode === null" in guard
 
 
 def test_the_analytics_paths_start_and_stop_the_flicker() -> None:

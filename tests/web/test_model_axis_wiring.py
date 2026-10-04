@@ -36,6 +36,7 @@ PAGE_SCRIPTS = (
     "generator_composer.js",
     "generator_model_panel.js",
     "generator_chrome.js",
+    "generator_canvas.js",
     "menu.js",
     "analytics.js",
     "settings.js",
@@ -142,7 +143,9 @@ def test_the_menu_row_reads_the_declaration_too() -> None:
 def test_the_canvas_affordances_read_the_shape() -> None:
     """Shape rather than family, so a state-space model is not offered
     remasking controls it has no masked positions for."""
-    region = _region("app.js", "function isAppendOnly()", 400)
+    region = _region(
+        "generator_canvas.js", "function isAppendOnly()", 400
+    )
 
     assert "capabilities.generation_shape" in region
     assert '"append_only"' in region
@@ -151,7 +154,9 @@ def test_the_canvas_affordances_read_the_shape() -> None:
 def test_the_glow_reads_the_family() -> None:
     """Family rather than shape: the glow pairs are per model class,
     so a state-space model wants its own even though it appends."""
-    region = _region("app.js", "function applyTokenBirthGlow()", 500)
+    region = _region(
+        "generator_canvas.js", "function applyModel()", 500
+    )
 
     assert "capabilities.family" in region
     assert "generation_shape" not in region

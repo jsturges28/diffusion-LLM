@@ -139,7 +139,7 @@ function quietFetch(url) {
 function choose(choice) {
   return (page) => {
     page.appSettings.unsettledShows = choice;
-    page.LIVE_TOKEN_OPTIONS.revealMask = choice !== "glyph";
+    page.generatorCanvas.applySettings();
   };
 }
 
@@ -181,7 +181,9 @@ test("a streaming frame cycles the positions it changed", () => {
 
   assert.deepEqual(cycling(context), [3, 2]);
   assert.notEqual(context.flickerTimer, null);
-  const span = context.liveTokenSpans[2];
+  const span = context.flickerEntries.find(
+    (entry) => entry.position === 2
+  ).span;
   assert.equal("data-cycling" in span.attributes, true);
   context.flickerStop();
 });
@@ -272,7 +274,7 @@ test("a resume's frames cycle the same way", () => {
   context.handleDone({ type: "done", final_text: "done" });
   context.remaskEdits = [{ frame_index: 1, token_positions: [2, 3] }];
   context.truncateRunArraysAt(1);
-  context.invalidateRunMemos();
+  context.generatorCanvas.invalidate();
   context.isResuming = true;
 
   context.handleFrame(frameOf(DRAFTS[1], 0, 2));

@@ -203,7 +203,11 @@ function host(value) {
 
 // The values the overlay picker lists, as a finished run built it.
 function pickerValues(context) {
-  const list = context.overlaySelect.children.find(
+  const mount = context.document.getElementById(
+    "overlay-select-mount"
+  );
+  const select = mount.children[mount.children.length - 1];
+  const list = select.children.find(
     (child) => child.tag === "ul"
   );
   return list.children.map((item) => item.getAttribute("data-value"));
@@ -230,7 +234,7 @@ test("a finished DiffusionGemma run is offered its entropy", () => {
   // frame was the only place the page looked.
   const { context } = dgemmaRun();
 
-  assert.equal(context.entropyAvailable(), true);
+  assert.equal(context.generatorCanvas.entropyAvailable(), true);
   assert.ok(pickerValues(context).includes("entropy"));
   assert.equal(context.entropyProfileShowing(), true);
 });
@@ -269,7 +273,7 @@ test("the readout says when the profile borrowed", () => {
 
 test("the Entropy overlay colors a commit from its draft", () => {
   const { context, registry } = dgemmaRun();
-  context.overlayMode = "entropy";
+  context.generatorCanvas.setOverlayMode("entropy");
   // The stub keeps children when text is cleared, so the spans the
   // finishing render drew are dropped by hand.
   const output = registry.get("output-area");
@@ -306,7 +310,7 @@ test("an edited run's two layers each borrow their own draft", () => {
   ]);
   context.remaskEdits = [{ frame_index: 1, token_positions: [2] }];
   context.truncateRunArraysAt(1);
-  context.invalidateRunMemos();
+  context.generatorCanvas.invalidate();
   context.isResuming = true;
   context.handleFrame(diffusionFrame(7, 0, false));
   context.handleFrame(diffusionFrame(8, 0, true));
@@ -314,7 +318,7 @@ test("an edited run's two layers each borrow their own draft", () => {
 
   const layers = context.entropyProfileLayers();
 
-  assert.equal(context.runBlendActive(), true);
+  assert.equal(context.generatorCanvas.blendActive(), true);
   assert.deepEqual(host(layers.values), draftValues(7));
   assert.equal(layers.asOfStep, 1);
   assert.deepEqual(host(layers.original), draftValues(1));

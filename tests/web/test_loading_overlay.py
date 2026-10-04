@@ -54,6 +54,7 @@ STATIC = (
 )
 INDEX_HTML = STATIC / "index.html"
 APP_JS = STATIC / "app.js"
+CANVAS_JS = STATIC / "generator_canvas.js"
 
 
 def _overlay_tag() -> str:
@@ -337,9 +338,11 @@ def test_the_reservation_reads_the_declaration() -> None:
     is offered for, so the row is never held for bars it cannot
     draw."""
     region = _region("function entropyDeclared()", 300)
+    canvas = CANVAS_JS.read_text(encoding="utf-8")
 
-    assert 'declaredChannel("entropy")' in region
-    assert "ENTROPY_SHAPES" in region
+    assert "generatorCanvas.entropyDeclared()" in region
+    assert 'declaredChannel("entropy")' in canvas
+    assert "ENTROPY_SHAPES" in canvas
 
 
 def test_the_entropy_row_starts_absent_in_the_markup() -> None:

@@ -173,7 +173,7 @@ function resumeAt(context, frameIndex) {
     { frame_index: frameIndex, token_positions: [1] },
   ];
   context.truncateRunArraysAt(frameIndex);
-  context.invalidateRunMemos();
+  context.generatorCanvas.invalidate();
   context.isResuming = true;
   context.setGenerating(true);
 }
@@ -287,7 +287,7 @@ test("the crossfade moves the readout to the original run", () => {
   assert.equal(words(page), "entropy 0.30 of 0.005, 1 changing");
 
   page.registry.get("run-blend").value = "0";
-  page.context.onRunBlendInput();
+  page.registry.get("run-blend").dispatch("input");
 
   assert.equal(words(page), "entropy 0.0010 of 0.005, steady");
 });

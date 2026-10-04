@@ -86,13 +86,13 @@ test("an append branch has a baseline to compare against", () => {
   assert.equal(
     context.generatorRun.originalTokenSeries().length, 0
   );
-  assert.equal(context.diffAvailable(), true);
+  assert.equal(context.generatorCanvas.diffAvailable(), true);
 });
 
 test("the crossfade is offered once the branch exists", () => {
   const { context, registry } = branchedRun();
 
-  assert.equal(context.runBlendActive(), true);
+  assert.equal(context.generatorCanvas.blendActive(), true);
   assert.equal(registry.get("run-blend-row").hidden, false);
 });
 
@@ -101,7 +101,7 @@ test("both runs are drawn as layers, the original in full", () => {
   const last = WORDS.length - 1;
   context.outputArea.children = [];
 
-  context.renderFrameWithTokens(last);
+  context.generatorCanvas.renderFrame(last);
 
   const layers = descendants(context.outputArea).filter(
     (node) => node.classes.has("token-layer")
@@ -119,10 +119,10 @@ test("both runs are drawn as layers, the original in full", () => {
 
 test("the diff overlay draws the original layer too", () => {
   const { context } = branchedRun();
-  context.overlayMode = "diff";
+  context.generatorCanvas.setOverlayMode("diff");
   context.outputArea.children = [];
 
-  context.renderFrameWithTokens(WORDS.length - 1);
+  context.generatorCanvas.renderFrame(WORDS.length - 1);
 
   const spans = descendants(context.outputArea).filter(
     (node) => node.classes.has("token-span")
@@ -144,7 +144,7 @@ test("hovering the original layer reads the baseline", () => {
 test("the diff finds the substituted position", () => {
   const { context } = branchedRun();
 
-  const diff = context.computeDiff();
+  const diff = context.generatorCanvas.diff();
 
   assert.ok(diff.changedCount >= 1, "the diff saw no change");
 });

@@ -107,11 +107,26 @@ function generator(signals, withForgetting) {
 // The values the real overlay picker lists, built the way a finished
 // run builds it.
 function pickerValues(context) {
-  context.buildOverlaySelect();
-  const list = context.overlaySelect.children.find(
+  context.generatorCanvas.rebuildOverlaySelect();
+  const mount = context.document.getElementById(
+    "overlay-select-mount"
+  );
+  const select = mount.children[mount.children.length - 1];
+  const list = select.children.find(
     (child) => child.tag === "ul"
   );
   return list.children.map((item) => item.getAttribute("data-value"));
+}
+
+function drawnSpans(element) {
+  const spans = [];
+  for (const child of element.children || []) {
+    if (child.classList.contains("token-span")) {
+      spans.push(child);
+    }
+    spans.push(...drawnSpans(child));
+  }
+  return spans;
 }
 
 // -- the generator: when the option appears --
@@ -119,7 +134,7 @@ function pickerValues(context) {
 test("a model that declares forgetting offers it", () => {
   const context = generator([FORGETTING], true);
 
-  assert.equal(context.forgettingAvailable(), true);
+  assert.equal(context.generatorCanvas.forgettingAvailable(), true);
   assert.ok(pickerValues(context).includes("forgetting"));
 });
 
@@ -128,14 +143,14 @@ test("a model that declares nothing never offers it", () => {
   // the key, so nothing says what the number means.
   const context = generator([], true);
 
-  assert.equal(context.forgettingAvailable(), false);
+  assert.equal(context.generatorCanvas.forgettingAvailable(), false);
   assert.ok(!pickerValues(context).includes("forgetting"));
 });
 
 test("a declaration with nothing recorded is not offered", () => {
   const context = generator([FORGETTING], false);
 
-  assert.equal(context.forgettingAvailable(), false);
+  assert.equal(context.generatorCanvas.forgettingAvailable(), false);
 });
 
 test("a declaration of another shape is refused", () => {
@@ -146,23 +161,24 @@ test("a declaration of another shape is refused", () => {
   });
   const context = generator([shaped], true);
 
-  assert.equal(context.forgettingAvailable(), false);
+  assert.equal(context.generatorCanvas.forgettingAvailable(), false);
 });
 
 // -- the generator: what it draws, reads and saves --
 
 test("each token is coloured by its own value", () => {
   const context = generator([FORGETTING], true);
-  context.overlayMode = "forgetting";
-  const token = context.generatorRun.framePositions()[1];
+  const output = context.document.getElementById("output-area");
+  context.generatorCanvas.setOverlayMode("forgetting");
+  output.children = [];
+  context.generatorCanvas.renderFrame(
+    context.generatorRun.frameCount() - 1
+  );
+  const spans = drawnSpans(output);
 
   assert.equal(
-    context.tokenColorAt(1, token, false),
+    spans[1].style.color,
     context.forgettingColor(VALUES[1])
-  );
-  assert.equal(
-    context.tokenColorAt(0, { t: "x", m: false, id: 1 }, false),
-    null
   );
 });
 
@@ -170,9 +186,9 @@ test("the strip reads the value while the overlay is on", () => {
   const context = generator([FORGETTING], true);
   const token = context.generatorRun.framePositions()[1];
 
-  context.overlayMode = "forgetting";
+  context.generatorCanvas.setOverlayMode("forgetting");
   assert.equal(context.metricsExtra(1, token), "Forgetting: 0.310");
-  context.overlayMode = "entropy";
+  context.generatorCanvas.setOverlayMode("entropy");
   assert.equal(context.metricsExtra(1, token), "");
 });
 

@@ -293,12 +293,12 @@ function chosenId(popover) {
 test("an edited run opens on the run the crossfade favours", () => {
   const { context, registry } = editedRun();
 
-  context.runBlend = 0.2;
+  context.generatorCanvas.setBlend(0.2);
   const original = popoverAt(context, registry, 3, 1);
   assert.equal(titleOf(original), "Position 2: Original");
   assert.deepEqual(rowIds(original), [301, 7]);
 
-  context.runBlend = 0.8;
+  context.generatorCanvas.setBlend(0.8);
   const edited = popoverAt(context, registry, 3, 1);
   assert.equal(titleOf(edited), "Position 2: Edited");
   assert.deepEqual(rowIds(edited), [101, 7]);
@@ -306,7 +306,7 @@ test("an edited run opens on the run the crossfade favours", () => {
 
 test("the pager turns to the other run, marking its own token", () => {
   const { context, registry } = editedRun();
-  context.runBlend = 0.2;
+  context.generatorCanvas.setBlend(0.2);
   const popover = popoverAt(context, registry, 3, 1);
   assert.equal(pagerTo(popover, "Original").disabled, true);
   assert.equal(chosenId(popover), 301);
@@ -321,7 +321,7 @@ test("the pager turns to the other run, marking its own token", () => {
 
 test("before the edit there is one run, so no pager", () => {
   const { context, registry } = editedRun();
-  context.runBlend = 0.2;
+  context.generatorCanvas.setBlend(0.2);
 
   const popover = popoverAt(context, registry, 1, 1);
 
@@ -334,7 +334,7 @@ test("the frame the edit branched at already has two runs", () => {
   // captured yet, so there is no pager to it, but the original's
   // frame 2 is its own and reads as of its step 1.
   const { context, registry } = editedRun();
-  context.runBlend = 0.2;
+  context.generatorCanvas.setBlend(0.2);
 
   const popover = popoverAt(context, registry, 2, 1);
 
@@ -348,7 +348,7 @@ test("the runs part at the earliest edit, whatever the order", () => {
   context.remaskEdits = [
     { frame_index: 3, token_positions: [2] }, EDIT_AT_2,
   ];
-  context.runBlend = 0.2;
+  context.generatorCanvas.setBlend(0.2);
 
   const popover = popoverAt(context, registry, 2, 1);
 
@@ -360,7 +360,7 @@ test("past its end, the Original page reads the original's last frame", () => {
   // crossfade's pre-edit layer holds the original's final frame
   // there, and the page names that frame as its own step.
   const { context, registry } = editedRun({ frames: 5 });
-  context.runBlend = 0.2;
+  context.generatorCanvas.setBlend(0.2);
 
   const popover = popoverAt(context, registry, 6, 1);
 
@@ -372,7 +372,7 @@ test("where the favoured run has nothing, the popover stays closed", () => {
   // The original's candidates would describe tokens that are not the
   // ones under the pointer.
   const { context, registry } = editedRun({ captured: null });
-  context.runBlend = 0.8;
+  context.generatorCanvas.setBlend(0.8);
 
   const popover = popoverAt(context, registry, 3, 1);
 
@@ -393,7 +393,7 @@ test("an edited run without its baseline has one page", () => {
   storage.setItem(context.SESSION_KEY, JSON.stringify(stored));
   context.generatorRun.reset();
   assert.equal(context.restoreSessionState(), true);
-  context.runBlend = 0.2;
+  context.generatorCanvas.setBlend(0.2);
 
   const popover = popoverAt(context, registry, 3, 1);
 
@@ -403,7 +403,7 @@ test("an edited run without its baseline has one page", () => {
 
 test("a page with nothing to turn to has no pager", () => {
   const { context, registry } = editedRun({ captured: null });
-  context.runBlend = 0.2;
+  context.generatorCanvas.setBlend(0.2);
 
   const popover = popoverAt(context, registry, 3, 1);
 
@@ -539,7 +539,7 @@ test("a new run's Original page never shows the last run's", () => {
   }
   context.handleDone({ type: "done", final_text: WORDS.join("") });
   context.remaskEdits = [EDIT_AT_2];
-  context.runBlend = 0.2;
+  context.generatorCanvas.setBlend(0.2);
 
   const popover = popoverAt(context, registry, 3, 1);
 
@@ -665,7 +665,7 @@ test("over the quota, the pre-edit candidates give way first", () => {
     ),
     [0, 2]
   );
-  context.runBlend = 0.2;
+  context.generatorCanvas.setBlend(0.2);
   assert.equal(popoverAt(context, registry, 3, 1).hidden, true);
 });
 
@@ -763,20 +763,19 @@ test("nothing cycles mid-edit", () => {
 });
 
 test("cycling needs a finished run the user is not editing", () => {
-  // The streaming canvas never reaches the scrubbed path, so these
-  // guards are what hold if some later path does.
+  // Drive the public render boundary: generation and edit phase are
+  // page facts, while scrub/live ownership is private to the canvas.
   const { context } = finishedRun();
   chooseCandidates(context);
-  assert.equal(context.candidatesCycle(), true);
+  context.generatorCanvas.renderFrame(3);
+  assert.ok(context.flickerEntries.length > 0);
 
-  context.scrubberActive = false;
-  assert.equal(context.candidatesCycle(), false);
-  context.scrubberActive = true;
   context.isGenerating = true;
-  assert.equal(context.candidatesCycle(), false);
+  context.generatorCanvas.renderFrame(3);
+  assert.equal(context.flickerEntries.length, 0);
   context.isGenerating = false;
   context.beginEditSession();
-  assert.equal(context.candidatesCycle(), false);
+  assert.equal(context.flickerEntries.length, 0);
 });
 
 test("nothing cycles with motion reduced", () => {
@@ -805,7 +804,7 @@ test("each crossfade layer cycles its own run's candidates", () => {
   context.handleMessage(branchMessage([1, 2]));
   context.handleDone({ type: "done", final_text: WORDS.join("") });
   chooseCandidates(context);
-  context.runBlend = 0.5;
+  context.generatorCanvas.setBlend(0.5);
 
   const cycling = cyclingAt(context, 3);
 
