@@ -55,6 +55,7 @@ const GENERATOR_SCRIPTS = [
   "run_phases.js",
   "download_client.js",
   "download_toast.js",
+  "generator_composer.js",
   "app.js",
 ];
 
@@ -147,6 +148,7 @@ function makeElement(id) {
       },
     },
     value: "",
+    files: [],
     checked: false,
     disabled: false,
     hidden: false,

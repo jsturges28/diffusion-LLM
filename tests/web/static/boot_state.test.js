@@ -25,7 +25,14 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { loadPage, ANALYTICS_SCRIPTS } = require("./dom_stub.js");
+const {
+  loadPage,
+  FakeSocket,
+  ANALYTICS_SCRIPTS,
+} = require("./dom_stub.js");
+
+class OpenSocket extends FakeSocket {}
+OpenSocket.OPEN = 1;
 
 const SMOL = {
   id: "smollm3",
@@ -147,9 +154,47 @@ test("the resident model is known at first paint", () => {
 
   assert.equal(page.sandbox.activeModelId, "smollm3");
   assert.equal(page.sandbox.activeDevice, "cuda");
-  assert.equal(page.sandbox.activeContextLength, 65536);
   assert.equal(page.sandbox.gpuPresent, true);
 });
+
+test("the composed context readout uses the boot window",
+  async () => {
+    const page = loadPage({
+      WebSocket: OpenSocket,
+      bootState: bootState(),
+      fetchImpl: recordingFetch([]),
+    });
+    const socket =
+      FakeSocket.opened[FakeSocket.opened.length - 1];
+    const input = page.registry.get("prompt-input");
+    input.value = "Explain diffusion";
+
+    input.dispatch("input");
+    await new Promise((resolve) => setTimeout(resolve, 380));
+
+    const request = JSON.parse(socket.sent[0]);
+    assert.deepEqual(request, {
+      type: "count_prompt",
+      text: "Explain diffusion",
+      thinking: false,
+      request_id: 1,
+    });
+    socket.deliver({
+      type: "count_prompt_result",
+      request_id: 1,
+      count: 65400,
+      truncated: false,
+    });
+    assert.equal(
+      page.registry.get("prompt-context-count").textContent,
+      "65,400 / 65,536 tokens"
+    );
+    assert.equal(
+      page.registry.get("prompt-context-note").textContent,
+      "prompt + 256 output exceeds the window"
+    );
+  }
+);
 
 test("the entropy row is settled for the resident model", () => {
   // The conditional reservation: held for a model that declares

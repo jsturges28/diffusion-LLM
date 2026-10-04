@@ -33,6 +33,7 @@ STATIC = (
 )
 PAGE_SCRIPTS = (
     "app.js",
+    "generator_composer.js",
     "menu.js",
     "analytics.js",
     "settings.js",
@@ -160,10 +161,11 @@ def test_the_prompt_copy_reads_the_input_mode() -> None:
     """A base model continues your text rather than answering it, and
     the box should say which. Read off the declared mode, so the next
     base checkpoint is described right without an edit here."""
-    region = _region("app.js", "function applyPromptMode()", 500)
+    region = _region("app.js", "function applyModelInfo(info)", 1500)
 
     assert "capabilities.input_mode" in region
-    assert "PROMPT_MODE_COPY" in region
+    assert "generatorComposer.configure" in region
+    assert "PROMPT_MODE_COPY" in _code("generator_composer.js")
 
 
 def test_the_prompt_count_shows_no_inequality() -> None:
@@ -171,7 +173,7 @@ def test_the_prompt_count_shows_no_inequality() -> None:
     which answered the wrong question. The number a user tunes against
     the window has to be the whole prompt's, and a floor is unusable
     for that."""
-    code = _code("app.js")
+    code = _code("generator_composer.js")
 
     assert "\\u2265" not in code
     assert "\u2265" not in code
@@ -184,7 +186,9 @@ def test_a_truncated_count_still_warns() -> None:
     proof the prompt is over, because the cap sits far past any window
     here."""
     region = _region(
-        "app.js", "function applyPromptContextWarning(", 700
+        "generator_composer.js",
+        "function applyPromptContextWarning(",
+        700,
     )
 
     assert "truncated ||" in region
@@ -196,7 +200,7 @@ def test_the_two_context_failures_look_different() -> None:
     css = (STATIC / "style.css").read_text(encoding="utf-8")
 
     assert ".prompt-context.is-over" in css
-    assert "is-over" in _code("app.js")
+    assert "is-over" in _code("generator_composer.js")
 
 
 def test_a_clipped_status_message_carries_its_full_text() -> None:

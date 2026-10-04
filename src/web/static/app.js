@@ -17,11 +17,6 @@ var activeDevice = null; // "cuda" | "cpu": the active model's device
 // boot beside activeDevice, which is sound because a model switch
 // reloads the page, so the two can never describe different models.
 var activeTokenizer = {};
-// Tokens the resident checkpoint can attend to at once, or null when
-// it reported none readable (see describe_context_length). Captured at
-// boot beside activeTokenizer, for the same reason: a model switch
-// reloads the page, so this can never describe a different model.
-var activeContextLength = null;
 var gpuPresent = false; // whether a usable GPU was detected
 var suppressReconnect = false;
 
@@ -31,49 +26,6 @@ var paramTooltips = {}; // name -> tooltip span
 
 // ---- DOM refs ----
 
-var promptInput =
-  document.getElementById("prompt-input");
-var promptLabel =
-  document.getElementById("prompt-label");
-// The "?" beside the label, shown only for a mode with a hint.
-var promptModeInfo =
-  document.getElementById("prompt-mode-info");
-var promptModeTip =
-  document.getElementById("prompt-mode-tip");
-var promptContextRow =
-  document.getElementById("prompt-context");
-var promptContextCount =
-  document.getElementById("prompt-context-count");
-var promptContextNote =
-  document.getElementById("prompt-context-note");
-var promptHistoryGroup =
-  document.getElementById("prompt-history");
-var btnPromptImport =
-  document.getElementById("btn-prompt-import");
-var promptFileInput =
-  document.getElementById("prompt-file-input");
-var importFileLabel =
-  document.getElementById("import-file-label");
-var btnImportConfirm =
-  document.getElementById("btn-import-confirm");
-var btnImportCancel =
-  document.getElementById("btn-import-cancel");
-var btnPromptHistory =
-  document.getElementById("btn-prompt-history");
-var promptHistoryNav =
-  document.getElementById("prompt-history-nav");
-var btnHistPrev =
-  document.getElementById("btn-hist-prev");
-var btnHistNext =
-  document.getElementById("btn-hist-next");
-var btnHistDelete =
-  document.getElementById("btn-hist-delete");
-var promptHistoryCounter =
-  document.getElementById("prompt-history-counter");
-var btnHistConfirm =
-  document.getElementById("btn-hist-confirm");
-var btnHistCancel =
-  document.getElementById("btn-hist-cancel");
 var btnGenerate =
   document.getElementById("btn-generate");
 var btnGenerateLabel =
@@ -100,6 +52,15 @@ var statusResourceValue =
   document.getElementById("status-resource-value");
 var statusMessage =
   document.getElementById("status-message");
+var generatorComposer = generatorComposerCreate({
+  onSubmit: submitComposer,
+  onDraftChanged: composerDraftChanged,
+  reportStatus: setPromptImportStatus,
+  readThinking: composerThinking,
+  readOutputBudget: composerOutputBudget,
+  isCountReady: composerCountReady,
+  sendCountPrompt: sendComposerCount,
+});
 var statusStack =
   document.getElementById("status-stack");
 var loadingOverlay =
@@ -468,22 +429,6 @@ var lastSavedRunId = null;
 // stops a second window's stale edit from erasing this one. Null means
 // we have not saved this run yet.
 var lastSavedRevision = null;
-// Prompt history (localStorage, per-browser): most-recent-first. While
-// browsing, the box is read-only and the pre-browse text is held in
-// promptHistoryDraft so Cancel can restore it.
-var PROMPT_HISTORY_KEY = "diffusion_prompt_history";
-var PROMPT_HISTORY_MAX = 30;
-var promptHistory = [];
-var promptHistoryIndex = -1;
-var promptHistoryDraft = null;
-var promptHistoryActive = false;
-// Whether the trash button has had its first press. The label names
-// what the second press will do, so the state is visible to a
-// screen reader as well as in the button's colour.
-var promptHistoryDeleteArmed = false;
-var PROMPT_HISTORY_DELETE_LABEL = "Delete this prompt from history";
-var PROMPT_HISTORY_DELETE_ARMED_LABEL =
-  "Press again to delete this prompt";
 // Snapshot of the complete run taken when Edit Frames is entered.
 // Partial resumes ("Run to Here") truncate the live run mid-way, so
 // exiting restores this to avoid stranding the user on an
@@ -1889,7 +1834,7 @@ function handleMessage(data) {
       handleProbeResult(data);
       break;
     case "count_prompt_result":
-      handleCountPromptResult(data);
+      generatorComposer.handleCountResult(data);
       break;
     case "resource_sample":
       handleResourceSample(data);
@@ -2065,7 +2010,7 @@ function handleModelStatus(data) {
     // The first count the page can make: the prompt was there from
     // boot (a default, a restored session, or a saved draft), but only
     // a ready worker can tokenize it.
-    promptTextChanged();
+    generatorComposer.textChanged();
     // Only the overlay waits. The model is usable the moment the
     // worker says so, and holding the Generate button for a
     // cosmetic beat would be the wrong trade. Re-checking readiness
@@ -5489,303 +5434,9 @@ function buildOverlaySelect() {
   });
 }
 
-// ---- Prompt history (localStorage) ----
-
-function loadPromptHistory() {
-  try {
-    var raw = localStorage.getItem(PROMPT_HISTORY_KEY);
-    if (!raw) {
-      return;
-    }
-    var parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) {
-      promptHistory = parsed.filter(function (p) {
-        return typeof p === "string" && p.length > 0;
-      });
-    }
-  } catch (_e) {
-    // Unavailable/corrupt storage: start with an empty history.
-    promptHistory = [];
-  }
-}
-
-function savePromptHistoryStore() {
-  // Write-through to the server (see persistSet) so history survives
-  // desktop-app restarts, not just the current window origin.
-  persistSet(PROMPT_HISTORY_KEY, JSON.stringify(promptHistory));
-}
-
-// Record a used prompt at the front (most recent first), de-duplicated
-// and capped. Called when a run starts.
-function pushPromptHistory(text) {
-  var prompt = (text || "").trim();
-  if (!prompt) {
-    return;
-  }
-  promptHistory = promptHistory.filter(function (p) {
-    return p !== prompt;
-  });
-  promptHistory.unshift(prompt);
-  if (promptHistory.length > PROMPT_HISTORY_MAX) {
-    promptHistory.length = PROMPT_HISTORY_MAX;
-  }
-  savePromptHistoryStore();
-  updatePromptHistoryUI();
-}
-
-// Show the history control only when there is something to browse.
-function updatePromptHistoryUI() {
-  if (promptHistoryGroup) {
-    promptHistoryGroup.hidden = promptHistory.length === 0;
-  }
-}
-
-// Numbered in the order the prompts were typed, oldest as 1, so the
-// count rises to the right the way the arrows move: browsing opens on
-// the most recent prompt at N / N, the right arrow (newer) climbs
-// back toward it and the left arrow (older) walks down.
-//
-// The store is most-recent-first, so this is not the index plus one.
-// It used to be, which made the newest prompt 1 / N and left the
-// right arrow lowering a number while moving forward in time. The
-// arrows were never the problem; the numbering direction was.
-function _setPromptHistoryCounter() {
-  if (promptHistoryCounter) {
-    promptHistoryCounter.textContent =
-      (promptHistory.length - promptHistoryIndex)
-      + " / " + promptHistory.length;
-  }
-}
-
-// Enter browse mode: hold the current text as a draft, show the most
-// recent prompt, and make the box read-only while browsing.
-function enterPromptHistory() {
-  if (promptHistory.length === 0 || promptHistoryActive) {
-    return;
-  }
-  promptHistoryActive = true;
-  promptHistoryDraft = promptInput.value;
-  promptHistoryIndex = 0;
-  promptInput.value = promptHistory[0];
-  promptInput.readOnly = true;
-  promptTextChanged();
-  if (btnPromptHistory) {
-    btnPromptHistory.classList.add("is-active");
-  }
-  if (promptHistoryNav) {
-    promptHistoryNav.hidden = false;
-  }
-  _setPromptHistoryCounter();
-}
-
-// Step through history (delta +1 = older, -1 = newer), wrapping.
-function cyclePromptHistory(delta) {
-  if (!promptHistoryActive || promptHistory.length === 0) {
-    return;
-  }
-  // The first press armed the trash for the prompt it was on.
-  setPromptHistoryDeleteArmed(false);
-  var n = promptHistory.length;
-  promptHistoryIndex =
-    (((promptHistoryIndex + delta) % n) + n) % n;
-  promptInput.value = promptHistory[promptHistoryIndex];
-  _setPromptHistoryCounter();
-  // Browsing swaps the text without an input event, so the readout has
-  // to be told; otherwise it describes the prompt left behind.
-  promptTextChanged();
-}
-
-// Reset the browse UI without changing the box text. Shared by commit
-// and by starting a generation from a browsed prompt.
-function _exitPromptHistoryUI() {
-  setPromptHistoryDeleteArmed(false);
-  promptHistoryActive = false;
-  promptHistoryDraft = null;
-  promptHistoryIndex = -1;
-  if (promptInput) {
-    promptInput.readOnly = false;
-  }
-  if (btnPromptHistory) {
-    btnPromptHistory.classList.remove("is-active");
-  }
-  if (promptHistoryNav) {
-    promptHistoryNav.hidden = true;
-  }
-}
-
-function confirmPromptHistory() {
-  // Keep the shown prompt; return to normal (editable) input.
-  _exitPromptHistoryUI();
-  promptInput.focus();
-}
-
-function cancelPromptHistory() {
-  // Restore the text the user had before browsing.
-  if (promptHistoryDraft !== null) {
-    promptInput.value = promptHistoryDraft;
-  }
-  _exitPromptHistoryUI();
-  promptTextChanged();
-}
-
-// Two presses delete, so a stray click cannot lose a prompt the user
-// may have nowhere else. The first arms the button; moving off it,
-// focus leaving it, stepping to another prompt or ending browsing
-// disarms it, so the second press only counts on the prompt the
-// first one was made on.
-function pressPromptHistoryDelete() {
-  if (!promptHistoryActive) {
-    return;
-  }
-  if (!promptHistoryDeleteArmed) {
-    setPromptHistoryDeleteArmed(true);
-    return;
-  }
-  setPromptHistoryDeleteArmed(false);
-  deleteShownPromptHistory();
-}
-
-function setPromptHistoryDeleteArmed(armed) {
-  promptHistoryDeleteArmed = armed;
-  if (!btnHistDelete) {
-    return;
-  }
-  var label = armed
-    ? PROMPT_HISTORY_DELETE_ARMED_LABEL
-    : PROMPT_HISTORY_DELETE_LABEL;
-  btnHistDelete.classList.toggle("is-armed", armed);
-  btnHistDelete.title = label;
-  btnHistDelete.setAttribute("aria-label", label);
-}
-
-// Drop the prompt on show and move to the next older one, or to the
-// newer one when the oldest went. When the last one goes there is
-// nothing left to browse, so browsing ends the way the cross ends it,
-// with whatever the user had typed put back.
-function deleteShownPromptHistory() {
-  var index = promptHistoryIndex;
-  if (index < 0 || index >= promptHistory.length) {
-    return;
-  }
-  promptHistory.splice(index, 1);
-  savePromptHistoryStore();
-  if (promptHistory.length === 0) {
-    cancelPromptHistory();
-    updatePromptHistoryUI();
-    promptInput.focus();
-    return;
-  }
-  promptHistoryIndex = Math.min(index, promptHistory.length - 1);
-  promptInput.value = promptHistory[promptHistoryIndex];
-  _setPromptHistoryCounter();
-  promptTextChanged();
-}
-
-// ---- Import a prompt from a file ----
-
-// Checked against file.size before a byte is read, so an accidentally
-// chosen video is refused rather than pulled into memory first. Text
-// prompts are kilobytes; this is orders of magnitude above any real
-// one and still bounds the read.
-var PROMPT_IMPORT_BYTES_MAX = 1048576;
-
-// What is inserted, after decoding. Matched to the worker's counting
-// cap on purpose: an import the box accepts is therefore always
-// counted in full, so the readout under it is never a floor.
-var PROMPT_IMPORT_CHARS_MAX = 200000;
-
-// The file waiting on the replace confirmation, or null when nothing
-// is pending. Held rather than re-read because the file input is
-// cleared as soon as it is read, so there would be nothing to go back
-// to if the confirmation were answered later.
-var pendingImportFile = null;
-
-// Start an import: refuse what cannot be read, confirm what would
-// overwrite work, and otherwise go straight in. The check order is
-// deliberate: a file that will be refused should be refused without
-// first asking the user whether to discard their prompt for it.
-function beginPromptImport(file) {
-  if (!file) {
-    return;
-  }
-  if (!isImportableTextFile(file)) {
-    setPromptImportStatus(
-      "Only .txt and .md files can be imported.", true
-    );
-    return;
-  }
-  if (file.size > PROMPT_IMPORT_BYTES_MAX) {
-    setPromptImportStatus(
-      "That file is too large to import ("
-      + formatKilobytes(file.size)
-      + "; the limit is "
-      + formatKilobytes(PROMPT_IMPORT_BYTES_MAX)
-      + ").",
-      true
-    );
-    return;
-  }
-  if (promptInput.value.trim() === "") {
-    readPromptFile(file);
-    return;
-  }
-  pendingImportFile = file;
-  if (importFileLabel) {
-    importFileLabel.textContent = file.name;
-  }
-  openModal(modalImport);
-}
-
-// Read the file and put it in the box. Entirely client-side: the
-// contents are the user's prompt, and routing them through the server
-// would mean uploading a file to have it handed straight back.
-function readPromptFile(file) {
-  file
-    .text()
-    .then(function (text) {
-      applyImportedPrompt(file, text);
-    })
-    .catch(function () {
-      // An unreadable file is an operating error, not a broken
-      // invariant: the file may have been moved or a permission
-      // withdrawn between the picker and the read.
-      setPromptImportStatus(
-        "Could not read " + file.name + ".", true
-      );
-    });
-}
-
-function applyImportedPrompt(file, text) {
-  // Choosing a file is a decision to use its text, which settles the
-  // question browse mode was asking. Left active, it would also hold
-  // the box read-only over text the user had just chosen.
-  if (promptHistoryActive) {
-    _exitPromptHistoryUI();
-  }
-  // Markdown goes in raw. The model reads it fine, and stripping the
-  // syntax would mean the prompt that ran was not the file's text.
-  var clipped = text.slice(0, PROMPT_IMPORT_CHARS_MAX);
-  promptInput.value = clipped;
-  promptTextChanged();
-  onParamFormChanged();
-  var message = "Imported " + file.name;
-  if (clipped.length < text.length) {
-    message +=
-      ", truncated to "
-      + PROMPT_IMPORT_CHARS_MAX.toLocaleString()
-      + " characters";
-  }
-  setPromptImportStatus(message + ".", false);
-  promptInput.focus();
-}
-
-function confirmPromptImport() {
-  var file = pendingImportFile;
-  closeModal(modalImport);
-  if (file) {
-    readPromptFile(file);
-  }
-}
+// Prompt composition lives in generator_composer.js. The page passes
+// model-panel values and transports its count requests, and otherwise
+// reaches it only through the controller API created above.
 
 // The resting status line, which is where this page spells out
 // results. An import is a one-off action with an outcome to report,
@@ -5805,139 +5456,16 @@ function setPromptImportStatus(text, danger) {
   }
 }
 
-function formatKilobytes(bytes) {
-  return Math.round(bytes / 1024).toLocaleString() + " KB";
-}
-
-// The picker enforces its own accept list, so this is really for the
-// drop path, where anything on the desktop can arrive. A PDF read as
-// text would fill the prompt with binary rather than fail, which is
-// worse than a refusal.
-//
-// The extension is checked as well as the MIME type because platforms
-// disagree about Markdown: some report text/markdown, some text/plain,
-// and some report nothing at all.
-function isImportableTextFile(file) {
-  var name = (file.name || "").toLowerCase();
-  var extensions = [".txt", ".md", ".markdown"];
-  for (var i = 0; i < extensions.length; i++) {
-    if (name.endsWith(extensions[i])) {
-      return true;
-    }
-  }
-  return (file.type || "").indexOf("text/") === 0;
-}
-
-// Whether a drag carries something worth accepting. Types are checked
-// rather than filenames because a drag exposes no name until it is
-// dropped, and an empty type is allowed through since some platforms
-// report none for a plain text file.
-function dragCarriesFile(e) {
-  var transfer = e.dataTransfer;
-  if (!transfer) {
-    return false;
-  }
-  var types = transfer.types || [];
-  for (var i = 0; i < types.length; i++) {
-    if (types[i] === "Files") {
-      return true;
-    }
-  }
-  return false;
-}
-
 // ---- Context window readout ----
 
-// How long the prompt has to sit still before a count goes out.
-// Slower than the typed-token preview's debounce because nothing waits
-// on this: the readout is a running total the user glances at, not a
-// step in an interaction they are mid-way through.
-var PROMPT_COUNT_DEBOUNCE_MS = 350;
-
-// Monotonic request id and the pending timer. Its own counter rather
-// than the typed preview's, because the two are answered independently
-// and either can outrun the other.
-var promptCountRequest = 0;
-var promptCountTimer = null;
-// The newest accepted answer: {count, truncated, thinking}, or null
-// when nothing has been counted yet. Null is distinct from a count of
-// zero: one means "unknown", the other means "the box is empty".
-// ``thinking`` records which template the count was taken under, so a
-// later toggle can tell a stale number from a current one.
-var promptCountLatest = null;
-// The flag the in-flight request went out with, carried into the
-// answer. Only the newest request is ever accepted, so the newest sent
-// value is the one that describes it.
-var promptCountThinkingSent = false;
-
-// The prompt text changed by any route: typing, history, import, or a
-// restored session. Schedules a count and clears the stale one, since
-// the old number describes text no longer on screen.
-function promptTextChanged() {
-  promptCountLatest = null;
-  renderPromptContext();
-  if (promptCountTimer !== null) {
-    clearTimeout(promptCountTimer);
-  }
-  promptCountTimer = setTimeout(
-    requestPromptCount, PROMPT_COUNT_DEBOUNCE_MS
-  );
+// These are the composer's only reads into the schema-driven model
+// panel. Keeping the callbacks here leaves parameter ownership in the
+// page until the later model-panel controller slice.
+function composerThinking() {
+  return Boolean(getParamValues().thinking);
 }
 
-// Ask the worker how many tokens the templated prompt occupies. The
-// count has to come from the worker rather than be estimated here:
-// only it holds the tokenizer and the chat template, and the template
-// is most of what separates a character count from the truth.
-function requestPromptCount() {
-  promptCountTimer = null;
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    return;
-  }
-  var text = promptInput ? promptInput.value : "";
-  // The flag changes which template is applied, so the count has to be
-  // taken under the one the next run will actually use.
-  var thinking = !!getParamValues().thinking;
-  if (text === "") {
-    promptCountLatest = {
-      count: 0,
-      truncated: false,
-      thinking: thinking,
-    };
-    renderPromptContext();
-    return;
-  }
-  promptCountRequest += 1;
-  promptCountThinkingSent = thinking;
-  ws.send(JSON.stringify({
-    type: "count_prompt",
-    text: text,
-    thinking: thinking,
-    request_id: promptCountRequest,
-  }));
-}
-
-// Accept only the newest request's answer. An older reply arriving
-// late describes a prompt that has since been edited, and showing it
-// would leave the readout disagreeing with the box above it.
-function handleCountPromptResult(msg) {
-  if (msg.request_id !== promptCountRequest) {
-    return;
-  }
-  promptCountLatest = {
-    count: Number(msg.count) || 0,
-    truncated: !!msg.truncated,
-    thinking: promptCountThinkingSent,
-  };
-  renderPromptContext();
-}
-
-// The tokens this run will generate, which the prompt has to share the
-// window with. Named per model: LLaDA sizes a fixed canvas with
-// gen_length, the other two decode up to max_new_tokens.
-//
-// Returns 0 when unreadable, so the warning falls back to comparing
-// the prompt alone against the window rather than vanishing.
-function outputBudgetTokens() {
+function composerOutputBudget() {
   var values = getParamValues();
   var budget = values.gen_length;
   if (typeof budget !== "number" || !isFinite(budget)) {
@@ -5949,67 +5477,33 @@ function outputBudgetTokens() {
   return Math.max(0, Math.round(budget));
 }
 
-// Paint the readout from the cached count. Split from requesting one
-// because the warning also depends on the output budget, so changing a
-// parameter must move it without re-counting an unchanged prompt.
-function renderPromptContext() {
-  if (!promptContextRow || !promptContextCount) {
-    return;
-  }
-  if (promptCountLatest === null) {
-    // Emptied, not removed. This row sits directly under the prompt
-    // box and only a ready worker can produce the count, so taking
-    // it out of the layout means everything below the box drops a
-    // step the moment the first count lands, on every page load.
-    promptContextRow.classList.add("is-empty");
-    return;
-  }
-  var count = promptCountLatest.count;
-  // A plain number, both figures the same shape. This used to prefix a
-  // truncated count with an inequality sign, which answered the wrong
-  // question: the number you are tuning against the window has to be
-  // the whole prompt's, and a floor is unusable for that.
-  var text = count.toLocaleString();
-  if (activeContextLength !== null) {
-    text += " / " + activeContextLength.toLocaleString();
-  }
-  text += count === 1 ? " token" : " tokens";
-  promptContextCount.textContent = text;
-  promptContextRow.classList.remove("is-empty");
-  applyPromptContextWarning(count, promptCountLatest.truncated);
+function composerCountReady() {
+  return Boolean(
+    ws
+    && ws.readyState === WebSocket.OPEN
+  );
 }
 
-// Warn when the prompt plus the output budget will not fit. Two
-// distinct failures, worth distinct wording and distinct colors,
-// because they no longer behave alike: a prompt that already exceeds
-// the window is refused, while one that only exceeds it once the
-// output is added runs and is truncated part-way.
-//
-// ``truncated`` means the worker stopped reading at its cap, so the
-// count is short of the real one. The cap sits far past any window
-// here, so hitting it is itself proof the prompt is over: treating it
-// as a number to compare would read as "fits", which is the bug this
-// replaces.
-function applyPromptContextWarning(count, truncated) {
-  var note = "";
-  var over = false;
-  if (activeContextLength !== null) {
-    var budget = outputBudgetTokens();
-    if (truncated || count > activeContextLength) {
-      note = "over the context window";
-      over = true;
-    } else if (count + budget > activeContextLength) {
-      note =
-        "prompt + "
-        + budget.toLocaleString()
-        + " output exceeds the window";
-    }
+function sendComposerCount(payload) {
+  if (!composerCountReady()) {
+    return;
   }
-  if (promptContextNote) {
-    promptContextNote.textContent = note;
+  ws.send(JSON.stringify(payload));
+}
+
+function submitComposer() {
+  // Enter runs a generation; in the finalized "New Run" state it is
+  // a no-op so it cannot wipe the canvas unexpectedly.
+  if (!editedRunSaved) {
+    startGeneration();
   }
-  promptContextRow.classList.toggle("is-warning", note !== "");
-  promptContextRow.classList.toggle("is-over", over);
+}
+
+function composerDraftChanged() {
+  // The controller has already stored the prompt member. Keep the
+  // parameter side of the shared form-state record in step with it.
+  saveParamState();
+  updateParamDefaultsButton();
 }
 
 // ---- Persistent UI settings (localStorage) ----
@@ -7752,13 +7246,7 @@ function setGenerating(active) {
   // (and whenever the model is not ready, params are invalid, or a
   // save is completing) -- centralized in updateGenerateButton.
   updateGenerateButton();
-  promptInput.disabled = active;
-  // Follows the prompt box it writes into. A disabled textarea already
-  // refuses a drop, so leaving the button live would be the one route
-  // that could still overwrite a prompt mid-run.
-  if (btnPromptImport) {
-    btnPromptImport.disabled = active;
-  }
+  generatorComposer.setDisabled(active);
   toggleExperimental.disabled = active;
   setModelSelectDisabled(active);
   var keys = Object.keys(paramInputs);
@@ -8261,10 +7749,9 @@ function resetRunState() {
 // finalized (Generate has become "New Run"). Clears the canvas and the
 // prompt box (revealing its placeholder), but keeps prompt history.
 function startNewRun() {
-  _exitPromptHistoryUI();
   resetRunState();
   deactivateScrubber();
-  promptInput.value = "";
+  generatorComposer.clear();
   if (thinkingPanel) {
     thinkingPanel.hidden = true;
   }
@@ -8273,8 +7760,6 @@ function startNewRun() {
   setGenerating(false);
   // Return to the pre-generation resting state.
   showOutputPlaceholder();
-  promptTextChanged();
-  promptInput.focus();
 }
 
 // Ask the worker to stop the run it is on.
@@ -8311,7 +7796,7 @@ function startGeneration() {
     return;
   }
 
-  var prompt = promptInput.value.trim();
+  var prompt = generatorComposer.trimmedValue();
   if (!prompt) {
     statusMessage.textContent =
       "Prompt is empty.";
@@ -8324,8 +7809,7 @@ function startGeneration() {
 
   // A fresh run abandons any in-progress edit session and clears the
   // previous run's state. Record the prompt in history first.
-  _exitPromptHistoryUI();
-  pushPromptHistory(prompt);
+  generatorComposer.prepareGeneration(prompt);
   resetRunState();
   var params = getParamValues();
   lastRunPrompt = prompt;
@@ -8571,7 +8055,7 @@ function runRecordPrompt() {
   if (lastRunPrompt !== null) {
     return lastRunPrompt;
   }
-  return promptInput.value.trim();
+  return generatorComposer.trimmedValue();
 }
 
 // Returns a promise that settles when the save has finished, one way
@@ -8853,109 +8337,7 @@ btnGenerate.addEventListener(
 );
 btnSave.addEventListener("click", saveRun);
 
-promptInput.addEventListener(
-  "keydown",
-  function (e) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      // Enter runs a generation; in the finalized "New Run" state it
-      // is a no-op so it can't wipe the canvas unexpectedly.
-      if (!editedRunSaved) {
-        startGeneration();
-      }
-    }
-  }
-);
-
-// Prompt history controls.
-if (btnPromptHistory) {
-  btnPromptHistory.addEventListener("click", function () {
-    if (promptHistoryActive) {
-      cancelPromptHistory();
-    } else {
-      enterPromptHistory();
-    }
-  });
-}
-if (btnHistPrev) {
-  btnHistPrev.addEventListener("click", function () {
-    cyclePromptHistory(1);
-  });
-}
-if (btnHistNext) {
-  btnHistNext.addEventListener("click", function () {
-    cyclePromptHistory(-1);
-  });
-}
-if (btnHistDelete) {
-  btnHistDelete.addEventListener("click", pressPromptHistoryDelete);
-  // Either way of leaving the button takes the first press back.
-  btnHistDelete.addEventListener("mouseleave", function () {
-    setPromptHistoryDeleteArmed(false);
-  });
-  btnHistDelete.addEventListener("blur", function () {
-    setPromptHistoryDeleteArmed(false);
-  });
-}
-if (btnHistConfirm) {
-  btnHistConfirm.addEventListener(
-    "click", confirmPromptHistory
-  );
-}
-if (btnHistCancel) {
-  btnHistCancel.addEventListener(
-    "click", cancelPromptHistory
-  );
-}
-
-// Prompt import: button, picker, drag-and-drop, and the confirmation.
-if (btnPromptImport && promptFileInput) {
-  btnPromptImport.addEventListener("click", function () {
-    promptFileInput.click();
-  });
-  promptFileInput.addEventListener("change", function () {
-    var file = promptFileInput.files[0];
-    // Cleared before the read so choosing the same file twice still
-    // fires a change event; beginPromptImport already holds it.
-    promptFileInput.value = "";
-    beginPromptImport(file);
-  });
-}
-
-if (promptInput) {
-  promptInput.addEventListener("dragover", function (e) {
-    if (!dragCarriesFile(e)) {
-      return;
-    }
-    // Without this the browser navigates to the file on drop, which
-    // loses the page and the run on it.
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "copy";
-    promptInput.classList.add("is-drop-target");
-  });
-  promptInput.addEventListener("dragleave", function () {
-    promptInput.classList.remove("is-drop-target");
-  });
-  promptInput.addEventListener("drop", function (e) {
-    if (!dragCarriesFile(e)) {
-      return;
-    }
-    e.preventDefault();
-    promptInput.classList.remove("is-drop-target");
-    beginPromptImport(e.dataTransfer.files[0]);
-  });
-}
-
-if (btnImportConfirm) {
-  btnImportConfirm.addEventListener(
-    "click", confirmPromptImport
-  );
-}
-if (btnImportCancel) {
-  btnImportCancel.addEventListener("click", function () {
-    closeModal(modalImport);
-  });
-}
+generatorComposer.wire();
 
 toggleExperimental.addEventListener(
   "change", applyLimits
@@ -8969,11 +8351,6 @@ if (btnParamDefaults) {
     "click", resetParamsToDefaults
   );
 }
-
-// The prompt's only other listener is Enter-to-generate, so the draft
-// needs its own to reach the session snapshot as it is typed.
-promptInput.addEventListener("input", onParamFormChanged);
-promptInput.addEventListener("input", promptTextChanged);
 
 if (modelSelect && modelSelectList) {
   // Start from a known state rather than trusting the markup to
@@ -9598,11 +8975,9 @@ var modalAbout =
   document.getElementById("modal-about");
 var modalHelp =
   document.getElementById("modal-help");
-var modalImport =
-  document.getElementById("modal-import");
 
 var allModals = [
-  modalAbout, modalHelp, modalImport,
+  modalAbout, modalHelp,
 ];
 
 // ---- Help tabs ----
@@ -9665,6 +9040,7 @@ function raiseLoadingOverlay() {
   for (var mi = 0; mi < allModals.length; mi++) {
     closeModal(allModals[mi]);
   }
+  generatorComposer.closeImport();
   loadingOverlay.classList.remove("hidden");
 }
 
@@ -9682,16 +9058,6 @@ function closeModal(modal) {
     modal.close();
   }
 }
-
-// Every route out of the import dialog is a decision not to replace:
-// the close button, the backdrop, Escape and Cancel. They all end in
-// the dialog's own `close` event now, which is the only funnel that
-// catches the native Escape as well, so dropping the pending file
-// here is what keeps a later import from acting on a file the user
-// walked away from.
-modalImport.addEventListener("close", function () {
-  pendingImportFile = null;
-});
 
 linkAbout.addEventListener(
   "click",
@@ -9762,7 +9128,7 @@ function saveSessionState() {
     // switch apart from a page navigation.
     device: activeDevice,
     // The box's text, put back in the box; runPrompt is what ran.
-    prompt: promptInput.value,
+    prompt: generatorComposer.value(),
     runPrompt: lastRunPrompt,
     finalText: lastFinalText,
     params: lastRunParams,
@@ -9874,7 +9240,7 @@ function restoreSessionStateApply(restored) {
   lastSavedRevision = restored.lastSavedRevision;
   updateGenerateButton();
   if (restored.prompt) {
-    promptInput.value = restored.prompt;
+    generatorComposer.restore(restored.prompt);
   }
 
   if (thinkingPanel && thinkingContent) {
@@ -9914,7 +9280,8 @@ function restoreSessionStateApply(restored) {
 // Leaving the page and coming back used to reset every
 // hyperparameter, because boot() rebuilds the panel from specDefault
 // and nothing put the user's values back. This restores them for the
-// life of the app.
+// life of the app. generator_composer.js owns the prompt member in
+// this same compatibility record until the model panel moves too.
 //
 // It cannot ride in SESSION_KEY: saveSessionState bails unless a run
 // completed, and clearSessionState fires at the *start* of every
@@ -9973,11 +9340,15 @@ function saveParamState() {
     return;
   }
   var all = readParamStateAll();
-  all[activeModelId] = {
+  var previous = all[activeModelId];
+  var state = {
     experimental: toggleExperimental.checked,
     params: currentParamRawValues(),
-    prompt: promptInput.value,
   };
+  if (previous && typeof previous.prompt === "string") {
+    state.prompt = previous.prompt;
+  }
+  all[activeModelId] = state;
   try {
     sessionStorage.setItem(
       PARAM_STATE_KEY, JSON.stringify(all)
@@ -9991,19 +9362,10 @@ function saveParamState() {
 // stored snapshot and the Reset button's enabled state cannot drift
 // apart.
 function onParamFormChanged() {
+  generatorComposer.saveDraft();
   saveParamState();
   updateParamDefaultsButton();
-  // The output budget moves the warning without changing the count, so
-  // the cached number is repainted. The thinking flag changes the
-  // count itself, so that one needs a fresh request.
-  if (
-    promptCountLatest !== null
-    && promptCountLatest.thinking !== !!getParamValues().thinking
-  ) {
-    promptTextChanged();
-    return;
-  }
-  renderPromptContext();
+  generatorComposer.parametersChanged();
 }
 
 function restoreParamState() {
@@ -10023,9 +9385,6 @@ function restoreParamState() {
   // the awkward case of the device changing between save and restore,
   // where a stored value can fall outside the override's range.
   applyLimits();
-  if (state.prompt) {
-    promptInput.value = state.prompt;
-  }
 }
 
 // Restore by spec name so a spec set that changed between sessions
@@ -10173,12 +9532,17 @@ function applyModelInfo(info) {
     models[activeModelId] || list[0] || null;
   activeDevice = modelClientActiveDevice(info);
   activeTokenizer = info.active_tokenizer || {};
-  activeContextLength =
-    typeof info.active_context_length === "number"
-      ? info.active_context_length
-      : null;
   gpuPresent = modelClientGpuPresent(info);
   renderModelSelector(list, activeModelId);
+  generatorComposer.configure({
+    modelId: activeModelId,
+    inputMode: (
+      activeModel
+      && activeModel.capabilities
+      && activeModel.capabilities.input_mode
+    ),
+    contextLength: info.active_context_length,
+  });
   if (activeModel) {
     buildParamPanel(activeModel);
     applyUniformParamWidth(list);
@@ -10197,59 +9561,6 @@ function applyModelInfo(info) {
   // Same reason: whether the entropy row is reserved or absent
   // depends on the model, and the markup starts it absent.
   setEntropyProfileVisible(false);
-  applyPromptMode();
-}
-
-// Say which of the two things the prompt box is for. A chat model
-// answers what you write; a base model continues it, and inviting a
-// question from one would be the misreading that makes a base model
-// easy to run and hard to interpret.
-//
-// Read off the declared input mode, never off a model id, so the next
-// base checkpoint is described correctly without an edit here. The
-// markup ships the chat wording, which is right for the
-// instruction-tuned models and is what a page with no model loaded
-// should say.
-//
-// The hint rides the "?" beside the label, and is the only place the
-// way out is spelled: a placeholder vanishes once the box has text,
-// and the prompt is kept between visits, so it is rarely seen.
-var PROMPT_MODE_COPY = {
-  chat: {
-    label: "Prompt",
-    placeholder: "Enter a prompt...",
-    hint: "",
-  },
-  completion: {
-    label: "Text to continue",
-    placeholder:
-      "Text for the model to continue, e.g. \"A REST API is\"",
-    hint:
-      "This is a base model: it writes on from where your text"
-      + " stops rather than replying to it, so a question tends to"
-      + " get more questions. To get an explanation, begin it"
-      + " yourself, for example: \"A REST API is\"",
-  },
-};
-
-function applyPromptMode() {
-  var mode =
-    activeModel
-    && activeModel.capabilities
-    && activeModel.capabilities.input_mode;
-  var copy = PROMPT_MODE_COPY[mode] || PROMPT_MODE_COPY.chat;
-  if (promptLabel) {
-    promptLabel.textContent = copy.label;
-  }
-  if (promptInput) {
-    promptInput.placeholder = copy.placeholder;
-  }
-  if (promptModeTip) {
-    promptModeTip.textContent = copy.hint;
-  }
-  if (promptModeInfo) {
-    promptModeInfo.hidden = copy.hint === "";
-  }
 }
 
 function finishBoot() {
@@ -10289,8 +9600,7 @@ function refreshModelVram() {
 
 function boot() {
   loadSettings();
-  loadPromptHistory();
-  updatePromptHistoryUI();
+  generatorComposer.boot();
   updateHoverHighlight();
   overlaysBuildTokenMetrics(tokenMetricsStrip);
   overlaysBuildStopReadout(stopReadout);

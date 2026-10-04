@@ -29,6 +29,7 @@ const { loadPage, FakeSocket } = require("./dom_stub.js");
 const RAN = "explain how yeast makes bread rise";
 const BROWSED = "an older prompt from the history";
 const WORDS = [" Yeast", " eats", " sugar", "."];
+const HISTORY_KEY = "diffusion_prompt_history";
 
 // The real WebSocket carries its states as statics and the page
 // compares against them; the shared stub leaves them off.
@@ -128,11 +129,10 @@ function finishedRun() {
     WebSocket: OpenSocket,
     fetchImpl: savingFetch(saved),
     bootState: { ui_state: {}, models: MODELS },
+    storage: { [HISTORY_KEY]: JSON.stringify([BROWSED]) },
   });
   const { context, registry } = page;
   context.ws = new OpenSocket("ws://test");
-  context.promptHistory = [BROWSED];
-  context.updatePromptHistoryUI();
   registry.get("prompt-input").value = RAN;
 
   context.startGeneration();
@@ -147,14 +147,14 @@ function finishedRun() {
   return { page, context, registry, saved };
 }
 
-function browseToOlder(context) {
-  context.enterPromptHistory();
-  context.cyclePromptHistory(1);
+function browseToOlder(registry) {
+  registry.get("btn-prompt-history").click();
+  registry.get("btn-hist-prev").click();
 }
 
 test("a save records the prompt the run was generated from", async () => {
   const { context, registry, saved } = finishedRun();
-  browseToOlder(context);
+  browseToOlder(registry);
   assert.equal(registry.get("prompt-input").value, BROWSED);
 
   await context.saveRun();
@@ -167,9 +167,9 @@ test("a prompt kept from the history is still not the run's", async () => {
   // Confirming the browsed prompt makes it the box's text for real,
   // ready to be edited and run next. It still did not produce this
   // run.
-  const { context, saved } = finishedRun();
-  browseToOlder(context);
-  context.confirmPromptHistory();
+  const { context, registry, saved } = finishedRun();
+  browseToOlder(registry);
+  registry.get("btn-hist-confirm").click();
 
   await context.saveRun();
 
@@ -203,9 +203,9 @@ test("the Analytics snapshot keeps the run's prompt apart", () => {
   // The box's text comes back into the box; the run's prompt comes
   // back as the run's. Folding the two is how the wrong prompt used
   // to survive the round trip and be saved later.
-  const { page, context } = finishedRun();
-  browseToOlder(context);
-  context.confirmPromptHistory();
+  const { page, context, registry } = finishedRun();
+  browseToOlder(registry);
+  registry.get("btn-hist-confirm").click();
 
   context.saveSessionState();
 

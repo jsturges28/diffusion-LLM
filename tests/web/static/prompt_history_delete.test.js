@@ -25,74 +25,70 @@ const NEWEST = "write a sonnet";
 const MIDDLE = "explain diffusion";
 const OLDEST = "hello world";
 const DRAFT = "half a thought";
-
-const OLDER = 1;
+const HISTORY_KEY = "diffusion_prompt_history";
 
 function browsing(history) {
-  const page = loadPage({});
-  const { context, registry } = page;
+  const page = loadPage({
+    storage: { [HISTORY_KEY]: JSON.stringify(history) },
+    bootState: { ui_state: {}, models: { models: [] } },
+  });
+  const { registry } = page;
   registry.get("prompt-input").value = DRAFT;
-  context.promptHistory = history.slice();
-  context.updatePromptHistoryUI();
-  context.enterPromptHistory();
+  registry.get("btn-prompt-history").click();
   return {
     page,
-    context,
     trash: registry.get("btn-hist-delete"),
     input: registry.get("prompt-input"),
     counter: registry.get("prompt-history-counter"),
+    older: registry.get("btn-hist-prev"),
+    cancel: registry.get("btn-hist-cancel"),
+    historyButton: registry.get("btn-prompt-history"),
   };
 }
 
-function stored(page, context) {
-  const raw = page.sandbox.localStorage.getItem(
-    context.PROMPT_HISTORY_KEY
-  );
+function stored(page) {
+  const raw = page.sandbox.localStorage.getItem(HISTORY_KEY);
   return JSON.parse(raw);
 }
 
-function history(context) {
-  return JSON.parse(JSON.stringify(context.promptHistory));
-}
-
 test("one press arms the trash and deletes nothing", () => {
-  const { context, trash, input } = browsing([NEWEST, MIDDLE]);
+  const { page, trash, input } = browsing([NEWEST, MIDDLE]);
 
   trash.click();
 
-  assert.deepEqual(history(context), [NEWEST, MIDDLE]);
+  assert.deepEqual(stored(page), [NEWEST, MIDDLE]);
   assert.equal(input.value, NEWEST);
   assert.equal(trash.classList.contains("is-armed"), true);
   assert.match(trash.getAttribute("aria-label"), /again/);
 });
 
 test("a second press deletes the prompt on show", () => {
-  const { page, context, trash, input, counter } = browsing(
+  const { page, trash, input, counter } = browsing(
     [NEWEST, MIDDLE, OLDEST]
   );
 
   trash.click();
   trash.click();
 
-  assert.deepEqual(history(context), [MIDDLE, OLDEST]);
+  assert.deepEqual(stored(page), [MIDDLE, OLDEST]);
   assert.equal(input.value, MIDDLE);
   assert.equal(counter.textContent, "2 / 2");
   assert.equal(trash.classList.contains("is-armed"), false);
-  assert.deepEqual(stored(page, context), [MIDDLE, OLDEST]);
+  assert.deepEqual(stored(page), [MIDDLE, OLDEST]);
 });
 
 test("deleting from the middle moves to the next older one", () => {
   // The case that tells the two directions apart: the prompt either
   // side of it still exists.
-  const { context, trash, input, counter } = browsing(
+  const { page, older, trash, input, counter } = browsing(
     [NEWEST, MIDDLE, OLDEST]
   );
-  context.cyclePromptHistory(OLDER);
+  older.click();
 
   trash.click();
   trash.click();
 
-  assert.deepEqual(history(context), [NEWEST, OLDEST]);
+  assert.deepEqual(stored(page), [NEWEST, OLDEST]);
   assert.equal(input.value, OLDEST);
   assert.equal(counter.textContent, "1 / 2");
 });
@@ -100,16 +96,16 @@ test("deleting from the middle moves to the next older one", () => {
 test("deleting the oldest moves to the newer one", () => {
   // There is no older prompt to move to, so the one after it in time
   // takes its place, and it is now the oldest.
-  const { context, trash, input, counter } = browsing(
+  const { page, older, trash, input, counter } = browsing(
     [NEWEST, MIDDLE, OLDEST]
   );
-  context.cyclePromptHistory(OLDER);
-  context.cyclePromptHistory(OLDER);
+  older.click();
+  older.click();
 
   trash.click();
   trash.click();
 
-  assert.deepEqual(history(context), [NEWEST, MIDDLE]);
+  assert.deepEqual(stored(page), [NEWEST, MIDDLE]);
   assert.equal(input.value, MIDDLE);
   assert.equal(counter.textContent, "1 / 2");
 });
@@ -117,60 +113,67 @@ test("deleting the oldest moves to the newer one", () => {
 test("stepping to another prompt disarms", () => {
   // Otherwise the first press, made on one prompt, would carry over
   // and let a single press delete a different one.
-  const { context, trash } = browsing([NEWEST, MIDDLE, OLDEST]);
+  const { page, older, trash } = browsing(
+    [NEWEST, MIDDLE, OLDEST]
+  );
   trash.click();
 
-  context.btnHistPrev.click();
+  older.click();
   trash.click();
 
-  assert.deepEqual(history(context), [NEWEST, MIDDLE, OLDEST]);
+  assert.deepEqual(
+    stored(page), [NEWEST, MIDDLE, OLDEST]
+  );
   assert.equal(trash.classList.contains("is-armed"), true);
 });
 
 test("moving off the button disarms", () => {
-  const { context, trash } = browsing([NEWEST, MIDDLE]);
+  const { page, trash } = browsing([NEWEST, MIDDLE]);
   trash.click();
 
   trash.dispatch("mouseleave");
   trash.click();
 
-  assert.deepEqual(history(context), [NEWEST, MIDDLE]);
+  assert.deepEqual(stored(page), [NEWEST, MIDDLE]);
 });
 
 test("focus leaving the button disarms", () => {
-  const { context, trash } = browsing([NEWEST, MIDDLE]);
+  const { page, trash } = browsing([NEWEST, MIDDLE]);
   trash.click();
 
   trash.dispatch("blur");
 
   assert.equal(trash.classList.contains("is-armed"), false);
   assert.match(trash.getAttribute("aria-label"), /^Delete/);
-  assert.deepEqual(history(context), [NEWEST, MIDDLE]);
+  assert.deepEqual(stored(page), [NEWEST, MIDDLE]);
 });
 
 test("ending browsing disarms", () => {
-  const { context, trash } = browsing([NEWEST, MIDDLE]);
+  const {
+    page, trash, cancel, historyButton,
+  } = browsing([NEWEST, MIDDLE]);
   trash.click();
 
-  context.cancelPromptHistory();
-  context.enterPromptHistory();
+  cancel.click();
+  historyButton.click();
   trash.click();
 
-  assert.deepEqual(history(context), [NEWEST, MIDDLE]);
+  assert.deepEqual(stored(page), [NEWEST, MIDDLE]);
 });
 
 test("deleting the last prompt puts the user's text back", () => {
   // Nothing is left to browse, so browsing ends the way the cross
   // ends it, and the history control goes away with its contents.
-  const { page, context, trash, input } = browsing([NEWEST]);
+  const { page, trash, input } = browsing([NEWEST]);
 
   trash.click();
   trash.click();
 
-  assert.deepEqual(history(context), []);
+  assert.deepEqual(stored(page), []);
   assert.equal(input.value, DRAFT);
   assert.equal(input.readOnly, false);
-  assert.equal(context.promptHistoryActive, false);
+  assert.equal(
+    page.registry.get("prompt-history-nav").hidden, true
+  );
   assert.equal(page.registry.get("prompt-history").hidden, true);
-  assert.deepEqual(stored(page, context), []);
 });

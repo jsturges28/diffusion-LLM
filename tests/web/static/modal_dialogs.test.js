@@ -127,12 +127,27 @@ test("the pending import is dropped on close, however it closed", () => {
   // so a cleanup hanging off the close button alone would leave the
   // file staged and a later import would act on it.
   const h = generator();
-  h.page.context.pendingImportFile = { name: "notes.txt" };
-  h.page.context.openModal(h.imports);
+  let reads = 0;
+  const prompt = h.page.registry.get("prompt-input");
+  const picker = h.page.registry.get("prompt-file-input");
+  prompt.value = "keep this";
+  picker.files = [{
+    name: "notes.txt",
+    type: "text/plain",
+    size: 9,
+    text() {
+      reads += 1;
+      return Promise.resolve("replace me");
+    },
+  }];
+  picker.dispatch("change");
+  assert.equal(h.imports.open, true);
 
   h.imports.close();
+  h.page.registry.get("btn-import-confirm").click();
 
-  assert.equal(h.page.context.pendingImportFile, null);
+  assert.equal(reads, 0);
+  assert.equal(prompt.value, "keep this");
 });
 
 test("closing one modal leaves another alone", () => {
