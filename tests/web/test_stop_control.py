@@ -103,13 +103,15 @@ def test_the_button_is_live_while_a_run_is_in_flight() -> None:
 def test_the_click_handler_follows_the_same_order() -> None:
     # Label and action are decided separately, so they can drift:
     # a button reading Stop that starts a run would be worse than
-    # no button. Both branch on isGenerating first.
+    # no button. The distinct New Conversation control now owns
+    # clearing, so this button has only the same two states as its
+    # label.
     body = _region("btnGenerate.addEventListener(", 420)
 
     assert "requestCancel()" in body
-    assert body.index("isGenerating") < body.index(
-        "generatorRun.editedSaved()"
-    )
+    assert "startGeneration()" in body
+    assert "generatorRun.editedSaved()" not in body
+    assert body.index("isGenerating") < body.index("startGeneration")
 
 
 # -- a stopped run is not a finished one --

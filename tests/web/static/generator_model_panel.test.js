@@ -48,6 +48,8 @@ const MODEL = {
       label: "Gen Length",
       type: "int",
       default: 8,
+      group: "output",
+      prominence: "primary",
       recommended: [4, 16],
       experimental: [1, 32],
       overrides: {
@@ -64,6 +66,8 @@ const MODEL = {
       label: "Block Length",
       type: "int",
       default: 4,
+      group: "output",
+      prominence: "secondary",
       recommended: [2, 8],
       experimental: [1, 16],
     },
@@ -72,6 +76,8 @@ const MODEL = {
       label: "Steps",
       type: "int",
       default: 8,
+      group: "output",
+      prominence: "primary",
       recommended: [2, 32],
       experimental: [1, 64],
     },
@@ -80,6 +86,8 @@ const MODEL = {
       label: "Temperature",
       type: "float",
       default: 0.7,
+      group: "sampling",
+      prominence: "primary",
       recommended: [0, 1],
       experimental: [0, 2],
       step: 0.1,
@@ -89,12 +97,16 @@ const MODEL = {
       label: "Thinking",
       type: "bool",
       default: false,
+      group: "features",
+      prominence: "secondary",
     },
     {
       name: "strategy",
       label: "Strategy",
       type: "select",
       default: "low_confidence",
+      group: "sampling",
+      prominence: "secondary",
       options: ["low_confidence", "random"],
     },
   ],
@@ -280,6 +292,90 @@ test("validation keeps the divisibility messages", () => {
     "Temperature is empty or invalid."
   );
 });
+
+test("controls render in schema groups without model checks", () => {
+  const h = loadPanel({});
+  const fields = h.page.registry.get("param-fields");
+  const groups = fields.children.map(
+    (child) => child.getAttribute("data-param-group")
+  );
+
+  assert.deepEqual(groups, ["output", "sampling"]);
+  assert.equal(
+    fields.children[0]
+      .querySelector(".run-settings-group-label").textContent,
+    "Output"
+  );
+  const modeExtra = h.page.registry.get("mode-extra");
+  assert.equal(modeExtra.children.length, 1);
+  assert.equal(
+    modeExtra.children[0].getAttribute("data-param-group"),
+    "features"
+  );
+});
+
+test("collapsed summary chips follow primary parameter values", () => {
+  const h = loadPanel({});
+  const chips =
+    h.page.registry.get("run-settings-summary-chips");
+
+  assert.equal(chips.children.length, 3);
+  const temperature = chips.children.find(
+    (chip) =>
+      chip.getAttribute("data-param-name") === "temperature"
+  );
+  assert.ok(temperature);
+  assert.equal(
+    temperature.querySelector(
+      ".run-settings-chip-value"
+    ).textContent,
+    "0.7"
+  );
+
+  input(h, "temperature").value = "0.9";
+  input(h, "temperature").dispatch("input");
+  const changed = chips.children.find(
+    (chip) =>
+      chip.getAttribute("data-param-name") === "temperature"
+  );
+  assert.equal(
+    changed.querySelector(".run-settings-chip-value").textContent,
+    "0.9"
+  );
+});
+
+test("native settings disclosure mirrors its expanded state", () => {
+  const h = loadPanel({});
+  const details = h.page.registry.get("run-settings");
+  const summary = h.page.registry.get("run-settings-summary");
+
+  assert.equal(summary.getAttribute("aria-expanded"), "false");
+  details.open = true;
+  details.dispatch("toggle");
+  assert.equal(summary.getAttribute("aria-expanded"), "true");
+  details.open = false;
+  details.dispatch("toggle");
+  assert.equal(summary.getAttribute("aria-expanded"), "false");
+});
+
+test("invalid collapsed settings open and focus the first error",
+  () => {
+    const h = loadPanel({});
+    const details = h.page.registry.get("run-settings");
+    const summary = h.page.registry.get("run-settings-summary");
+    const length = input(h, "gen_length");
+    let focused = false;
+    length.focus = () => { focused = true; };
+
+    details.open = false;
+    length.value = "6";
+    length.dispatch("input");
+
+    assert.equal(details.open, true);
+    assert.equal(summary.getAttribute("aria-expanded"), "true");
+    assert.equal(focused, true);
+  }
+);
 
 test("Experimental and Defaults use device-aware bounds", () => {
   const h = loadPanel({});

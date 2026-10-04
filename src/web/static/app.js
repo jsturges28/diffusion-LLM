@@ -10,6 +10,8 @@ var btnGenerateLabel =
   document.getElementById("btn-generate-label");
 var btnSave =
   document.getElementById("btn-save");
+var btnNewConversation =
+  document.getElementById("btn-new-conversation");
 var generatorComposer = generatorComposerCreate({
   onSubmit: submitComposer,
   onDraftChanged: composerDraftChanged,
@@ -817,8 +819,8 @@ function sendComposerCount(payload) {
 }
 
 function submitComposer() {
-  // Enter runs a generation; in the finalized "New Run" state it is
-  // a no-op so it cannot wipe the canvas unexpectedly.
+  // Enter runs a generation. A finalized edit stays locked until
+  // the explicit New Conversation action clears the active turn.
   if (!generatorRun.editedSaved()) {
     startGeneration();
   }
@@ -857,37 +859,28 @@ function applySettings() {
   generatorModelPanel.refreshSelector();
 }
 
-// The primary button has three jobs, in priority order: Stop while a
-// run is in flight, New Run after an edited save, and Generate at
-// rest.
+// The composer action has two jobs: Stop while a run is in flight,
+// and Generate at rest. Starting over has its own toolbar button.
 function currentGenerateLabel() {
-  if (isGenerating) {
-    return "Stop";
-  }
-  return generatorRun.editedSaved()
-    ? "New Run"
-    : "Generate";
+  return isGenerating ? "Stop" : "Generate";
 }
 
 function updateGenerateButton() {
   if (isGenerating) {
-    btnGenerate.classList.remove("is-new-run");
     btnGenerate.classList.add("is-stop");
     btnGenerate.disabled = false;
-  } else if (generatorRun.editedSaved()) {
-    btnGenerate.classList.remove("is-stop");
-    btnGenerate.classList.add("is-new-run");
-    btnGenerate.disabled = generatorRun.saving();
   } else {
-    btnGenerate.classList.remove("is-new-run");
     btnGenerate.classList.remove("is-stop");
     btnGenerate.disabled =
       generatorRun.saving()
+      || generatorRun.editedSaved()
       || !(
         modelReady
         && generatorModelPanel.validation().valid
       );
   }
+  btnNewConversation.disabled =
+    isGenerating || generatorRun.saving();
   updateGenerateIdleEffect();
 }
 
@@ -1110,7 +1103,7 @@ function resetStatus() {
 // ---- Actions ----
 
 // Clear all live-run state (frames, edits, overlays, gates) back to a
-// pre-run baseline. Shared by Generate (fresh run) and New Run.
+// pre-run baseline. Shared by Generate and New Conversation.
 function resetRunState() {
   generatorEdit.reset();
   generatorRun.reset();
@@ -1121,9 +1114,8 @@ function resetRunState() {
   setSaveAvailable(false);
 }
 
-// "New Run": reset to a clean slate for a new prompt once a run is
-// finalized (Generate has become "New Run"). Clears the canvas and the
-// prompt box (revealing its placeholder), but keeps prompt history.
+// New Conversation resets the single active turn to a clean slate.
+// It clears the canvas and prompt while keeping history and settings.
 function startNewRun() {
   resetRunState();
   generatorComposer.clear();
@@ -1418,6 +1410,7 @@ function generatorRunSessionRestored() {
 
 function generatorRunSaveStart(info) {
   btnSave.disabled = true;
+  updateGenerateButton();
   generatorEdit.setSavingControls(true);
   generatorEdit.refreshLocks();
   if (saveCheckTimer !== null) {
@@ -1433,6 +1426,7 @@ function generatorRunSaveStart(info) {
 
 function generatorRunSaveSettled() {
   btnSave.classList.remove("is-saving");
+  updateGenerateButton();
   generatorEdit.setSavingControls(false);
   generatorEdit.refreshLocks();
 }
@@ -1476,17 +1470,18 @@ function generatorRunSaveRefused(message) {
 btnGenerate.addEventListener(
   "click",
   function () {
-    // Same order as currentGenerateLabel, so what the button says
-    // and what it does cannot drift apart.
     if (isGenerating) {
       requestCancel();
-    } else if (generatorRun.editedSaved()) {
-      startNewRun();
     } else {
       startGeneration();
     }
   }
 );
+btnNewConversation.addEventListener("click", function () {
+  if (!btnNewConversation.disabled) {
+    startNewRun();
+  }
+});
 btnSave.addEventListener("click", saveRun);
 
 generatorComposer.wire();

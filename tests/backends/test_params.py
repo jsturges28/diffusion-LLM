@@ -34,7 +34,9 @@ from src.backends.params import (
     resolve_params,
 )
 from src.backends.protocol import (
+    ParamGroup,
     ParamOverride,
+    ParamProminence,
     ParamSpec,
     ParamType,
 )
@@ -521,3 +523,46 @@ def test_the_worker_still_requires_a_prompt() -> None:
 
     with pytest.raises(ValueError, match="prompt"):
         backend._validate_generate({"prompt": "   "})
+
+
+# -- presentation metadata --
+
+
+def test_presentation_metadata_defaults_are_safe() -> None:
+    """An older or third-party spec stays reachable in General.
+
+    It does not silently join the collapsed summary, where an
+    unreviewed parameter would crowd out the deliberate readout.
+    """
+    spec = ParamSpec(
+        name="new_parameter",
+        label="New Parameter",
+        type=ParamType.INT,
+        default=1,
+    )
+
+    assert spec.group == ParamGroup.GENERAL
+    assert spec.prominence == ParamProminence.SECONDARY
+
+
+def test_registered_parameters_have_meaningful_groups() -> None:
+    """Every shipped control opted into presentation metadata."""
+    for model_id, info in REGISTRY.items():
+        for spec in info.param_specs:
+            assert spec.group != ParamGroup.GENERAL, (
+                f"{model_id}/{spec.name} still uses the safe fallback"
+            )
+
+
+def test_each_model_has_a_bounded_collapsed_summary() -> None:
+    """A summary stays useful only while it is selective."""
+    for model_id, info in REGISTRY.items():
+        primary = [
+            spec
+            for spec in info.param_specs
+            if spec.prominence == ParamProminence.PRIMARY
+        ]
+
+        assert 1 <= len(primary) <= 3, (
+            f"{model_id} exposes {len(primary)} summary controls"
+        )

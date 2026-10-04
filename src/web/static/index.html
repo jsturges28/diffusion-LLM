@@ -14,6 +14,8 @@
     as="font" type="font/woff2" crossorigin />
   <link rel="stylesheet" href="/vendor/fonts/jetbrains-mono.css" />
   <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/conversation.css" />
+  <link rel="stylesheet" href="/run_settings.css" />
 </head>
 <body>
   <!-- Animated background grid + floating characters -->
@@ -58,143 +60,56 @@
       </nav>
     </header>
 
-    <!-- Controls panel -->
-    <section id="controls">
-      <div id="prompt-row">
-        <!-- The label and, for a model that continues text rather
-             than answering it, a "?" saying so. Wrapped because the
-             label is a block and the icon has to share its line. -->
-        <div id="prompt-label-row">
-          <label id="prompt-label" for="prompt-input">Prompt</label>
-          <span id="prompt-mode-info" class="info-icon info-icon-sm"
-            aria-label="Prompt mode info" hidden>?<span
-            id="prompt-mode-tip" class="tooltip"></span></span>
+    <main id="conversation-shell">
+      <section id="conversation-toolbar"
+        aria-label="Conversation controls">
+        <div class="conversation-toolbar-title">
+          <span>Conversation</span>
+          <span class="conversation-toolbar-mode">Single turn</span>
         </div>
-        <!-- Always present, unlike #prompt-history, which hides itself
-             when there is nothing to browse. Import has to stay
-             reachable either way, so the two share a container that is
-             positioned once. -->
-        <div id="prompt-actions">
-          <button id="btn-prompt-import" type="button" class="prompt-hist-btn"
-            title="Import a prompt from a .txt or .md file"
-            aria-label="Import a prompt from a file">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
-              stroke="currentColor" stroke-width="2" stroke-linecap="round"
-              stroke-linejoin="round" aria-hidden="true">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <path d="M7 10l5 5 5-5" />
-              <path d="M12 15V3" />
-            </svg>
-          </button>
-          <!-- Extensions only. A file chooser builds one filter
-               per accept token and looks each description up in
-               the host's type database, where an extension and
-               its MIME type resolve to the same words, so listing
-               both showed every type twice. Extensions also map
-               the same way on every platform, unlike MIME tokens.
-               .markdown still imports: isImportableTextFile is
-               what actually decides. -->
-          <input id="prompt-file-input" type="file"
-            accept=".txt,.md" hidden />
-          <div id="prompt-history" hidden>
-            <button id="btn-prompt-history" type="button" class="prompt-hist-btn"
-              title="Use a previous prompt" aria-label="Use a previous prompt">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
-                stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                stroke-linejoin="round" aria-hidden="true">
-                <path d="M3 3v5h5" />
-                <path d="M3.05 13a9 9 0 1 0 2.6-6.36L3 8" />
-                <path d="M12 7v5l3 2" />
-              </svg>
-            </button>
-            <span id="prompt-history-nav" hidden>
-              <button id="btn-hist-prev" type="button" class="prompt-hist-nav-btn"
-                title="Older prompt" aria-label="Older prompt">&lsaquo;</button>
-              <span id="prompt-history-counter"></span>
-              <button id="btn-hist-next" type="button" class="prompt-hist-nav-btn"
-                title="Newer prompt" aria-label="Newer prompt">&rsaquo;</button>
-              <button id="btn-hist-delete" type="button"
-                class="prompt-hist-icon prompt-hist-delete"
-                title="Delete this prompt from history"
-                aria-label="Delete this prompt from history">
-                <svg viewBox="0 0 24 24" width="12" height="12"
-                  fill="none" stroke="currentColor" stroke-width="2"
-                  stroke-linecap="round" stroke-linejoin="round"
-                  aria-hidden="true">
-                  <path d="M3 6h18" />
-                  <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
-                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                  <line x1="10" y1="11" x2="10" y2="17" />
-                  <line x1="14" y1="11" x2="14" y2="17" />
-                </svg>
-              </button>
-              <button id="btn-hist-confirm" type="button"
-                class="prompt-hist-icon prompt-hist-confirm"
-                title="Use this prompt" aria-label="Use this prompt">&#x2713;</button>
-              <button id="btn-hist-cancel" type="button"
-                class="prompt-hist-icon prompt-hist-cancel"
-                title="Cancel" aria-label="Cancel">&#x2717;</button>
-            </span>
-          </div>
-        </div>
-        <textarea
-          id="prompt-input"
-          rows="2"
-          placeholder="Enter a prompt..."
-          spellcheck="false"
-        >Write a short explanation of REST APIs and show a Python requests example.</textarea>
-        <div id="prompt-context" class="prompt-context is-empty">
-          <span id="prompt-context-count"></span>
-          <span id="prompt-context-note" class="prompt-context-note"></span>
-        </div>
-      </div>
-
-      <div id="mode-row">
-        <label class="toggle-switch">
-          <input type="checkbox" id="toggle-experimental" />
-          <span class="toggle-slider"></span>
-        </label>
-        <span class="toggle-label">Experimental</span>
-        <span class="info-icon info-icon-sm" aria-label="Experimental mode info">?
-          <span class="tooltip">Removes recommended parameter bounds. Values outside the default range may produce erratic or unstable results.</span>
-        </span>
-        <span id="mode-extra"></span>
-        <!-- Sits on this row rather than beside Save and Generate
-             because it resets Experimental along with every
-             hyperparameter, and because those two are destructive
-             enough to want distance from. -->
-        <button id="btn-param-defaults" type="button" disabled
-          title="Reset hyperparameters to their defaults"
-          aria-label="Reset hyperparameters to their defaults">
-          <span aria-hidden="true">&#8634;</span>
-          <span>Reset</span>
+        <button id="btn-new-conversation" type="button">
+          New Conversation
         </button>
-      </div>
+      </section>
 
-      <div id="param-row">
-        <div id="param-fields" class="param-fields"></div>
+      <!-- Reserved for completed turns once a chat protocol exists.
+           This parity pass remains single-turn, so it is intentionally
+           empty and owns no transcript behavior. -->
+      <section id="conversation-transcript"
+        aria-label="Conversation transcript"></section>
 
-        <div class="param-group param-group-btn">
-          <button id="btn-save" class="btn-save" disabled title="Save run" aria-label="Save run">
-            <svg class="save-icon save-icon-arrow" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <section id="active-turn-workspace"
+        aria-label="Active turn explainability workspace">
+        <div id="active-turn-toolbar">
+          <span class="active-turn-label">Active turn</span>
+          <button id="btn-save" class="btn-save" type="button"
+            disabled title="Save Run" aria-label="Save Run">
+            <svg class="save-icon save-icon-arrow"
+              viewBox="0 0 24 24" width="17" height="17"
+              fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round"
+              aria-hidden="true">
               <path d="M12 3v12" />
               <path d="M7 10l5 5 5-5" />
               <path d="M5 20h14" />
             </svg>
-            <svg class="save-icon save-icon-spinner" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true">
+            <svg class="save-icon save-icon-spinner"
+              viewBox="0 0 24 24" width="17" height="17"
+              fill="none" stroke="currentColor" stroke-width="2.4"
+              stroke-linecap="round" aria-hidden="true">
               <circle cx="12" cy="12" r="8" opacity="0.25" />
               <path d="M12 4 a 8 8 0 0 1 8 8" />
             </svg>
-            <svg class="save-icon save-icon-check" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <svg class="save-icon save-icon-check"
+              viewBox="0 0 24 24" width="17" height="17"
+              fill="none" stroke="currentColor" stroke-width="2.6"
+              stroke-linecap="round" stroke-linejoin="round"
+              aria-hidden="true">
               <path d="M5 13l4 4L19 7" />
             </svg>
+            <span class="btn-save-label">Save Run</span>
           </button>
-          <button id="btn-generate" disabled><span id="btn-generate-label">Generate</span></button>
         </div>
-      </div>
-
-      <div id="validation-hint" hidden></div>
-    </section>
 
     <!-- Per-token readout, filled by overlays.js. Always present, and
          directly above the canvas so the distance between a token and
@@ -369,6 +284,156 @@
         <span id="status-message"></span>
       </div>
     </footer>
+      </section>
+
+      <section id="controls" class="conversation-composer"
+        aria-label="Prompt composer">
+        <details id="run-settings">
+          <summary id="run-settings-summary"
+            aria-controls="run-settings-body"
+            aria-expanded="false">
+            <span class="run-settings-title">Run settings</span>
+            <span id="run-settings-summary-chips"></span>
+            <span class="run-settings-chevron"
+              aria-hidden="true">&#9662;</span>
+          </summary>
+          <div id="run-settings-body">
+            <div id="mode-row">
+              <label class="toggle-switch">
+                <input type="checkbox"
+                  id="toggle-experimental" />
+                <span class="toggle-slider"></span>
+              </label>
+              <span class="toggle-label">Experimental</span>
+              <span class="info-icon info-icon-sm"
+                aria-label="Experimental mode info">?
+                <span class="tooltip">Removes recommended parameter
+                  bounds. Values outside the default range may
+                  produce erratic or unstable results.</span>
+              </span>
+              <button id="btn-param-defaults" type="button"
+                disabled
+                title="Reset hyperparameters to their defaults"
+                aria-label="Reset hyperparameters to their defaults">
+                <span aria-hidden="true">&#8634;</span>
+                <span>Reset</span>
+              </button>
+            </div>
+
+            <div id="mode-extra"></div>
+            <div id="param-row">
+              <div id="param-fields" class="param-fields"></div>
+            </div>
+            <div id="validation-hint" role="status"
+              aria-live="polite" hidden></div>
+          </div>
+        </details>
+
+        <div id="composer-row">
+          <div id="prompt-row">
+            <!-- The label and, for a model that continues text rather
+                 than answering it, a "?" saying so. -->
+            <div id="prompt-label-row">
+              <label id="prompt-label"
+                for="prompt-input">Prompt</label>
+              <span id="prompt-mode-info"
+                class="info-icon info-icon-sm"
+                aria-label="Prompt mode info" hidden>?<span
+                id="prompt-mode-tip"
+                class="tooltip"></span></span>
+            </div>
+            <!-- Import stays present when history has no entries, so
+                 the two controls share one stable mount. -->
+            <div id="prompt-actions">
+              <button id="btn-prompt-import" type="button"
+                class="prompt-hist-btn"
+                title="Import a prompt from a .txt or .md file"
+                aria-label="Import a prompt from a file">
+                <svg viewBox="0 0 24 24" width="14" height="14"
+                  fill="none" stroke="currentColor"
+                  stroke-width="2" stroke-linecap="round"
+                  stroke-linejoin="round" aria-hidden="true">
+                  <path
+                    d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <path d="M7 10l5 5 5-5" />
+                  <path d="M12 15V3" />
+                </svg>
+              </button>
+              <input id="prompt-file-input" type="file"
+                accept=".txt,.md" hidden />
+              <div id="prompt-history" hidden>
+                <button id="btn-prompt-history" type="button"
+                  class="prompt-hist-btn"
+                  title="Use a previous prompt"
+                  aria-label="Use a previous prompt">
+                  <svg viewBox="0 0 24 24" width="14" height="14"
+                    fill="none" stroke="currentColor"
+                    stroke-width="2" stroke-linecap="round"
+                    stroke-linejoin="round" aria-hidden="true">
+                    <path d="M3 3v5h5" />
+                    <path
+                      d="M3.05 13a9 9 0 1 0 2.6-6.36L3 8" />
+                    <path d="M12 7v5l3 2" />
+                  </svg>
+                </button>
+                <span id="prompt-history-nav" hidden>
+                  <button id="btn-hist-prev" type="button"
+                    class="prompt-hist-nav-btn"
+                    title="Older prompt"
+                    aria-label="Older prompt">&lsaquo;</button>
+                  <span id="prompt-history-counter"></span>
+                  <button id="btn-hist-next" type="button"
+                    class="prompt-hist-nav-btn"
+                    title="Newer prompt"
+                    aria-label="Newer prompt">&rsaquo;</button>
+                  <button id="btn-hist-delete" type="button"
+                    class="prompt-hist-icon prompt-hist-delete"
+                    title="Delete this prompt from history"
+                    aria-label="Delete this prompt from history">
+                    <svg viewBox="0 0 24 24" width="12" height="12"
+                      fill="none" stroke="currentColor"
+                      stroke-width="2" stroke-linecap="round"
+                      stroke-linejoin="round" aria-hidden="true">
+                      <path d="M3 6h18" />
+                      <path
+                        d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+                      <path
+                        d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                      <line x1="10" y1="11"
+                        x2="10" y2="17" />
+                      <line x1="14" y1="11"
+                        x2="14" y2="17" />
+                    </svg>
+                  </button>
+                  <button id="btn-hist-confirm" type="button"
+                    class="prompt-hist-icon prompt-hist-confirm"
+                    title="Use this prompt"
+                    aria-label="Use this prompt">&#x2713;</button>
+                  <button id="btn-hist-cancel" type="button"
+                    class="prompt-hist-icon prompt-hist-cancel"
+                    title="Cancel"
+                    aria-label="Cancel">&#x2717;</button>
+                </span>
+              </div>
+            </div>
+            <textarea id="prompt-input" rows="2"
+              placeholder="Enter a prompt..."
+              spellcheck="false">Write a short explanation of REST APIs and show a Python requests example.</textarea>
+            <div id="prompt-context"
+              class="prompt-context is-empty">
+              <span id="prompt-context-count"></span>
+              <span id="prompt-context-note"
+                class="prompt-context-note"></span>
+            </div>
+          </div>
+          <div id="composer-actions">
+            <button id="btn-generate" type="button" disabled>
+              <span id="btn-generate-label">Generate</span>
+            </button>
+          </div>
+        </div>
+      </section>
+    </main>
   </div>
 
   <!-- Competing-candidate popover, shown on token hover when the
@@ -481,7 +546,7 @@
           <li>On the <strong>Main Menu</strong>, pick a model. Rows that will not fit in the available GPU memory are greyed out. Selecting one loads it and opens this generator (the generator is reachable only after a model is chosen).</li>
           <li>Wait for the model to load (the overlay dismisses automatically). To switch models later, use the <strong>Model</strong> selector in the header; it unloads the current model and loads the other, since only one fits in GPU memory at a time.</li>
           <li>Type a prompt in the text area.</li>
-          <li>Adjust hyperparameters if desired, then click <strong>Generate</strong>.</li>
+          <li>Open <strong>Run settings</strong> to adjust hyperparameters if desired, then click <strong>Generate</strong>.</li>
           <li>Watch the canvas resolve into text in real time; unresolved positions appear as <code>░</code>, or, by <strong>Unsettled positions show</strong> in Settings, as the model's current guess at them, or as the candidates it was weighing, cycling once the run has finished.</li>
           <li>While the model runs, <strong>Generate</strong> becomes <strong>Stop</strong> and the status bar shows an animated <em>Running&hellip;</em> until the run completes.</li>
         </ol>
@@ -492,10 +557,12 @@
         <p>It turns <strong style="color:#ffb400;">amber</strong> when the prompt plus your output budget would not fit in the window (<strong>Gen Length</strong> for LLaDA, <strong>Max Tokens</strong> for the others), which is the case worth catching before you run rather than after. For DiffusionGemma the comparison is against the window, not the 256-token canvas: a longer budget legitimately chains several canvases.</p>
         <p>The <strong>import</strong> button, at the top right of the prompt box, loads a <code>.txt</code> or <code>.md</code> file into it. You can also drag a file onto the text area. The file is read in your browser and never uploaded anywhere. Markdown goes in as written, since the model reads it perfectly well and stripping it would misrepresent the file. If the prompt box is not empty, you are asked before it is replaced. Very large files are refused rather than truncated silently, and an import that lands tells you how many characters arrived; the readout above then says immediately what fraction of the window the file has taken, which is usually the thing you wanted to know.</p>
         <p>The <strong>history</strong> button beside it brings back prompts you have run. <strong>&lsaquo;</strong> and <strong>&rsaquo;</strong> step through them, the check keeps the one shown, and the cross puts back what you had typed. The <strong>trash</strong> deletes the prompt shown, on a second press: the first turns it red, and moving away takes that back. Browsing after a run is safe, because a save records the prompt the run was generated from, not what the box shows by then.</p>
+        <h4>The active turn</h4>
+        <p><strong>Run settings</strong> is the disclosure above the prompt. Its collapsed chips show the main output and sampling values; open it for grouped controls, Experimental, and Reset. <strong>Save Run</strong> stays with the output in the active-turn workspace and enables when there is a run to save. <strong>New Conversation</strong> clears the current canvas and prompt for a fresh single-turn run while keeping prompt history and per-model settings.</p>
         <h4>Moving between pages</h4>
         <p>Header links move between pages: <strong>Menu</strong> returns to model selection, <strong>Analytics</strong> opens the analytics suite, and <strong>Vision</strong> opens the image tokeniser, which inspects a model without loading it. From Analytics, Vision and Settings, a <strong>Generation</strong> link appears whenever a model is loaded. A <strong>gear icon</strong> in the header opens the shared <strong>Settings</strong> page.</p>
         <h4>Experimental mode</h4>
-        <p>The toggle above the parameter controls removes the recommended bounds, allowing extreme values for exploratory purposes. The default bounds represent the range that produces more consistent, stable results.</p>
+        <p>Open <strong>Run settings</strong> to reach the Experimental toggle. It removes the recommended bounds, allowing extreme values for exploratory purposes. The default bounds represent the range that produces more consistent, stable results.</p>
         <h4>Where the rest of it is</h4>
         <p>These tabs cover the controls: what each one does and what the numbers beside it mean. Two things live outside them. <code>docs/GUIDE.md</code> in the repository is the long-form version, including how each model actually generates and how to read a profile once you have one. <code>docs/ROADMAP.md</code> records why particular decisions were made, and what is deliberately not built yet.</p>
         </section>
@@ -588,10 +655,10 @@
         <p>The same as SmolLM3's, with the same lower ceiling on CPU, less <strong>Thinking</strong>: a base model has no reasoning channel for it to select.</p>
         <h4>Hyperparameters between visits</h4>
         <p>Your hyperparameters, the <strong>Experimental</strong> toggle, and whatever is in the prompt box are kept for as long as the app is open, so a trip to Analytics and back leaves your setup exactly as you left it. Each model remembers its own values, and a half-typed number is preserved as typed rather than rounded off. Closing the app clears all of it: a fresh launch starts from the recommended defaults, which is the state worth starting from.</p>
-        <p><strong>Reset</strong>, at the right of the Experimental row, puts every hyperparameter and the Experimental toggle back to their defaults for the current model and device. It is greyed out whenever nothing has been changed, so it doubles as a readout of whether you are on defaults. Your prompt is left alone, and the button is unavailable while a generation is running.</p>
+        <p><strong>Reset</strong>, inside the expanded <strong>Run settings</strong> disclosure, puts every hyperparameter and the Experimental toggle back to their defaults for the current model and device. It is greyed out whenever nothing has been changed, so it doubles as a readout of whether you are on defaults. Your prompt is left alone, and the button is unavailable while a generation is running.</p>
         <h4>Stopping a run</h4>
         <p>Click <strong>Stop</strong> to end a run early. The model checks between steps rather than mid-step, so a run ends within roughly one step of the click; it does not have to reach its token budget first.</p>
-        <p>A stopped run keeps everything it produced. The frames stay on the scrubber, the overlays and the metrics strip still read from them, and <strong>Save</strong>, <strong>Edit Frames</strong> and <strong>What If?</strong> all still apply. What changes is that it no longer claims to have finished: the status line reads <em>Stopped.</em> rather than <em>Done.</em>, and if you save it, the run is recorded as stopped and shows its duration in Analytics as <em>(stopped)</em>. That matters later, because a truncated answer on its own looks exactly like one the model chose to end. A dropped connection stops a run the same way, and the line reads <em>Stopped: lost the connection mid-run.</em> <strong>Save</strong> still keeps it, as stopped, with the text it had reached, though <strong>Edit Frames</strong> and <strong>What If?</strong> no longer apply, and lock to say so. They lock the same way when another window or a restart reloads the model under a run, since the worker that held it is gone; the run stays, and can still be saved.</p>
+        <p>A stopped run keeps everything it produced. The frames stay on the scrubber, the overlays and the metrics strip still read from them, and <strong>Save Run</strong>, <strong>Edit Frames</strong> and <strong>What If?</strong> all still apply. What changes is that it no longer claims to have finished: the status line reads <em>Stopped.</em> rather than <em>Done.</em>, and if you save it, the run is recorded as stopped and shows its duration in Analytics as <em>(stopped)</em>. That matters later, because a truncated answer on its own looks exactly like one the model chose to end. A dropped connection stops a run the same way, and the line reads <em>Stopped: lost the connection mid-run.</em> <strong>Save Run</strong> still keeps it, as stopped, with the text it had reached, though <strong>Edit Frames</strong> and <strong>What If?</strong> no longer apply, and lock to say so. They lock the same way when another window or a restart reloads the model under a run, since the worker that held it is gone; the run stays, and can still be saved.</p>
         <p><strong>Leaving the page also stops the run.</strong> Closing the tab, or navigating to Analytics or the Main Menu while a run is going, ends it rather than leaving the model computing for a page that is no longer watching. The frames it had already produced are still there when you come back.</p>
         </section>
         <section class="help-panel" role="tabpanel"
@@ -725,7 +792,7 @@
         <p>A collection holds runs, not copies, and a run can sit in as many as you like. Membership is kept by the server, so it survives a restart and is the same in the browser and the desktop app. Deleting a run removes it from every collection it was in, whether you delete it from this table, from another window, or from the filesystem directly.</p>
         <p>Switching tabs clears any ticked checkboxes, and so does turning <strong>Show all runs</strong> on or off. <strong>Select all</strong>, <strong>Compare Selected</strong>, the bulk trashcan, and the bulk star all act only on the rows the current view is showing, so no bulk gesture can reach a run you cannot see.</p>
         <h4>Saving results</h4>
-        <p>The <strong>Save</strong> button (the down-arrow icon to the left of <strong>Generate</strong>) becomes enabled once a run completes. Clicking it saves the run to a timestamped folder under <code>results/</code> containing:</p>
+        <p>The <strong>Save Run</strong> button in the active-turn toolbar becomes enabled once a run completes. Clicking it saves the run to a timestamped folder under <code>results/</code> containing:</p>
         <ul>
           <li><strong>metadata.json:</strong> prompt, hyperparameters, final output text, reproducibility info (seed, GPU, this app's commit, the model's own commit on Hugging Face, library versions, and the tokenizer that produced the run's ids), the prompt's token length against the model's context window, what the run cost in VRAM when it ran on a card, any remask edits, and the run's format version and list of captured signals.</li>
           <li><strong>final.txt:</strong> the decoded final text.</li>

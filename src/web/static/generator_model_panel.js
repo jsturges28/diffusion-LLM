@@ -37,6 +37,11 @@ function generatorModelPanelCreate(options) {
   }
 
   var validationHint = requiredElement("validation-hint");
+  var runSettings = requiredElement("run-settings");
+  var runSettingsSummary =
+    requiredElement("run-settings-summary");
+  var runSettingsSummaryChips =
+    requiredElement("run-settings-summary-chips");
   var toggleExperimental =
     requiredElement("toggle-experimental");
   var btnParamDefaults = requiredElement("btn-param-defaults");
@@ -49,6 +54,12 @@ function generatorModelPanelCreate(options) {
   var PARAM_STATE_KEY = "diffusion_param_state";
   var MODEL_OPTION_ID_PREFIX = "model-select-option-";
   var DEVICE_LABELS = { cuda: "GPU", cpu: "CPU" };
+  var PARAM_GROUP_LABELS = {
+    general: "General",
+    output: "Output",
+    sampling: "Sampling",
+    features: "Features",
+  };
 
   var models = {};
   var modelList = [];
@@ -61,6 +72,8 @@ function generatorModelPanelCreate(options) {
 
   var paramInputs = {};
   var paramTooltips = {};
+  var paramGroupMounts = {};
+  var modeGroupMounts = {};
   var paramsValid = true;
   var modelSelectDisabled = false;
   var modelActiveRow = -1;
@@ -79,7 +92,17 @@ function generatorModelPanelCreate(options) {
     btnParamDefaults.addEventListener(
       "click", resetParamsToDefaults
     );
+    runSettings.addEventListener(
+      "toggle", syncRunSettingsExpanded
+    );
+    syncRunSettingsExpanded();
     wireModelPicker();
+  }
+
+  function syncRunSettingsExpanded() {
+    runSettingsSummary.setAttribute(
+      "aria-expanded", runSettings.open ? "true" : "false"
+    );
   }
 
   function experimentalChanged() {
@@ -222,8 +245,11 @@ function generatorModelPanelCreate(options) {
     if (!activeModel) {
       paramInputs = {};
       paramTooltips = {};
+      paramGroupMounts = {};
+      modeGroupMounts = {};
       paramFields.innerHTML = "";
       modeExtra.innerHTML = "";
+      runSettingsSummaryChips.innerHTML = "";
       updateParamDefaultsButton();
       return;
     }
@@ -909,7 +935,7 @@ function generatorModelPanelCreate(options) {
     return info;
   }
 
-  function buildParamField(spec, input) {
+  function buildParamField(spec, input, mount) {
     var group = document.createElement("div");
     group.className = "param-group";
     var label = document.createElement("label");
@@ -918,10 +944,10 @@ function generatorModelPanelCreate(options) {
     label.appendChild(buildInfoIcon(spec));
     group.appendChild(label);
     group.appendChild(input);
-    paramFields.appendChild(group);
+    mount.appendChild(group);
   }
 
-  function buildModeToggle(spec, checkbox) {
+  function buildModeToggle(spec, checkbox, mount) {
     var wrap = document.createElement("span");
     wrap.className = "mode-toggle";
     var toggle = document.createElement("label");
@@ -936,12 +962,14 @@ function generatorModelPanelCreate(options) {
     wrap.appendChild(toggle);
     wrap.appendChild(name);
     wrap.appendChild(buildInfoIcon(spec));
-    modeExtra.appendChild(wrap);
+    mount.appendChild(wrap);
   }
 
   function buildParamPanel(model) {
     paramInputs = {};
     paramTooltips = {};
+    paramGroupMounts = {};
+    modeGroupMounts = {};
     paramFields.innerHTML = "";
     modeExtra.innerHTML = "";
     var specs = model.param_specs;
@@ -955,9 +983,9 @@ function generatorModelPanelCreate(options) {
     var input = buildParamInput(spec);
     paramInputs[spec.name] = input;
     if (spec.type === "bool") {
-      buildModeToggle(spec, input);
+      buildModeToggle(spec, input, modeGroupMount(spec));
     } else {
-      buildParamField(spec, input);
+      buildParamField(spec, input, paramGroupMount(spec));
     }
     var eventName = (
       spec.type === "int" || spec.type === "float"
@@ -966,6 +994,48 @@ function generatorModelPanelCreate(options) {
       validateAllParams();
       paramFormChanged();
     });
+  }
+
+  function specGroup(spec) {
+    var group = typeof spec.group === "string"
+      ? spec.group
+      : "general";
+    return PARAM_GROUP_LABELS[group] ? group : "general";
+  }
+
+  function paramGroupMount(spec) {
+    var group = specGroup(spec);
+    if (!paramGroupMounts[group]) {
+      paramGroupMounts[group] = buildControlGroup(
+        paramFields, group, "run-settings-group"
+      );
+    }
+    return paramGroupMounts[group];
+  }
+
+  function modeGroupMount(spec) {
+    var group = specGroup(spec);
+    if (!modeGroupMounts[group]) {
+      modeGroupMounts[group] = buildControlGroup(
+        modeExtra, group, "run-settings-mode-group"
+      );
+    }
+    return modeGroupMounts[group];
+  }
+
+  function buildControlGroup(host, group, className) {
+    var section = document.createElement("section");
+    section.className = className;
+    section.setAttribute("data-param-group", group);
+    var heading = document.createElement("h3");
+    heading.className = "run-settings-group-label";
+    heading.textContent = PARAM_GROUP_LABELS[group];
+    var controls = document.createElement("div");
+    controls.className = "run-settings-group-controls";
+    section.appendChild(heading);
+    section.appendChild(controls);
+    host.appendChild(section);
+    return controls;
   }
 
   function buildParamInput(spec) {
@@ -1164,6 +1234,7 @@ function generatorModelPanelCreate(options) {
     }
     validateDivisibility(errors);
     setValidation(errors);
+    updateSummaryChips();
   }
 
   function validateNumericParam(settings) {
@@ -1203,7 +1274,67 @@ function generatorModelPanelCreate(options) {
     paramsValid = errors.length === 0;
     validationHint.hidden = paramsValid;
     validationHint.textContent = paramsValid ? "" : errors[0];
+    if (!paramsValid && !runSettings.open) {
+      revealFirstInvalidControl();
+    }
     onValidationChanged(validationRead());
+  }
+
+  function revealFirstInvalidControl() {
+    runSettings.open = true;
+    syncRunSettingsExpanded();
+    var first = paramFields.querySelector(".input-warn");
+    if (!first) {
+      first = modeExtra.querySelector(".input-warn");
+    }
+    if (first && typeof first.focus === "function") {
+      first.focus();
+    }
+  }
+
+  function updateSummaryChips() {
+    runSettingsSummaryChips.innerHTML = "";
+    if (!activeModel) {
+      return;
+    }
+    var specs = activeModel.param_specs || [];
+    for (var index = 0; index < specs.length; index++) {
+      if (specs[index].prominence === "primary") {
+        appendSummaryChip(specs[index]);
+      }
+    }
+  }
+
+  function appendSummaryChip(spec) {
+    var input = paramInputs[spec.name];
+    if (!input) {
+      return;
+    }
+    var chip = document.createElement("span");
+    chip.className = "run-settings-chip";
+    chip.setAttribute("data-param-name", spec.name);
+    if (input.classList.contains("input-warn")) {
+      chip.classList.add("is-invalid");
+    }
+    var label = document.createElement("span");
+    label.className = "run-settings-chip-label";
+    label.textContent = spec.label;
+    var value = document.createElement("span");
+    value.className = "run-settings-chip-value";
+    value.textContent = summaryParamValue(spec, input);
+    chip.appendChild(label);
+    chip.appendChild(value);
+    runSettingsSummaryChips.appendChild(chip);
+  }
+
+  function summaryParamValue(spec, input) {
+    if (spec.type === "bool") {
+      return input.checked ? "On" : "Off";
+    }
+    if (spec.type === "select") {
+      return prettifyOption(input.value);
+    }
+    return input.value;
   }
 
   function validateDivisibility(errors) {

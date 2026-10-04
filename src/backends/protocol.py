@@ -24,6 +24,22 @@ class ParamType(str, Enum):
     BOOL = "bool"
 
 
+class ParamGroup(str, Enum):
+    """Presentation group for a generation parameter."""
+
+    GENERAL = "general"
+    OUTPUT = "output"
+    SAMPLING = "sampling"
+    FEATURES = "features"
+
+
+class ParamProminence(str, Enum):
+    """Whether a parameter is repeated in the collapsed summary."""
+
+    PRIMARY = "primary"
+    SECONDARY = "secondary"
+
+
 class ParamOverride(BaseModel):
     """Per-device overrides for a ``ParamSpec``.
 
@@ -44,12 +60,17 @@ class ParamSpec(BaseModel):
     ``recommended`` / ``experimental`` are (low, high) bounds for
     numeric params; ``options`` lists choices for ``SELECT``.
     ``overrides`` optionally narrows the default/bounds per device.
+    ``group`` and ``prominence`` describe presentation only. Safe
+    defaults keep an unannotated parameter in the expanded General
+    group and out of the compact summary.
     """
 
     name: str
     label: str
     type: ParamType
     default: Union[int, float, str, bool]
+    group: ParamGroup = ParamGroup.GENERAL
+    prominence: ParamProminence = ParamProminence.SECONDARY
     step: Optional[float] = None
     options: Optional[List[str]] = None
     recommended: Optional[Tuple[float, float]] = None

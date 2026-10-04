@@ -1,0 +1,217 @@
+/* Generator-only run settings disclosure.
+
+   Native details owns disclosure semantics and keyboard behavior. The
+   controller only mirrors its state for explicit accessibility
+   inspection and opens it when validation has something to show. */
+
+#run-settings {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.018);
+}
+
+#run-settings-summary {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 9px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+#run-settings-summary::-webkit-details-marker {
+  display: none;
+}
+
+#run-settings-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.run-settings-title {
+  flex: 0 0 auto;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+#run-settings-summary-chips {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.run-settings-chip {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+  padding: 2px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.run-settings-chip-label {
+  overflow: hidden;
+  color: var(--text-dim);
+  text-overflow: ellipsis;
+}
+
+.run-settings-chip-value {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.run-settings-chip.is-invalid {
+  border-color: rgba(255, 68, 68, 0.5);
+}
+
+.run-settings-chip.is-invalid .run-settings-chip-value {
+  color: var(--danger);
+}
+
+.run-settings-chevron {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-size: 10px;
+  transition: transform 0.15s ease;
+}
+
+#run-settings[open] .run-settings-chevron {
+  transform: rotate(180deg);
+}
+
+#run-settings-body {
+  max-height: min(42vh, 360px);
+  overflow-y: auto;
+  padding: 9px;
+  border-top: 1px solid var(--border);
+  scrollbar-color: var(--border) transparent;
+  scrollbar-width: thin;
+}
+
+#run-settings-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+#run-settings-body::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: var(--border);
+}
+
+#run-settings #mode-row {
+  margin-bottom: 8px;
+}
+
+#run-settings #btn-param-defaults {
+  margin-left: auto;
+}
+
+#mode-extra {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 9px;
+}
+
+#mode-extra:empty {
+  display: none;
+}
+
+.run-settings-mode-group,
+.run-settings-group {
+  min-width: 0;
+}
+
+.run-settings-mode-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.run-settings-group-label {
+  margin: 0 0 5px;
+  color: var(--text-dim);
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.run-settings-mode-group .run-settings-group-label {
+  margin: 0;
+}
+
+.run-settings-group-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 9px;
+}
+
+#run-settings #param-row {
+  display: block;
+}
+
+#run-settings #param-fields {
+  display: grid;
+  max-width: none;
+  align-items: start;
+  gap: 12px;
+  grid-template-columns:
+    repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+}
+
+#run-settings .run-settings-group {
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+#run-settings .mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#run-settings #validation-hint {
+  min-height: 1.3em;
+  margin-top: 7px;
+}
+
+#run-settings #validation-hint[hidden] {
+  display: block;
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .run-settings-chevron {
+    transition: none;
+  }
+}
+
+@media (max-width: 700px) {
+  #run-settings-summary-chips {
+    gap: 4px;
+  }
+
+  .run-settings-chip {
+    padding-right: 5px;
+    padding-left: 5px;
+  }
+
+  .run-settings-chip-label {
+    display: none;
+  }
+}

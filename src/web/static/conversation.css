@@ -1,0 +1,185 @@
+/* Generator-only conversation shell.
+
+   The shipped protocol still owns one run, so the transcript mount is
+   intentionally empty. The structure gives the current turn, composer,
+   and future completed turns separate layout owners without pretending
+   that chat turns already exist. */
+
+#conversation-shell {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-color: var(--border) transparent;
+  scrollbar-width: thin;
+}
+
+#conversation-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 42px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.conversation-toolbar-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  color: var(--text-primary);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.conversation-toolbar-mode {
+  color: var(--text-dim);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+
+#btn-new-conversation {
+  padding: 5px 11px;
+  border: 1px solid rgba(79, 195, 247, 0.35);
+  background: rgba(79, 195, 247, 0.1);
+  color: #78c8ff;
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+#btn-new-conversation:hover:not(:disabled) {
+  border-color: rgba(79, 195, 247, 0.65);
+  background: rgba(79, 195, 247, 0.2);
+}
+
+#btn-new-conversation:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+
+#conversation-transcript {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+#conversation-transcript:empty {
+  display: none;
+}
+
+#active-turn-workspace {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 220px;
+}
+
+#active-turn-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 38px;
+  padding-top: 7px;
+}
+
+.active-turn-label {
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+#active-turn-toolbar .btn-save {
+  display: inline-flex;
+  width: auto;
+  height: 30px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid rgba(0, 170, 255, 0.35);
+  border-radius: var(--radius);
+  color: #4fc3f7;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+#active-turn-toolbar .btn-save:hover:not(:disabled) {
+  border-color: rgba(79, 195, 247, 0.65);
+}
+
+.btn-save-label {
+  pointer-events: none;
+}
+
+#active-turn-workspace > .token-metrics-row {
+  flex: 0 0 auto;
+}
+
+#active-turn-workspace > #output-section {
+  padding: 8px 0;
+}
+
+#active-turn-workspace > #scrubber-section {
+  padding-top: 7px;
+}
+
+#active-turn-workspace > #status-bar {
+  min-height: 32px;
+}
+
+#controls.conversation-composer {
+  flex: 0 0 auto;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 0;
+}
+
+#composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  padding-top: 8px;
+}
+
+#composer-row #prompt-row {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+#composer-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-end;
+  padding-bottom: calc(1.3em + 4px);
+}
+
+#composer-actions #btn-generate {
+  min-width: 124px;
+}
+
+@media (max-width: 700px) {
+  #conversation-toolbar {
+    gap: 8px;
+  }
+
+  .conversation-toolbar-mode {
+    display: none;
+  }
+
+  #composer-row {
+    gap: 8px;
+  }
+
+  #composer-actions #btn-generate {
+    min-width: 104px;
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+}

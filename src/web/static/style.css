@@ -947,26 +947,10 @@ button {
   text-align: center;
 }
 
-/* Finalized-run state: same slot as Generate, but a distinct calm blue
-   to signal it starts a fresh run rather than generating. */
-#btn-generate.is-new-run {
-  background: rgba(0, 170, 255, 0.16);
-  color: #4fc3f7;
-  border-color: rgba(0, 170, 255, 0.4);
-  box-shadow: 0 0 10px rgba(0, 170, 255, 0.3);
-}
-
-#btn-generate.is-new-run:hover:not(:disabled) {
-  background: rgba(0, 170, 255, 0.26);
-  border-color: rgba(40, 190, 255, 0.7);
-  box-shadow: 0 0 20px rgba(0, 170, 255, 0.4);
-  transform: translateY(-1px);
-}
-
-/* Running state: the same slot again, in the shared danger red. It is
-   the only one of the three that interrupts rather than starts, and
-   red is the colour this app already uses for the controls that end
-   something (delete, cancel), so it reads without being learned. */
+/* Running state: the same slot again, in the shared danger red. Stop
+   interrupts rather than starts, and red is the colour this app
+   already uses for controls that end something (delete, cancel), so
+   it reads without being learned. */
 #btn-generate.is-stop {
   background: rgba(255, 68, 68, 0.16);
   color: var(--danger);
@@ -2965,10 +2949,9 @@ input[type="checkbox"].app-checkbox:checked::after {
 
 /* ---- Model selector + dynamic param panel ---- */
 
-/* param-fields holds the dynamic hyperparameters. It is capped at
-   five per row (via max-width) so many-param models wrap onto extra
-   rows instead of crowding the Save / Generate buttons, which sit to
-   its right in #param-row. */
+/* Base layout for the dynamic hyperparameters. The generator's
+   page-local run_settings.css groups these controls and removes this
+   fallback cap inside the disclosure. */
 #param-fields {
   display: flex;
   flex-wrap: wrap;
