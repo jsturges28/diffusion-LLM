@@ -197,6 +197,24 @@ def test_an_opt_in_channel_says_it_is_optional() -> None:
         assert alternatives.location == "sidecar", model.id
 
 
+def test_watermark_membership_is_an_ar_opt_in_category() -> None:
+    for model in (SMOLLM3, MAMBA3):
+        channels = _channels(model)
+        membership = channels["watermark_membership"]
+        evidence = channels["watermark_evidence"]
+
+        for channel in (membership, evidence):
+            assert channel.capture == "opt_in"
+            assert channel.axes == SHAPES["one value per position"]
+            assert channel.location == "token_record"
+            assert channel.unit == "categorical"
+        assert membership.key == "g"
+        assert evidence.key == "we"
+    for model in (LLADA, DGEMMA):
+        assert "watermark_membership" not in _channels(model)
+        assert "watermark_evidence" not in _channels(model)
+
+
 def test_diffusion_candidates_are_a_budgeted_trajectory() -> None:
     """The alternatives pair, like the entropy pair: one name, two
     shapes. A diffusion position is re-decided at every step, so its
@@ -220,7 +238,7 @@ def test_everything_else_is_always_captured() -> None:
     carry it."""
     for model in SHIPPED:
         for channel in _channels(model).values():
-            if channel.name == "alternatives":
+            if channel.capture == "opt_in":
                 continue
             assert channel.capture == "always", channel.name
 

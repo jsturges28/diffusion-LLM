@@ -338,6 +338,9 @@ kept when these were written:
   conversation display, model inputs, saved/text-only distinction,
   two-window recovery, tail-only edits, and restart behavior on a real
   display with real workers.
+- **425 to 428**: **not yet validated.** These cover KGW's CUDA cost,
+  real-checkpoint sampling parity, What If evidence, durable key
+  permissions and tokenizer-id detection.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -5068,3 +5071,45 @@ models and target devices before anyone raises or lowers them.
     the durable text and workspace both return to the original. A
     pre-conversation snapshot remains on the legacy single-prompt path
     until Send.
+
+## AR-only KGW watermark core
+
+425. **Synthetic CUDA cost.** In `.venv-ar`, run
+    `python scripts/benchmark_kgw.py --repeats 50`, then repeat with
+    `--cuda`. Record candidate construction, cache-miss bias and
+    cache-hit bias medians and maxima beside the CPU reference in
+    `docs/ROADMAP.md` (about 1.1 ms, 0.18 ms and 0.10 ms median on
+    this CPU). Treat a median above 2 ms for selection, 1 ms for a
+    CUDA miss, or 0.5 ms for a CUDA hit as a regression to
+    investigate. Confirm the green-list size is exactly 32,064 for
+    the 128,256-id vocabulary, both host and device caches stay at or
+    below 32 entries, and CUDA memory returns to its baseline after
+    the script exits.
+
+426. **Real SmolLM3 parity and bias.** With one fixed seed and prompt,
+    run SmolLM3 three times: watermark off, on with Delta 0, and on with
+    Delta 2. The first two must produce identical token ids, confidence,
+    entropy, ranks and Alternatives. The Delta 2 run may differ, while
+    those readouts must still match the model's unmodified logits. Save
+    each run. Only enabled runs carry `g`, `we`, and a watermark metadata
+    block; no saved record contains key bytes.
+
+427. **Mamba-3 and What If evidence.** Run Mamba-3 with KGW enabled and
+    branch at a middle position. The kept prefix retains every `g` and
+    `we` value. The forced token has a boolean membership and `we=false`;
+    every generated token after it has `we=true`. Back restores the
+    original run's watermark provenance, and Confirm saves the branch's
+    own green count, scored count and z-score.
+
+428. **Durable key and detector boundary.** With no KGW key present,
+    complete an ordinary run and confirm no
+    `$XDG_STATE_HOME/diffusion-llm/kgw-v1.key` was created. Enable KGW
+    once, confirm the new file is 32 bytes and mode 0600, then run again
+    and confirm its contents and provenance key id are unchanged. Feed a
+    saved enabled run's ids and evidence flags to the tokenizer-id
+    detector CLI with `--expected-key-id` set to the saved id: it must
+    report that id and reproduce the saved `p0`, counts and z-score.
+    Remove the key and repeat: detection must fail without creating a
+    replacement. An explicit wrong experiment key must fail the id
+    check, and fewer than 50 evidence tokens must report
+    `insufficient_evidence`, with no AI or human label.

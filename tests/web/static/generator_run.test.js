@@ -270,6 +270,111 @@ test("the save payload preserves the run record shape", () => {
   assert.equal("partial" in payload, false);
 });
 
+test("watermark token flags survive save and session codecs", () => {
+  const { run } = harness();
+  const first = appendFrame(1, "a");
+  first.token.g = true;
+  first.token.we = false;
+  const second = appendFrame(2, "b");
+  second.token.g = false;
+  second.token.we = true;
+
+  run.begin("marked", {
+    watermark: true,
+    watermark_gamma: 0.25,
+    watermark_delta: 2,
+  });
+  run.appendFrame(first);
+  run.appendFrame(second);
+  finish(run, "ab");
+
+  let payload = run.buildSavePayload();
+  assert.equal(payload.frame_positions[0].g, true);
+  assert.equal(payload.frame_positions[0].we, false);
+  assert.equal(payload.frame_positions[1].g, false);
+  assert.equal(payload.frame_positions[1].we, true);
+
+  assert.equal(run.saveSession(), true);
+  run.reset();
+  assert.equal(run.restoreSession(), true);
+  payload = run.buildSavePayload();
+  assert.equal(payload.frame_positions[0].g, true);
+  assert.equal(payload.frame_positions[1].we, true);
+});
+
+test("branch rollback restores watermark provenance", () => {
+  const { run } = harness();
+  run.begin("marked", { watermark: true });
+  run.appendFrame(appendFrame(1, "a"));
+  run.appendFrame(appendFrame(2, "b"));
+  run.finish({
+    final_text: "ab",
+    run_token: "nonce:1",
+    provenance: {
+      model_id: "smollm3",
+      watermark: { key_id: "original-key", scored_count: 1 },
+    },
+  });
+  const checkpoint = run.captureCheckpoint();
+
+  run.finish({
+    final_text: "branch",
+    run_token: "nonce:1",
+    provenance: {
+      model_id: "smollm3",
+      watermark: { key_id: "branch-key", scored_count: 2 },
+    },
+  });
+  assert.equal(
+    run.provenance().watermark.key_id, "branch-key"
+  );
+
+  run.restoreCheckpoint(checkpoint);
+
+  assert.equal(
+    run.provenance().watermark.key_id, "original-key"
+  );
+});
+
+test("append frames retain the latest watermark score", () => {
+  const { run } = harness();
+  run.begin("marked", { watermark: true });
+  const first = appendFrame(1, "a");
+  first.provenance = {
+    model_id: "smollm3",
+    watermark: {
+      scheme: "kgw",
+      key_id: "0123456789abcdef",
+      scored_count: 0,
+    },
+  };
+  first.watermark_stats = {
+    green_count: 0,
+    scored_count: 0,
+    z_score: 0,
+    p0: 0.25,
+    status: "insufficient_evidence",
+  };
+  const second = appendFrame(2, "b");
+  second.watermark_stats = {
+    green_count: 1,
+    scored_count: 1,
+    z_score: 1.5,
+    p0: 0.25,
+    status: "insufficient_evidence",
+  };
+
+  run.appendFrame(first);
+  run.appendFrame(second);
+
+  const watermark = run.provenance().watermark;
+  assert.equal(watermark.key_id, "0123456789abcdef");
+  assert.equal(watermark.green_count, 1);
+  assert.equal(watermark.scored_count, 1);
+  assert.equal(watermark.z_score, 1.5);
+  assert.equal(watermark.p0, 0.25);
+});
+
 test("a conversation-bound run saves its durable turn location", () => {
   const { run, external } = harness();
   external.conversation = conversationIdentity();

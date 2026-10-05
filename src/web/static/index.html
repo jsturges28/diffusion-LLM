@@ -315,9 +315,9 @@
               <span class="toggle-label">Experimental</span>
               <span class="info-icon info-icon-sm"
                 aria-label="Experimental mode info">?
-                <span class="tooltip">Removes recommended parameter
-                  bounds. Values outside the default range may
-                  produce erratic or unstable results.</span>
+                <span class="tooltip">Reveals experimental controls
+                  and removes recommended parameter bounds. Extreme
+                  values may produce unstable results.</span>
               </span>
               <button id="btn-param-defaults" type="button"
                 disabled
@@ -482,6 +482,7 @@
         <p><strong>DiffusionGemma-26B-A4B:</strong> Google's block-autoregressive text-diffusion model, a 26B-parameter Mixture-of-Experts (~4B active) built on Gemma 4, run here as a self-quantized 4-bit <strong>NF4</strong> checkpoint (~18 GB VRAM). It denoises 256-token canvases with an entropy-bounded sampler and <em>adaptive stopping</em>: a canvas ends once it holds still and its mean entropy falls below a threshold, both of which you can set, and a readout above the canvas shows how far it has left to go. It chains canvases for longer outputs, and exposes an optional step-by-step <em>reasoning</em> (thinking) channel. It also changes its mind, settling a position on one token and later another, which flashes cyan while it runs and is counted afterwards by the <strong>Revisions</strong> overlay.</p>
         <p><strong>SmolLM3-3B:</strong> a compact 3B-parameter <strong>autoregressive</strong> (left-to-right) decoder-only transformer, included as a baseline for contrast with the diffusion models. It streams tokens one at a time with per-token sampling confidence, runs in bf16 on <strong>GPU or CPU</strong> (selectable per activation, so GPU-less hosts can still use it), and exposes an optional reasoning (thinking) channel. Because it generates strictly left to right, it has no interactive remasking / Edit Frames; it carries its own explainability tools instead: per-token <strong>entropy</strong>, an optional top-5 <strong>Alternatives</strong> capture, and <strong>What If?</strong> substitution, which can force one of those five or any token you type, reporting what the model gave your choice and where it ranked.</p>
         <p><strong>Mamba-3-1.5B:</strong> a <strong>state-space</strong> model. It writes left to right like SmolLM3 but keeps no cache of past tokens: everything it knows lives in a fixed-size memory that each token first decays and then writes into. It is a base model, so it continues your text rather than answering it, and it runs in float32 on <strong>GPU or CPU</strong>, on this project's own PyTorch implementation. It shares SmolLM3's tools, What If? included, and adds one of its own: per-token <strong>forgetting</strong>, how much of its memory reading each token erased, drawn by the <strong>Forgetting</strong> overlay.</p>
+        <p>Both left-to-right models also offer experimental <strong>KGW watermarking</strong>: a keyed sampling bias with saved token evidence and an exact-null score, deliberately not an authorship label.</p>
         <p class="modal-links">
           LLaDA:
           <a href="https://arxiv.org/abs/2502.09992" target="_blank" rel="noopener">Paper</a>
@@ -572,7 +573,7 @@
         <h4>Moving between pages</h4>
         <p>Header links move between pages: <strong>Menu</strong> returns to model selection, <strong>Analytics</strong> opens the analytics suite, and <strong>Vision</strong> opens the image tokeniser, which inspects a model without loading it. From Analytics, Vision and Settings, a <strong>Generation</strong> link appears whenever a model is loaded. A <strong>gear icon</strong> in the header opens the shared <strong>Settings</strong> page.</p>
         <h4>Experimental mode</h4>
-        <p>Open <strong>Run settings</strong> to reach the Experimental toggle. It removes the recommended bounds, allowing extreme values for exploratory purposes. The default bounds represent the range that produces more consistent, stable results.</p>
+        <p>Open <strong>Run settings</strong> to reach the Experimental toggle. It reveals experimental-only controls, including KGW on SmolLM3 and Mamba-3, and removes the recommended bounds, allowing extreme values for exploratory purposes. The default bounds represent the range that produces more consistent, stable results.</p>
         <h4>Where the rest of it is</h4>
         <p>These tabs cover the controls: what each one does and what the numbers beside it mean. Two things live outside them. <code>docs/GUIDE.md</code> in the repository is the long-form version, including how each model actually generates and how to read a profile once you have one. <code>docs/ROADMAP.md</code> records why particular decisions were made, and what is deliberately not built yet.</p>
         </section>
@@ -660,6 +661,12 @@
           <dd>Enables an extended step-by-step reasoning pass before the answer. When on, the model's reasoning is separated into a collapsible <em>Reasoning</em> panel above the output, keeping the final answer clean.</dd>
           <dt>Alternatives</dt>
           <dd>Captures the five most likely tokens at every position, not just the one that was chosen. Hovering a token then shows what the model nearly said instead, and it is required for <strong>What If?</strong> substitution. On by default, since it is what the hover popover and What If? both run on; turn it off to save a little time per token. On LLaDA and DiffusionGemma it captures the five at every step rather than once, and a run long enough to pass its budget keeps every few steps instead.</dd>
+          <dt>KGW Watermark</dt>
+          <dd>An experimental SmolLM3 and Mamba-3 signal. It biases an exact, keyed set of token ids before Temperature, Top-k and Top-p. It records evidence for later scoring, not an AI or human verdict.</dd>
+          <dt>Green Fraction</dt>
+          <dd>The exact share of output ids placed on each keyed green list.</dd>
+          <dt>Green Bias</dt>
+          <dd>The logit bias added to those ids. Set it to 0 to record membership with output identical to an unwatermarked run at the same seed.</dd>
         </dl>
         <h5>Mamba-3 (state space)</h5>
         <p>The same as SmolLM3's, with the same lower ceiling on CPU, less <strong>Thinking</strong>: a base model has no reasoning channel for it to select.</p>

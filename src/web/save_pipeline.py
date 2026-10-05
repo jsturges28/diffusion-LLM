@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -19,13 +20,20 @@ from typing import (
     Callable,
     Dict,
     List,
+    Literal,
     Mapping,
     Optional,
     Sized,
     Tuple,
 )
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    model_validator,
+)
 
 from src.backends.context_pack import (
     IDENTIFIER_CHARS_MAX as CONTEXT_IDENTIFIER_CHARS_MAX,
@@ -39,6 +47,13 @@ from src.backends.protocol import (
     saved_model_type,
 )
 from src.backends.registry import DEFAULT_MODEL, REGISTRY, run_bounds
+from src.inference.kgw_watermark import (
+    KGW_EVIDENCE_MIN,
+    detection_status,
+    detection_z_score,
+    green_list_size,
+    null_probability,
+)
 from src.inference.render_gif import history_to_gif
 from src.web import run_store
 from src.web.save_limits import (
@@ -105,6 +120,16 @@ class TokenRecord(BaseModel):
     c: Optional[float] = None
     e: Optional[float] = None
     f: Optional[float] = None
+    g: Optional[StrictBool] = None
+    we: Optional[StrictBool] = None
+
+    @model_validator(mode="after")
+    def _watermark_evidence_has_membership(self) -> "TokenRecord":
+        if self.we is True and self.g is None:
+            raise ValueError(
+                "watermark evidence needs green membership"
+            )
+        return self
 
 
 class TokenAlternative(BaseModel):
@@ -219,6 +244,92 @@ class RunProvenance(BaseModel):
     context_pack: Optional["ContextPackProvenance"] = None
     signals: List[Dict[str, Any]] = Field(default_factory=list)
     resources: Dict[str, Any] = Field(default_factory=dict)
+    watermark: Optional["WatermarkProvenance"] = None
+
+
+class WatermarkProvenance(BaseModel):
+    """The worker-attested KGW contract and detector score."""
+
+    model_config = ConfigDict(
+        extra="allow",
+        allow_inf_nan=False,
+    )
+
+    scheme: Literal["kgw"]
+    version: int = Field(ge=1)
+    key_id: str = Field(pattern=r"^[0-9a-f]{16}$")
+    gamma: float = Field(gt=0.0, lt=1.0)
+    delta: float = Field(ge=0.0)
+    vocab_size: int = Field(ge=2)
+    green_list_size: int = Field(ge=1)
+    tokenizer_fingerprint: str = Field(
+        min_length=1, max_length=256
+    )
+    seeding_contract: str = Field(min_length=1, max_length=512)
+    rng_contract: str = Field(min_length=1, max_length=512)
+    exclusions: List[str] = Field(min_length=1, max_length=8)
+    status: Literal["insufficient_evidence", "scored"]
+    green_count: int = Field(ge=0)
+    scored_count: int = Field(ge=0)
+    z_score: float
+    p0: float = Field(gt=0.0, lt=1.0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _secret_never_crosses(
+        cls, value: object
+    ) -> object:
+        if isinstance(value, dict) and "secret" in value:
+            raise ValueError(
+                "watermark provenance must not contain a secret"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _coherent(self) -> "WatermarkProvenance":
+        expected_size = green_list_size(
+            gamma=self.gamma,
+            vocab_size=self.vocab_size,
+        )
+        if self.green_list_size != expected_size:
+            raise ValueError(
+                "green list size disagrees with gamma and vocabulary"
+            )
+        if self.green_count > self.scored_count:
+            raise ValueError("green count exceeds scored count")
+        expected_p0 = null_probability(
+            green_list_size=self.green_list_size,
+            vocab_size=self.vocab_size,
+        )
+        if not math.isclose(
+            self.p0,
+            expected_p0,
+            rel_tol=1e-15,
+            abs_tol=1e-15,
+        ):
+            raise ValueError("watermark p0 is not the exact null")
+        expected_status = detection_status(self.scored_count)
+        if self.status != expected_status:
+            threshold = KGW_EVIDENCE_MIN
+            raise ValueError(
+                "watermark status disagrees with the "
+                f"{threshold}-token evidence threshold"
+            )
+        expected_score = detection_z_score(
+            green_count=self.green_count,
+            scored_count=self.scored_count,
+            p0=expected_p0,
+        )
+        if not math.isclose(
+            self.z_score,
+            expected_score,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        ):
+            raise ValueError(
+                "watermark z-score disagrees with its counts"
+            )
+        return self
 
 
 class ContextConversationProvenance(BaseModel):
@@ -340,6 +451,7 @@ class SaveRunRequest(BaseModel):
     def _within_bounds(self) -> "SaveRunRequest":
         _check_run_bounds(self)
         _check_conversation_metadata(self)
+        _check_watermark_records(self)
         return self
 
     def normalized(self) -> "SaveRunRequest":
@@ -409,6 +521,61 @@ def _check_attested_conversation(body: SaveRunRequest) -> None:
             "save conversation metadata differs from the worker"
             " attestation"
         )
+
+
+def _check_watermark_records(body: SaveRunRequest) -> None:
+    """Reconcile current token evidence with worker provenance."""
+    records = _live_token_records(body)
+    watermark = (
+        body.provenance.watermark
+        if body.provenance is not None
+        else None
+    )
+    if watermark is None:
+        if records is not None and _has_watermark_fields(records):
+            raise ValueError(
+                "watermark token fields need watermark provenance"
+            )
+        return
+    if records is None or not records:
+        raise ValueError(
+            "watermark provenance needs final token records"
+        )
+    if any(record.g is None for record in records):
+        raise ValueError("watermarked tokens need membership flags")
+    if any(record.we is None for record in records):
+        raise ValueError("watermarked tokens need evidence flags")
+    scored = sum(record.we is True for record in records)
+    green = sum(
+        record.we is True and record.g is True
+        for record in records
+    )
+    if watermark.scored_count != scored:
+        raise ValueError(
+            "watermark scored count differs from token evidence"
+        )
+    if watermark.green_count != green:
+        raise ValueError(
+            "watermark green count differs from token evidence"
+        )
+
+
+def _live_token_records(
+    body: SaveRunRequest,
+) -> Optional[List[TokenRecord]]:
+    """Current final tokens, excluding any original-run snapshot."""
+    if body.frame_positions is not None:
+        return body.frame_positions
+    if body.frame_tokens:
+        return body.frame_tokens[-1]
+    return None
+
+
+def _has_watermark_fields(records: List[TokenRecord]) -> bool:
+    return any(
+        record.g is not None or record.we is not None
+        for record in records
+    )
 
 
 def _check_run_bounds(body: SaveRunRequest) -> None:
@@ -637,6 +804,19 @@ def _resources_metadata(
     return dict(provenance.resources)
 
 
+def _watermark_metadata(
+    provenance: Optional[RunProvenance],
+) -> Dict[str, Any]:
+    """The enabled run's worker-attested KGW block."""
+    if provenance is None or provenance.watermark is None:
+        return {}
+    return {
+        "watermark": provenance.watermark.model_dump(
+            exclude_none=True
+        )
+    }
+
+
 def _conversation_metadata(
     body: SaveRunRequest,
 ) -> Dict[str, Any]:
@@ -754,6 +934,7 @@ def _build_metadata(
         metadata["resources"] = resources
     if provenance is not None and provenance.signals:
         metadata[run_store.SIGNALS_KEY] = provenance.signals
+    metadata.update(_watermark_metadata(provenance))
     metadata["reproducibility"] = _reproducibility_block(
         body,
         provenance,

@@ -119,6 +119,22 @@ _AUTOREGRESSIVE_SIGNALS: Tuple[SignalChannel, ...] = (
         key="alternatives",
         capture="opt_in",
     ),
+    SignalChannel(
+        name="watermark_membership",
+        unit="categorical",
+        axes=("position",),
+        location="token_record",
+        key="g",
+        capture="opt_in",
+    ),
+    SignalChannel(
+        name="watermark_evidence",
+        unit="categorical",
+        axes=("position",),
+        location="token_record",
+        key="we",
+        capture="opt_in",
+    ),
 )
 
 DEFAULT_MODEL = "llada"
@@ -159,6 +175,46 @@ _DIFFUSION_ALTERNATIVES = ParamSpec(
     help="Capture the five likeliest tokens at each position for"
     " every step, shown on hover. Long runs keep every few"
     " steps instead.",
+)
+
+# KGW is intentionally behind Experimental. The switch controls
+# whether a key is touched at all; gamma and delta remain declared
+# beside it so saved parameters fully describe an enabled run.
+_KGW_PARAMETERS: Tuple[ParamSpec, ...] = (
+    ParamSpec(
+        name="watermark",
+        label="KGW Watermark",
+        type=ParamType.BOOL,
+        default=False,
+        group=ParamGroup.SIGNALS,
+        experimental_only=True,
+        help="Bias a deterministic keyed green list during"
+        " left-to-right sampling.",
+    ),
+    ParamSpec(
+        name="watermark_gamma",
+        label="Green Fraction",
+        type=ParamType.FLOAT,
+        default=0.25,
+        group=ParamGroup.SIGNALS,
+        step=0.01,
+        recommended=(0.05, 0.5),
+        experimental=(0.01, 0.5),
+        experimental_only=True,
+        help="Share of vocabulary ids in each exact green list.",
+    ),
+    ParamSpec(
+        name="watermark_delta",
+        label="Green Bias",
+        type=ParamType.FLOAT,
+        default=2.0,
+        group=ParamGroup.SIGNALS,
+        step=0.1,
+        recommended=(0.0, 5.0),
+        experimental=(0.0, 10.0),
+        experimental_only=True,
+        help="Logit bias added before temperature and truncation.",
+    ),
 )
 
 
@@ -572,6 +628,7 @@ SMOLLM3 = ModelInfo(
             " position, shown on hover and required for"
             " What If substitution (slightly slower).",
         ),
+        *_KGW_PARAMETERS,
     ],
 )
 

@@ -74,6 +74,7 @@ from src.inference.frame_queue import (
     frame_queue_drain_until_done,
     frame_queue_put,
 )
+from src.inference.kgw_watermark import KgwWatermark
 
 # Competing candidates captured per position when the opt-in
 # alternatives signal is on. Fixed rather than user-facing: five is
@@ -91,6 +92,8 @@ class _StepPick(NamedTuple):
     confidence: float
     entropy: float
     alternatives: Optional[List[Dict[str, Any]]]
+    green: Optional[bool] = None
+    evidence: Optional[bool] = None
 
 
 def _seed(seed: int) -> None:
@@ -277,6 +280,9 @@ def _sample_next(
     top_k: int,
     tokenizer: Any,
     alternatives: bool,
+    watermark: Optional[KgwWatermark] = None,
+    previous_token: Optional[int] = None,
+    watermark_evidence: bool = False,
 ) -> _StepPick:
     """Pick the next token and its signals from step logits.
 
@@ -290,12 +296,26 @@ def _sample_next(
     """
     logits = logits.float().squeeze(0)  # (vocab,)
     base_probs = torch.softmax(logits, dim=-1)
+    sample_logits = logits
+    if watermark is not None:
+        if previous_token is None:
+            raise ValueError(
+                "watermarking needs the previous token id"
+            )
+        green_ids = watermark.green_ids(previous_token)
+        sample_logits = _watermark_bias(
+            logits,
+            green_ids=green_ids,
+            delta=watermark.config.delta,
+            watermark=watermark,
+            previous_token=previous_token,
+        )
     if temperature <= 0.0:
         # Greedy takes the argmax, which no truncation can move:
         # the highest token survives every top-k and every nucleus.
-        next_id = int(torch.argmax(logits).item())
+        next_id = int(torch.argmax(sample_logits).item())
     else:
-        scaled = torch.softmax(logits / temperature, dim=-1)
+        scaled = torch.softmax(sample_logits / temperature, dim=-1)
         scaled = _top_k_filter(scaled, top_k)
         scaled = _top_p_filter(scaled, top_p)
         next_id = int(torch.multinomial(scaled, 1).item())
@@ -325,12 +345,89 @@ def _sample_next(
                 tokenizer=tokenizer,
             )
         )
+    green: Optional[bool] = None
+    evidence: Optional[bool] = None
+    if watermark is not None:
+        assert previous_token is not None
+        green = watermark.is_green(
+            previous_token=previous_token,
+            token_id=next_id,
+        )
+        evidence = watermark_evidence
+        watermark.observe(green=green, evidence=evidence)
     return _StepPick(
         token_id=next_id,
         confidence=confidence,
         entropy=_entropy_nats(base_probs),
         alternatives=candidates,
+        green=green,
+        evidence=evidence,
     )
+
+
+def _watermark_bias(
+    logits: torch.Tensor,
+    *,
+    green_ids: Any,
+    delta: float,
+    watermark: Optional[KgwWatermark] = None,
+    previous_token: Optional[int] = None,
+) -> torch.Tensor:
+    """Add KGW bias without touching the model-evidence logits."""
+    assert logits.dim() == 1, "logits must be 1-D"
+    if delta == 0.0:
+        return logits
+    indices = _watermark_indices(
+        logits=logits,
+        green_ids=green_ids,
+        watermark=watermark,
+        previous_token=previous_token,
+    )
+    biased = logits.clone()
+    biased[indices] += delta
+    return biased
+
+
+def _watermark_indices(
+    *,
+    logits: torch.Tensor,
+    green_ids: Any,
+    watermark: Optional[KgwWatermark],
+    previous_token: Optional[int],
+) -> torch.Tensor:
+    """One fixed, bounded cached index tensor per predecessor."""
+    if watermark is None:
+        return torch.tensor(
+            green_ids,
+            dtype=torch.long,
+            device=logits.device,
+        )
+    if previous_token is None:
+        raise ValueError(
+            "cached watermark indices need a predecessor"
+        )
+    device_key = str(logits.device)
+    cached = watermark.cache.device_get(
+        device_key=device_key,
+        previous_token=previous_token,
+    )
+    if cached is not None:
+        if not isinstance(cached, torch.Tensor):
+            raise TypeError("watermark device cache is not a tensor")
+        assert cached.device == logits.device
+        assert cached.dtype == torch.long
+        return cached
+    indices = torch.tensor(
+        green_ids,
+        dtype=torch.long,
+        device=logits.device,
+    )
+    watermark.cache.device_put(
+        device_key=device_key,
+        previous_token=previous_token,
+        value=indices,
+    )
+    return indices
 
 
 # Frame shapes, named on the frame itself.
@@ -356,6 +453,7 @@ def _build_append_frame(
     frame_index: int,
     total_steps: int,
     conf_sum: float,
+    watermark: Optional[KgwWatermark] = None,
 ) -> Dict[str, Any]:
     """Build the frame that adds one position to the sequence.
 
@@ -398,12 +496,22 @@ def _build_append_frame(
         "revealed": [frame_index],
     }
     token = frame["token"]
+    green = trace.greens[frame_index]
+    evidence = trace.evidence[frame_index]
+    if green is not None:
+        token["g"] = green
+    if evidence is not None:
+        token["we"] = evidence
     for key, value in trace.signals[frame_index].items():
         assert key not in token, f"signal {key!r} shadows a field"
         token[key] = round(value, 4)
     alternatives = trace.alts[frame_index]
     if alternatives is not None:
         frame["alts"] = alternatives
+    if watermark is not None:
+        frame["watermark_stats"] = (
+            watermark.accumulator.result().as_dict()
+        )
     return frame
 
 
@@ -445,6 +553,8 @@ class _Trace:
         self.confs: List[float] = []
         self.entropies: List[float] = []
         self.alts: List[Optional[List[Dict[str, Any]]]] = []
+        self.greens: List[Optional[bool]] = []
+        self.evidence: List[Optional[bool]] = []
         # Values the model reports as it reads a token, keyed by the
         # token record's short key. Empty until the token is read,
         # and always empty for a model that reports none.
@@ -460,6 +570,8 @@ class _Trace:
         self.confs.append(pick.confidence)
         self.entropies.append(pick.entropy)
         self.alts.append(pick.alternatives)
+        self.greens.append(pick.green)
+        self.evidence.append(pick.evidence)
         self.signals.append({})
         self.conf_sum += pick.confidence
 
@@ -470,6 +582,12 @@ class _Trace:
         entropies: List[float],
         alts: List[Optional[List[Dict[str, Any]]]],
         signals: Optional[List[Dict[str, float]]] = None,
+        watermark_memberships: Optional[
+            List[Optional[bool]]
+        ] = None,
+        watermark_evidence: Optional[
+            List[Optional[bool]]
+        ] = None,
     ) -> None:
         """Start from a kept prefix rather than from nothing.
 
@@ -483,11 +601,23 @@ class _Trace:
         assert len(ids) == len(alts), "seed alts misalign"
         if signals is None:
             signals = [{} for _ in ids]
+        if watermark_memberships is None:
+            watermark_memberships = [None for _ in ids]
+        if watermark_evidence is None:
+            watermark_evidence = [None for _ in ids]
         assert len(ids) == len(signals), "seed signals misalign"
+        assert len(ids) == len(watermark_memberships), (
+            "seed watermark memberships misalign"
+        )
+        assert len(ids) == len(watermark_evidence), (
+            "seed watermark evidence misalign"
+        )
         self.ids = list(ids)
         self.confs = list(confs)
         self.entropies = list(entropies)
         self.alts = list(alts)
+        self.greens = list(watermark_memberships)
+        self.evidence = list(watermark_evidence)
         self.signals = [dict(values) for values in signals]
         self.conf_sum = sum(self.confs)
 
@@ -505,6 +635,8 @@ class _Trace:
         del self.confs[length:]
         del self.entropies[length:]
         del self.alts[length:]
+        del self.greens[length:]
+        del self.evidence[length:]
         del self.signals[length:]
         self.conf_sum = sum(self.confs)
 
@@ -514,7 +646,18 @@ class _Trace:
             "entropy misalign"
         )
         assert len(self.ids) == len(self.alts), "alts misalign"
+        assert len(self.ids) == len(self.greens), "green misalign"
+        assert len(self.ids) == len(self.evidence), (
+            "watermark evidence misalign"
+        )
         assert len(self.ids) == len(self.signals), "signals misalign"
+        for green, evidence in zip(
+            self.greens, self.evidence, strict=True
+        ):
+            if evidence is True:
+                assert green is not None, (
+                    "scored token needs green membership"
+                )
         # Tolerant, because the running total adds in decode order
         # while this adds in list order and float addition is not
         # associative. The check is for a missed update, which is off
@@ -523,6 +666,18 @@ class _Trace:
         assert drift < 1e-6, (
             f"running confidence sum drifted by {drift}"
         )
+
+
+def _trace_truncate_to_delivered(
+    trace: _Trace,
+    length: int,
+    watermark: Optional[KgwWatermark],
+) -> None:
+    """Drop unsent positions and restore every derived counter."""
+    trace.truncate(length)
+    if watermark is not None:
+        watermark.restore(trace.greens, trace.evidence)
+    trace.check()
 
 
 def _stream_tokens(
@@ -541,6 +696,7 @@ def _stream_tokens(
     alternatives: bool,
     out_queue: "queue.Queue[Any]",
     cancel_event: Optional[threading.Event],
+    watermark: Optional[KgwWatermark] = None,
     past: Any = None,
 ) -> Any:
     """Decode up to ``budget`` tokens, emitting one frame each.
@@ -590,6 +746,9 @@ def _stream_tokens(
                 top_k=top_k,
                 tokenizer=tokenizer,
                 alternatives=alternatives,
+                watermark=watermark,
+                previous_token=int(step_ids[0, -1].item()),
+                watermark_evidence=len(trace.ids) > 0,
             )
             frame_index = len(trace.ids)
             trace.append(pick)
@@ -602,6 +761,7 @@ def _stream_tokens(
                     frame_index=frame_index,
                     total_steps=total_steps,
                     conf_sum=trace.conf_sum,
+                    watermark=watermark,
                 ),
                 stop_event=cancel_event,
             )
@@ -610,6 +770,11 @@ def _stream_tokens(
             # well as at the top of the loop because a run can be
             # cancelled during the wait this put just did.
             if not delivered:
+                _trace_truncate_to_delivered(
+                    trace,
+                    frame_index,
+                    watermark,
+                )
                 break
             if pick.token_id in stop_ids:
                 break
@@ -644,6 +809,7 @@ def _stream_read_tokens(
     alternatives: bool,
     out_queue: "queue.Queue[Any]",
     cancel_event: Optional[threading.Event],
+    watermark: Optional[KgwWatermark] = None,
     past: Any = None,
     pending: Optional[int] = None,
 ) -> Any:
@@ -677,6 +843,7 @@ def _stream_read_tokens(
         trace=trace,
         total_steps=total_steps,
         cancel_event=cancel_event,
+        watermark=watermark,
     )
     sent = len(trace.ids) if pending is None else pending
     assert len(trace.ids) - sent in (0, 1), "only the newest waits"
@@ -703,6 +870,9 @@ def _stream_read_tokens(
                 top_k=top_k,
                 tokenizer=tokenizer,
                 alternatives=alternatives,
+                watermark=watermark,
+                previous_token=int(step_ids[0, -1].item()),
+                watermark_evidence=len(trace.ids) > 0,
             )
             trace.append(pick)
             sampled += 1
@@ -712,8 +882,7 @@ def _stream_read_tokens(
             attention_mask = _grow_attention(
                 attention_mask, device
             )
-    trace.truncate(sent)
-    trace.check()
+    _trace_truncate_to_delivered(trace, sent, watermark)
     return past
 
 
@@ -746,6 +915,7 @@ def _emit_position(
     trace: _Trace,
     total_steps: int,
     cancel_event: Optional[threading.Event],
+    watermark: Optional[KgwWatermark] = None,
 ) -> bool:
     """Send the frame for one position; False if nobody took it."""
     return frame_queue_put(
@@ -757,6 +927,7 @@ def _emit_position(
             frame_index=index,
             total_steps=total_steps,
             conf_sum=trace.conf_sum,
+            watermark=watermark,
         ),
         stop_event=cancel_event,
     )
@@ -768,6 +939,7 @@ def _finalize(
     trace: _Trace,
     result: Dict[str, Any],
     prompt_len: Optional[int] = None,
+    watermark: Optional[KgwWatermark] = None,
 ) -> None:
     """Record the decoded text and the full trace for the caller.
 
@@ -793,6 +965,10 @@ def _finalize(
     result["entropies"] = list(trace.entropies)
     result["alternatives"] = list(trace.alts)
     result["signals"] = list(trace.signals)
+    if watermark is not None:
+        watermark.restore(trace.greens, trace.evidence)
+        result["watermark_memberships"] = list(trace.greens)
+        result["watermark_evidence"] = list(trace.evidence)
 
 
 def _decode_loop(
@@ -807,6 +983,7 @@ def _decode_loop(
     top_k: int,
     alternatives: bool,
     seed: int,
+    watermark: Optional[KgwWatermark],
     out_queue: "queue.Queue[Any]",
     cancel_event: Optional[threading.Event],
     result: Dict[str, Any],
@@ -830,11 +1007,19 @@ def _decode_loop(
         top_p=top_p,
         top_k=top_k,
         alternatives=alternatives,
+        watermark=watermark,
         out_queue=out_queue,
         cancel_event=cancel_event,
     )
     prompt_len = int(inputs["input_ids"].shape[-1])
-    _finalize(tokenizer, adapter, trace, result, prompt_len)
+    _finalize(
+        tokenizer,
+        adapter,
+        trace,
+        result,
+        prompt_len,
+        watermark=watermark,
+    )
     result["cache"] = _cache_record(
         past, prompt_len, trace.ids
     )
@@ -861,11 +1046,18 @@ def _substitute_loop(
     top_k: int,
     alternatives: bool,
     seed: int,
+    watermark: Optional[KgwWatermark],
     out_queue: "queue.Queue[Any]",
     cancel_event: Optional[threading.Event],
     result: Dict[str, Any],
     cache: Optional[Dict[str, Any]] = None,
     prefix_signals: Optional[List[Dict[str, float]]] = None,
+    prefix_watermark_memberships: Optional[
+        List[Optional[bool]]
+    ] = None,
+    prefix_watermark_evidence: Optional[
+        List[Optional[bool]]
+    ] = None,
 ) -> None:
     """Force one position, then continue generating from it.
 
@@ -915,15 +1107,26 @@ def _substitute_loop(
         forced_alts=forced_alts,
         tokenizer=tokenizer,
         prefix_signals=prefix_signals,
+        watermark=watermark,
+        previous_token=(
+            prefix_ids[-1]
+            if prefix_ids
+            else int(prompt_ids[0, -1].item())
+        ),
+        prefix_watermark_memberships=(
+            prefix_watermark_memberships
+        ),
+        prefix_watermark_evidence=prefix_watermark_evidence,
     )
 
     stream: Any = _stream_tokens
+    should_stream = True
     if _reads_signals(model):
         stream = functools.partial(
             _stream_read_tokens, pending=position
         )
     else:
-        _emit_seed_frame(
+        should_stream = _emit_seed_frame(
             tokenizer=tokenizer,
             adapter=adapter,
             trace=trace,
@@ -931,41 +1134,51 @@ def _substitute_loop(
             total_steps=max_new_tokens,
             out_queue=out_queue,
             cancel_event=cancel_event,
+            watermark=watermark,
         )
+        if not should_stream:
+            _trace_truncate_to_delivered(
+                trace,
+                position,
+                watermark,
+            )
 
     # Only the forced token is left to forward: the probe's cache
     # already covers the prompt and the kept prefix.
     device = model.device
     remaining = max_new_tokens - (position + 1)
-    stream(
-        model=model,
-        tokenizer=tokenizer,
-        adapter=adapter,
-        step_ids=torch.tensor(
-            [[forced_id]],
-            dtype=prompt_ids.dtype,
-            device=device,
-        ),
-        attention_mask=_grow_attention(
-            attention_mask, device
-        ),
-        trace=trace,
-        budget=max(0, remaining),
-        total_steps=max_new_tokens,
-        temperature=temperature,
-        top_p=top_p,
-        top_k=top_k,
-        alternatives=alternatives,
-        out_queue=out_queue,
-        cancel_event=cancel_event,
-        past=past,
-    )
+    if should_stream:
+        stream(
+            model=model,
+            tokenizer=tokenizer,
+            adapter=adapter,
+            step_ids=torch.tensor(
+                [[forced_id]],
+                dtype=prompt_ids.dtype,
+                device=device,
+            ),
+            attention_mask=_grow_attention(
+                attention_mask, device
+            ),
+            trace=trace,
+            budget=max(0, remaining),
+            total_steps=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            alternatives=alternatives,
+            watermark=watermark,
+            out_queue=out_queue,
+            cancel_event=cancel_event,
+            past=past,
+        )
     _finalize(
         tokenizer,
         adapter,
         trace,
         result,
         int(prompt_ids.shape[-1]),
+        watermark=watermark,
     )
 
 
@@ -978,7 +1191,8 @@ def _emit_seed_frame(
     total_steps: int,
     out_queue: "queue.Queue[Any]",
     cancel_event: Optional[threading.Event],
-) -> None:
+    watermark: Optional[KgwWatermark] = None,
+) -> bool:
     """The frame that splices the forced position onto the client.
 
     Emitted after the probe rather than before it, or it would carry
@@ -988,11 +1202,11 @@ def _emit_seed_frame(
     ``forced_alts``, so the row the client shows and the row the
     saved run keeps are the same list by construction.
 
-    A dropped seed frame is not handled here, because the caller's
-    own decode loop re-reads the same stop event on its first pass
-    and ends the run there.
+    False tells the caller to remove the forced token from its trace:
+    a token the client never received cannot enter final text, score
+    state, or provenance.
     """
-    frame_queue_put(
+    return frame_queue_put(
         out_queue,
         _build_append_frame(
             tokenizer,
@@ -1001,6 +1215,7 @@ def _emit_seed_frame(
             frame_index=position,
             total_steps=total_steps,
             conf_sum=trace.conf_sum,
+            watermark=watermark,
         ),
         stop_event=cancel_event,
     )
@@ -1020,6 +1235,14 @@ def _forced_trace(
     forced_alts: Optional[List[Dict[str, Any]]],
     tokenizer: Any,
     prefix_signals: Optional[List[Dict[str, float]]] = None,
+    watermark: Optional[KgwWatermark] = None,
+    previous_token: Optional[int] = None,
+    prefix_watermark_memberships: Optional[
+        List[Optional[bool]]
+    ] = None,
+    prefix_watermark_evidence: Optional[
+        List[Optional[bool]]
+    ] = None,
 ) -> _Trace:
     """The branch's trace: the kept prefix plus the forced position.
 
@@ -1035,6 +1258,9 @@ def _forced_trace(
     decides that and not ``forced_conf``, because a typed token can
     land on a captured candidate by coincidence.
     """
+    if watermark is None:
+        prefix_watermark_memberships = None
+        prefix_watermark_evidence = None
     trace = _Trace()
     trace.seed(
         list(prefix_ids),
@@ -1042,7 +1268,22 @@ def _forced_trace(
         list(prefix_entropies),
         list(prefix_alts),
         prefix_signals,
+        prefix_watermark_memberships,
+        prefix_watermark_evidence,
     )
+    green: Optional[bool] = None
+    evidence: Optional[bool] = None
+    if watermark is not None:
+        if previous_token is None:
+            raise ValueError(
+                "forced watermark membership needs a predecessor"
+            )
+        green = watermark.is_green(
+            previous_token=previous_token,
+            token_id=forced_id,
+        )
+        evidence = False
+        watermark.observe(green=green, evidence=evidence)
     trace.append(
         _StepPick(
             token_id=forced_id,
@@ -1057,6 +1298,8 @@ def _forced_trace(
                 forced_rank=forced_rank,
                 tokenizer=tokenizer,
             ),
+            green=green,
+            evidence=evidence,
         )
     )
     trace.check()
@@ -1454,6 +1697,7 @@ async def streaming_generate(
     thinking: bool = False,
     alternatives: bool = False,
     seed: int = -1,
+    watermark: Optional[KgwWatermark] = None,
     cancel_event: Optional[threading.Event] = None,
     state_sink: Optional[Dict[str, Any]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
@@ -1491,6 +1735,7 @@ async def streaming_generate(
                 top_k=top_k,
                 alternatives=alternatives,
                 seed=seed,
+                watermark=watermark,
                 out_queue=out_queue,
                 cancel_event=cancel_event,
                 result=result,
@@ -1532,10 +1777,17 @@ async def streaming_substitute(
     thinking: bool = False,
     alternatives: bool = False,
     seed: int = -1,
+    watermark: Optional[KgwWatermark] = None,
     cancel_event: Optional[threading.Event] = None,
     state_sink: Optional[Dict[str, Any]] = None,
     cache: Optional[Dict[str, Any]] = None,
     prefix_signals: Optional[List[Dict[str, float]]] = None,
+    prefix_watermark_memberships: Optional[
+        List[Optional[bool]]
+    ] = None,
+    prefix_watermark_evidence: Optional[
+        List[Optional[bool]]
+    ] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Substitute one position's token, then regenerate forward.
 
@@ -1594,11 +1846,18 @@ async def streaming_substitute(
                 top_k=top_k,
                 alternatives=alternatives,
                 seed=seed,
+                watermark=watermark,
                 out_queue=out_queue,
                 cancel_event=cancel_event,
                 result=result,
                 cache=cache,
                 prefix_signals=prefix_signals,
+                prefix_watermark_memberships=(
+                    prefix_watermark_memberships
+                ),
+                prefix_watermark_evidence=(
+                    prefix_watermark_evidence
+                ),
             )
         except Exception as exc:  # noqa: BLE001
             result["err"] = exc
@@ -1661,6 +1920,12 @@ async def _drain_frames(
         # substitution keeps the prefix's values instead of blanking
         # them.
         state_sink["signals"] = result.get("signals", [])
+        memberships = result.get("watermark_memberships")
+        evidence = result.get("watermark_evidence")
+        if memberships is not None:
+            state_sink["watermark_memberships"] = memberships
+        if evidence is not None:
+            state_sink["watermark_evidence"] = evidence
         # Rides with the trace rather than on its own channel,
         # because it is only meaningful alongside it: the cache and
         # the ids describe the same sequence, and a sink holding one

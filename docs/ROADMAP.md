@@ -649,6 +649,41 @@ line drawn deliberately, or a trap a future change will otherwise walk into.
 They moved here from `docs/HANDOFF.md` when `META-01` reduced it to a cold-start
 page.
 
+**KGW watermarking is an autoregressive sampling signal, not an
+authorship verdict.** Recorded 2026-10-04 with the AR-only core.
+
+The shipped boundary is SmolLM3 and Mamba-3. KGW needs a defined
+left-to-right predecessor and a single raw-logit sampling decision, so
+putting the same switch on either diffusion model would imply semantics
+their denoising steps do not have. On the two append-only models, the
+green-list bias is applied before temperature, top-k, top-p and greedy
+argmax. Confidence, entropy, rank and Alternatives stay measurements of
+the unmodified model distribution.
+
+One 256-bit host key is created only on the enabled generation path
+under `XDG_STATE_HOME/diffusion-llm`: directory mode 0700, key mode
+0600, both owned by the current account. Runs attest its one-way key
+id, never the secret. Detection only loads an existing key and can
+require that id, so losing the key cannot silently replace it.
+HMAC-SHA256 separates the scheme version, model, tokenizer fingerprint,
+output width and previous token. The digest seeds NumPy's pinned PCG64
+generator, whose without-replacement choice has exact cardinality and
+touches no global random state. A 32-entry host LRU keeps selected ids;
+a second 32-entry LRU per device keeps their tensor form, so a repeated
+predecessor neither reallocates nor retransfers it. In `.venv-ar` on
+this CPU, the synthetic 128,256-id benchmark measured about 1.1 ms
+median to select a cache miss, 0.18 ms to apply an uncached tensor bias,
+and 0.10 ms for a cached bias. CUDA remains a hardware checklist item.
+
+Detection reports the exact null probability
+`p0 = green_list_size / vocab_size`, its count and z-score. Fewer than
+50 scored tokens is `insufficient_evidence`, never an AI or human label.
+The first output token is biased but excluded because an output-only
+detector lacks the prompt predecessor. A token forced by What If keeps
+its membership for inspection but is also excluded; generated tokens
+after it score normally. The detector UI and overlay are deliberately
+the next slice, not part of the sampling core.
+
 **Conversation text is durable; XAI artifacts remain explicit and
 tail-owned.** Recorded 2026-10-04, when multi-turn chat shipped.
 

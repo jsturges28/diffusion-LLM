@@ -22,7 +22,7 @@ from transformers.models.auto.tokenization_auto import (
 )
 
 from src.backends.context_pack import ContextRequestError
-from src.backends.params import resolve_params
+from src.backends.params import request_bool, resolve_params
 from src.backends.protocol import (
     ERROR_GENERATION_FAILED,
     ERROR_INVALID_REQUEST,
@@ -233,13 +233,12 @@ class LladaBackend(Backend):
         of any one, so no ``ParamSpec`` can express them; they belong
         to the algorithm, and ``block_schedule`` owns them.
         """
+        experimental = request_bool(data, "experimental")
         params = resolve_params(
             self.model_info.param_specs,
             data,
             device=self.effective_device,
-            experimental=bool(
-                data.get("experimental", False)
-            ),
+            experimental=experimental,
         )
 
         prompt = self.prepare_generation_prompt(

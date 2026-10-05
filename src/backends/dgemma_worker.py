@@ -19,7 +19,7 @@ from fastapi import WebSocket
 from transformers import AutoTokenizer  # type: ignore[attr-defined]
 
 from src.backends.context_pack import ContextRequestError
-from src.backends.params import resolve_params
+from src.backends.params import request_bool, resolve_params
 from src.backends.text_adapter import DGEMMA_TEXT
 from src.backends.protocol import (
     ERROR_GENERATION_FAILED,
@@ -194,13 +194,12 @@ class DgemmaBackend(Backend):
         is not a declared parameter. This model has no relational
         rules between its parameters.
         """
+        experimental = request_bool(data, "experimental")
         params = resolve_params(
             self.model_info.param_specs,
             data,
             device=self.effective_device,
-            experimental=bool(
-                data.get("experimental", False)
-            ),
+            experimental=experimental,
         )
         prompt = self.prepare_generation_prompt(
             data,

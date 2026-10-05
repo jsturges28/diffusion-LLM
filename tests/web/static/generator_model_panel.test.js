@@ -109,6 +109,37 @@ const MODEL = {
       prominence: "secondary",
       options: ["low_confidence", "random"],
     },
+    {
+      name: "watermark",
+      label: "KGW Watermark",
+      type: "bool",
+      default: false,
+      group: "signals",
+      prominence: "secondary",
+      experimental_only: true,
+    },
+    {
+      name: "watermark_gamma",
+      label: "Green Fraction",
+      type: "float",
+      default: 0.25,
+      group: "signals",
+      prominence: "secondary",
+      recommended: [0.05, 0.5],
+      experimental: [0.01, 0.5],
+      experimental_only: true,
+    },
+    {
+      name: "watermark_delta",
+      label: "Green Bias",
+      type: "float",
+      default: 2,
+      group: "signals",
+      prominence: "secondary",
+      recommended: [0, 5],
+      experimental: [0, 10],
+      experimental_only: true,
+    },
   ],
   status: "active",
 };
@@ -300,18 +331,56 @@ test("controls render in schema groups without model checks", () => {
     (child) => child.getAttribute("data-param-group")
   );
 
-  assert.deepEqual(groups, ["output", "sampling"]);
+  assert.deepEqual(groups, ["output", "sampling", "signals"]);
   assert.equal(
     fields.children[0]
       .querySelector(".run-settings-group-label").textContent,
     "Output"
   );
   const modeExtra = h.page.registry.get("mode-extra");
-  assert.equal(modeExtra.children.length, 1);
+  assert.equal(modeExtra.children.length, 2);
   assert.equal(
     modeExtra.children[0].getAttribute("data-param-group"),
     "features"
   );
+  assert.equal(fields.children[2].hidden, true);
+  assert.equal(modeExtra.children[1].hidden, true);
+});
+
+test("experimental-only controls stay hidden until enabled", () => {
+  const h = loadPanel({});
+  const experimental =
+    h.page.registry.get("toggle-experimental");
+  const fields = h.page.registry.get("param-fields");
+  const modes = h.page.registry.get("mode-extra");
+
+  assert.equal(input(h, "watermark").closest(
+    ".mode-toggle"
+  ).hidden, true);
+  assert.equal(input(h, "watermark_delta").closest(
+    ".param-group"
+  ).hidden, true);
+  assert.equal(modes.children[1].hidden, true);
+  assert.equal(fields.children[2].hidden, true);
+  assert.equal(
+    "watermark" in host(h.panel.parameterValues()), false
+  );
+  assert.equal(
+    "watermark_delta" in host(h.panel.parameterValues()), false
+  );
+
+  experimental.checked = true;
+  experimental.dispatch("change");
+
+  assert.equal(modes.children[1].hidden, false);
+  assert.equal(fields.children[2].hidden, false);
+  assert.equal(input(h, "watermark").closest(
+    ".mode-toggle"
+  ).hidden, false);
+  assert.equal(
+    h.panel.parameterValues().watermark, false
+  );
+  assert.equal(h.panel.parameterValues().watermark_delta, 2);
 });
 
 test("collapsed summary chips follow primary parameter values", () => {

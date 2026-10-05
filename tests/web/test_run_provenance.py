@@ -53,6 +53,27 @@ OTHER_TOKENIZER: Dict[str, Any] = {
     "model_vocab_size": 128_256,
 }
 OTHER_VERSIONS = {"torch": "2.6.0", "transformers": "4.53.1"}
+WATERMARK: Dict[str, Any] = {
+    "scheme": "kgw",
+    "version": 1,
+    "key_id": "0123456789abcdef",
+    "gamma": 0.25,
+    "delta": 2.0,
+    "vocab_size": 128_256,
+    "green_list_size": 32_064,
+    "tokenizer_fingerprint": "ab" * 32,
+    "seeding_contract": "HMAC-SHA256 test contract",
+    "rng_contract": "local deterministic test contract",
+    "exclusions": [
+        "first output token lacks its prompt predecessor",
+        "user-forced tokens are not model sampling evidence",
+    ],
+    "status": "scored",
+    "green_count": 28,
+    "scored_count": 64,
+    "z_score": 3.4641016151377544,
+    "p0": 0.25,
+}
 
 
 SWITCHED_FACTS = CurrentModelFacts(
@@ -136,6 +157,40 @@ def _request(**overrides: Any) -> SaveRunRequest:
     return SaveRunRequest(**base)
 
 
+def _watermark_positions() -> List[Dict[str, Any]]:
+    positions: List[Dict[str, Any]] = [
+        {
+            "t": "first",
+            "m": False,
+            "id": 1,
+            "g": False,
+            "we": False,
+        }
+    ]
+    for index in range(64):
+        positions.append(
+            {
+                "t": f"t{index}",
+                "m": False,
+                "id": index + 2,
+                "g": index < 28,
+                "we": True,
+            }
+        )
+    return positions
+
+
+def _watermarked_request(
+    watermark: Dict[str, Any] | None = None,
+) -> SaveRunRequest:
+    active = WATERMARK if watermark is None else watermark
+    return _request(
+        frames=None,
+        frame_positions=_watermark_positions(),
+        provenance=_provenance(watermark=active),
+    )
+
+
 # -- the run's facts beat the supervisor's --
 
 
@@ -192,6 +247,69 @@ def test_every_provenance_field_moves_together(
     assert meta["reproducibility"]["tokenizer"] == RUN_TOKENIZER
     assert meta["context"]["context_length"] == 4_096
     assert meta["model"] == "GSAI-ML/LLaDA-8B-Instruct"
+
+
+def test_worker_watermark_reaches_saved_metadata() -> None:
+    meta = _build_metadata(_watermarked_request())
+
+    assert meta["watermark"] == WATERMARK
+    assert "secret" not in meta["watermark"]
+
+
+def test_unwatermarked_run_has_no_watermark_metadata() -> None:
+    meta = _build_metadata(_request())
+
+    assert "watermark" not in meta
+
+
+def test_watermark_attestation_refuses_a_secret() -> None:
+    exposed = {**WATERMARK, "secret": "00" * 32}
+
+    with pytest.raises(ValueError, match="secret"):
+        _provenance(watermark=exposed)
+
+
+def test_watermark_attestation_preserves_future_fields() -> None:
+    extended = {
+        **WATERMARK,
+        "future_metric": {"name": "held"},
+    }
+
+    meta = _build_metadata(_watermarked_request(extended))
+
+    assert meta["watermark"]["future_metric"] == {"name": "held"}
+
+
+@pytest.mark.parametrize(
+    ("changed", "message"),
+    [
+        ({"version": 0}, "version"),
+        ({"green_list_size": 1}, "green list size"),
+        ({"p0": 0.2}, "exact null"),
+        ({"status": "insufficient_evidence"}, "status"),
+        ({"z_score": 999.0}, "z-score"),
+    ],
+)
+def test_watermark_attestation_refuses_impossible_core(
+    changed: Dict[str, Any],
+    message: str,
+) -> None:
+    impossible = {**WATERMARK, **changed}
+
+    with pytest.raises(ValueError, match=message):
+        _provenance(watermark=impossible)
+
+
+def test_watermark_counts_must_match_final_token_records() -> None:
+    positions = _watermark_positions()
+    positions[-1]["we"] = False
+
+    with pytest.raises(ValueError, match="scored count"):
+        _request(
+            frames=None,
+            frame_positions=positions,
+            provenance=_provenance(watermark=WATERMARK),
+        )
 
 
 def test_the_model_commit_is_recorded_beside_the_app_s(

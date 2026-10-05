@@ -390,6 +390,13 @@ def worker_envelope(backend: Backend) -> Dict[str, Any]:
         envelope["signals"] = [
             channel.model_dump() for channel in signals
         ]
+    watermark = getattr(backend, "run_watermark", None)
+    if watermark is not None:
+        described = watermark.provenance()
+        assert "secret" not in described, (
+            "watermark provenance must never carry its key"
+        )
+        envelope["watermark"] = described
     context_pack = getattr(backend, "run_context_pack", None)
     if context_pack is not None:
         # Fresh for each envelope. The opening and terminal frames
@@ -626,6 +633,10 @@ class Backend(ABC):
     # the two, and one number cannot say it. Its presence is also what
     # tells ``provenance_envelope`` a measurement is running at all.
     vram_start_bytes: Optional[int] = None
+    # An enabled append-only run's versioned watermark state. Kept
+    # opaque here so diffusion workers do not import the scheme. Its
+    # public provenance method is read by ``worker_envelope``.
+    run_watermark: Optional[Any] = None
     # The one run this worker can still answer questions about.
     # Declared here rather than only on each backend because the two
     # members below are what make it safe to read, and the three of
@@ -701,6 +712,7 @@ class Backend(ABC):
         if not self._run_nonce:
             self._run_nonce = secrets.token_hex(4)
         self.last_run_state = None
+        self.run_watermark = None
         self.run_context_pack = (
             None
             if context_pack is None

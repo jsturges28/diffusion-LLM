@@ -59,6 +59,7 @@ function generatorModelPanelCreate(options) {
     output: "Output",
     sampling: "Sampling",
     features: "Features",
+    signals: "Signals",
   };
 
   var models = {};
@@ -72,6 +73,7 @@ function generatorModelPanelCreate(options) {
 
   var paramInputs = {};
   var paramTooltips = {};
+  var paramControls = {};
   var paramGroupMounts = {};
   var modeGroupMounts = {};
   var paramsValid = true;
@@ -245,6 +247,7 @@ function generatorModelPanelCreate(options) {
     if (!activeModel) {
       paramInputs = {};
       paramTooltips = {};
+      paramControls = {};
       paramGroupMounts = {};
       modeGroupMounts = {};
       paramFields.innerHTML = "";
@@ -854,6 +857,12 @@ function generatorModelPanelCreate(options) {
     var specs = activeModel.param_specs;
     for (var index = 0; index < specs.length; index++) {
       if (
+        specs[index].experimental_only
+        && !toggleExperimental.checked
+      ) {
+        continue;
+      }
+      if (
         specs[index].type === "int"
         || specs[index].type === "float"
       ) {
@@ -945,6 +954,7 @@ function generatorModelPanelCreate(options) {
     group.appendChild(label);
     group.appendChild(input);
     mount.appendChild(group);
+    return group;
   }
 
   function buildModeToggle(spec, checkbox, mount) {
@@ -963,11 +973,13 @@ function generatorModelPanelCreate(options) {
     wrap.appendChild(name);
     wrap.appendChild(buildInfoIcon(spec));
     mount.appendChild(wrap);
+    return wrap;
   }
 
   function buildParamPanel(model) {
     paramInputs = {};
     paramTooltips = {};
+    paramControls = {};
     paramGroupMounts = {};
     modeGroupMounts = {};
     paramFields.innerHTML = "";
@@ -982,11 +994,21 @@ function generatorModelPanelCreate(options) {
   function appendParam(spec) {
     var input = buildParamInput(spec);
     paramInputs[spec.name] = input;
+    var control;
     if (spec.type === "bool") {
-      buildModeToggle(spec, input, modeGroupMount(spec));
+      control = buildModeToggle(
+        spec, input, modeGroupMount(spec)
+      );
     } else {
-      buildParamField(spec, input, paramGroupMount(spec));
+      control = buildParamField(
+        spec, input, paramGroupMount(spec)
+      );
     }
+    control.setAttribute(
+      "data-experimental-only",
+      spec.experimental_only ? "true" : "false"
+    );
+    paramControls[spec.name] = control;
     var eventName = (
       spec.type === "int" || spec.type === "float"
     ) ? "input" : "change";
@@ -1035,6 +1057,7 @@ function generatorModelPanelCreate(options) {
     section.appendChild(heading);
     section.appendChild(controls);
     host.appendChild(section);
+    controls._section = section;
     return controls;
   }
 
@@ -1187,6 +1210,7 @@ function generatorModelPanelCreate(options) {
   }
 
   function applyLimits() {
+    updateExperimentalVisibility();
     var limits = activeLimits();
     var names = Object.keys(limits);
     for (var index = 0; index < names.length; index++) {
@@ -1196,6 +1220,39 @@ function generatorModelPanelCreate(options) {
     }
     updateRangeLabels();
     validateAllParams();
+  }
+
+  function updateExperimentalVisibility() {
+    if (!activeModel) {
+      return;
+    }
+    var specs = activeModel.param_specs || [];
+    for (var index = 0; index < specs.length; index++) {
+      var control = paramControls[specs[index].name];
+      if (control) {
+        control.hidden = !!specs[index].experimental_only
+          && !toggleExperimental.checked;
+      }
+    }
+    updateControlGroupVisibility(paramGroupMounts);
+    updateControlGroupVisibility(modeGroupMounts);
+  }
+
+  function updateControlGroupVisibility(mounts) {
+    var names = Object.keys(mounts);
+    for (var index = 0; index < names.length; index++) {
+      var mount = mounts[names[index]];
+      var visible = false;
+      for (var child = 0; child < mount.children.length; child++) {
+        if (!mount.children[child].hidden) {
+          visible = true;
+          break;
+        }
+      }
+      if (mount._section) {
+        mount._section.hidden = !visible;
+      }
+    }
   }
 
   function applyInputLimit(input, bounds) {
@@ -1415,6 +1472,9 @@ function generatorModelPanelCreate(options) {
     var specs = activeModel.param_specs;
     for (var index = 0; index < specs.length; index++) {
       var spec = specs[index];
+      if (spec.experimental_only && !toggleExperimental.checked) {
+        continue;
+      }
       var input = paramInputs[spec.name];
       if (input) {
         result[spec.name] = parsedParamValue(spec, input);

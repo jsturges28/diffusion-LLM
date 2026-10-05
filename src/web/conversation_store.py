@@ -426,7 +426,10 @@ def update_assistant(
             partial=partial,
             context_pack=clean_context,
             metadata=clean_metadata,
-            run_link=current.run_link,
+            # A revised answer no longer describes the run linked to
+            # its previous text. Confirm will attach the replacement
+            # revision after that run is published successfully.
+            run_link=None,
         )
         result = _publish_tail_revision(
             conversation_dir=conversation_dir,

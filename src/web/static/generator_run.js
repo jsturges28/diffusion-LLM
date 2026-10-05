@@ -136,6 +136,19 @@ function generatorRunCreate(options) {
     if (data.provenance && typeof data.provenance === "object") {
       provenance = data.provenance;
     }
+    if (
+      provenance !== null
+      && data.watermark_stats
+      && typeof data.watermark_stats === "object"
+    ) {
+      var updated = copyJson(provenance);
+      updated.watermark = Object.assign(
+        {},
+        updated.watermark || {},
+        data.watermark_stats
+      );
+      provenance = updated;
+    }
   }
 
   function appendFrame(data) {
@@ -287,6 +300,9 @@ function generatorRunCreate(options) {
       positionAlts: positionAlts.slice(),
       candidates: candidates,
       finalText: finalText,
+      provenance: provenance === null
+        ? null
+        : copyJson(provenance),
       interrupted: interrupted,
       frameOffset: frameOffset,
       elapsedOffset: elapsedOffset,
@@ -305,6 +321,7 @@ function generatorRunCreate(options) {
     positionAlts = state.positionAlts.slice();
     candidates = state.candidates;
     finalText = state.finalText;
+    provenance = state.provenance;
     interrupted = state.interrupted;
     frameOffset = state.frameOffset;
     elapsedOffset = state.elapsedOffset;
@@ -706,6 +723,12 @@ function generatorRunCreate(options) {
     }
     if (typeof token.f === "number") {
       record.f = token.f;
+    }
+    if (typeof token.g === "boolean") {
+      record.g = token.g;
+    }
+    if (typeof token.we === "boolean") {
+      record.we = token.we;
     }
     return record;
   }

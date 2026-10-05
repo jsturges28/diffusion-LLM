@@ -64,6 +64,8 @@ def resolve_params(
     Callers turn that into an invalid-request envelope.
     """
     assert specs, "a model with no parameters cannot generate"
+    if not isinstance(experimental, bool):
+        raise TypeError("experimental must be a boolean")
     resolved: Dict[str, ParamValue] = {}
     for spec in specs:
         if spec.name in data:
@@ -95,6 +97,23 @@ def default_of(
     if override is not None and override.default is not None:
         return override.default
     return spec.default
+
+
+def request_bool(
+    data: Dict[str, Any],
+    name: str,
+    *,
+    default: bool = False,
+) -> bool:
+    """One request-boundary boolean without truthy coercion."""
+    if not isinstance(default, bool):
+        raise TypeError("a boolean default must be boolean")
+    value = data.get(name, default)
+    if not isinstance(value, bool):
+        raise ValueError(
+            f"{name} must be a boolean, got {value!r}"
+        )
+    return value
 
 
 def bounds_of(
@@ -132,7 +151,12 @@ def coerce(
 ) -> ParamValue:
     """One request value as the type and range the spec declares."""
     if spec.type == ParamType.BOOL:
-        return bool(given)
+        if not isinstance(given, bool):
+            raise ValueError(
+                f"{spec.name} must be a boolean,"
+                f" got {given!r}"
+            )
+        return given
     if spec.type == ParamType.SELECT:
         return _chosen_option(spec, given)
     number = _as_number(spec, given)

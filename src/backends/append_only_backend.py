@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import WebSocket
 
 from src.backends.context_pack import ContextRequestError
-from src.backends.params import resolve_params
+from src.backends.params import request_bool, resolve_params
 from src.backends.protocol import (
     ERROR_GENERATION_FAILED,
     ERROR_INVALID_REQUEST,
@@ -45,12 +45,19 @@ from src.backends.worker_base import (
     Backend,
     FrameStreamer,
     StaleRunError,
+    describe_output_width,
     tokenize_pieces,
 )
 from src.inference.ar_sampler import (
     probe_token,
     streaming_generate,
     streaming_substitute,
+)
+from src.inference.kgw_key import load_or_create_key
+from src.inference.kgw_watermark import (
+    KgwConfig,
+    KgwWatermark,
+    tokenizer_fingerprint,
 )
 
 logger = logging.getLogger("append_only_backend")
@@ -86,13 +93,12 @@ class AppendOnlyBackend(Backend):
         parameter, and this model has no relational rules between its
         parameters.
         """
+        experimental = request_bool(data, "experimental")
         params = resolve_params(
             self.model_info.param_specs,
             data,
             device=self.effective_device,
-            experimental=bool(
-                data.get("experimental", False)
-            ),
+            experimental=experimental,
         )
         thinking = bool(params.get("thinking", False))
         prompt = self.prepare_generation_prompt(
@@ -103,7 +109,43 @@ class AppendOnlyBackend(Backend):
         params["prompt"] = prompt.value
         params["prompt_text"] = prompt.pending_user_text
         params["context_pack"] = prompt.context_pack
+        params["_watermark"] = self._resolve_watermark(
+            params,
+            experimental=experimental,
+        )
         return params
+
+    def _resolve_watermark(
+        self,
+        params: Dict[str, Any],
+        *,
+        experimental: bool,
+    ) -> Optional[KgwWatermark]:
+        """Build keyed state only after the opt-in resolves true."""
+        if not bool(params.get("watermark", False)):
+            return None
+        if not experimental:
+            raise ValueError(
+                "KGW watermarking requires Experimental mode."
+            )
+        width = describe_output_width(self.model)
+        if width is None:
+            raise ValueError(
+                "KGW watermarking needs the model vocabulary width."
+            )
+        key = load_or_create_key()
+        config = KgwConfig(
+            secret=key.secret,
+            key_id=key.key_id,
+            model_id=self.model_info.id,
+            tokenizer_fingerprint=tokenizer_fingerprint(
+                self.tokenizer
+            ),
+            vocab_size=width,
+            gamma=float(params["watermark_gamma"]),
+            delta=float(params["watermark_delta"]),
+        )
+        return KgwWatermark(config)
 
     async def handle_generate(
         self,
@@ -144,6 +186,11 @@ class AppendOnlyBackend(Backend):
         # happens before the new one allocates so the two never sit
         # in device memory at once.
         self.begin_run(context_pack=params.get("context_pack"))
+        watermark = params.get("_watermark")
+        assert watermark is None or isinstance(
+            watermark, KgwWatermark
+        )
+        self.run_watermark = watermark
         state: Dict[str, Any] = {}
         try:
             generator = streaming_generate(
@@ -158,6 +205,7 @@ class AppendOnlyBackend(Backend):
                 thinking=thinking,
                 alternatives=params["alternatives"],
                 seed=params["seed"],
+                watermark=watermark,
                 cancel_event=cancel_event,
                 state_sink=state,
             )
@@ -196,6 +244,8 @@ class AppendOnlyBackend(Backend):
             state["alternatives_enabled"] = params[
                 "alternatives"
             ]
+            if watermark is not None:
+                state["watermark_run"] = watermark
             self.last_run_state = state
 
     # -- substitution (the autoregressive counterfactual) --
@@ -310,6 +360,8 @@ class AppendOnlyBackend(Backend):
         assert state is not None
         assert state.get("ids"), "run state has no token trace"
         position = request["position"]
+        watermark = _watermark_branch(state, position)
+        self.run_watermark = watermark
         start = time.monotonic()
         try:
             generator = streaming_substitute(
@@ -342,6 +394,7 @@ class AppendOnlyBackend(Backend):
                 thinking=state["thinking"],
                 alternatives=state["alternatives_enabled"],
                 seed=state["seed"],
+                watermark=watermark,
                 cancel_event=cancel_event,
                 # The branch's trace is deliberately discarded, so
                 # last_run_state stays pinned to the recorded run.
@@ -360,6 +413,12 @@ class AppendOnlyBackend(Backend):
                 # one whose cache exceeded the ceiling, and the
                 # sampler prefills in that case.
                 cache=state.get("cache"),
+                prefix_watermark_memberships=state.get(
+                    "watermark_memberships", []
+                )[:position],
+                prefix_watermark_evidence=state.get(
+                    "watermark_evidence", []
+                )[:position],
             )
             await stream.run(generator, start)
         except Exception as exc:  # noqa: BLE001
@@ -481,6 +540,27 @@ def _prefix_signals(
     if signals is None:
         return None
     return list(signals[:position])
+
+
+def _watermark_branch(
+    state: Dict[str, Any], position: int
+) -> Optional[KgwWatermark]:
+    """Seed a What If score from the original run's kept prefix."""
+    retained = state.get("watermark_run")
+    if retained is None:
+        return None
+    if not isinstance(retained, KgwWatermark):
+        raise TypeError("retained watermark state has the wrong type")
+    memberships = state.get("watermark_memberships")
+    evidence = state.get("watermark_evidence")
+    if not isinstance(memberships, list):
+        raise ValueError("watermarked run lost its memberships")
+    if not isinstance(evidence, list):
+        raise ValueError("watermarked run lost its evidence flags")
+    return retained.fork(
+        memberships[:position],
+        evidence[:position],
+    )
 
 
 def _probe_token_id(data: Dict[str, Any]) -> int:

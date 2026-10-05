@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Tuple
 import pytest
 
 from src.backends.llada_worker import LladaBackend
+from src.backends.smollm3_worker import Smollm3Backend
 from src.backends.params import (
     bounds_of,
     default_of,
@@ -413,18 +414,66 @@ def test_an_integer_parameter_resolves_to_an_int() -> None:
     assert isinstance(resolved["steps"], int)
 
 
-def test_a_boolean_parameter_resolves_to_a_bool() -> None:
-    """Truthiness, matching what the workers did, so a client sending
-    1 rather than true keeps working."""
+def test_boolean_parameters_keep_actual_booleans() -> None:
     resolved = resolve_params(
         REGISTRY["smollm3"].param_specs,
-        {"thinking": 1, "alternatives": 0},
+        {"thinking": True, "alternatives": False},
         device="cuda",
         experimental=False,
     )
 
     assert resolved["thinking"] is True
     assert resolved["alternatives"] is False
+
+
+@pytest.mark.parametrize(
+    ("model_id", "parameter"),
+    [
+        (model_id, spec.name)
+        for model_id, info in REGISTRY.items()
+        for spec in info.param_specs
+        if spec.type == ParamType.BOOL
+    ],
+)
+@pytest.mark.parametrize(
+    "sent",
+    ["false", "true", 0, 1, None],
+)
+def test_every_boolean_parameter_refuses_non_booleans(
+    model_id: str,
+    parameter: str,
+    sent: Any,
+) -> None:
+    info = REGISTRY[model_id]
+    device = info.capabilities.supported_devices[0]
+
+    with pytest.raises(ValueError, match=parameter):
+        resolve_params(
+            info.param_specs,
+            {parameter: sent},
+            device=device,
+            experimental=True,
+        )
+
+
+@pytest.mark.parametrize(
+    "backend",
+    [
+        LladaBackend(),
+        Smollm3Backend(),
+    ],
+    ids=["llada", "append_only"],
+)
+def test_every_worker_boundary_refuses_textual_experimental(
+    backend: Any,
+) -> None:
+    with pytest.raises(ValueError, match="experimental"):
+        backend._validate_generate(
+            {
+                "prompt": "hi",
+                "experimental": "false",
+            }
+        )
 
 
 @pytest.mark.parametrize("model_id", ["llada", "diffusiongemma"])
@@ -440,7 +489,10 @@ def test_a_diffusion_run_captures_candidates_unless_told_not_to(
         specs, {}, device="cuda", experimental=False
     )
     refused = resolve_params(
-        specs, {"alternatives": 0}, device="cuda", experimental=False
+        specs,
+        {"alternatives": False},
+        device="cuda",
+        experimental=False,
     )
 
     assert omitted["alternatives"] is True
@@ -566,3 +618,48 @@ def test_each_model_has_a_bounded_collapsed_summary() -> None:
         assert 1 <= len(primary) <= 3, (
             f"{model_id} exposes {len(primary)} summary controls"
         )
+
+
+def test_kgw_parameters_belong_only_to_append_models() -> None:
+    expected = {
+        "watermark",
+        "watermark_gamma",
+        "watermark_delta",
+    }
+    for model_id, info in REGISTRY.items():
+        names = {spec.name for spec in info.param_specs}
+        if model_id in {"smollm3", "mamba3"}:
+            assert expected <= names
+        else:
+            assert expected.isdisjoint(names)
+
+
+def test_kgw_controls_are_experimental_signals() -> None:
+    for model_id in ("smollm3", "mamba3"):
+        specs = {
+            spec.name: spec
+            for spec in REGISTRY[model_id].param_specs
+        }
+        for name in (
+            "watermark",
+            "watermark_gamma",
+            "watermark_delta",
+        ):
+            assert specs[name].group == ParamGroup.SIGNALS
+            assert specs[name].experimental_only is True
+        assert specs["watermark"].default is False
+        assert specs["watermark_gamma"].default == pytest.approx(0.25)
+        assert specs["watermark_delta"].default == pytest.approx(2.0)
+
+
+def test_watermark_membership_signal_is_append_only() -> None:
+    for model_id, info in REGISTRY.items():
+        names = {
+            signal.name for signal in info.capabilities.signals
+        }
+        if model_id in {"smollm3", "mamba3"}:
+            assert "watermark_membership" in names
+            assert "watermark_evidence" in names
+        else:
+            assert "watermark_membership" not in names
+            assert "watermark_evidence" not in names

@@ -36,6 +36,7 @@ class ParamGroup(str, Enum):
     OUTPUT = "output"
     SAMPLING = "sampling"
     FEATURES = "features"
+    SIGNALS = "signals"
 
 
 class ParamProminence(str, Enum):
@@ -81,6 +82,10 @@ class ParamSpec(BaseModel):
     recommended: Optional[Tuple[float, float]] = None
     experimental: Optional[Tuple[float, float]] = None
     overrides: Optional[Dict[str, ParamOverride]] = None
+    # Kept in the schema at all times, so an API request and a saved
+    # run have stable names, but hidden from the ordinary parameter
+    # panel until the user explicitly enables Experimental.
+    experimental_only: bool = False
     help: Optional[str] = None
 
 
@@ -153,7 +158,9 @@ class SignalChannel(BaseModel):
     # one quantity would make the Analytics scale a guess. A fraction
     # is a share of something between 0 and 1 that is not a
     # probability: what reading a token erased from a state.
-    unit: Literal["probability", "nats", "fraction"]
+    unit: Literal[
+        "probability", "nats", "fraction", "categorical"
+    ]
     axes: Tuple[Axis, ...]
     location: Literal["token_record", "frame_scalar", "sidecar"]
     # Where to find it: a key on each token record, a metadata key

@@ -474,6 +474,20 @@ def _install_scripted_sampler(
 # -- requests, as the page sends them --
 
 
+def test_generate_refuses_textual_experimental(
+    worker: ModuleType,
+) -> None:
+    backend = worker.DgemmaBackend()
+
+    with pytest.raises(ValueError, match="experimental"):
+        backend._validate_generate(
+            {
+                "prompt": "hi",
+                "experimental": "false",
+            }
+        )
+
+
 def _resume(
     backend: DgemmaBackend,
     socket: _RecordingSocket,

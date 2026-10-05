@@ -78,6 +78,28 @@
    "location": "sidecar",
    "name": "alternatives",
    "unit": "probability"
+  },
+  {
+   "axes": [
+    "position"
+   ],
+   "budget_records": null,
+   "capture": "opt_in",
+   "key": "g",
+   "location": "token_record",
+   "name": "watermark_membership",
+   "unit": "categorical"
+  },
+  {
+   "axes": [
+    "position"
+   ],
+   "budget_records": null,
+   "capture": "opt_in",
+   "key": "we",
+   "location": "token_record",
+   "name": "watermark_evidence",
+   "unit": "categorical"
   }
  ],
  "stop_rule": null

@@ -115,6 +115,72 @@ def test_forgetting_is_not_written_for_models_without_it() -> None:
     assert "f" not in dumped[0][0]
 
 
+def test_watermark_flags_survive_the_token_record() -> None:
+    record = TokenRecord(
+        t="he",
+        m=False,
+        id=5,
+        c=0.9,
+        e=0.31,
+        g=True,
+        we=False,
+    )
+    dumped = _dump_frame_tokens([[record]])
+
+    assert dumped[0] is not None
+    assert dumped[0][0]["g"] is True
+    assert dumped[0][0]["we"] is False
+
+
+def test_watermark_flags_are_absent_when_off() -> None:
+    dumped = _dump_frame_tokens(_request().frame_tokens)
+
+    assert dumped[0] is not None
+    assert "g" not in dumped[0][0]
+    assert "we" not in dumped[0][0]
+
+
+def test_watermark_evidence_requires_membership() -> None:
+    with pytest.raises(ValidationError, match="membership"):
+        TokenRecord(
+            t="he",
+            m=False,
+            id=5,
+            we=True,
+        )
+
+
+@pytest.mark.parametrize("value", ["true", 1])
+def test_watermark_token_flags_require_real_booleans(
+    value: Any,
+) -> None:
+    with pytest.raises(ValidationError):
+        TokenRecord(
+            t="he",
+            m=False,
+            id=5,
+            g=value,  # type: ignore[arg-type]
+            we=False,
+        )
+
+
+def test_watermark_token_fields_require_provenance() -> None:
+    with pytest.raises(ValidationError, match="provenance"):
+        SaveRunRequest(
+            prompt="p",
+            final_text="he",
+            frame_positions=[
+                {
+                    "t": "he",
+                    "m": False,
+                    "id": 5,
+                    "g": True,
+                    "we": False,
+                }
+            ],
+        )
+
+
 def test_alternatives_keep_position_alignment() -> None:
     dumped = _dump_alternatives(_request().alternatives)
     assert len(dumped) == 2

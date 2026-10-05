@@ -367,6 +367,33 @@ def test_the_envelope_reports_this_worker_s_libraries() -> None:
     assert "torch" in envelope["versions"]
 
 
+def test_enabled_watermark_is_worker_attested() -> None:
+    class _Watermark:
+        def provenance(self) -> Dict[str, Any]:
+            return {
+                "scheme": "kgw",
+                "version": 1,
+                "key_id": "0123456789abcdef",
+            }
+
+    backend = _StubBackend("cpu")
+    backend.run_watermark = _Watermark()
+
+    envelope = worker_envelope(backend)  # type: ignore[arg-type]
+
+    assert envelope["watermark"]["scheme"] == "kgw"
+    assert envelope["watermark"]["key_id"] == "0123456789abcdef"
+    assert "secret" not in envelope["watermark"]
+
+
+def test_disabled_watermark_is_absent_from_worker_envelope() -> None:
+    envelope = worker_envelope(
+        _StubBackend("cpu")  # type: ignore[arg-type]
+    )
+
+    assert "watermark" not in envelope
+
+
 def test_the_envelope_omits_an_unreadable_context_window() -> None:
     """Omitted rather than null, matching /health, so a consumer's
     "is there a ceiling" test stays a plain key check."""

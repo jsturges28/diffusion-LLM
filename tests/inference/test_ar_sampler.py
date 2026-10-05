@@ -46,9 +46,25 @@ from src.inference.ar_sampler import (
     streaming_generate,
     streaming_substitute,
 )
+from src.inference.kgw_watermark import KgwConfig, KgwWatermark
 
 VOCAB_SIZE = 12
 EOS_ID = 11
+KGW_KEY = bytes(range(32))
+
+
+def _watermark(delta: float = 2.0) -> KgwWatermark:
+    return KgwWatermark(
+        KgwConfig(
+            secret=KGW_KEY,
+            key_id="0123456789abcdef",
+            model_id="stub",
+            tokenizer_fingerprint="ab" * 32,
+            vocab_size=VOCAB_SIZE,
+            gamma=0.25,
+            delta=delta,
+        )
+    )
 
 
 class StubTokenizer:
@@ -129,6 +145,37 @@ class StubModel:
                 else ((last * 3 + value * 5) % 7) * 0.7
             )
         return StubOutput(logits, 0)
+
+
+class CancelOnCallModel(StubModel):
+    """Set one run's stop event during a chosen model forward."""
+
+    def __init__(
+        self,
+        cancel_event: threading.Event,
+        cancel_on_call: int,
+    ) -> None:
+        super().__init__()
+        assert cancel_on_call >= 1
+        self.cancel_event = cancel_event
+        self.cancel_on_call = cancel_on_call
+
+    def __call__(
+        self,
+        input_ids: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        past_key_values: Any = None,
+        use_cache: bool = True,
+    ) -> StubOutput:
+        output = super().__call__(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            use_cache=use_cache,
+        )
+        if len(self.calls) == self.cancel_on_call:
+            self.cancel_event.set()
+        return output
 
 
 class StubCache:
@@ -441,6 +488,128 @@ def test_sample_next_omits_alternatives_when_disabled() -> None:
     assert pick.alternatives is None
 
 
+def _bias_case() -> Tuple[torch.Tensor, int, int, KgwWatermark]:
+    """Raw winner and green runner-up separate bias from evidence."""
+    watermark = _watermark()
+    previous = 3
+    greens = set(watermark.green_ids(previous).tolist())
+    green_id = next(iter(greens))
+    raw_id = next(
+        token for token in range(VOCAB_SIZE) if token not in greens
+    )
+    logits = torch.full((1, VOCAB_SIZE), -5.0)
+    logits[0, raw_id] = 3.0
+    logits[0, green_id] = 2.0
+    return logits, raw_id, green_id, watermark
+
+
+def test_watermark_bias_precedes_greedy_argmax() -> None:
+    logits, raw_id, green_id, watermark = _bias_case()
+    raw_probs = torch.softmax(logits.squeeze(0), dim=-1)
+
+    pick = _sample_next(
+        logits,
+        temperature=0.0,
+        top_p=1.0,
+        top_k=-1,
+        tokenizer=StubTokenizer(),
+        alternatives=True,
+        watermark=watermark,
+        previous_token=3,
+        watermark_evidence=True,
+    )
+
+    assert int(torch.argmax(logits).item()) == raw_id
+    assert pick.token_id == green_id
+    assert pick.green is True
+    assert pick.evidence is True
+    assert pick.confidence == pytest.approx(
+        float(raw_probs[green_id]), abs=1e-9
+    )
+    assert pick.entropy == pytest.approx(
+        _entropy_nats(raw_probs), abs=1e-9
+    )
+    assert pick.alternatives is not None
+    assert pick.alternatives[0]["id"] == raw_id
+
+
+@pytest.mark.parametrize(
+    ("top_k", "top_p"),
+    [
+        (1, 1.0),
+        (-1, 0.01),
+    ],
+)
+def test_watermark_bias_precedes_top_k_and_top_p(
+    top_k: int, top_p: float
+) -> None:
+    logits, _raw_id, green_id, watermark = _bias_case()
+
+    pick = _sample_next(
+        logits,
+        temperature=1.0,
+        top_p=top_p,
+        top_k=top_k,
+        tokenizer=StubTokenizer(),
+        alternatives=False,
+        watermark=watermark,
+        previous_token=3,
+        watermark_evidence=True,
+    )
+
+    assert pick.token_id == green_id
+
+
+def test_zero_delta_is_bit_identical_and_rng_identical() -> None:
+    logits = torch.tensor(
+        [
+            [
+                0.2,
+                0.5,
+                1.0,
+                0.1,
+                0.8,
+                0.7,
+                0.4,
+                0.3,
+                0.6,
+                0.9,
+                0.0,
+                -1.0,
+            ]
+        ]
+    )
+    torch.manual_seed(381)
+    plain = _sample_next(
+        logits,
+        temperature=0.8,
+        top_p=0.9,
+        top_k=7,
+        tokenizer=StubTokenizer(),
+        alternatives=True,
+    )
+    plain_state = torch.random.get_rng_state()
+
+    torch.manual_seed(381)
+    watermark = _watermark(delta=0.0)
+    marked = _sample_next(
+        logits,
+        temperature=0.8,
+        top_p=0.9,
+        top_k=7,
+        tokenizer=StubTokenizer(),
+        alternatives=True,
+        watermark=watermark,
+        previous_token=3,
+        watermark_evidence=True,
+    )
+    marked_state = torch.random.get_rng_state()
+
+    assert marked[:4] == plain[:4]
+    assert torch.equal(marked_state, plain_state)
+    assert watermark.cache.device_entry_count("cpu") == 0
+
+
 def _traced(
     picks: List[Tuple[int, float, float]],
     alts: Optional[List[Optional[List[Dict[str, Any]]]]] = None,
@@ -579,14 +748,20 @@ def test_a_drifted_sum_is_caught() -> None:
 
 
 def _run_generate(
-    *, alternatives: bool, budget: int
+    *,
+    alternatives: bool,
+    budget: int,
+    watermark: Optional[KgwWatermark] = None,
+    model: Optional[StubModel] = None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> Dict[str, Any]:
     state: Dict[str, Any] = {}
     frames: List[Dict[str, Any]] = []
+    active_model = StubModel() if model is None else model
 
     async def drive() -> None:
         async for item in streaming_generate(
-            StubModel(),
+            active_model,
             StubTokenizer(),
             ChatTextAdapter(),
             "prompt",
@@ -594,6 +769,8 @@ def _run_generate(
             temperature=0.0,
             top_p=1.0,
             alternatives=alternatives,
+            watermark=watermark,
+            cancel_event=cancel_event,
             state_sink=state,
         ):
             frames.append(item)
@@ -665,6 +842,95 @@ def test_state_sink_traces_every_position() -> None:
     assert len(state["alternatives"]) == 6
 
 
+def test_first_watermarked_token_is_biased_but_not_evidence() -> None:
+    out = _run_generate(
+        alternatives=False,
+        budget=5,
+        watermark=_watermark(),
+    )
+    frames = [
+        frame for frame in out["frames"]
+        if frame["type"] == "frame"
+    ]
+    state = out["state"]
+
+    assert isinstance(frames[0]["token"]["g"], bool)
+    assert frames[0]["token"]["we"] is False
+    assert all(frame["token"]["we"] for frame in frames[1:])
+    assert state["watermark_evidence"] == [
+        False,
+        True,
+        True,
+        True,
+        True,
+    ]
+    assert frames[-1]["watermark_stats"]["scored_count"] == 4
+    expected_green = sum(
+        green
+        for green, evidence in zip(
+            state["watermark_memberships"],
+            state["watermark_evidence"],
+            strict=True,
+        )
+        if evidence
+    )
+    assert (
+        frames[-1]["watermark_stats"]["green_count"]
+        == expected_green
+    )
+
+
+def test_watermark_off_omits_token_and_state_fields() -> None:
+    out = _run_generate(alternatives=False, budget=3)
+    frames = [
+        frame for frame in out["frames"]
+        if frame["type"] == "frame"
+    ]
+
+    assert all("g" not in frame["token"] for frame in frames)
+    assert all("we" not in frame["token"] for frame in frames)
+    assert "watermark_memberships" not in out["state"]
+    assert "watermark_evidence" not in out["state"]
+
+
+def test_cancelled_generate_drops_every_unsent_trace_field() -> None:
+    """Cancel during the second forward, after one frame was sent."""
+    cancel_event = threading.Event()
+    watermark = _watermark()
+    out = _run_generate(
+        alternatives=True,
+        budget=5,
+        watermark=watermark,
+        model=CancelOnCallModel(cancel_event, 2),
+        cancel_event=cancel_event,
+    )
+    delivered = [
+        frame["token"]["id"]
+        for frame in out["frames"]
+        if frame["type"] == "frame"
+    ]
+    state = out["state"]
+
+    assert state["ids"] == delivered
+    for name in (
+        "confidences",
+        "entropies",
+        "alternatives",
+        "signals",
+        "watermark_memberships",
+        "watermark_evidence",
+    ):
+        assert len(state[name]) == len(delivered), name
+    result = watermark.accumulator.result()
+    assert result.scored_count == 0
+    assert result.green_count == 0
+    done = out["frames"][-1]
+    assert done["cancelled"] is True
+    assert done["final_text"] == StubTokenizer().decode(
+        delivered
+    ).strip()
+
+
 def _run_substitute(
     *,
     state: Dict[str, Any],
@@ -673,6 +939,9 @@ def _run_substitute(
     typed: bool = False,
     forced_id: Optional[int] = None,
     cache: Optional[Dict[str, Any]] = None,
+    watermark: Optional[KgwWatermark] = None,
+    model: Optional[StubModel] = None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> Dict[str, Any]:
     captured = state["alternatives"][position]
     if forced_id is None:
@@ -688,11 +957,11 @@ def _run_substitute(
         typed = True
     branch: Dict[str, Any] = {}
     frames: List[Dict[str, Any]] = []
-    model = StubModel()
+    active_model = StubModel() if model is None else model
 
     async def drive() -> None:
         async for item in streaming_substitute(
-            model,
+            active_model,
             StubTokenizer(),
             ChatTextAdapter(),
             "prompt",
@@ -709,8 +978,16 @@ def _run_substitute(
             prefix_alts=state["alternatives"][:position],
             max_new_tokens=budget,
             alternatives=True,
+            watermark=watermark,
+            cancel_event=cancel_event,
             state_sink=branch,
             cache=cache,
+            prefix_watermark_memberships=state.get(
+                "watermark_memberships", []
+            )[:position],
+            prefix_watermark_evidence=state.get(
+                "watermark_evidence", []
+            )[:position],
         ):
             frames.append(item)
 
@@ -721,7 +998,9 @@ def _run_substitute(
         "forced": forced,
         # The pass that reads the forced position's distribution, and
         # the one the retained cache is supposed to shorten.
-        "first_call": model.calls[0] if model.calls else None,
+        "first_call": (
+            active_model.calls[0] if active_model.calls else None
+        ),
     }
 
 
@@ -734,6 +1013,142 @@ def test_substitute_keeps_prefix_and_forces_position() -> None:
     assert branch["ids"][:2] == state["ids"][:2]
     assert branch["ids"][2] == result["forced"]["id"]
     assert branch["ids"][2] != state["ids"][2]
+
+
+def test_substitute_preserves_watermark_prefix() -> None:
+    original_watermark = _watermark()
+    out = _run_generate(
+        alternatives=True,
+        budget=6,
+        watermark=original_watermark,
+    )
+    state = out["state"]
+    position = 2
+    branch_watermark = original_watermark.fork(
+        state["watermark_memberships"][:position],
+        state["watermark_evidence"][:position],
+    )
+
+    result = _run_substitute(
+        state=state,
+        position=position,
+        budget=6,
+        watermark=branch_watermark,
+    )
+    branch = result["branch"]
+
+    assert branch["watermark_memberships"][:position] == (
+        state["watermark_memberships"][:position]
+    )
+    assert branch["watermark_evidence"][:position] == (
+        state["watermark_evidence"][:position]
+    )
+    assert isinstance(
+        branch["watermark_memberships"][position], bool
+    )
+    assert branch["watermark_evidence"][position] is False
+    assert all(
+        branch["watermark_evidence"][position + 1 :]
+    )
+    assert result["frames"][0]["token"]["we"] is False
+
+
+def test_cancelled_substitute_drops_unsent_continuation() -> None:
+    """A sent seed remains; the cancelled next token is dropped."""
+    original = _watermark()
+    out = _run_generate(
+        alternatives=True,
+        budget=6,
+        watermark=original,
+    )
+    state = out["state"]
+    position = 2
+    branch_watermark = original.fork(
+        state["watermark_memberships"][:position],
+        state["watermark_evidence"][:position],
+    )
+    cancel_event = threading.Event()
+
+    result = _run_substitute(
+        state=state,
+        position=position,
+        budget=6,
+        watermark=branch_watermark,
+        model=CancelOnCallModel(cancel_event, 2),
+        cancel_event=cancel_event,
+    )
+    branch = result["branch"]
+    delivered = [
+        frame["token"]["id"]
+        for frame in result["frames"]
+        if frame["type"] == "frame"
+    ]
+
+    assert branch["ids"][position:] == delivered
+    assert len(branch["ids"]) == position + 1
+    for name in (
+        "confidences",
+        "entropies",
+        "alternatives",
+        "signals",
+        "watermark_memberships",
+        "watermark_evidence",
+    ):
+        assert len(branch[name]) == len(branch["ids"]), name
+    score = branch_watermark.accumulator.result()
+    expected_scored = sum(branch["watermark_evidence"])
+    expected_green = sum(
+        green
+        for green, evidence in zip(
+            branch["watermark_memberships"],
+            branch["watermark_evidence"],
+            strict=True,
+        )
+        if evidence
+    )
+    assert score.scored_count == expected_scored
+    assert score.green_count == expected_green
+    done = result["frames"][-1]
+    assert done["cancelled"] is True
+    assert done["final_text"] == StubTokenizer().decode(
+        branch["ids"]
+    ).strip()
+
+
+def test_cancelled_substitute_drops_unsent_forced_seed() -> None:
+    """Cancel during the probe, before the forced frame can leave."""
+    original = _watermark()
+    out = _run_generate(
+        alternatives=True,
+        budget=6,
+        watermark=original,
+    )
+    state = out["state"]
+    position = 2
+    branch_watermark = original.fork(
+        state["watermark_memberships"][:position],
+        state["watermark_evidence"][:position],
+    )
+    cancel_event = threading.Event()
+
+    result = _run_substitute(
+        state=state,
+        position=position,
+        budget=6,
+        watermark=branch_watermark,
+        model=CancelOnCallModel(cancel_event, 1),
+        cancel_event=cancel_event,
+    )
+
+    assert result["branch"]["ids"] == state["ids"][:position]
+    assert [
+        frame for frame in result["frames"]
+        if frame["type"] == "frame"
+    ] == []
+    score = branch_watermark.accumulator.result()
+    assert score.scored_count == sum(
+        state["watermark_evidence"][:position]
+    )
 
 
 def test_substitute_preserves_the_forced_signals() -> None:
