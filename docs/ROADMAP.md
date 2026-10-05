@@ -737,6 +737,126 @@ semantic-quality benchmark remain later alternatives. Each changes
 the claim or threat model enough to require a separate design rather
 than another toggle on this detector.
 
+**Diffusion watermarking has a first experiment, not a production
+scheme.** Recorded 2026-10-04 after comparing three diffusion-native
+directions and building a model-free position-seeded Gumbel spike.
+
+The closest fit is Bagchi et al.,
+["Watermarking Discrete Diffusion Language
+Models"](https://arxiv.org/abs/2511.02083). For a token distribution
+`p` and a keyed uniform vector `r`, it selects the token maximizing
+`ln(r_x) / p_x`, repeats this at every denoising step, and derives the
+vector from `(position + offset) mod modulus` so a detector can try all
+prefix alignments. LLaDA already has the right intervention point:
+`add_gumbel_noise` feeds `diffusion_step` before its argmax. At
+temperature 1, its `exp(logit) / -ln(r)` argmax is equivalent to the
+paper's score. That equivalence does not make the method a drop-in
+switch. LLaDA defaults to temperature 0, which bypasses random
+sampling entirely; other temperatures implement a different score.
+Fresh generation advances blocks while resume treats the whole canvas
+as one block, and today's edit reproducibility restores process RNG
+state. A position PRF needs an explicit absolute-position and branch
+contract instead. Reusing vectors modulo a small value also changes
+the joint distribution even when each idealized categorical draw has
+the right marginal. Finally, detection sees final token ids, not the
+many transient picks, so final-token evidence and exclusions must be
+defined rather than inferred from a denoising trace.
+
+The standard-library spike uses a 256-bit host-key input but derives a
+research-only HMAC-SHA256 domain, emits open-interval uniforms without
+touching Python, NumPy or torch global RNG state, and enforces strict
+vocabulary, sequence, modulus and total-work ceilings. Its deterministic
+default report uses target probabilities `[0.1, 0.2, 0.3, 0.4]`, 1,024
+positions and modulus 256. The watermarked frequencies were
+`[0.1016, 0.2109, 0.3125, 0.3750]`, versus
+`[0.0977, 0.2090, 0.2920, 0.4014]` for an independently
+domain-separated control. The detector's aligned watermarked score was
+2.0773; the control's aligned score was 1.0348 and its maximum over 256
+offsets was 1.1377. These are implementation sanity checks only.
+Finite synthetic frequencies and scores do not prove distortion-free
+production behavior, model quality, calibrated soundness, or robustness.
+
+[dgMARK](https://arxiv.org/abs/2601.22985) uses a different channel:
+sequentially reveal the highest-reward position whose proposed token
+matches a keyed position-parity rule. This fits LLaDA only after
+changing its present multi-token top-k transfer into sequential
+reveal-order control. That would also confound two of this project's XAI
+signals. The frame's `revealed` positions and Commit Order currently
+describe how the model's confidence schedule settled the canvas;
+dgMARK would make them partly describe the watermark policy. Its
+one-step lookahead is not free reuse of the current logits. Each
+hypothetical top-k commitment runs the decoding strategy on a changed
+partial sequence, which adds model forwards before choosing one
+position. DiffusionGemma offers no corresponding project seam. Its
+upstream loop samples a whole canvas, applies acceptance and renoising,
+then hands the streamer CPU logits. `FrameQueueStreamer.put_draft`
+therefore observes the result after the order or selection decision and
+cannot steer it.
+
+Gloaguen et al.,
+["Watermarking Diffusion Language
+Models"](https://arxiv.org/abs/2509.24368), optimize a green-list signal
+over distributions of still-unknown context hashes. Their practical
+method computes hash distributions across positions, keeps top-k
+probability and hash support, differentiates an energy, and
+exponentially tilts the token distributions. It combines a green-list
+boost in expectation with a predictive bias toward tokens that make
+other positions likely to be green. This is the broadest method, and
+the least natural first spike here: it needs probability and
+hash-distribution work across positions and the vocabulary, likely at
+material compute and memory cost, and it must run before token
+selection. LLaDA exposes that point inside `diffusion_step`;
+DiffusionGemma's CPU streamer logits arrive too late.
+
+The recommendation is one LLaDA-only position-seeded Gumbel
+experiment first. It must have its own scheme name, version and HMAC
+domain, even if a future design deliberately derives from the same
+host key. It must not reuse KGW's green-list seeding, cache, token
+statistic, or claim. Before a run can be saved, a separate signal
+contract must name the key id, tokenizer fingerprint, vocabulary
+width, modulus, zero-based position origin, alignment offset, score
+term and evidence/exclusion state for each final token. Edit branches
+must attest whether a remasked final token was sampled under that same
+contract.
+
+The real-model gate is a paired evaluation, decided on all of these
+measurements rather than on the synthetic report:
+
+1. **Marginal token distribution:** fixed-logit categorical trials
+   across low-, medium- and high-entropy distributions, plus sampled
+   real LLaDA logit rows, reporting total variation, maximum
+   standardized residual and marked-minus-control deltas against a
+   control-versus-control null envelope.
+2. **Quality:** paired perplexity, task exact match and a blinded
+   rubric score on identical prompts. Non-inferiority margins must be
+   written before looking at the result.
+3. **Detectability:** held-out thresholds calibrated separately at
+   1% and 0.1% false-positive rates, with TPR and 95% intervals by
+   final-token length 32, 64, 128 and 256. Maximizing over offsets is
+   part of calibration, never an uncorrected extra chance to detect.
+4. **Prefix and edit robustness:** the same calibrated TPR after
+   deleting 1, 8, 16 and 25 percent prefixes, substituting 5, 10 and
+   20 percent of tokens, and after this app's remask/resume workflow.
+5. **Cost:** median and p95 step and run latency, tokens per second,
+   peak allocated and reserved VRAM, and host memory for matched
+   watermark-off/on runs. The allowed regression is fixed before the
+   hardware run.
+6. **Resume reproducibility:** repeated generation, Continue and the
+   same edit from the same checkpoint must match token ids, reveal
+   positions, saved evidence and detector score in 100% of trials.
+7. **XAI semantics:** confidence, entropy and Alternatives must remain
+   measurements of the unmodified model distribution; Commit Order
+   and reveal events must retain a documented interpretation. Any
+   channel silently changing meaning is a no-go, even if detection is
+   strong.
+
+DiffusionGemma stays deferred until upstream exposes and supports a
+pre-selection logits or reveal-order intervention seam. Its current
+post-selection streamer boundary is an observation seam, not a
+watermarking one. The shipped AR KGW implementation must not be reused
+mechanically for either diffusion model: its predecessor-keyed
+green-list assumption is precisely the structure these methods replace.
+
 **Conversation text is durable; XAI artifacts remain explicit and
 tail-owned.** Recorded 2026-10-04, when multi-turn chat shipped.
 

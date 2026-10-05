@@ -2,7 +2,8 @@
 
 This is the detector foundation, not a user-facing authorship tool.
 It accepts ids that have already been produced by the tokenizer and
-returns the loaded key id, exact null probability, counts, z-score,
+returns the loaded key id, exact null rate, counts, a
+normal-approximation z-score,
 and either ``scored`` or ``insufficient_evidence``. It never labels
 text as AI or human.
 """
