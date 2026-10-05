@@ -66,6 +66,12 @@ function host(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function copyStatus(node, turnId) {
+  return node.querySelector(
+    '[data-conversation-copy-status="' + turnId + '"]'
+  );
+}
+
 function explicitConflict(reason, message) {
   const error = new Error(message);
   error.status = 409;
@@ -343,9 +349,15 @@ test("clipboard success reports Copied", async () => {
   await tick();
 
   assert.equal(copied, "question 1");
+  const status = copyStatus(card(h, "turn-1"), "turn-1");
+  const copy = action(card(h, "turn-1"), "copy");
+  assert.equal(status.textContent, "Copied");
+  assert.equal(status.classes.has("is-visible"), true);
+  assert.equal(copy.classes.has("is-copied"), true);
+  assert.ok(copy.querySelector(".conversation-action-icon-check"));
   assert.equal(
     h.page.registry.get("conversation-action-status").textContent,
-    "Copied"
+    ""
   );
 });
 
@@ -374,9 +386,10 @@ test("native copy bypasses Clipboard inside the click gesture",
   assert.equal(copiedBeforeReturn, true);
   assert.equal(h.page.document.activeElement, copy);
   assert.equal(
-    h.page.registry.get("conversation-action-status").textContent,
+    copyStatus(card(h, "turn-1"), "turn-1").textContent,
     "Copied"
   );
+  assert.equal(copy.classes.has("is-copied"), true);
 });
 
 test("QtWebEngine user agent selects synchronous copy", () => {
@@ -416,12 +429,11 @@ test("native copy refusal reports failure without state mutation",
 
   dispatch(h, copy);
 
-  const status = h.page.registry.get(
-    "conversation-action-status"
-  );
+  const status = copyStatus(card(h, "turn-1"), "turn-1");
   assert.equal(clipboardCalls, 0);
   assert.match(status.textContent, /Copy failed/);
   assert.equal(status.classes.has("is-error"), true);
+  assert.equal(copy.classes.has("is-copy-error"), true);
   assert.equal(h.page.document.body.children.length, bodyCount);
   assert.equal(h.page.document.activeElement, copy);
   assert.deepEqual(h.calls.edit, []);
@@ -450,7 +462,7 @@ test("clipboard rejection uses one bounded fallback", async () => {
   assert.equal(h.page.document.body.children.length, bodyCount);
   assert.equal(h.page.document.activeElement, copy);
   assert.equal(
-    h.page.registry.get("conversation-action-status").textContent,
+    copyStatus(card(h, "turn-2"), "turn-2").textContent,
     "Copied"
   );
 });
@@ -467,9 +479,7 @@ test("clipboard and fallback failure stays in the live region",
   dispatch(h, copy);
   await tick();
 
-  const status = h.page.registry.get(
-    "conversation-action-status"
-  );
+  const status = copyStatus(card(h, "turn-1"), "turn-1");
   assert.match(status.textContent, /Copy failed/);
   assert.equal(status.classes.has("is-error"), true);
   assert.equal(h.page.document.activeElement, copy);
@@ -523,8 +533,12 @@ test("a stale clipboard rejection cannot overwrite newer copy",
   assert.deepEqual(copied, ["question 3"]);
   assert.equal(h.page.document.activeElement, copyB);
   assert.equal(
-    h.page.registry.get("conversation-action-status").textContent,
+    copyStatus(card(h, "turn-3"), "turn-3").textContent,
     "Copied"
+  );
+  assert.equal(
+    copyStatus(card(h, "turn-1"), "turn-1").textContent,
+    ""
   );
 });
 

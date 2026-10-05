@@ -11,6 +11,7 @@ var CONVERSATION_ACTION_TEXT_MAX = 1000000;
 var CONVERSATION_ACTION_SUMMARY_MAX = 2000;
 var CONVERSATION_CLIPBOARD_FALLBACK_MAX = 1000000;
 var CONVERSATION_ACTION_FEEDBACK_MS = 4000;
+var CONVERSATION_COPY_FEEDBACK_MS = 1200;
 var CONVERSATION_ACTION_EPOCH_MAX = 1000000;
 
 function conversationActionsCreate(options) {
@@ -50,6 +51,7 @@ function conversationActionsCreate(options) {
     confirmation: null,
     pendingAction: false,
     feedbackTimer: null,
+    copyFeedbackTimers: {},
     copyEpoch: 0,
     wired: false,
   };
@@ -769,6 +771,9 @@ function conversationActionsCopy(owner, turnId, button) {
     );
     return;
   }
+  conversationActionsSetCopyFeedback(
+    owner, turnId, "idle", ""
+  );
   owner.copyEpoch = (
     owner.copyEpoch % CONVERSATION_ACTION_EPOCH_MAX
   ) + 1;
@@ -782,12 +787,14 @@ function conversationActionsCopy(owner, turnId, button) {
         turn.text, button, isCurrent
       );
       if (epoch === owner.copyEpoch) {
-        conversationActionsReport(owner, "Copied", false);
+        conversationActionsSetCopyFeedback(
+          owner, turnId, "copied", "Copied"
+        );
       }
-    } catch (error) {
+    } catch (_error) {
       if (epoch === owner.copyEpoch) {
-        conversationActionsReportError(
-          owner, "Copy failed", error
+        conversationActionsSetCopyFeedback(
+          owner, turnId, "error", "Copy failed"
         );
       }
     }
@@ -798,16 +805,39 @@ function conversationActionsCopy(owner, turnId, button) {
   )
     .then(function () {
       if (epoch === owner.copyEpoch) {
-        conversationActionsReport(owner, "Copied", false);
+        conversationActionsSetCopyFeedback(
+          owner, turnId, "copied", "Copied"
+        );
       }
     })
-    .catch(function (error) {
+    .catch(function (_error) {
       if (epoch === owner.copyEpoch) {
-        conversationActionsReportError(
-          owner, "Copy failed", error
+        conversationActionsSetCopyFeedback(
+          owner, turnId, "error", "Copy failed"
         );
       }
     });
+}
+
+function conversationActionsSetCopyFeedback(
+  owner, turnId, state, message
+) {
+  var timer = owner.copyFeedbackTimers[turnId];
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    delete owner.copyFeedbackTimers[turnId];
+  }
+  owner.view.setCopyFeedback(turnId, state, message);
+  if (state === "idle") {
+    return;
+  }
+  var delay = state === "error"
+    ? CONVERSATION_ACTION_FEEDBACK_MS
+    : CONVERSATION_COPY_FEEDBACK_MS;
+  owner.copyFeedbackTimers[turnId] = setTimeout(function () {
+    delete owner.copyFeedbackTimers[turnId];
+    owner.view.setCopyFeedback(turnId, "idle", "");
+  }, delay);
 }
 
 // QtWebEngine's Clipboard permission path is the likely native-only

@@ -54,6 +54,9 @@ var conversationActionViewCreate = (function () {
       setFeedback: function (message, danger) {
         setFeedback(owner, message, danger);
       },
+      setCopyFeedback: function (turnId, state, message) {
+        setCopyFeedback(owner, turnId, state, message);
+      },
       focusEdit: function (turnId) {
         return focusAttribute(
           owner,
@@ -171,6 +174,7 @@ var conversationActionViewCreate = (function () {
       turnId: turn.turn_id,
       focusAttribute: "data-conversation-delete-for",
     }));
+    actions.appendChild(copyStatus(turn.turn_id));
     return actions;
   }
 
@@ -189,6 +193,7 @@ var conversationActionViewCreate = (function () {
       turnId: turn.turn_id,
       focusAttribute: "data-conversation-retry-for",
     }));
+    actions.appendChild(copyStatus(turn.turn_id));
     return actions;
   }
 
@@ -216,8 +221,31 @@ var conversationActionViewCreate = (function () {
         settings.focusAttribute, settings.turnId
       );
     }
-    button.appendChild(icon(settings.icon));
+    var primary = icon(settings.icon);
+    primary.classList.add("conversation-action-icon-primary");
+    button.appendChild(primary);
+    if (settings.action === "copy") {
+      button.setAttribute(
+        "data-conversation-copy-for", settings.turnId
+      );
+      button.setAttribute(
+        "data-conversation-copy-label", settings.label
+      );
+      var check = icon("check");
+      check.classList.add("conversation-action-icon-check");
+      button.appendChild(check);
+    }
     return button;
+  }
+
+  function copyStatus(turnId) {
+    var status = document.createElement("span");
+    status.className = "conversation-copy-status";
+    status.setAttribute("role", "status");
+    status.setAttribute("aria-live", "polite");
+    status.setAttribute("aria-atomic", "true");
+    status.setAttribute("data-conversation-copy-status", turnId);
+    return status;
   }
 
   function icon(kind) {
@@ -230,6 +258,8 @@ var conversationActionViewCreate = (function () {
       deleteIcon(svg);
     } else if (kind === "retry") {
       retryIcon(svg);
+    } else if (kind === "check") {
+      checkIcon(svg);
     } else {
       throw new Error("Unknown conversation action icon");
     }
@@ -291,6 +321,10 @@ var conversationActionViewCreate = (function () {
 
   function retryIcon(svg) {
     svgPath(svg, "M20 11a8 8 0 1 0 1 4M20 4v7h-7");
+  }
+
+  function checkIcon(svg) {
+    svgPath(svg, "M5 13l4 4L19 7");
   }
 
   function renderEdit(settings) {
@@ -589,6 +623,54 @@ var conversationActionViewCreate = (function () {
     owner.feedback.textContent = message;
     owner.feedback.hidden = message === "";
     owner.feedback.classList.toggle("is-error", danger);
+  }
+
+  function setCopyFeedback(owner, turnId, state, message) {
+    if (typeof turnId !== "string" || turnId === "") {
+      throw new TypeError("Copy feedback needs a turn id");
+    }
+    if (
+      state !== "idle"
+      && state !== "copied"
+      && state !== "error"
+    ) {
+      throw new TypeError("Copy feedback state is invalid");
+    }
+    var buttons = owner.root.querySelectorAll(
+      "[data-conversation-copy-for=\"" + turnId + "\"]"
+    );
+    var statuses = owner.root.querySelectorAll(
+      "[data-conversation-copy-status=\"" + turnId + "\"]"
+    );
+    for (var index = 0; index < buttons.length; index++) {
+      setCopyButtonState(buttons[index], state);
+    }
+    for (var statusIndex = 0;
+      statusIndex < statuses.length;
+      statusIndex++) {
+      setCopyStatusState(
+        statuses[statusIndex], state, message
+      );
+    }
+  }
+
+  function setCopyButtonState(button, state) {
+    button.classList.toggle("is-copied", state === "copied");
+    button.classList.toggle("is-copy-error", state === "error");
+    var original = button.getAttribute(
+      "data-conversation-copy-label"
+    ) || "Copy message";
+    var label = state === "copied" ? "Copied" : original;
+    button.title = label;
+    button.setAttribute("aria-label", label);
+  }
+
+  function setCopyStatusState(status, state, message) {
+    status.textContent = state === "idle" ? "" : message;
+    status.classList.toggle(
+      "is-visible", state !== "idle"
+    );
+    status.classList.toggle("is-error", state === "error");
   }
 
   function focusTrigger(owner, confirmation) {

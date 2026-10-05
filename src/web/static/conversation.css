@@ -151,9 +151,7 @@
 }
 
 .conversation-turn-user.is-editing:focus-within {
-  box-shadow:
-    0 0 0 1px rgba(112, 211, 255, 0.34),
-    0 0 18px rgba(42, 169, 255, 0.2);
+  box-shadow: 0 0 18px rgba(42, 169, 255, 0.2);
 }
 
 .conversation-turn-assistant {
@@ -256,6 +254,67 @@
   color: var(--text-primary);
 }
 
+.conversation-action-icon-check {
+  display: none;
+}
+
+.conversation-action-copy.is-copied {
+  border-color: rgba(0, 255, 65, 0.35);
+  color: var(--accent);
+}
+
+.conversation-action-copy.is-copied
+  .conversation-action-icon-primary {
+  display: none;
+}
+
+.conversation-action-copy.is-copied
+  .conversation-action-icon-check {
+  display: block;
+  animation: conversation-copy-check 0.2s ease-out;
+  filter: drop-shadow(0 0 4px var(--accent-glow));
+}
+
+.conversation-action-copy.is-copy-error {
+  border-color: rgba(255, 92, 92, 0.45);
+  color: #ff8c8c;
+}
+
+.conversation-copy-status {
+  width: 62px;
+  flex: 0 0 62px;
+  color: var(--accent);
+  font-size: 9px;
+  letter-spacing: 0.03em;
+  opacity: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: opacity 0.16s ease;
+  visibility: hidden;
+  white-space: nowrap;
+}
+
+.conversation-copy-status.is-visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+.conversation-copy-status.is-error {
+  color: #ff8c8c;
+}
+
+@keyframes conversation-copy-check {
+  from {
+    opacity: 0;
+    transform: scale(0.72);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 .conversation-action:focus-visible,
 .conversation-branch-button:focus-visible,
 .conversation-inline-edit button:focus-visible,
@@ -271,11 +330,14 @@
 }
 
 .conversation-inline-edit-input {
+  box-sizing: border-box;
   width: 100%;
   min-height: 78px;
   max-height: 260px;
-  border-color: rgba(79, 195, 247, 0.5);
+  border: 1px solid rgba(79, 195, 247, 0.5);
+  border-radius: var(--radius);
   background: rgba(3, 22, 36, 0.78);
+  outline: none;
   resize: vertical;
   font: inherit;
   line-height: inherit;
@@ -283,8 +345,6 @@
 
 .conversation-inline-edit-input:focus-visible {
   border-color: #78cfff;
-  outline: 2px solid rgba(79, 195, 247, 0.82);
-  outline-offset: 2px;
   box-shadow: 0 0 12px rgba(42, 169, 255, 0.2);
 }
 
@@ -730,7 +790,13 @@
 
 @media (prefers-reduced-motion: reduce) {
   .conversation-turn-actions,
-  .conversation-active-actions {
+  .conversation-active-actions,
+  .conversation-copy-status {
     transition: none;
+  }
+
+  .conversation-action-copy.is-copied
+    .conversation-action-icon-check {
+    animation: none;
   }
 }

@@ -365,6 +365,9 @@ def test_inline_user_edit_has_distinct_blue_focus_treatment() -> None:
         ".conversation-turn-user.is-editing:focus-within {",
         260,
     )
+    input_rule = _rule(
+        styles, ".conversation-inline-edit-input {", 360
+    )
     input_focus = _rule(
         styles,
         ".conversation-inline-edit-input:focus-visible {",
@@ -377,8 +380,32 @@ def test_inline_user_edit_has_distinct_blue_focus_treatment() -> None:
     assert "99, 205, 255" in card
     assert "linear-gradient" in card
     assert "box-shadow" in focus
-    assert "outline: 2px solid" in input_focus
+    assert "0 0 0 1px" not in focus
+    assert "border: 1px solid" in input_rule
+    assert "border-radius: var(--radius)" in input_rule
+    assert "outline: none" in input_rule
+    assert "outline-offset" not in input_focus
+    assert "box-shadow" in input_focus
     assert "#9bddff" in badge
+
+
+def test_copy_feedback_reserves_its_message_action_slot() -> None:
+    """A local status and icon swap never insert a transcript row."""
+    styles = CONVERSATION_CSS.read_text(encoding="utf-8")
+    status = _rule(styles, ".conversation-copy-status {", 520)
+    copied = _rule(
+        styles, ".conversation-action-copy.is-copied {", 220
+    )
+    check = _rule(
+        styles, ".conversation-action-icon-check {", 100
+    )
+
+    assert "width: 62px" in status
+    assert "flex: 0 0 62px" in status
+    assert "visibility: hidden" in status
+    assert "text-overflow: ellipsis" in status
+    assert "var(--accent)" in copied
+    assert "display: none" in check
 
 
 def test_completed_canvas_height_is_bounded_and_scrollable() -> None:
