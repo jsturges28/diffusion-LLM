@@ -40,6 +40,7 @@ const USER_D =
   "t_" + "e".repeat(32) + "_00000001_34539a25cb885b4f";
 const ASSISTANT_D =
   "t_" + "e".repeat(32) + "_00000002_ab45a84c532dc218";
+const SCHEMA_ID = "1".repeat(64);
 
 const MODEL = {
   id: "llada",
@@ -52,6 +53,7 @@ const MODEL = {
     unresolved_char: "\u2591",
     supports_resume: true,
   },
+  generation_schema_ids: { cuda: SCHEMA_ID },
   param_specs: [
     {
       name: "temperature",
@@ -86,6 +88,15 @@ const MODELS = {
   default: MODEL.id,
   gpu_name: "Test GPU",
 };
+
+const OTHER_MODEL = Object.assign({}, MODEL, {
+  id: "other",
+  display_name: "Other Model",
+});
+const OTHER_MODELS = Object.assign({}, MODELS, {
+  models: [MODEL, OTHER_MODEL],
+  active: OTHER_MODEL.id,
+});
 
 function response(body, status) {
   const code = status || 200;
@@ -157,6 +168,7 @@ class BranchApi {
       releaseFork: null,
       dropForkReply: null,
       rejectFork: null,
+      authoritativeConfiguration: null,
       receipts: new Map(),
     };
     this.fetchImpl = this.fetchImpl.bind(this);
@@ -354,6 +366,13 @@ class BranchApi {
     const assistant = turn(
       BRANCH_C, ASSISTANT_C, 2, "assistant", "", 1
     );
+    const configuration =
+      this.takeAuthoritativeConfiguration(
+        body.generation_configuration
+      );
+    assistant.metadata = {
+      pending_generation_v1: configuration,
+    };
     this.branches[BRANCH_C] = {
       revision: 1,
       turns: [source.turns[0], assistant],
@@ -370,6 +389,7 @@ class BranchApi {
       source_branch_id: body.branch_id,
       retried_assistant_turn_id: assistantTurnId,
       assistant_turn: assistant,
+      generation_configuration: configuration,
     });
   }
 
@@ -393,6 +413,13 @@ class BranchApi {
     const assistant = turn(
       BRANCH_D, ASSISTANT_D, 2, "assistant", "", 1
     );
+    const configuration =
+      this.takeAuthoritativeConfiguration(
+        body.generation_configuration
+      );
+    assistant.metadata = {
+      pending_generation_v1: configuration,
+    };
     this.branches[BRANCH_D] = {
       revision: 1,
       turns: [user, assistant],
@@ -410,6 +437,7 @@ class BranchApi {
       replaced_user_turn_id: userTurnId,
       user_turn: user,
       assistant_turn: assistant,
+      generation_configuration: configuration,
     });
   }
 
@@ -580,6 +608,17 @@ class BranchApi {
   rejectNextFork(kind) {
     this.state.rejectFork = kind;
   }
+
+  takeAuthoritativeConfiguration(fallback) {
+    const configured = this.state.authoritativeConfiguration;
+    this.state.authoritativeConfiguration = null;
+    return configured === null ? fallback : configured;
+  }
+
+  setAuthoritativeConfiguration(configuration) {
+    this.state.authoritativeConfiguration =
+      JSON.parse(JSON.stringify(configuration));
+  }
 }
 
 function branchApi() {
@@ -701,6 +740,35 @@ function clickDialog(run, kind, action) {
 function temperatureInput(run) {
   return run.page.registry.get("param-fields")
     .querySelector("input");
+}
+
+function actionSettingsRoot(run, kind) {
+  if (kind === "retry") {
+    return run.page.registry.get(
+      "conversation-retry-settings"
+    ).querySelector(".run-settings");
+  }
+  return run.page.registry.get("conversation-turns")
+    .querySelector(".run-settings");
+}
+
+function actionTemperatureInput(run, kind) {
+  const root = actionSettingsRoot(run, kind);
+  assert.ok(root, "missing " + kind + " Run settings");
+  const input = root.querySelectorAll("input").find(
+    (candidate) => candidate.id.endsWith("param-temperature")
+  );
+  assert.ok(input, "missing " + kind + " temperature");
+  return input;
+}
+
+function actionExperimentalInput(run, kind) {
+  const root = actionSettingsRoot(run, kind);
+  const input = root.querySelectorAll("input").find(
+    (candidate) => candidate.id.endsWith("toggle-experimental")
+  );
+  assert.ok(input, "missing " + kind + " Experimental toggle");
+  return input;
 }
 
 async function settleConversation(run) {
@@ -834,12 +902,14 @@ test("clicked Retry launches with its confirmed parameter snapshot",
     run.page.document.activeElement,
     run.page.registry.get("btn-conversation-retry-cancel")
   );
+  const localTemperature = actionTemperatureInput(run, "retry");
+  localTemperature.value = "0.9";
+  localTemperature.dispatch("input");
+  assert.equal(temperatureInput(run).value, "0.7");
   clickDialog(run, "retry", "confirm");
   await tick();
 
-  const temperature = temperatureInput(run);
-  temperature.value = "0.9";
-  temperature.dispatch("input");
+  assert.equal(localTemperature.disabled, true);
   run.api.releaseFork();
   await settleConversation(run);
 
@@ -855,7 +925,7 @@ test("clicked Retry launches with its confirmed parameter snapshot",
   assert.equal(retried.branch_id, BRANCH_C);
   assert.equal(retried.assistant_turn_id, ASSISTANT_C);
   assert.equal(retried.assistant_turn_index, 2);
-  assert.equal(retried.temperature, 0.7);
+  assert.equal(retried.temperature, 0.9);
   assert.equal(retried.messages.at(-1).turn_id, USER_A);
   assert.equal(retried.messages.at(-1).content, "Contract question");
   const mutation = run.api.state.calls.find((call) =>
@@ -863,9 +933,18 @@ test("clicked Retry launches with its confirmed parameter snapshot",
     && call.method === "POST"
   );
   assert.match(mutation.body.operation_id, /^[0-9a-f]{32}$/);
-  assert.equal("parameters" in mutation.body, false);
-  assert.equal("configuration" in mutation.body, false);
-  assert.equal("experimental" in mutation.body, false);
+  assert.deepEqual(mutation.body.generation_configuration, {
+    codec_version: 1,
+    model_id: MODEL.id,
+    input_mode: "chat",
+    device: "cuda",
+    schema_id: SCHEMA_ID,
+    experimental: false,
+    parameters: {
+      temperature: 0.9,
+      strategy: "low_confidence",
+    },
+  });
   assert.equal(run.context.generatorRun.frameCount(), 0);
   assert.equal(
     run.page.document.activeElement,
@@ -877,6 +956,90 @@ test("clicked Retry launches with its confirmed parameter snapshot",
     code: "test_cleanup",
     message: "cleanup",
   });
+});
+
+test("fork launch uses the store-authoritative configuration",
+  async () => {
+  const run = await activeRun();
+  run.context.handleModelStatus({ status: "ready" });
+  run.api.setAuthoritativeConfiguration({
+    codec_version: 1,
+    model_id: MODEL.id,
+    input_mode: "chat",
+    device: "cuda",
+    schema_id: SCHEMA_ID,
+    experimental: false,
+    parameters: {
+      temperature: 0.4,
+      strategy: "random",
+    },
+  });
+  clickAction(
+    run,
+    actionButton(
+      run.page.registry.get("active-assistant-actions"),
+      "retry"
+    )
+  );
+  const localTemperature = actionTemperatureInput(run, "retry");
+  localTemperature.value = "0.9";
+  localTemperature.dispatch("input");
+  clickDialog(run, "retry", "confirm");
+  await settleConversation(run);
+
+  const mutation = run.api.state.calls.find((call) =>
+    call.path.includes("/branches/retry-assistant/")
+  );
+  const generated = run.socket.sent
+    .map((raw) => JSON.parse(raw))
+    .filter((message) => message.type === "generate")
+    .at(-1);
+  assert.equal(
+    mutation.body.generation_configuration.parameters.temperature,
+    0.9
+  );
+  assert.equal(generated.temperature, 0.4);
+  assert.equal(generated.strategy, "random");
+  run.context.handleError({
+    type: "error",
+    scope: "run",
+    code: "test_cleanup",
+    message: "cleanup",
+  });
+});
+
+test("invalid local Retry settings never reach the fork API",
+  async () => {
+  const run = await activeRun();
+  const retry = actionButton(
+    run.page.registry.get("active-assistant-actions"),
+    "retry"
+  );
+  clickAction(run, retry);
+  const localTemperature = actionTemperatureInput(run, "retry");
+  localTemperature.value = "";
+  localTemperature.dispatch("input");
+  const forksBefore = run.api.state.calls.filter((call) =>
+    call.path.includes("/branches/retry-assistant/")
+  ).length;
+
+  clickDialog(run, "retry", "confirm");
+  await tick();
+
+  const forksAfter = run.api.state.calls.filter((call) =>
+    call.path.includes("/branches/retry-assistant/")
+  ).length;
+  assert.equal(forksAfter, forksBefore);
+  assert.equal(actionSettingsRoot(run, "retry").open, true);
+  assert.equal(run.page.document.activeElement, localTemperature);
+  assert.equal(
+    run.page.registry.get(
+      "btn-conversation-retry-cancel"
+    ).disabled,
+    false
+  );
+  assert.equal(temperatureInput(run).value, "0.7");
+  assert.equal(run.context.generatorRun.frameCount(), 2);
 });
 
 test("clicked fork holds the shared conversation busy guard",
@@ -982,13 +1145,15 @@ test("clicked Edit keeps Save-time settings through a slow fork",
   run.page.registry.get("conversation-transcript").dispatch(
     "input", { target: input }
   );
+  const localTemperature = actionTemperatureInput(run, "edit");
+  localTemperature.value = "0.9";
+  localTemperature.dispatch("input");
+  assert.equal(temperatureInput(run).value, "0.7");
   run.api.holdNextFork();
   clickAction(run, actionButton(editing, "edit-save"));
   await tick();
 
-  const temperature = temperatureInput(run);
-  temperature.value = "0.9";
-  temperature.dispatch("input");
+  assert.equal(localTemperature.disabled, true);
   run.api.releaseFork();
   await settleConversation(run);
 
@@ -1002,7 +1167,7 @@ test("clicked Edit keeps Save-time settings through a slow fork",
     .at(-1);
   assert.equal(generated.branch_id, BRANCH_D);
   assert.equal(generated.assistant_turn_id, ASSISTANT_D);
-  assert.equal(generated.temperature, 0.7);
+  assert.equal(generated.temperature, 0.9);
   assert.equal(generated.messages.at(-1).turn_id, USER_D);
   assert.equal(
     generated.messages.at(-1).content,
@@ -1012,8 +1177,18 @@ test("clicked Edit keeps Save-time settings through a slow fork",
     call.path.includes("/branches/edit-user/")
   );
   assert.match(mutation.body.operation_id, /^[0-9a-f]{32}$/);
-  assert.equal("parameters" in mutation.body, false);
-  assert.equal("configuration" in mutation.body, false);
+  assert.deepEqual(mutation.body.generation_configuration, {
+    codec_version: 1,
+    model_id: MODEL.id,
+    input_mode: "chat",
+    device: "cuda",
+    schema_id: SCHEMA_ID,
+    experimental: false,
+    parameters: {
+      temperature: 0.9,
+      strategy: "low_confidence",
+    },
+  });
   assert.equal(run.context.generatorRun.frameCount(), 0);
   assert.equal(turnCard(run, USER_D).focused, true);
   run.context.handleError({
@@ -1101,6 +1276,9 @@ test("lost Edit reply auto-replays one branch and operation",
   run.page.registry.get("conversation-transcript").dispatch(
     "input", { target: input }
   );
+  const localTemperature = actionTemperatureInput(run, "edit");
+  localTemperature.value = "0.8";
+  localTemperature.dispatch("input");
   clickAction(run, actionButton(editing, "edit-save"));
   await settleConversation(run);
 
@@ -1120,6 +1298,11 @@ test("lost Edit reply auto-replays one branch and operation",
     run.context.conversationState.selectedBranchId,
     BRANCH_D
   );
+  const generated = run.socket.sent
+    .map((raw) => JSON.parse(raw))
+    .filter((message) => message.type === "generate")
+    .at(-1);
+  assert.equal(generated.temperature, 0.8);
   run.context.handleError({
     type: "error",
     scope: "run",
@@ -1169,6 +1352,9 @@ test("lost Retry reply auto-replays one branch and operation",
       "retry"
     )
   );
+  const localTemperature = actionTemperatureInput(run, "retry");
+  localTemperature.value = "0.8";
+  localTemperature.dispatch("input");
   clickDialog(run, "retry", "confirm");
   await settleConversation(run);
 
@@ -1188,6 +1374,11 @@ test("lost Retry reply auto-replays one branch and operation",
     run.context.conversationState.selectedBranchId,
     BRANCH_C
   );
+  const generated = run.socket.sent
+    .map((raw) => JSON.parse(raw))
+    .filter((message) => message.type === "generate")
+    .at(-1);
+  assert.equal(generated.temperature, 0.8);
   run.context.handleError({
     type: "error",
     scope: "run",
@@ -1196,7 +1387,8 @@ test("lost Retry reply auto-replays one branch and operation",
   });
 });
 
-test("a disconnected Retry remains durably pending", async () => {
+test("disconnected Retry Send reuses durable local settings",
+  async () => {
   const run = await activeRun();
   run.context.generatorSocket.close();
   const generationsBefore = run.socket.sent.filter((raw) =>
@@ -1210,6 +1402,9 @@ test("a disconnected Retry remains durably pending", async () => {
       "retry"
     )
   );
+  const localTemperature = actionTemperatureInput(run, "retry");
+  localTemperature.value = "0.9";
+  localTemperature.dispatch("input");
   clickDialog(run, "retry", "confirm");
   await settleConversation(run);
 
@@ -1237,9 +1432,275 @@ test("a disconnected Retry remains durably pending", async () => {
     run.page.document.activeElement,
     run.page.registry.get("prompt-input")
   );
+  assert.equal(temperatureInput(run).value, "0.7");
+  const durable =
+    run.context.conversationStatePendingGenerationConfiguration(
+      run.context.conversationState
+    );
+  assert.equal(durable.parameters.temperature, 0.9);
+
+  const socketMark = FakeSocket.opened.length;
+  run.context.generatorSocket.connect();
+  run.context.handleModelStatus({ status: "ready" });
+  assert.equal(await run.context.startGeneration(), true);
+  const resumedSocket = FakeSocket.opened[socketMark];
+  const resumed = resumedSocket.sent
+    .map((raw) => JSON.parse(raw))
+    .find((message) => message.type === "generate");
+  assert.equal(resumed.temperature, 0.9);
+  assert.equal(resumed.experimental, false);
+  assert.equal(temperatureInput(run).value, "0.7");
+  run.context.handleError({
+    type: "error",
+    scope: "run",
+    code: "test_cleanup",
+    message: "cleanup",
+  });
 });
 
-test("a disconnected Edit focuses its selected user card",
+test("reloaded deferred Retry clicks Send with invalid Draft",
+  async () => {
+  const first = await activeRun();
+  first.context.generatorSocket.close();
+  clickAction(
+    first,
+    actionButton(
+      first.page.registry.get("active-assistant-actions"),
+      "retry"
+    )
+  );
+  const localTemperature = actionTemperatureInput(first, "retry");
+  const localExperimental = actionExperimentalInput(first, "retry");
+  localExperimental.checked = true;
+  localExperimental.dispatch("change");
+  localTemperature.value = "1.5";
+  localTemperature.dispatch("input");
+  clickDialog(first, "retry", "confirm");
+  await settleConversation(first);
+
+  const key = first.context.PERSIST_ACTIVE_CONVERSATION_KEY;
+  const storage = {};
+  storage[key] = first.context.localStorage.getItem(key);
+  const socketMark = FakeSocket.opened.length;
+  const second = loadPage({
+    WebSocket: OpenSocket,
+    fetchImpl: first.api.fetchImpl,
+    conversationApi: false,
+    bootState: { ui_state: {}, models: MODELS },
+    storage,
+  });
+  await tick();
+  await tick();
+  await tick();
+  second.context.handleModelStatus({ status: "ready" });
+
+  assert.equal(
+    second.context.conversationState.conversation
+      .pending_assistant_id,
+    ASSISTANT_C
+  );
+  assert.equal(
+    second.registry.get("param-fields").querySelector("input").value,
+    "0.7"
+  );
+  assert.equal(
+    second.registry.get("toggle-experimental").checked,
+    false
+  );
+  const draftTemperature = second.registry.get("param-fields")
+    .querySelector("input");
+  draftTemperature.value = "";
+  draftTemperature.dispatch("input");
+  assert.equal(
+    second.context.generatorModelPanel.validation().valid,
+    false
+  );
+  const send = second.registry.get("btn-generate");
+  assert.equal(send.disabled, false);
+  send.dispatch("click");
+  await tick();
+  await tick();
+  await tick();
+  const socket = FakeSocket.opened[socketMark];
+  const generated = socket.sent
+    .map((raw) => JSON.parse(raw))
+    .find((message) => message.type === "generate");
+  assert.equal(generated.temperature, 1.5);
+  assert.equal(generated.experimental, true);
+  second.context.handleError({
+    type: "error",
+    scope: "run",
+    code: "test_cleanup",
+    message: "cleanup",
+  });
+});
+
+test("reloaded legacy pending still requires valid Draft",
+  async () => {
+  const first = await activeRun();
+  first.context.generatorSocket.close();
+  clickAction(
+    first,
+    actionButton(
+      first.page.registry.get("active-assistant-actions"),
+      "retry"
+    )
+  );
+  clickDialog(first, "retry", "confirm");
+  await settleConversation(first);
+  first.api.branches[BRANCH_C].turns.at(-1).metadata = {};
+
+  const key = first.context.PERSIST_ACTIVE_CONVERSATION_KEY;
+  const storage = {
+    [key]: first.context.localStorage.getItem(key),
+  };
+  const second = loadPage({
+    WebSocket: OpenSocket,
+    fetchImpl: first.api.fetchImpl,
+    conversationApi: false,
+    bootState: { ui_state: {}, models: MODELS },
+    storage,
+  });
+  await tick();
+  await tick();
+  await tick();
+  second.context.handleModelStatus({ status: "ready" });
+  const draftTemperature = second.registry.get("param-fields")
+    .querySelector("input");
+  draftTemperature.value = "";
+  draftTemperature.dispatch("input");
+
+  assert.equal(
+    second.context.conversationState.conversation
+      .pending_assistant_id,
+    ASSISTANT_C
+  );
+  assert.equal(
+    second.context.conversationStatePendingGenerationConfiguration(
+      second.context.conversationState
+    ),
+    null
+  );
+  assert.equal(second.registry.get("btn-generate").disabled, true);
+});
+
+test("pending device mismatch stays reserved with switch copy",
+  async () => {
+  const run = await activeRun();
+  run.context.generatorSocket.close();
+  clickAction(
+    run,
+    actionButton(
+      run.page.registry.get("active-assistant-actions"),
+      "retry"
+    )
+  );
+  clickDialog(run, "retry", "confirm");
+  await settleConversation(run);
+  run.api.branches[BRANCH_C].turns.at(-1)
+    .metadata.pending_generation_v1.device = "cpu";
+
+  run.context.generatorSocket.connect();
+  run.context.handleModelStatus({ status: "ready" });
+  assert.equal(await run.context.startGeneration(), false);
+  assert.equal(
+    run.context.conversationState.conversation
+      .pending_assistant_id,
+    ASSISTANT_C
+  );
+  assert.match(
+    run.page.registry.get("status-message").textContent,
+    /requires LLaDA on CPU.*Switch back/
+  );
+});
+
+test("pending schema mismatch stays readable and refuses Send",
+  async () => {
+  const run = await activeRun();
+  run.context.generatorSocket.close();
+  clickAction(
+    run,
+    actionButton(
+      run.page.registry.get("active-assistant-actions"),
+      "retry"
+    )
+  );
+  clickDialog(run, "retry", "confirm");
+  await settleConversation(run);
+  run.api.branches[BRANCH_C].turns.at(-1)
+    .metadata.pending_generation_v1.schema_id = "9".repeat(64);
+
+  const socketMark = FakeSocket.opened.length;
+  run.context.generatorSocket.connect();
+  run.context.handleModelStatus({ status: "ready" });
+
+  assert.equal(await run.context.startGeneration(), false);
+  assert.equal(
+    run.context.conversationState.conversation
+      .pending_assistant_id,
+    ASSISTANT_C
+  );
+  assert.match(
+    run.page.registry.get("status-message").textContent,
+    /different Run settings schema.*cannot launch.*changed/
+  );
+  assert.equal(
+    FakeSocket.opened[socketMark].sent.some((raw) =>
+      JSON.parse(raw).type === "generate"
+    ),
+    false
+  );
+});
+
+test("pending model mismatch stays reserved with switch copy",
+  async () => {
+  const first = await activeRun();
+  first.context.generatorSocket.close();
+  clickAction(
+    first,
+    actionButton(
+      first.page.registry.get("active-assistant-actions"),
+      "retry"
+    )
+  );
+  clickDialog(first, "retry", "confirm");
+  await settleConversation(first);
+  const key = first.context.PERSIST_ACTIVE_CONVERSATION_KEY;
+  const storage = {};
+  storage[key] = first.context.localStorage.getItem(key);
+  const socketMark = FakeSocket.opened.length;
+  const second = loadPage({
+    WebSocket: OpenSocket,
+    fetchImpl: first.api.fetchImpl,
+    conversationApi: false,
+    bootState: { ui_state: {}, models: OTHER_MODELS },
+    storage,
+  });
+  await tick();
+  await tick();
+  await tick();
+  second.context.handleModelStatus({ status: "ready" });
+
+  assert.equal(await second.context.startGeneration(), false);
+  assert.equal(
+    second.context.conversationState.conversation
+      .pending_assistant_id,
+    ASSISTANT_C
+  );
+  assert.match(
+    second.registry.get("status-message").textContent,
+    /requires LLaDA.*Switch back/
+  );
+  const socket = FakeSocket.opened[socketMark];
+  assert.equal(
+    socket.sent.some((raw) =>
+      JSON.parse(raw).type === "generate"
+    ),
+    false
+  );
+});
+
+test("disconnected Edit keeps focus and durable local settings",
   async () => {
   const run = await activeRun();
   run.context.generatorSocket.close();
@@ -1258,6 +1719,9 @@ test("a disconnected Edit focuses its selected user card",
   run.page.registry.get("conversation-transcript").dispatch(
     "input", { target: input }
   );
+  const localTemperature = actionTemperatureInput(run, "edit");
+  localTemperature.value = "0.85";
+  localTemperature.dispatch("input");
   clickAction(run, actionButton(editing, "edit-save"));
   await settleConversation(run);
 
@@ -1280,6 +1744,31 @@ test("a disconnected Edit focuses its selected user card",
     false
   );
   assert.equal(turnCard(run, USER_D).focused, true);
+  assert.equal(temperatureInput(run).value, "0.7");
+  const durable =
+    run.context.conversationStatePendingGenerationConfiguration(
+      run.context.conversationState
+    );
+  assert.equal(durable.parameters.temperature, 0.85);
+
+  const socketMark = FakeSocket.opened.length;
+  run.context.generatorSocket.connect();
+  run.context.handleModelStatus({ status: "ready" });
+  assert.equal(await run.context.startGeneration(), true);
+  const generated = FakeSocket.opened[socketMark].sent
+    .map((raw) => JSON.parse(raw))
+    .find((message) => message.type === "generate");
+  assert.equal(generated.temperature, 0.85);
+  assert.equal(
+    generated.messages.at(-1).content,
+    "Deferred edit"
+  );
+  run.context.handleError({
+    type: "error",
+    scope: "run",
+    code: "test_cleanup",
+    message: "cleanup",
+  });
 });
 
 test("a rejected clicked Retry preserves branch and XAI",
@@ -1291,6 +1780,8 @@ test("a rejected clicked Retry preserves branch and XAI",
     "retry"
   );
   clickAction(run, retry);
+  const localRoot = actionSettingsRoot(run, "retry");
+  const localTemperature = actionTemperatureInput(run, "retry");
   clickDialog(run, "retry", "confirm");
   await settleConversation(run);
 
@@ -1315,6 +1806,8 @@ test("a rejected clicked Retry preserves branch and XAI",
     temperatureInput(run).disabled,
     true
   );
+  assert.equal(localRoot.parentNode !== null, true);
+  assert.equal(localTemperature.disabled, true);
   assert.equal(run.page.document.activeElement, status);
 
   clickDialog(run, "retry", "cancel");
@@ -1323,6 +1816,7 @@ test("a rejected clicked Retry preserves branch and XAI",
     false
   );
   assert.equal(temperatureInput(run).disabled, false);
+  assert.equal(localRoot.parentNode, null);
   assert.equal(run.page.document.activeElement, retry);
 });
 

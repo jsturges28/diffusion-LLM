@@ -59,7 +59,7 @@ def test_the_resident_frame_is_handled() -> None:
     assert "handleResident(data)" in region
 
 
-def test_the_page_compares_both_model_and_device() -> None:
+def test_page_compares_model_device_and_generation_schema() -> None:
     """The same model on the other device is a different worker with
     its own output, which is why the switch path has always treated
     it as a switch."""
@@ -69,6 +69,7 @@ def test_the_page_compares_both_model_and_device() -> None:
     assert "generatorModelPanel.activeDevice()" in region
     assert "data.model === activeId" in region
     assert "data.device === activeDevice" in region
+    assert "data.generation_schema_id === activeSchema" in region
 
 
 def test_a_matching_resident_does_nothing() -> None:
@@ -77,7 +78,9 @@ def test_a_matching_resident_does_nothing() -> None:
     itself in a loop."""
     region = _region(APP_JS, "function handleResident(data)", 1500)
 
-    guard = region.find("if (sameModel && sameDevice)")
+    guard = region.find(
+        "if (sameModel && sameDevice && sameSchema)"
+    )
     rescue = region.find("rescueRunThenReload()")
 
     assert guard != -1

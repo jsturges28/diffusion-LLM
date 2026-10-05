@@ -120,6 +120,14 @@ def test_action_view_exports_only_its_factory() -> None:
     (
         ("run_settings_core.js", "runSettingsCoreCreate"),
         ("run_settings_panel.js", "runSettingsPanelCreate"),
+        (
+            "conversation_generation.js",
+            "conversationGenerationCreate",
+        ),
+        (
+            "pending_generation_controller.js",
+            "pendingGenerationControllerCreate",
+        ),
     ),
 )
 def test_run_settings_scripts_export_one_factory(
@@ -134,3 +142,18 @@ def test_run_settings_scripts_export_one_factory(
 
     assert globals_found == [factory]
     assert "module.exports" not in source
+
+
+def test_generation_codec_precedes_all_consumers() -> None:
+    scripts = _page_scripts("index.html")
+    codec = scripts.index("conversation_generation.js")
+
+    assert codec < scripts.index("conversation_state.js")
+    assert codec < scripts.index("conversation_client.js")
+    assert codec < scripts.index("conversation_actions.js")
+    assert scripts.index("generator_model_panel.js") < scripts.index(
+        "pending_generation_controller.js"
+    )
+    assert scripts.index(
+        "pending_generation_controller.js"
+    ) < scripts.index("app.js")

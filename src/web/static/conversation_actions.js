@@ -13,6 +13,7 @@ var CONVERSATION_CLIPBOARD_FALLBACK_MAX = 1000000;
 var CONVERSATION_ACTION_FEEDBACK_MS = 4000;
 var CONVERSATION_COPY_FEEDBACK_MS = 1200;
 var CONVERSATION_ACTION_EPOCH_MAX = 1000000;
+var CONVERSATION_ACTION_ID_PREFIX_MAX = 64;
 
 function conversationActionsCreate(options) {
   var view = conversationActionViewCreate();
@@ -24,6 +25,9 @@ function conversationActionsCreate(options) {
     readState: conversationActionsCallback(options, "readState"),
     readConfiguration: conversationActionsCallback(
       options, "readConfiguration"
+    ),
+    createRunSettingsPanel: conversationActionsCallback(
+      options, "createRunSettingsPanel"
     ),
     readBlockReason: conversationActionsCallback(
       options, "readBlockReason"
@@ -44,6 +48,9 @@ function conversationActionsCreate(options) {
     retryAssistant: conversationActionsCallback(
       options, "retryAssistant"
     ),
+    launchGeneration: conversationActionsCallback(
+      options, "launchGeneration"
+    ),
     createOperationId: conversationActionsCallback(
       options, "createOperationId"
     ),
@@ -53,6 +60,9 @@ function conversationActionsCreate(options) {
     feedbackTimer: null,
     copyFeedbackTimers: {},
     copyEpoch: 0,
+    selectionEpoch: 0,
+    actionEpoch: 0,
+    generationCodec: conversationGenerationCreate(),
     wired: false,
   };
 
@@ -89,8 +99,8 @@ function conversationActionsCreate(options) {
     deletionMarker: function (point) {
       return owner.view.deletionMarker(point);
     },
-    reconcile: function () {
-      conversationActionsReconcile(owner);
+    reconcile: function (action) {
+      conversationActionsReconcile(owner, action || null);
     },
     blocking: function () {
       return conversationActionsLocallyBlocked(owner);
@@ -270,12 +280,44 @@ function conversationActionsBeginEdit(owner, turnId) {
     submittedDraft: null,
     saving: false,
     operationId: operationId,
+    sourceBranchId: conversationActionsSelectedBranch(owner),
+    epoch: conversationActionsNextEpoch(owner),
+    launchFenced: false,
     configuration: configuration,
     request: null,
+    panel: null,
+    settingsRoot: null,
     replayedAfterReload: false,
   };
   conversationActionsStateChanged(owner);
   owner.requestRender();
+  var panel = conversationActionsCreatePanel(owner, {
+    kind: "edit",
+    operationId: operationId,
+    mount: owner.view.editSettingsMount(turn.turn_id),
+    prefix: "Edit cannot start",
+  });
+  if (panel === null) {
+    owner.edit = null;
+    conversationActionsStateChanged(owner);
+    owner.requestRender();
+    owner.view.focusEditTrigger(turn.turn_id);
+    return;
+  }
+  var panelConfiguration = conversationActionsPanelConfiguration(
+    owner, panel, "Edit cannot start"
+  );
+  if (panelConfiguration === null) {
+    panel.destroy();
+    owner.edit = null;
+    conversationActionsStateChanged(owner);
+    owner.requestRender();
+    owner.view.focusEditTrigger(turn.turn_id);
+    return;
+  }
+  owner.edit.panel = panel;
+  owner.edit.settingsRoot = panel.root();
+  owner.edit.configuration = panelConfiguration;
   owner.view.focusEdit(turn.turn_id);
 }
 
@@ -284,6 +326,7 @@ function conversationActionsCancelEdit(owner) {
     return;
   }
   var turnId = owner.edit.turnId;
+  conversationActionsDestroyPanel(owner.edit);
   owner.edit = null;
   conversationActionsStateChanged(owner);
   owner.requestRender();
@@ -315,16 +358,24 @@ function conversationActionsSaveEdit(owner) {
     return;
   }
   if (owner.edit.request === null) {
+    var configuration = conversationActionsValidPanelConfiguration(
+      owner, owner.edit, "Edit cannot continue"
+    );
+    if (configuration === null) {
+      return;
+    }
     owner.edit.submittedDraft = draft;
+    owner.edit.configuration = configuration;
     owner.edit.request = Object.freeze({
       operationId: owner.edit.operationId,
       userTurnId: owner.edit.turnId,
       text: draft,
-      modelId: owner.edit.configuration.modelId,
-      inputMode: owner.edit.configuration.inputMode,
+      modelId: configuration.modelId,
+      inputMode: configuration.inputMode,
       metadata: Object.freeze({}),
-      configuration: owner.edit.configuration,
+      configuration: configuration,
     });
+    owner.edit.panel.setDisabled(true);
   }
   conversationActionsRunEdit(owner, owner.edit);
 }
@@ -340,27 +391,62 @@ function conversationActionsRunEdit(owner, edit) {
   owner.view.focusEditPending(edit.turnId);
   Promise.resolve().then(function () {
     return owner.editUser(edit.request);
-  }).then(function (outcome) {
-    conversationActionsEditSucceeded(
-      owner, outcome, edit.turnId
+  }).then(function (result) {
+    if (!conversationActionsOwns(owner, edit, "edit")) {
+      return;
+    }
+    if (!conversationActionsIsCurrent(owner, edit, "edit")) {
+      conversationActionsFinishFencedFork(
+        owner, edit, result, "edited path"
+      );
+      return;
+    }
+    if (result === false) {
+      conversationActionsEditFailed(
+        owner,
+        new Error("conversation action is unavailable"),
+        edit
+      );
+      return;
+    }
+    var configuration = conversationActionsStoreConfiguration(
+      owner, result
     );
+    return Promise.resolve(owner.launchGeneration(
+      result, "edited path", configuration
+    )).then(function (outcome) {
+      if (conversationActionsIsCurrent(owner, edit, "edit")) {
+        conversationActionsEditSucceeded(
+          owner, outcome, edit
+        );
+      }
+    });
   }).catch(function (error) {
+    if (!conversationActionsOwns(owner, edit, "edit")) {
+      return;
+    }
     if (conversationActionsReplayAfterReload(edit, error)) {
       conversationActionsRunEdit(owner, edit);
       return;
     }
-    conversationActionsEditFailed(owner, error, edit.turnId);
+    conversationActionsEditFailed(owner, error, edit);
   });
 }
 
-function conversationActionsEditSucceeded(owner, outcome, turnId) {
+function conversationActionsEditSucceeded(owner, outcome, edit) {
+  if (!conversationActionsIsCurrent(owner, edit, "edit")) {
+    return;
+  }
   if (outcome === false) {
     conversationActionsEditFailed(
-      owner, new Error("conversation action is unavailable"), turnId
+      owner,
+      new Error("conversation action is unavailable"),
+      edit
     );
     return;
   }
   owner.pendingAction = false;
+  conversationActionsDestroyPanel(edit);
   owner.edit = null;
   conversationActionsStateChanged(owner);
   var result = conversationActionsOutcomeResult(outcome);
@@ -383,9 +469,15 @@ function conversationActionsEditSucceeded(owner, outcome, turnId) {
   }
 }
 
-function conversationActionsEditFailed(owner, error, turnId) {
+function conversationActionsEditFailed(owner, error, edit) {
+  if (owner.edit !== edit) {
+    return;
+  }
+  var turnId = edit.turnId;
   owner.pendingAction = false;
   if (conversationActionsExplicitConflict(error)) {
+    conversationActionsNextEpoch(owner);
+    conversationActionsDestroyPanel(edit);
     owner.edit = null;
     conversationActionsStateChanged(owner);
     owner.requestRender();
@@ -450,6 +542,9 @@ function conversationActionsOpenDelete(owner, turnId, trigger) {
     trigger: trigger,
     dialog: owner.deleteDialog,
     operationId: operationId,
+    sourceBranchId: conversationActionsSelectedBranch(owner),
+    epoch: conversationActionsNextEpoch(owner),
+    launchFenced: false,
     request: Object.freeze({
       operationId: operationId,
       userTurnId: turn.turn_id,
@@ -485,13 +580,30 @@ function conversationActionsOpenRetry(owner, turnId, trigger) {
   if (operationId === null || configuration === null) {
     return;
   }
+  var panel = conversationActionsCreatePanel(owner, {
+    kind: "retry",
+    operationId: operationId,
+    mount: owner.view.dialogSettingsMount("retry"),
+    prefix: "Retry cannot start",
+  });
+  if (panel === null) {
+    return;
+  }
+  var panelConfiguration = conversationActionsPanelConfiguration(
+    owner, panel, "Retry cannot start"
+  );
+  if (panelConfiguration === null) {
+    panel.destroy();
+    return;
+  }
+  configuration = panelConfiguration;
   owner.view.setDialogMessage(
     "retry",
-    "Retry with " + conversationActionsModelLabel(configuration)
-    + ". Input mode: " + configuration.inputMode + ". "
-    + "Current Run settings: "
-    + configuration.settingsSummary
-    + ". This creates an alternate path."
+    "Model: " + conversationActionsModelLabel(configuration)
+    + ". Device: "
+    + conversationActionsDeviceLabel(configuration.device)
+    + ". Input mode: " + configuration.inputMode
+    + ". Retrying creates an alternate path."
   );
   owner.view.clearDialogStatus("retry");
   owner.confirmation = {
@@ -501,14 +613,12 @@ function conversationActionsOpenRetry(owner, turnId, trigger) {
     trigger: trigger,
     dialog: owner.retryDialog,
     operationId: operationId,
+    sourceBranchId: conversationActionsSelectedBranch(owner),
+    epoch: conversationActionsNextEpoch(owner),
+    launchFenced: false,
     configuration: configuration,
-    request: Object.freeze({
-      operationId: operationId,
-      assistantTurnId: turn.turn_id,
-      modelId: configuration.modelId,
-      inputMode: configuration.inputMode,
-      configuration: configuration,
-    }),
+    request: null,
+    panel: panel,
     replayedAfterReload: false,
     restoreFocus: true,
   };
@@ -539,10 +649,16 @@ function conversationActionsRunDelete(owner, confirmation) {
   Promise.resolve().then(function () {
     return owner.deleteUser(confirmation.request);
   }).then(function (outcome) {
+    if (owner.confirmation !== confirmation) {
+      return;
+    }
     conversationActionsDeleteSucceeded(
       owner, confirmation, outcome
     );
   }).catch(function (error) {
+    if (owner.confirmation !== confirmation) {
+      return;
+    }
     if (
       conversationActionsReplayAfterReload(confirmation, error)
     ) {
@@ -606,6 +722,23 @@ function conversationActionsConfirmRetry(owner) {
     return;
   }
   owner.view.clearDialogStatus("retry");
+  if (confirmation.request === null) {
+    var configuration = conversationActionsValidPanelConfiguration(
+      owner, confirmation, "Retry cannot continue"
+    );
+    if (configuration === null) {
+      return;
+    }
+    confirmation.configuration = configuration;
+    confirmation.request = Object.freeze({
+      operationId: confirmation.operationId,
+      assistantTurnId: confirmation.turnId,
+      modelId: configuration.modelId,
+      inputMode: configuration.inputMode,
+      configuration: configuration,
+    });
+    confirmation.panel.setDisabled(true);
+  }
   owner.pendingAction = true;
   conversationActionsSetDialogPending(
     owner, confirmation, true
@@ -617,11 +750,49 @@ function conversationActionsConfirmRetry(owner) {
 function conversationActionsRunRetry(owner, confirmation) {
   Promise.resolve().then(function () {
     return owner.retryAssistant(confirmation.request);
-  }).then(function (outcome) {
-    conversationActionsRetrySucceeded(
-      owner, confirmation, outcome
+  }).then(function (result) {
+    if (!conversationActionsOwns(
+      owner, confirmation, "retry"
+    )) {
+      return;
+    }
+    if (!conversationActionsIsCurrent(
+      owner, confirmation, "retry"
+    )) {
+      conversationActionsFinishFencedFork(
+        owner, confirmation, result, "retry path"
+      );
+      return;
+    }
+    if (result === false) {
+      conversationActionsConfirmationFailed(
+        owner,
+        confirmation,
+        "Retry failed",
+        new Error("conversation action is unavailable")
+      );
+      return;
+    }
+    var configuration = conversationActionsStoreConfiguration(
+      owner, result
     );
+    return Promise.resolve(owner.launchGeneration(
+      result, "retry path", configuration
+    )).then(function (outcome) {
+      if (conversationActionsIsCurrent(
+        owner, confirmation, "retry"
+      )) {
+        conversationActionsRetrySucceeded(
+          owner, confirmation, outcome
+        );
+      }
+    });
   }).catch(function (error) {
+    if (!conversationActionsOwns(
+      owner, confirmation, "retry"
+    )) {
+      return;
+    }
     if (
       conversationActionsReplayAfterReload(confirmation, error)
     ) {
@@ -648,6 +819,7 @@ function conversationActionsRetrySucceeded(
   }
   owner.pendingAction = false;
   confirmation.restoreFocus = false;
+  conversationActionsDestroyPanel(confirmation);
   owner.confirmation = null;
   conversationActionsSetDialogPending(
     owner, confirmation, false
@@ -677,7 +849,9 @@ function conversationActionsConfirmationFailed(
     owner, confirmation, false
   );
   if (conversationActionsExplicitConflict(error)) {
+    conversationActionsNextEpoch(owner);
     confirmation.restoreFocus = false;
+    conversationActionsDestroyPanel(confirmation);
     owner.confirmation = null;
     if (confirmation.dialog.open) {
       confirmation.dialog.close("conflict");
@@ -717,6 +891,7 @@ function conversationActionsDialogClosed(owner, dialog) {
     return;
   }
   owner.confirmation = null;
+  conversationActionsDestroyPanel(confirmation);
   owner.view.clearDialogStatus(confirmation.kind);
   conversationActionsStateChanged(owner);
   if (confirmation.restoreFocus) {
@@ -735,11 +910,18 @@ function conversationActionsSelectBranch(owner, button) {
   if (!branchId || !focusKey) {
     throw new Error("Branch action is missing its target");
   }
+  owner.selectionEpoch = (
+    owner.selectionEpoch % CONVERSATION_ACTION_EPOCH_MAX
+  ) + 1;
+  var epoch = owner.selectionEpoch;
   owner.pendingAction = true;
   conversationActionsStateChanged(owner);
   Promise.resolve().then(function () {
     return owner.selectBranch(branchId);
   }).then(function (selected) {
+    if (epoch !== owner.selectionEpoch) {
+      return;
+    }
     owner.pendingAction = false;
     conversationActionsStateChanged(owner);
     if (selected === false) {
@@ -754,6 +936,9 @@ function conversationActionsSelectBranch(owner, button) {
     );
     owner.view.focusBranchFallback(focusKey);
   }).catch(function (error) {
+    if (epoch !== owner.selectionEpoch) {
+      return;
+    }
     owner.pendingAction = false;
     conversationActionsStateChanged(owner);
     conversationActionsReportError(
@@ -972,28 +1157,67 @@ function conversationActionsLocallyBlocked(owner) {
   );
 }
 
-function conversationActionsReconcile(owner) {
+function conversationActionsReconcile(owner, action) {
   var changed = false;
+  var selectedBranch = null;
+  var state = owner.readState();
+  if (state && typeof state.selectedBranchId === "string") {
+    selectedBranch = state.selectedBranchId;
+  }
+  var expectedFork = Boolean(
+    action && action.type === "forked"
+  );
+  if (expectedFork) {
+    if (owner.edit !== null) {
+      owner.edit.sourceBranchId = selectedBranch;
+    }
+    if (owner.confirmation !== null) {
+      owner.confirmation.sourceBranchId = selectedBranch;
+    }
+  }
   if (
     owner.edit !== null
-    && conversationActionsFindTurn(owner, owner.edit.turnId) === null
-    && !owner.pendingAction
+    && !expectedFork
+    && (
+      owner.edit.sourceBranchId !== selectedBranch
+      || conversationActionsFindTurn(
+        owner, owner.edit.turnId
+      ) === null
+    )
   ) {
-    owner.edit = null;
+    conversationActionsNextEpoch(owner);
+    conversationActionsDestroyPanel(owner.edit);
+    if (owner.pendingAction) {
+      owner.edit.launchFenced = true;
+    } else {
+      owner.edit = null;
+    }
     changed = true;
   }
   if (
     owner.confirmation !== null
-    && conversationActionsFindTurn(
-      owner, owner.confirmation.turnId
-    ) === null
-    && !owner.pendingAction
+    && !expectedFork
+    && (
+      owner.confirmation.sourceBranchId !== selectedBranch
+      || conversationActionsFindTurn(
+        owner, owner.confirmation.turnId
+      ) === null
+    )
   ) {
     var confirmation = owner.confirmation;
-    owner.confirmation = null;
+    conversationActionsNextEpoch(owner);
     confirmation.restoreFocus = false;
+    conversationActionsDestroyPanel(confirmation);
     owner.view.clearDialogStatus(confirmation.kind);
-    confirmation.dialog.close("stale");
+    if (owner.pendingAction) {
+      confirmation.launchFenced = true;
+      if (confirmation.dialog.open) {
+        confirmation.dialog.close("stale");
+      }
+    } else {
+      owner.confirmation = null;
+      confirmation.dialog.close("stale");
+    }
     changed = true;
   }
   if (changed) {
@@ -1025,13 +1249,24 @@ function conversationActionsExplicitConflict(error) {
 }
 
 function conversationActionsCloseAll(owner) {
-  var changed = owner.edit !== null || owner.confirmation !== null;
+  var changed = (
+    owner.edit !== null
+    || owner.confirmation !== null
+    || owner.pendingAction
+  );
+  conversationActionsDestroyPanel(owner.edit);
+  conversationActionsNextEpoch(owner);
+  owner.selectionEpoch = (
+    owner.selectionEpoch % CONVERSATION_ACTION_EPOCH_MAX
+  ) + 1;
   owner.edit = null;
   if (owner.confirmation !== null) {
+    conversationActionsDestroyPanel(owner.confirmation);
     owner.view.clearDialogStatus(owner.confirmation.kind);
     owner.confirmation.restoreFocus = false;
     owner.confirmation = null;
   }
+  owner.pendingAction = false;
   var dialogs = [owner.deleteDialog, owner.retryDialog];
   for (var index = 0; index < dialogs.length; index++) {
     if (dialogs[index].open) {
@@ -1044,8 +1279,118 @@ function conversationActionsCloseAll(owner) {
   }
 }
 
-function conversationActionsConfiguration(owner) {
-  var raw = owner.readConfiguration();
+function conversationActionsCreatePanel(owner, settings) {
+  var panel = null;
+  try {
+    if (
+      !settings.mount
+      || !settings.mount.children
+      || settings.mount.children.length !== 0
+    ) {
+      throw new Error(
+        "Run settings mount must start empty"
+      );
+    }
+    panel = owner.createRunSettingsPanel({
+      mount: settings.mount,
+      idPrefix: conversationActionsPanelPrefix(
+        settings.kind, settings.operationId
+      ),
+    });
+    conversationActionsPanelShape(panel);
+    return panel;
+  } catch (error) {
+    if (panel && typeof panel.destroy === "function") {
+      panel.destroy();
+    }
+    conversationActionsReportError(
+      owner, settings.prefix, error
+    );
+    return null;
+  }
+}
+
+function conversationActionsPanelPrefix(kind, operationId) {
+  if (kind !== "edit" && kind !== "retry") {
+    throw new Error("Run settings action kind is invalid");
+  }
+  var canonical = conversationActionsOperationId(operationId);
+  var prefix =
+    "conversation-" + kind + "-" + canonical + "-";
+  if (prefix.length > CONVERSATION_ACTION_ID_PREFIX_MAX) {
+    throw new Error("Run settings id prefix exceeds its bound");
+  }
+  return prefix;
+}
+
+function conversationActionsPanelShape(panel) {
+  if (!panel || typeof panel !== "object") {
+    throw new TypeError(
+      "Run settings factory must return a panel"
+    );
+  }
+  var methods = [
+    "destroy",
+    "revealFirstInvalid",
+    "root",
+    "setDisabled",
+    "snapshot",
+  ];
+  for (var index = 0; index < methods.length; index++) {
+    if (typeof panel[methods[index]] !== "function") {
+      throw new TypeError(
+        "Run settings panel is missing " + methods[index]
+      );
+    }
+  }
+}
+
+function conversationActionsPanelConfiguration(
+  owner, panel, prefix
+) {
+  try {
+    return conversationActionsConfiguration(panel.snapshot());
+  } catch (error) {
+    conversationActionsReportError(owner, prefix, error);
+    return null;
+  }
+}
+
+function conversationActionsValidPanelConfiguration(
+  owner, action, prefix
+) {
+  if (!action.panel) {
+    throw new Error("Conversation action has no Run settings panel");
+  }
+  if (action.request !== null) {
+    return action.request.configuration;
+  }
+  var configuration = conversationActionsPanelConfiguration(
+    owner, action.panel, prefix
+  );
+  if (configuration === null) {
+    return null;
+  }
+  if (!configuration.valid) {
+    action.panel.revealFirstInvalid();
+    return null;
+  }
+  return configuration;
+}
+
+function conversationActionsDestroyPanel(action) {
+  if (!action || !action.panel) {
+    return;
+  }
+  var panel = action.panel;
+  action.panel = null;
+  if ("settingsRoot" in action) {
+    action.settingsRoot = null;
+  }
+  panel.destroy();
+}
+
+function conversationActionsConfiguration(raw) {
   if (!raw || typeof raw !== "object") {
     throw new TypeError(
       "conversation action configuration must be an object"
@@ -1054,6 +1399,8 @@ function conversationActionsConfiguration(owner) {
   var fields = [
     raw.modelId,
     raw.modelDisplay,
+    raw.device,
+    raw.schemaId,
     raw.inputMode,
     raw.settingsSummary,
   ];
@@ -1074,6 +1421,11 @@ function conversationActionsConfiguration(owner) {
       "conversation action experimental flag is invalid"
     );
   }
+  if (!/^[0-9a-f]{64}$/.test(raw.schemaId)) {
+    throw new TypeError(
+      "conversation action schema id is invalid"
+    );
+  }
   if (
     typeof raw.valid !== "boolean"
     || typeof raw.validationMessage !== "string"
@@ -1082,10 +1434,14 @@ function conversationActionsConfiguration(owner) {
       "conversation action validation snapshot is invalid"
     );
   }
-  var parameters = conversationActionsParameters(raw.parameters);
+  var parameters = conversationActionsParameters(
+    raw.parameters, raw.valid
+  );
   return Object.freeze({
     modelId: raw.modelId,
     modelDisplay: raw.modelDisplay,
+    device: raw.device,
+    schemaId: raw.schemaId,
     inputMode: raw.inputMode,
     settingsSummary: raw.settingsSummary,
     parameters: parameters,
@@ -1095,7 +1451,7 @@ function conversationActionsConfiguration(owner) {
   });
 }
 
-function conversationActionsParameters(raw) {
+function conversationActionsParameters(raw, valid) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new TypeError(
       "conversation action parameters must be an object"
@@ -1115,7 +1471,7 @@ function conversationActionsParameters(raw) {
         "conversation action parameter value is invalid"
       );
     }
-    if (type === "number" && !isFinite(value)) {
+    if (type === "number" && !isFinite(value) && valid) {
       throw new TypeError(
         "conversation action parameter number is invalid"
       );
@@ -1127,7 +1483,9 @@ function conversationActionsParameters(raw) {
 
 function conversationActionsReadConfiguration(owner, prefix) {
   try {
-    return conversationActionsConfiguration(owner);
+    return conversationActionsConfiguration(
+      owner.readConfiguration()
+    );
   } catch (error) {
     conversationActionsReportError(owner, prefix, error);
     return null;
@@ -1165,6 +1523,16 @@ function conversationActionsModelLabel(configuration) {
     + " (" + configuration.modelId + ")";
 }
 
+function conversationActionsDeviceLabel(device) {
+  if (device === "cuda") {
+    return "GPU";
+  }
+  if (device === "cpu") {
+    return "CPU";
+  }
+  return device.toUpperCase();
+}
+
 function conversationActionsFindTurn(owner, turnId) {
   if (typeof turnId !== "string" || turnId === "") {
     return null;
@@ -1181,6 +1549,96 @@ function conversationActionsFindTurn(owner, turnId) {
     }
   }
   return null;
+}
+
+function conversationActionsSelectedBranch(owner) {
+  var state = owner.readState();
+  if (
+    !state
+    || typeof state.selectedBranchId !== "string"
+    || state.selectedBranchId === ""
+  ) {
+    throw new Error("Conversation action needs a selected branch");
+  }
+  return state.selectedBranchId;
+}
+
+function conversationActionsNextEpoch(owner) {
+  owner.actionEpoch = (
+    owner.actionEpoch % CONVERSATION_ACTION_EPOCH_MAX
+  ) + 1;
+  return owner.actionEpoch;
+}
+
+function conversationActionsIsCurrent(owner, action, kind) {
+  if (!conversationActionsOwns(owner, action, kind)) {
+    return false;
+  }
+  return action.epoch === owner.actionEpoch
+    && action.launchFenced !== true;
+}
+
+function conversationActionsOwns(owner, action, kind) {
+  if (!action) {
+    return false;
+  }
+  if (kind === "edit") {
+    return owner.edit === action;
+  }
+  if (kind === "retry") {
+    return owner.confirmation === action
+      && action.kind === "retry";
+  }
+  throw new Error("Conversation action current kind is invalid");
+}
+
+function conversationActionsFinishFencedFork(
+  owner, action, result, label
+) {
+  if (result === false) {
+    throw new Error("conversation action is unavailable");
+  }
+  owner.pendingAction = false;
+  conversationActionsDestroyPanel(action);
+  if (owner.edit === action) {
+    owner.edit = null;
+  }
+  if (owner.confirmation === action) {
+    owner.confirmation = null;
+    owner.view.clearDialogStatus(action.kind);
+    if (action.dialog.open) {
+      action.dialog.close("stale");
+    }
+  }
+  conversationActionsStateChanged(owner);
+  conversationActionsReport(
+    owner,
+    "Created the " + label
+      + ". Generation stayed pending because the selected path"
+      + " changed before launch.",
+    true
+  );
+  owner.requestRender();
+}
+
+function conversationActionsStoreConfiguration(owner, result) {
+  if (
+    !result
+    || typeof result !== "object"
+    || !Object.prototype.hasOwnProperty.call(
+      result, "store_configuration"
+    )
+  ) {
+    throw new TypeError(
+      "Fork result has no store-authoritative configuration"
+    );
+  }
+  if (result.store_configuration === null) {
+    return null;
+  }
+  return owner.generationCodec.actionConfiguration(
+    result.store_configuration
+  );
 }
 
 function conversationActionsOutcomeResult(outcome) {

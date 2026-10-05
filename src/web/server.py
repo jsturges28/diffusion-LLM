@@ -65,6 +65,10 @@ from src.backends.registry import (
     DEFAULT_MODEL,
     REGISTRY,
 )
+from src.backends.generation_schema import (
+    generation_schema_id,
+    generation_schema_ids,
+)
 from src.inference.vision_encoders import (
     EncoderUnavailable,
     VisionEncoder,
@@ -250,6 +254,12 @@ def _model_entry(model_id: str, info: Any) -> Dict[str, Any]:
     data = info.model_dump()
     data.pop("worker_module", None)
     data.pop("environment", None)
+    data["generation_schema_ids"] = generation_schema_ids(
+        model_id=model_id,
+        input_mode=info.capabilities.input_mode,
+        devices=info.capabilities.supported_devices,
+        specs=info.param_specs,
+    )
     data["status"] = manager.status(model_id)
     return data
 
@@ -596,6 +606,16 @@ async def websocket_proxy(browser: WebSocket) -> None:
         return
 
     url = manager.ws_url()
+    active_device = manager.active_device
+    assert active_id in REGISTRY
+    assert active_device is not None
+    active_info = REGISTRY[active_id]
+    schema_id = generation_schema_id(
+        model_id=active_info.id,
+        input_mode=active_info.capabilities.input_mode,
+        device=active_device,
+        specs=active_info.param_specs,
+    )
     try:
         async with websockets.connect(
             url, max_size=None
@@ -612,7 +632,8 @@ async def websocket_proxy(browser: WebSocket) -> None:
                 {
                     "type": "resident",
                     "model": active_id,
-                    "device": manager.active_device,
+                    "device": active_device,
+                    "generation_schema_id": schema_id,
                     "operation": manager.activation_id,
                     # What a page compares to notice that the same
                     # model and device are now a different worker,

@@ -13,6 +13,7 @@ committed data fail without touching legacy run folders.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -23,8 +24,11 @@ from uuid import uuid4
 
 import pytest
 
+from src.backends.protocol import ParamGroup, ParamSpec, ParamType
+from src.backends.registry import REGISTRY
 from src.web import _conversation_branch_store as branch_store
 from src.web import _conversation_store_core as core_store
+from src.web import conversation_generation
 from src.web import conversation_store as store
 
 
@@ -43,6 +47,105 @@ print(",".join(sorted(loaded & forbidden)))
 
 def _operation_id() -> str:
     return uuid4().hex
+
+
+def _semantic_digest(payload: dict[str, object]) -> str:
+    canonical = dict(payload)
+    configuration = canonical.get("generation_configuration")
+    if configuration is not None:
+        canonical["generation_configuration"] = (
+            _canonical_generation_numbers(configuration)
+        )
+    encoded = json.dumps(
+        canonical,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _canonical_generation_numbers(value: object) -> object:
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, (str, int)):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else value
+    if isinstance(value, list):
+        return [
+            _canonical_generation_numbers(item) for item in value
+        ]
+    if isinstance(value, dict):
+        return {
+            key: _canonical_generation_numbers(item)
+            for key, item in value.items()
+        }
+    raise TypeError("fixture contains a non-JSON value")
+
+
+def _generation_configuration(
+    *,
+    temperature: float = 0.0,
+    experimental: bool = False,
+) -> dict[str, object]:
+    """Build one exact LLaDA panel snapshot for fork tests."""
+    return {
+        "codec_version": (
+            store.GENERATION_CONFIGURATION_CODEC_VERSION
+        ),
+        "model_id": "llada",
+        "input_mode": "chat",
+        "device": "cuda",
+        "schema_id": (
+            conversation_generation.registry_generation_schema_id(
+                "llada", "cuda"
+            )
+        ),
+        "experimental": experimental,
+        "parameters": {
+            "steps": 128,
+            "gen_length": 160,
+            "block_length": 160,
+            "temperature": temperature,
+            "cfg_scale": 0.0,
+            "seed": -1,
+            "remasking": "low_confidence",
+            "alternatives": True,
+        },
+    }
+
+
+def _smollm_configuration(
+    *,
+    device: str,
+    max_new_tokens: int,
+) -> dict[str, object]:
+    """Build a non-Experimental SmolLM3 snapshot."""
+    return {
+        "codec_version": (
+            store.GENERATION_CONFIGURATION_CODEC_VERSION
+        ),
+        "model_id": "smollm3",
+        "input_mode": "chat",
+        "device": device,
+        "schema_id": (
+            conversation_generation.registry_generation_schema_id(
+                "smollm3", device
+            )
+        ),
+        "experimental": False,
+        "parameters": {
+            "max_new_tokens": max_new_tokens,
+            "temperature": 0.6,
+            "top_p": 0.95,
+            "top_k": -1,
+            "seed": -1,
+            "thinking": False,
+            "alternatives": True,
+        },
+    }
 
 
 def _append(
@@ -172,6 +275,32 @@ def _turn_dir(
         / store.TURNS_DIR_NAME
         / turn_id
     )
+
+
+def _rewrite_fork_as_preconfiguration_fixture(
+    root: Path,
+    *,
+    conversation_id: str,
+    assistant_turn_id: str,
+    operation_id: str,
+    semantic_payload: dict[str, object],
+) -> None:
+    """Replace current fork artifacts with exact pre-config shapes."""
+    turn_path = (
+        _turn_dir(root, conversation_id, assistant_turn_id)
+        / "00000001.json"
+    )
+    turn = json.loads(turn_path.read_text(encoding="utf-8"))
+    turn["metadata"] = {}
+    turn_path.write_text(json.dumps(turn), encoding="utf-8")
+    receipt_path = (
+        _conversation_dir(root, conversation_id)
+        / store.OPERATIONS_DIR_NAME
+        / f"{operation_id}.json"
+    )
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["request_digest"] = _semantic_digest(semantic_payload)
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
 
 
 def _branch_turns_root(
@@ -1388,6 +1517,80 @@ def test_v1_fixture_reads_and_upgrades_only_on_fork(
     )
 
 
+def test_v1_user_and_completed_reserved_key_stays_ordinary(
+    tmp_path: Path,
+) -> None:
+    """A later reservation codec cannot reinterpret old metadata."""
+    _created, appended, completed = _legacy_ready_pair(tmp_path)
+    values = {
+        appended.user_turn.turn_id: {"historical": "user"},
+        appended.assistant_turn.turn_id: {
+            "historical": "completed"
+        },
+    }
+    for turn_id, historical in values.items():
+        version = 1 if turn_id == appended.user_turn.turn_id else 2
+        path = (
+            _turn_dir(tmp_path, completed.manifest.id, turn_id)
+            / f"{version:08d}.json"
+        )
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw["metadata"][store.PENDING_GENERATION_KEY] = historical
+        path.write_text(json.dumps(raw), encoding="utf-8")
+
+    page = store.get_turns(tmp_path, completed.manifest.id)
+
+    assert page.turns[0].metadata[store.PENDING_GENERATION_KEY] == {
+        "historical": "user"
+    }
+    assert page.turns[1].metadata[store.PENDING_GENERATION_KEY] == {
+        "historical": "completed"
+    }
+
+
+def test_v1_pending_reserved_key_stays_ordinary(
+    tmp_path: Path,
+) -> None:
+    """A schema-v1 reservation predates the reserved-key contract."""
+    conversation_id = "d" * 32
+    conversation_dir = _conversation_dir(tmp_path, conversation_id)
+    (conversation_dir / store.TURNS_DIR_NAME).mkdir(parents=True)
+    timestamp = "2026-01-01T00:00:00.000Z"
+    created = store.ConversationManifest(
+        id=conversation_id,
+        title="Legacy pending fixture",
+        revision=1,
+        created_at=timestamp,
+        updated_at=timestamp,
+        turn_count=0,
+        tail_role=None,
+        tail_turn_id=None,
+        tail_version=None,
+        pending_assistant_id=None,
+    )
+    core_store.write_legacy_manifest(conversation_dir, created)
+    appended = _append(tmp_path, created)
+    path = (
+        _turn_dir(
+            tmp_path,
+            conversation_id,
+            appended.assistant_turn.turn_id,
+        )
+        / "00000001.json"
+    )
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["metadata"][store.PENDING_GENERATION_KEY] = {
+        "historical": "pending"
+    }
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    page = store.get_turns(tmp_path, conversation_id)
+
+    assert page.turns[-1].metadata[store.PENDING_GENERATION_KEY] == {
+        "historical": "pending"
+    }
+
+
 def test_lost_v1_fork_replays_without_a_new_v2_selector(
     tmp_path: Path,
 ) -> None:
@@ -2342,6 +2545,716 @@ def test_operation_id_collision_refuses_changed_edit_payload(
         )
 
     assert store.list_branches(tmp_path, created.id) == before
+
+
+def test_edit_configuration_round_trips_and_is_pending_only(
+    tmp_path: Path,
+) -> None:
+    """Edit stores the exact snapshot only on its reservation."""
+    created, appended, completed = _ready_pair(tmp_path)
+    configuration = _generation_configuration(temperature=0.75)
+    forked = store.fork_edit_user(
+        tmp_path,
+        created.id,
+        appended.user_turn.turn_id,
+        operation_id="6" * 32,
+        branch_id=completed.manifest.branch_id,
+        expected_revision=completed.manifest.revision,
+        expected_catalog_revision=completed.manifest.catalog_revision,
+        text="Configured edit",
+        model_id="llada",
+        input_mode="chat",
+        generation_configuration=configuration,
+    )
+
+    assert forked.generation_configuration == configuration
+    assert forked.assistant_turn.metadata == {
+        store.PENDING_GENERATION_KEY: configuration
+    }
+    receipt_path = (
+        _conversation_dir(tmp_path, created.id)
+        / store.OPERATIONS_DIR_NAME
+        / f"{'6' * 32}.json"
+    )
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["request_digest"] == _semantic_digest(
+        {
+            "kind": "edit_user",
+            "source_branch_id": completed.manifest.branch_id,
+            "target_turn_id": appended.user_turn.turn_id,
+            "text": "Configured edit",
+            "model_id": "llada",
+            "input_mode": "chat",
+            "generation_configuration": configuration,
+            "metadata": {},
+        }
+    )
+    page = store.get_turns(
+        tmp_path,
+        created.id,
+        branch_id=forked.branch.branch_id,
+    )
+    assert page.turns[-1].metadata == forked.assistant_turn.metadata
+
+    completed_fork = store.update_assistant(
+        tmp_path,
+        created.id,
+        forked.assistant_turn.turn_id,
+        branch_id=forked.branch.branch_id,
+        expected_revision=forked.manifest.revision,
+        text="Configured answer",
+        partial=False,
+        metadata={"source": "worker"},
+    )
+
+    assert completed_fork.turn.metadata == {"source": "worker"}
+    assert (
+        store.PENDING_GENERATION_KEY
+        not in completed_fork.turn.metadata
+    )
+
+
+def test_public_user_metadata_refuses_reserved_generation_key(
+    tmp_path: Path,
+) -> None:
+    """Only the store may create pending-generation metadata."""
+    created = store.create(tmp_path)
+
+    with pytest.raises(ValueError, match="cannot contain"):
+        store.append_user(
+            tmp_path,
+            created.id,
+            branch_id=created.branch_id,
+            expected_revision=created.revision,
+            text="Question",
+            model_id="llada",
+            input_mode="chat",
+            metadata={store.PENDING_GENERATION_KEY: {}},
+        )
+
+    assert store.get_manifest(tmp_path, created.id) == created
+
+
+def test_public_completion_metadata_refuses_reserved_generation_key(
+    tmp_path: Path,
+) -> None:
+    """Completion clears rather than accepting reserved spoofing."""
+    created = store.create(tmp_path)
+    appended = _append(tmp_path, created)
+
+    with pytest.raises(ValueError, match="cannot contain"):
+        store.update_assistant(
+            tmp_path,
+            created.id,
+            appended.assistant_turn.turn_id,
+            branch_id=created.branch_id,
+            expected_revision=appended.manifest.revision,
+            text="Answer",
+            partial=False,
+            metadata={store.PENDING_GENERATION_KEY: {}},
+        )
+
+    assert (
+        store.get_manifest(tmp_path, created.id).pending_assistant_id
+        == appended.assistant_turn.turn_id
+    )
+
+
+def test_retry_receipt_replays_the_same_configuration(
+    tmp_path: Path,
+) -> None:
+    """Receipt replay reconstructs version-one pending metadata."""
+    created, appended, completed = _ready_pair(tmp_path)
+    configuration = _generation_configuration(temperature=0.65)
+    operation_id = "7" * 32
+    first = store.fork_retry_assistant(
+        tmp_path,
+        created.id,
+        appended.assistant_turn.turn_id,
+        operation_id=operation_id,
+        branch_id=completed.manifest.branch_id,
+        expected_revision=completed.manifest.revision,
+        expected_catalog_revision=completed.manifest.catalog_revision,
+        model_id="llada",
+        input_mode="chat",
+        generation_configuration=configuration,
+    )
+
+    replayed = store.fork_retry_assistant(
+        tmp_path,
+        created.id,
+        appended.assistant_turn.turn_id,
+        operation_id=operation_id,
+        branch_id=completed.manifest.branch_id,
+        expected_revision=completed.manifest.revision + 99,
+        expected_catalog_revision=first.catalog.revision + 99,
+        model_id="llada",
+        input_mode="chat",
+        generation_configuration=configuration,
+    )
+
+    assert replayed == first
+    assert replayed.generation_configuration == configuration
+    assert replayed.assistant_turn.metadata == {
+        store.PENDING_GENERATION_KEY: configuration
+    }
+
+
+def test_receipt_digest_canonicalizes_equivalent_json_numbers(
+    tmp_path: Path,
+) -> None:
+    """A persisted float replays a request that arrived as an int."""
+    created, appended, completed = _ready_pair(tmp_path)
+    configuration = _generation_configuration()
+    parameters = configuration["parameters"]
+    assert isinstance(parameters, dict)
+    parameters["temperature"] = 0
+    operation_id = "e" * 32
+    first = store.fork_retry_assistant(
+        tmp_path,
+        created.id,
+        appended.assistant_turn.turn_id,
+        operation_id=operation_id,
+        branch_id=completed.manifest.branch_id,
+        expected_revision=completed.manifest.revision,
+        expected_catalog_revision=completed.manifest.catalog_revision,
+        model_id="llada",
+        input_mode="chat",
+        generation_configuration=configuration,
+    )
+    stored = first.generation_configuration
+    assert stored is not None
+
+    replayed = store.fork_retry_assistant(
+        tmp_path,
+        created.id,
+        appended.assistant_turn.turn_id,
+        operation_id=operation_id,
+        branch_id=completed.manifest.branch_id,
+        expected_revision=completed.manifest.revision + 1,
+        expected_catalog_revision=first.catalog.revision + 1,
+        model_id="llada",
+        input_mode="chat",
+        generation_configuration=stored,
+    )
+
+    assert replayed == first
+    assert stored["parameters"]["temperature"] == 0.0
+
+
+def test_preconfiguration_retry_receipt_replays_without_duplicate(
+    tmp_path: Path,
+) -> None:
+    """An old receipt stays pending without invented settings."""
+    created, appended, completed = _ready_pair(tmp_path)
+    operation_id = "c" * 32
+    first = store.fork_retry_assistant(
+        tmp_path,
+        created.id,
+        appended.assistant_turn.turn_id,
+        operation_id=operation_id,
+        branch_id=completed.manifest.branch_id,
+        expected_revision=completed.manifest.revision,
+        expected_catalog_revision=completed.manifest.catalog_revision,
+        model_id="llada",
+        input_mode="chat",
+        generation_configuration=_generation_configuration(
+            temperature=0.25
+        ),
+    )
+    _rewrite_fork_as_preconfiguration_fixture(
+        tmp_path,
+        conversation_id=created.id,
+        assistant_turn_id=first.assistant_turn.turn_id,
+        operation_id=operation_id,
+        semantic_payload={
+            "kind": "retry_assistant",
+            "source_branch_id": completed.manifest.branch_id,
+            "target_turn_id": appended.assistant_turn.turn_id,
+            "model_id": "llada",
+            "input_mode": "chat",
+        },
+    )
+    before = store.list_branches(tmp_path, created.id)
+
+    replayed = store.fork_retry_assistant(
+        tmp_path,
+        created.id,
+        appended.assistant_turn.turn_id,
+        operation_id=operation_id,
+        branch_id=completed.manifest.branch_id,
+        expected_revision=completed.manifest.revision + 99,
+        expected_catalog_revision=first.catalog.revision + 99,
+        model_id="llada",
+        input_mode="chat",
+        generation_configuration=_generation_configuration(
+            temperature=0.9
+        ),
+    )
+
+    assert replayed.branch.branch_id == first.branch.branch_id
+    assert replayed.assistant_turn.metadata == {}
+    assert replayed.generation_configuration is None
+    assert store.list_branches(tmp_path, created.id) == before
+
+
+@pytest.mark.parametrize("evolution", ["add", "remove", "change"])
+def test_schema_evolution_keeps_reads_and_receipt_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    evolution: str,
+) -> None:
+    """Old data reads, stale writes fail, and receipts replay once."""
+    created, appended, completed = _ready_pair(tmp_path)
+    operation_id = "7" * 32
+    configuration = _generation_configuration(temperature=0.25)
+    first = store.fork_retry_assistant(
+        tmp_path,
+        created.id,
+        appended.assistant_turn.turn_id,
+        operation_id=operation_id,
+        branch_id=completed.manifest.branch_id,
+        expected_revision=completed.manifest.revision,
+        expected_catalog_revision=completed.manifest.catalog_revision,
+        model_id="llada",
+        input_mode="chat",
+        generation_configuration=configuration,
+    )
+    original = REGISTRY["llada"]
+    specs = list(original.param_specs)
+    if evolution == "add":
+        specs.append(
+            ParamSpec(
+                name="future_parameter",
+                label="Future Parameter",
+                type=ParamType.INT,
+                default=1,
+                group=ParamGroup.OUTPUT,
+                recommended=(1, 2),
+            )
+        )
+    elif evolution == "remove":
+        specs.pop()
+    else:
+        specs[0] = specs[0].model_copy(
+            update={"default": specs[0].default + 1}
+        )
+    monkeypatch.setitem(
+        REGISTRY,
+        "llada",
+        original.model_copy(update={"param_specs": specs}),
+    )
+
+    page = store.get_turns(
+        tmp_path,
+        created.id,
+        branch_id=first.branch.branch_id,
+    )
+    replayed = store.fork_retry_assistant(
+        tmp_path,
+        created.id,
+        appended.assistant_turn.turn_id,
+        operation_id=operation_id,
+        branch_id=completed.manifest.branch_id,
+        expected_revision=completed.manifest.revision + 99,
+        expected_catalog_revision=first.catalog.revision + 99,
+        model_id="llada",
+        input_mode="chat",
+        generation_configuration=configuration,
+    )
+
+    assert page.turns[-1].metadata[
+        store.PENDING_GENERATION_KEY
+    ] == configuration
+    assert replayed.branch.branch_id == first.branch.branch_id
+    assert len(
+        store.list_branches(tmp_path, created.id).branches
+    ) == 2
+    with pytest.raises(ValueError, match="schema id"):
+        store.fork_retry_assistant(
+            tmp_path,
+            created.id,
+            appended.assistant_turn.turn_id,
+            operation_id=_operation_id(),
+            branch_id=completed.manifest.branch_id,
+            expected_revision=completed.manifest.revision,
+            expected_catalog_revision=first.catalog.revision,
+            model_id="llada",
+            input_mode="chat",
+            generation_configuration=configuration,
+        )
+
+
+def test_preconfiguration_edit_receipt_replays_without_duplicate(
+    tmp_path: Path,
+) -> None:
+    """A committed old edit keeps its branch without invented data."""
+    created, appended, completed = _ready_pair(tmp_path)
+    operation_id = "d" * 32
+    metadata = {"source": "legacy-client"}
+    first = store.fork_edit_user(
+        tmp_path,
+        created.id,
+        appended.user_turn.turn_id,
+        operation_id=operation_id,
+        branch_id=completed.manifest.branch_id,
+        expected_revision=completed.manifest.revision,
+        expected_catalog_revision=completed.manifest.catalog_revision,
+        text="Legacy edit",
+        model_id="llada",
+        input_mode="chat",
+        generation_configuration=_generation_configuration(
+            temperature=0.25
+        ),
+        metadata=metadata,
+    )
+    _rewrite_fork_as_preconfiguration_fixture(
+        tmp_path,
+        conversation_id=created.id,
+        assistant_turn_id=first.assistant_turn.turn_id,
+        operation_id=operation_id,
+        semantic_payload={
+            "kind": "edit_user",
+            "source_branch_id": completed.manifest.branch_id,
+            "target_turn_id": appended.user_turn.turn_id,
+            "text": "Legacy edit",
+            "model_id": "llada",
+            "input_mode": "chat",
+            "metadata": metadata,
+        },
+    )
+    before = store.list_branches(tmp_path, created.id)
+
+    replayed = store.fork_edit_user(
+        tmp_path,
+        created.id,
+        appended.user_turn.turn_id,
+        operation_id=operation_id,
+        branch_id=completed.manifest.branch_id,
+        expected_revision=completed.manifest.revision + 99,
+        expected_catalog_revision=first.catalog.revision + 99,
+        text="Legacy edit",
+        model_id="llada",
+        input_mode="chat",
+        generation_configuration=_generation_configuration(
+            temperature=0.9
+        ),
+        metadata=metadata,
+    )
+
+    assert replayed.branch.branch_id == first.branch.branch_id
+    assert replayed.assistant_turn.metadata == {}
+    assert replayed.generation_configuration is None
+    assert store.list_branches(tmp_path, created.id) == before
+
+
+def test_operation_id_collision_refuses_changed_configuration(
+    tmp_path: Path,
+) -> None:
+    """Hyperparameters are part of fork operation semantics."""
+    created, appended, completed = _ready_pair(tmp_path)
+    operation_id = "8" * 32
+    store.fork_retry_assistant(
+        tmp_path,
+        created.id,
+        appended.assistant_turn.turn_id,
+        operation_id=operation_id,
+        branch_id=completed.manifest.branch_id,
+        expected_revision=completed.manifest.revision,
+        expected_catalog_revision=completed.manifest.catalog_revision,
+        model_id="llada",
+        input_mode="chat",
+        generation_configuration=_generation_configuration(
+            temperature=0.25
+        ),
+    )
+
+    with pytest.raises(store.ConversationOperationConflictError):
+        store.fork_retry_assistant(
+            tmp_path,
+            created.id,
+            appended.assistant_turn.turn_id,
+            operation_id=operation_id,
+            branch_id=completed.manifest.branch_id,
+            expected_revision=completed.manifest.revision,
+            expected_catalog_revision=completed.manifest.catalog_revision,
+            model_id="llada",
+            input_mode="chat",
+            generation_configuration=_generation_configuration(
+                temperature=0.5
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "unknown",
+        "bool_as_int",
+        "nonfinite",
+        "wrong_select",
+        "out_of_bounds",
+        "experimental_bool",
+        "unsupported_device",
+        "huge_integer",
+        "huge_float",
+    ],
+)
+def test_retry_configuration_rejects_invalid_schema_values(
+    tmp_path: Path,
+    case: str,
+) -> None:
+    """Malformed snapshots fail before allocating a branch."""
+    created, appended, completed = _ready_pair(tmp_path)
+    configuration = _generation_configuration()
+    parameters = configuration["parameters"]
+    assert isinstance(parameters, dict)
+    if case == "unknown":
+        parameters["unknown"] = 1
+    elif case == "bool_as_int":
+        parameters["steps"] = True
+    elif case == "nonfinite":
+        parameters["temperature"] = float("inf")
+    elif case == "wrong_select":
+        parameters["remasking"] = 1
+    elif case == "out_of_bounds":
+        parameters["steps"] = 151
+    elif case == "experimental_bool":
+        configuration["experimental"] = 1
+    elif case == "huge_integer":
+        parameters["steps"] = 10**1000
+    elif case == "huge_float":
+        parameters["temperature"] = 1e101
+    else:
+        assert case == "unsupported_device"
+        configuration["device"] = "cpu"
+    before = store.get_catalog(tmp_path, created.id)
+
+    with pytest.raises(ValueError):
+        store.fork_retry_assistant(
+            tmp_path,
+            created.id,
+            appended.assistant_turn.turn_id,
+            operation_id=_operation_id(),
+            branch_id=completed.manifest.branch_id,
+            expected_revision=completed.manifest.revision,
+            expected_catalog_revision=(
+                completed.manifest.catalog_revision
+            ),
+            model_id="llada",
+            input_mode="chat",
+            generation_configuration=configuration,
+        )
+
+    assert store.get_catalog(tmp_path, created.id) == before
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    [
+        ("gen_length", 159, "divisible by block_length"),
+        ("block_length", 32, "steps .* divisible by"),
+    ],
+)
+def test_retry_configuration_rejects_llada_relational_rules(
+    tmp_path: Path,
+    name: str,
+    value: int,
+    message: str,
+) -> None:
+    """LLaDA arithmetic is checked before branch publication."""
+    created, appended, completed = _ready_pair(tmp_path)
+    configuration = _generation_configuration()
+    parameters = configuration["parameters"]
+    assert isinstance(parameters, dict)
+    parameters[name] = value
+    before = store.get_catalog(tmp_path, created.id)
+
+    with pytest.raises(ValueError, match=message):
+        store.fork_retry_assistant(
+            tmp_path,
+            created.id,
+            appended.assistant_turn.turn_id,
+            operation_id=_operation_id(),
+            branch_id=completed.manifest.branch_id,
+            expected_revision=completed.manifest.revision,
+            expected_catalog_revision=(
+                completed.manifest.catalog_revision
+            ),
+            model_id="llada",
+            input_mode="chat",
+            generation_configuration=configuration,
+        )
+
+    assert store.get_catalog(tmp_path, created.id) == before
+
+
+def test_retry_configuration_uses_device_specific_bounds(
+    tmp_path: Path,
+) -> None:
+    """The same token budget is valid on GPU but not ordinary CPU."""
+    created, appended, completed = _ready_pair(tmp_path)
+    with pytest.raises(ValueError, match="active cpu bounds"):
+        store.fork_retry_assistant(
+            tmp_path,
+            created.id,
+            appended.assistant_turn.turn_id,
+            operation_id="a" * 32,
+            branch_id=completed.manifest.branch_id,
+            expected_revision=completed.manifest.revision,
+            expected_catalog_revision=(
+                completed.manifest.catalog_revision
+            ),
+            model_id="smollm3",
+            input_mode="chat",
+            generation_configuration=_smollm_configuration(
+                device="cpu",
+                max_new_tokens=200,
+            ),
+        )
+
+    forked = store.fork_retry_assistant(
+        tmp_path,
+        created.id,
+        appended.assistant_turn.turn_id,
+        operation_id="b" * 32,
+        branch_id=completed.manifest.branch_id,
+        expected_revision=completed.manifest.revision,
+        expected_catalog_revision=completed.manifest.catalog_revision,
+        model_id="smollm3",
+        input_mode="chat",
+        generation_configuration=_smollm_configuration(
+            device="cuda",
+            max_new_tokens=200,
+        ),
+    )
+
+    assert forked.generation_configuration["device"] == "cuda"
+    assert (
+        forked.generation_configuration["parameters"][
+            "max_new_tokens"
+        ]
+        == 200
+    )
+
+
+@pytest.mark.parametrize("registry_change", ["added", "removed"])
+def test_pending_configuration_read_ignores_registry_drift(
+    tmp_path: Path,
+    registry_change: str,
+) -> None:
+    """Durable reads preserve snapshots from older registries."""
+    created, appended, completed = _ready_pair(tmp_path)
+    forked = store.fork_retry_assistant(
+        tmp_path,
+        created.id,
+        appended.assistant_turn.turn_id,
+        operation_id="9" * 32,
+        branch_id=completed.manifest.branch_id,
+        expected_revision=completed.manifest.revision,
+        expected_catalog_revision=completed.manifest.catalog_revision,
+        model_id="llada",
+        input_mode="chat",
+        generation_configuration=_generation_configuration(),
+    )
+    assistant_dir = _turn_dir(
+        tmp_path,
+        created.id,
+        forked.assistant_turn.turn_id,
+    )
+    path = assistant_dir / "00000001.json"
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    pending = raw["metadata"][store.PENDING_GENERATION_KEY]
+    if registry_change == "added":
+        del pending["parameters"]["alternatives"]
+    else:
+        assert registry_change == "removed"
+        pending["parameters"]["retired_parameter"] = 17
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    page = store.get_turns(
+        tmp_path,
+        created.id,
+        branch_id=forked.branch.branch_id,
+    )
+
+    stored = page.turns[-1].metadata[
+        store.PENDING_GENERATION_KEY
+    ]
+    assert stored == pending
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    [
+        ("codec", "unsupported generation configuration codec"),
+        ("device", "device must be cpu or cuda"),
+        ("identity", "model_id does not match"),
+        ("type", "temperature must be a boolean, number, or string"),
+        ("magnitude", "temperature exceeds the numeric limit"),
+        ("field", "unknown fields"),
+        ("serialized_size", "exceeds 16384 bytes"),
+    ],
+)
+def test_corrupt_pending_configuration_structure_is_refused(
+    tmp_path: Path,
+    case: str,
+    message: str,
+) -> None:
+    """The registry-independent reader still enforces codec bounds."""
+    created, appended, completed = _ready_pair(tmp_path)
+    forked = store.fork_retry_assistant(
+        tmp_path,
+        created.id,
+        appended.assistant_turn.turn_id,
+        operation_id="9" * 32,
+        branch_id=completed.manifest.branch_id,
+        expected_revision=completed.manifest.revision,
+        expected_catalog_revision=completed.manifest.catalog_revision,
+        model_id="llada",
+        input_mode="chat",
+        generation_configuration=_generation_configuration(),
+    )
+    path = (
+        _turn_dir(
+            tmp_path,
+            created.id,
+            forked.assistant_turn.turn_id,
+        )
+        / "00000001.json"
+    )
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    pending = raw["metadata"][store.PENDING_GENERATION_KEY]
+    parameters = pending["parameters"]
+    if case == "codec":
+        pending["codec_version"] = 2
+    elif case == "device":
+        pending["device"] = "cuda:0"
+    elif case == "identity":
+        pending["model_id"] = "mamba3"
+    elif case == "type":
+        parameters["temperature"] = []
+    elif case == "magnitude":
+        parameters["temperature"] = 10**101
+    elif case == "field":
+        pending["unexpected"] = True
+    else:
+        assert case == "serialized_size"
+        pending["parameters"] = {
+            f"retired_{index}": "\U0001f4a5" * 1024
+            for index in range(5)
+        }
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(
+        store.ConversationCorruptError,
+        match=message,
+    ):
+        store.get_turns(
+            tmp_path,
+            created.id,
+            branch_id=forked.branch.branch_id,
+        )
 
 
 def test_authoritative_replay_does_not_clean_other_debris(

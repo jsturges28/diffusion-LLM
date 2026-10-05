@@ -529,10 +529,13 @@
     aria-labelledby="conversation-retry-title"
     aria-describedby="conversation-retry-message
       conversation-retry-status">
-    <div class="modal-box modal-box-confirm">
+    <div class="modal-box modal-box-confirm
+      conversation-retry-box">
       <h2 id="conversation-retry-title">Retry this response?</h2>
       <div class="modal-body">
         <p id="conversation-retry-message"></p>
+        <div id="conversation-retry-settings"
+          class="conversation-action-settings"></div>
         <p id="conversation-retry-status"
           class="conversation-dialog-status" role="alert"
           aria-live="assertive" aria-atomic="true"
@@ -622,7 +625,7 @@
       <h2><span class="title-accent">LLM</span> Visualizer</h2>
       <div class="modal-body">
         <p>This tool visualizes how language models actually produce text, in real time. Its depth is in <strong>discrete diffusion</strong>: instead of generating one token at a time (left to right), a diffusion LLM starts from noise or masked tokens and iteratively refines an entire block over many denoising steps. A compact <strong>autoregressive</strong> (left-to-right) model runs alongside them as a baseline for contrast, and a <strong>state-space</strong> model shows what a fixed-size memory keeps and forgets. Use the <strong>Model</strong> selector in the header to switch between the available models (only one is resident in GPU memory at a time).</p>
-        <p>Generation is organized as a durable, branching conversation: compact cards stay in chronological order, the newest selected assistant owns the live explainability workspace, and a <strong>Draft</strong> user card follows the thread. User messages offer Copy, Edit and Delete from this path; assistant messages offer Copy and Retry, with visible Path arrows preserving every alternate. These conversation paths change which messages led to a response, while <strong>Edit Frames</strong> and <strong>What If?</strong> intervene only inside the exact active tail run. Context is packed from a bounded recent suffix without summaries or partial exchanges, and explicitly saved XAI runs link back to the response that produced them.</p>
+        <p>Generation is organized as a durable, branching conversation: compact cards stay in chronological order, the newest selected assistant owns the live explainability workspace, and a <strong>Draft</strong> user card follows the thread. User messages offer Copy, Edit and Delete from this path; assistant messages offer Copy and Retry, with visible Path arrows preserving every alternate. Edit and Retry each open independent <strong>Run settings</strong> seeded from the Draft, then freeze the first valid configuration through generation and deferred recovery without changing the Draft. These conversation paths change which messages led to a response, while <strong>Edit Frames</strong> and <strong>What If?</strong> intervene only inside the exact active tail run. Context is packed from a bounded recent suffix without summaries or partial exchanges, and explicitly saved XAI runs link back to the response that produced them.</p>
         <h3>How diffusion LLMs work</h3>
         <p>The <strong>forward process</strong> corrupts text by independently replacing each token with a placeholder at a rate controlled by a noise schedule. The <strong>reverse process</strong> starts from a corrupted canvas and uses a Transformer with bidirectional attention to predict all positions simultaneously, then re-noises (re-masks) the least confident predictions. This repeats for <em>N</em> steps until the sequence converges. Unresolved positions are shown as <code>░</code> until they stabilize, and a Settings toggle can draw the prediction behind each one instead.</p>
         <h3>Models</h3>
@@ -708,7 +711,7 @@
           <li>Watch the canvas resolve into text in real time; unresolved positions appear as <code>░</code>, or, by <strong>Unsettled positions show</strong> in Settings, as the model's current guess at them, or as the candidates it was weighing, cycling once the run has finished.</li>
           <li>While the model runs, <strong>Send</strong> becomes <strong>Stop</strong> and the status bar shows an animated <em>Running&hellip;</em> until the run completes.</li>
           <li>After completion, the canvas keeps the tallest output height reached by that generation while long content scrolls inside it, so scrubbing shorter frames does not move the scrubber away from the pointer.</li>
-          <li>Use the icons below a user message to Copy, Edit or Delete from this path, and those below an assistant response to Copy or Retry. Edit and Retry show and freeze the current model and Run settings; visible Path arrows browse the preserved alternatives.</li>
+          <li>Use the icons below a user message to Copy, Edit or Delete from this path, and those below an assistant response to Copy or Retry. Edit and Retry open independent Run settings seeded from the Draft. Adjust or Reset them without changing the Draft; the first valid confirmation freezes that action's exact configuration through launch, replay and deferred recovery. Visible Path arrows browse the preserved alternatives.</li>
         </ol>
         <h4>The prompt box</h4>
         <p>Below the text area, a readout says what your prompt costs against the model's <strong>context window</strong>, as in <code>1,240 / 65,536</code>. The figure on the left is not a character count: it is the number of tokens the model will actually receive, which includes the chat template's role markers and changes when <strong>Thinking</strong> is switched on, so it is counted by the same code that builds the real input rather than estimated here. The figure on the right is read from the checkpoint that is loaded, not from a table of model names, so it is right even for a checkpoint that has since changed. It appears once a model is resident and updates as you type, a moment behind your keystrokes.</p>
@@ -1071,6 +1074,7 @@
   <script src="/run_frames.js"></script>
   <script src="/run_candidates.js"></script>
   <script src="/run_snapshot.js"></script>
+  <script src="/conversation_generation.js"></script>
   <script src="/conversation_state.js"></script>
   <script src="/conversation_client.js"></script>
   <script src="/conversation_view.js"></script>
@@ -1087,6 +1091,7 @@
   <script src="/run_settings_core.js"></script>
   <script src="/run_settings_panel.js"></script>
   <script src="/generator_model_panel.js"></script>
+  <script src="/pending_generation_controller.js"></script>
   <script src="/generator_chrome.js"></script>
   <script src="/generator_canvas.js"></script>
   <script src="/generator_readouts.js"></script>

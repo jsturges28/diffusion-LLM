@@ -13,19 +13,24 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Literal, Optional
+from typing import Callable, Dict, Literal, Optional, Union
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from src.backends.registry import REGISTRY
-from src.web import conversation_store, run_store
+from src.web import (
+    conversation_generation,
+    conversation_store,
+    run_store,
+)
 
 
 logger = logging.getLogger("diffusion_supervisor")
 
 ResultsDirReader = Callable[[], Path]
+GenerationParameterValue = Union[bool, int, float, str]
 STRICT = ConfigDict(extra="forbid", strict=True)
 
 
@@ -124,6 +129,39 @@ class UnlinkRunRequest(BranchMutationRequest):
     """The conversation revision an unlink is based on."""
 
 
+class GenerationConfigurationRequest(BaseModel):
+    """One exact action-local Run settings snapshot."""
+
+    model_config = STRICT
+
+    codec_version: Literal[1]
+    model_id: str = Field(
+        min_length=1,
+        max_length=conversation_store.IDENTIFIER_CHARS_MAX,
+    )
+    input_mode: Literal["chat", "completion"]
+    device: str = Field(
+        min_length=1,
+        max_length=(
+            conversation_generation.GENERATION_DEVICE_CHARS_MAX
+        ),
+    )
+    schema_id: str = Field(
+        min_length=(
+            conversation_generation.GENERATION_SCHEMA_ID_CHARS
+        ),
+        max_length=(
+            conversation_generation.GENERATION_SCHEMA_ID_CHARS
+        ),
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    experimental: bool
+    parameters: Dict[str, GenerationParameterValue] = Field(
+        max_length=(
+            conversation_generation.GENERATION_PARAMETER_COUNT_MAX
+        )
+    )
+
 
 class EditUserForkRequest(CatalogBranchMutationRequest):
     """Replacement text and current model for a user fork."""
@@ -134,6 +172,9 @@ class EditUserForkRequest(CatalogBranchMutationRequest):
     )
     input_mode: Literal["chat", "completion"]
     metadata: Dict[str, JsonValue] = Field(default_factory=dict)
+    generation_configuration: Optional[
+        GenerationConfigurationRequest
+    ] = None
 
 
 class DeletePathForkRequest(CatalogBranchMutationRequest):
@@ -147,6 +188,9 @@ class RetryAssistantForkRequest(CatalogBranchMutationRequest):
         max_length=conversation_store.IDENTIFIER_CHARS_MAX
     )
     input_mode: Literal["chat", "completion"]
+    generation_configuration: Optional[
+        GenerationConfigurationRequest
+    ] = None
 
 
 class RunRevisionConflictError(Exception):
@@ -405,7 +449,13 @@ class ConversationApi:
         body: EditUserForkRequest,
     ) -> JSONResponse:
         try:
-            _validate_model(body.model_id, body.input_mode)
+            configuration = (
+                None
+                if body.generation_configuration is None
+                else body.generation_configuration.model_dump(
+                    mode="python"
+                )
+            )
             result = await asyncio.to_thread(
                 conversation_store.fork_edit_user,
                 self._results_dir(),
@@ -418,6 +468,8 @@ class ConversationApi:
                 text=body.text,
                 model_id=body.model_id,
                 input_mode=body.input_mode,
+                generation_configuration=configuration,
+                allow_compatibility_default=False,
                 metadata=body.metadata,
             )
         except _STORE_FAILURES as exc:
@@ -458,7 +510,13 @@ class ConversationApi:
         body: RetryAssistantForkRequest,
     ) -> JSONResponse:
         try:
-            _validate_model(body.model_id, body.input_mode)
+            configuration = (
+                None
+                if body.generation_configuration is None
+                else body.generation_configuration.model_dump(
+                    mode="python"
+                )
+            )
             result = await asyncio.to_thread(
                 conversation_store.fork_retry_assistant,
                 self._results_dir(),
@@ -470,6 +528,8 @@ class ConversationApi:
                 expected_catalog_revision=body.catalog_revision,
                 model_id=body.model_id,
                 input_mode=body.input_mode,
+                generation_configuration=configuration,
+                allow_compatibility_default=False,
             )
         except _STORE_FAILURES as exc:
             return _error_response(exc)
@@ -489,6 +549,7 @@ _STORE_FAILURES = (
     conversation_store.ConversationOperationConflictError,
     conversation_store.ConversationStateError,
     conversation_store.ConversationCorruptError,
+    OverflowError,
     ValueError,
     OSError,
 )
@@ -759,6 +820,7 @@ def _edit_fork_payload(
             result.assistant_turn,
             selected_branch_id=branch_id,
         ),
+        "generation_configuration": result.generation_configuration,
     }
 
 
@@ -791,6 +853,7 @@ def _retry_fork_payload(
             result.assistant_turn,
             selected_branch_id=branch_id,
         ),
+        "generation_configuration": result.generation_configuration,
     }
 
 
@@ -1047,6 +1110,7 @@ def _error_response(exc: Exception) -> JSONResponse:
         (
             conversation_store.InvalidConversationIdError,
             run_store.InvalidRunIdError,
+            OverflowError,
             ValueError,
         ),
     ):

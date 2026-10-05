@@ -924,6 +924,24 @@ stale CAS coordinates are considered. Reusing an operation id for different
 semantics is an error. This is the dropped-response idempotency boundary;
 blindly retrying arbitrary conversation mutations remains forbidden.
 
+Edit and Retry freeze one action-local generation contract at their first
+valid confirmation. Each compact panel is seeded from the Draft, but its
+Experimental flag and parameters neither mutate nor persist back to that
+Draft. The operation digest covers the exact model, input mode, device,
+device-qualified schema identity and parameters. While the response is
+pending, that compact versioned snapshot lives only on the reserved assistant
+so a reload or dropped launch can resume the same request. Completion removes
+it; saved-run provenance remains the long-term parameter record.
+
+Historical configuration is parsed without consulting today's registry, then
+the current registry is enforced only before a new branch is published or a
+pending response is launched. This order lets a committed receipt replay after
+schema evolution without authorizing a new stale write. Schema identity covers
+parameter declarations plus an explicit revision for model-level relational
+rules such as LLaDA's schedule divisibility. A legacy receipt that predates
+snapshots returns no configuration and asks for valid current Draft settings;
+it never labels guessed defaults as historical fact.
+
 The graph has fixed, defensive limits: 256 catalog branches, 16 child
 branches at one fork point and ancestry depth 32. Path and local-suffix
 turn counts, assistant versions, revisions, receipt scans and browser pages

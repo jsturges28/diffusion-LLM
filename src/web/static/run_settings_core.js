@@ -82,11 +82,8 @@ function runSettingsCoreCreate() {
 
   function parseValue(spec, raw) {
     requireObject(spec, "Run settings spec");
-    if (spec.type === "int") {
-      return parseInt(raw, 10);
-    }
-    if (spec.type === "float") {
-      return parseFloat(raw);
+    if (spec.type === "int" || spec.type === "float") {
+      return Number(rawText(raw));
     }
     if (spec.type === "bool") {
       return Boolean(raw);
@@ -122,9 +119,12 @@ function runSettingsCoreCreate() {
 
   function numericError(spec, raw, range) {
     var text = rawText(raw);
-    var value = parseFloat(text);
-    if (text === "" || isNaN(value)) {
+    var value = Number(text);
+    if (text === "" || !Number.isFinite(value)) {
       return spec.label + " is empty or invalid.";
+    }
+    if (spec.type === "int" && !Number.isInteger(value)) {
+      return spec.label + " must be a whole number.";
     }
     if (range && value < range.min) {
       if (value < 0) {
@@ -194,13 +194,13 @@ function runSettingsCoreCreate() {
     if (!hasSpec(settings.specs, "steps")) {
       return;
     }
-    var genLength = parseInt(
-      settings.rawValues.gen_length, 10
+    var genLength = Number(
+      rawText(settings.rawValues.gen_length)
     );
-    var blockLength = parseInt(
-      settings.rawValues.block_length, 10
+    var blockLength = Number(
+      rawText(settings.rawValues.block_length)
     );
-    var steps = parseInt(settings.rawValues.steps, 10);
+    var steps = Number(rawText(settings.rawValues.steps));
     if (
       !invalid(settings.invalidNames, "gen_length")
       && !invalid(settings.invalidNames, "block_length")
@@ -294,8 +294,8 @@ function runSettingsCoreCreate() {
     if (!range) {
       return raw;
     }
-    var value = parseFloat(raw);
-    if (isNaN(value)) {
+    var value = Number(rawText(raw));
+    if (!Number.isFinite(value)) {
       return raw;
     }
     if (value < range.min) {
@@ -393,6 +393,22 @@ function runSettingsCoreCreate() {
         "Conversation actions need the model input mode"
       );
     }
+    if (
+      typeof settings.device !== "string"
+      || settings.device === ""
+    ) {
+      throw new Error(
+        "Conversation actions need the active device"
+      );
+    }
+    if (
+      typeof settings.schemaId !== "string"
+      || !/^[0-9a-f]{64}$/.test(settings.schemaId)
+    ) {
+      throw new Error(
+        "Conversation actions need the generation schema id"
+      );
+    }
     var specs = requireSpecs(settings.specs);
     var rawValues = requireObject(
       settings.rawValues, "Run settings raw values"
@@ -410,6 +426,8 @@ function runSettingsCoreCreate() {
     return Object.freeze({
       modelId: settings.modelId,
       modelDisplay: String(settings.modelDisplay || ""),
+      device: settings.device,
+      schemaId: settings.schemaId,
       inputMode: settings.inputMode,
       settingsSummary: primarySummary(specs, rawValues),
       parameters: parameters,

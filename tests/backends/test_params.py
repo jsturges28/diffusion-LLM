@@ -23,12 +23,18 @@ specifically means the defaults have come apart again.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Tuple
 
 import pytest
 
 from src.backends.llada_worker import LladaBackend
 from src.backends.smollm3_worker import Smollm3Backend
+from src.backends.generation_schema import (
+    GENERATION_RELATION_REVISIONS,
+    generation_schema_id,
+    generation_schema_ids,
+)
 from src.backends.params import (
     bounds_of,
     default_of,
@@ -42,6 +48,41 @@ from src.backends.protocol import (
     ParamType,
 )
 from src.backends.registry import REGISTRY
+
+EXPECTED_SCHEMA_IDS = {
+    "llada": {
+        "cuda": (
+            "2d3a3566f1dfd65f124e5620418fab8c"
+            "b43678bd908619c66dc17fd30696ab96"
+        ),
+    },
+    "diffusiongemma": {
+        "cuda": (
+            "c7b5b65876458c0af62e5389e661ea668"
+            "6b79ab0c06394336d48885c46fdfd35"
+        ),
+    },
+    "smollm3": {
+        "cuda": (
+            "c05b20b6bed4e37dfa875e2e7d61b9ee"
+            "53bcfbaf3146f5694a743fa77b09f001"
+        ),
+        "cpu": (
+            "404e9a296b05898b3ac549df29bdf747"
+            "5b0028e1448c9c071ab9f9b13aaa9424"
+        ),
+    },
+    "mamba3": {
+        "cuda": (
+            "0a7fa05b3bc0ca05ae2001f648ef5b407"
+            "6e6fff60e37e96eb81d90c7f6c29241"
+        ),
+        "cpu": (
+            "866224aa6f60b08299a3d5ff1da7555a"
+            "f6b4f1b05cb1794742ba35ad2be87515"
+        ),
+    },
+}
 
 
 def _spec(model_id: str, name: str) -> ParamSpec:
@@ -105,7 +146,148 @@ def _matrix() -> List[Tuple[str, str, str]]:
     return cases
 
 
+def _schema_id(model_id: str, device: str) -> str:
+    model = REGISTRY[model_id]
+    return generation_schema_id(
+        model_id=model.id,
+        input_mode=model.capabilities.input_mode,
+        device=device,
+        specs=model.param_specs,
+    )
+
+
 # -- the matrix --
+
+
+def test_every_model_device_has_one_stable_schema_identity() -> None:
+    """All model families expose every declared device exactly."""
+    for model_id, model in REGISTRY.items():
+        first = generation_schema_ids(
+            model_id=model.id,
+            input_mode=model.capabilities.input_mode,
+            devices=model.capabilities.supported_devices,
+            specs=model.param_specs,
+        )
+        second = generation_schema_ids(
+            model_id=model.id,
+            input_mode=model.capabilities.input_mode,
+            devices=model.capabilities.supported_devices,
+            specs=model.param_specs,
+        )
+
+        assert first == second, model_id
+        assert first == EXPECTED_SCHEMA_IDS[model_id]
+        assert set(first) == set(
+            model.capabilities.supported_devices
+        )
+        assert all(
+            re.fullmatch(r"[0-9a-f]{64}", value)
+            for value in first.values()
+        )
+
+
+def test_schema_identity_changes_for_parameter_evolution() -> None:
+    """Every generation-relevant ParamSpec change changes identity."""
+    model = REGISTRY["llada"]
+    original = _schema_id(model.id, "cuda")
+    added = [
+        *model.param_specs,
+        ParamSpec(
+            name="new_limit",
+            label="New Limit",
+            type=ParamType.INT,
+            default=1,
+            recommended=(1, 2),
+        ),
+    ]
+    removed = model.param_specs[:-1]
+    changed = list(model.param_specs)
+    changed[0] = changed[0].model_copy(
+        update={"default": changed[0].default + 1}
+    )
+
+    for specs in (added, removed, changed):
+        evolved = generation_schema_id(
+            model_id=model.id,
+            input_mode=model.capabilities.input_mode,
+            device="cuda",
+            specs=specs,
+        )
+        assert evolved != original
+
+
+def test_relational_generation_contracts_have_schema_revisions(
+) -> None:
+    """Rules outside ParamSpec still invalidate old snapshots."""
+    assert GENERATION_RELATION_REVISIONS["llada"] == 1
+    assert set(GENERATION_RELATION_REVISIONS) <= set(REGISTRY)
+
+
+def test_schema_identity_is_device_qualified() -> None:
+    """SmolLM3's CPU override is part of CPU identity only."""
+    model = REGISTRY["smollm3"]
+
+    assert _schema_id(model.id, "cpu") != _schema_id(
+        model.id, "cuda"
+    )
+
+
+def test_only_selected_device_override_changes_identity() -> None:
+    """A CPU policy change does not strand an equivalent GPU run."""
+    model = REGISTRY["smollm3"]
+    specs = list(model.param_specs)
+    index = next(
+        position
+        for position, spec in enumerate(specs)
+        if spec.name == "max_new_tokens"
+    )
+    original = specs[index]
+    overrides = dict(original.overrides or {})
+    cpu = overrides["cpu"]
+    assert isinstance(cpu.default, int)
+    overrides["cpu"] = cpu.model_copy(
+        update={"default": cpu.default + 1}
+    )
+    specs[index] = original.model_copy(
+        update={"overrides": overrides}
+    )
+
+    changed_cpu = generation_schema_id(
+        model_id=model.id,
+        input_mode=model.capabilities.input_mode,
+        device="cpu",
+        specs=specs,
+    )
+    unchanged_gpu = generation_schema_id(
+        model_id=model.id,
+        input_mode=model.capabilities.input_mode,
+        device="cuda",
+        specs=specs,
+    )
+
+    assert changed_cpu != _schema_id(model.id, "cpu")
+    assert unchanged_gpu == _schema_id(model.id, "cuda")
+
+
+def test_presentation_copy_does_not_change_schema_identity() -> None:
+    """A label-only release does not invalidate pending generation."""
+    model = REGISTRY["llada"]
+    specs = list(model.param_specs)
+    specs[0] = specs[0].model_copy(
+        update={
+            "label": "Renamed Steps",
+            "help": "Different presentation copy.",
+        }
+    )
+
+    changed = generation_schema_id(
+        model_id=model.id,
+        input_mode=model.capabilities.input_mode,
+        device="cuda",
+        specs=specs,
+    )
+
+    assert changed == _schema_id(model.id, "cuda")
 
 
 @pytest.mark.parametrize(
@@ -398,6 +580,23 @@ def test_a_numeric_string_is_still_accepted() -> None:
     )
 
     assert resolved["max_new_tokens"] == 64
+
+
+@pytest.mark.parametrize(
+    "sent",
+    [10**1000, 1e101, "1e10000", float("inf")],
+)
+def test_huge_numeric_values_are_refused_without_overflow(
+    sent: Any,
+) -> None:
+    """Worker boundaries make hostile magnitudes a ValueError."""
+    with pytest.raises(ValueError, match="number|finite|limit"):
+        resolve_params(
+            REGISTRY["smollm3"].param_specs,
+            {"max_new_tokens": sent},
+            device="cuda",
+            experimental=True,
+        )
 
 
 def test_an_integer_parameter_resolves_to_an_int() -> None:

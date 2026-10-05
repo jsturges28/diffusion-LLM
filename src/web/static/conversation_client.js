@@ -18,6 +18,7 @@ function conversationClientCreate(options) {
       options, "applyAction"
     ),
     onConflict: conversationClientOptional(options, "onConflict"),
+    generationCodec: conversationGenerationCreate(),
     mutationTail: Promise.resolve(),
     selectionEpoch: 0,
   };
@@ -328,6 +329,13 @@ function conversationClientEditUserFork(owner, input) {
     );
     body.input_mode = conversationClientInputMode(input.inputMode);
     body.metadata = conversationClientObject(input.metadata);
+    body.generation_configuration =
+      conversationClientGenerationConfiguration(
+        owner,
+        input.configuration,
+        body.model_id,
+        body.input_mode
+      );
     var url = conversationClientBranchesUrl(
       state.conversation.id
     ) + "/edit-user/" + encodeURIComponent(turnId);
@@ -375,6 +383,13 @@ function conversationClientRetryAssistantFork(owner, input) {
       input.modelId, "model id"
     );
     body.input_mode = conversationClientInputMode(input.inputMode);
+    body.generation_configuration =
+      conversationClientGenerationConfiguration(
+        owner,
+        input.configuration,
+        body.model_id,
+        body.input_mode
+      );
     var url = conversationClientBranchesUrl(
       state.conversation.id
     ) + "/retry-assistant/" + encodeURIComponent(turnId);
@@ -399,7 +414,9 @@ function conversationClientForkMutation(
   return conversationClientMutation(
     owner.request, url, "POST", body, state
   ).then(function (result) {
-    var conversation = conversationClientForkResult(result, kind);
+    var conversation = conversationClientForkResult(
+      owner, result, kind
+    );
     var manifest = conversationStateManifest(conversation);
     return conversationClientRestore(
       owner,
@@ -746,12 +763,14 @@ function conversationClientAppendResult(result) {
   conversationStateTurn(
     result.user_turn,
     manifest.branch_id,
-    manifest.schema_version
+    manifest.schema_version,
+    manifest.pending_assistant_id
   );
   conversationStateTurn(
     result.assistant_turn,
     manifest.branch_id,
-    manifest.schema_version
+    manifest.schema_version,
+    manifest.pending_assistant_id
   );
 }
 
@@ -761,11 +780,12 @@ function conversationClientTailResult(result) {
   conversationStateTurn(
     result.turn,
     manifest.branch_id,
-    manifest.schema_version
+    manifest.schema_version,
+    manifest.pending_assistant_id
   );
 }
 
-function conversationClientForkResult(result, kind) {
+function conversationClientForkResult(owner, result, kind) {
   var raw = conversationClientManifest(result);
   var manifest = conversationStateManifest(raw);
   if (!result.catalog || typeof result.catalog !== "object") {
@@ -779,27 +799,58 @@ function conversationClientForkResult(result, kind) {
     throw new Error("Fork catalog and conversation revisions differ");
   }
   conversationClientForkBranch(result.branch, manifest);
+  var assistant = null;
   if (kind === "edit") {
     conversationStateTurn(
       result.user_turn,
       manifest.branch_id,
-      manifest.schema_version
+      manifest.schema_version,
+      manifest.pending_assistant_id
     );
     conversationStateTurn(
       result.assistant_turn,
       manifest.branch_id,
-      manifest.schema_version
+      manifest.schema_version,
+      manifest.pending_assistant_id
     );
+    assistant = result.assistant_turn;
   } else if (kind === "retry") {
     conversationStateTurn(
       result.assistant_turn,
       manifest.branch_id,
-      manifest.schema_version
+      manifest.schema_version,
+      manifest.pending_assistant_id
     );
+    assistant = result.assistant_turn;
   } else if (kind !== "delete") {
     throw new Error("Unknown conversation fork kind");
   }
+  if (assistant !== null) {
+    result.store_configuration =
+      conversationClientStoreConfiguration(
+        owner, result, assistant
+      );
+  }
   return raw;
+}
+
+function conversationClientStoreConfiguration(
+  owner, result, assistant
+) {
+  if (!Object.prototype.hasOwnProperty.call(
+    result, "generation_configuration"
+  )) {
+    throw new TypeError(
+      "Conversation fork response is missing generation configuration"
+    );
+  }
+  var raw = result.generation_configuration;
+  if (raw === null) {
+    return null;
+  }
+  return owner.generationCodec.fromWire(
+    raw, assistant.model_id, assistant.input_mode
+  );
 }
 
 function conversationClientForkBranch(branch, manifest) {
@@ -1033,6 +1084,14 @@ function conversationClientObject(value) {
     throw new TypeError("Conversation metadata must be an object");
   }
   return value;
+}
+
+function conversationClientGenerationConfiguration(
+  owner, raw, modelId, inputMode
+) {
+  return owner.generationCodec.toWire(
+    raw, modelId, inputMode
+  );
 }
 
 function conversationClientBoolean(value, name) {

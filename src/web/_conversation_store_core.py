@@ -33,6 +33,7 @@ from typing import (
 from uuid import uuid4
 
 from src import conversation_identity
+from src.web import conversation_generation
 from src.web.data_root_lock import DataRootLock
 
 
@@ -158,6 +159,15 @@ JsonValue: TypeAlias = Union[
     Dict[str, "JsonValue"],
 ]
 JsonObject: TypeAlias = Dict[str, JsonValue]
+GenerationConfigurationPayload = (
+    conversation_generation.GenerationConfigurationPayload
+)
+PENDING_GENERATION_KEY = (
+    conversation_generation.PENDING_GENERATION_KEY
+)
+GENERATION_CONFIGURATION_CODEC_VERSION = (
+    conversation_generation.GENERATION_CONFIGURATION_CODEC_VERSION
+)
 
 CONVERSATION_ID_RE = conversation_identity.CONVERSATION_ID_RE
 BRANCH_ID_RE = conversation_identity.BRANCH_ID_RE
@@ -457,6 +467,7 @@ class ForkOperation:
     kind: ForkOperationKind
     source_branch_id: str
     target_turn_id: str
+    legacy_request_digest: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -539,6 +550,9 @@ class EditUserForkResult:
     replaced_user_turn_id: str
     user_turn: TurnRecord
     assistant_turn: TurnRecord
+    generation_configuration: Optional[
+        GenerationConfigurationPayload
+    ]
 
 
 @dataclass(frozen=True)
@@ -563,6 +577,9 @@ class RetryAssistantForkResult:
     source_branch_id: str
     retried_assistant_turn_id: str
     assistant_turn: TurnRecord
+    generation_configuration: Optional[
+        GenerationConfigurationPayload
+    ]
 
 
 def require_results_dir(results_dir: Path) -> None:
@@ -761,6 +778,68 @@ def copy_json_object(
             " characters"
         )
     return copied
+
+
+def copy_user_metadata(
+    value: Mapping[str, object],
+) -> JsonObject:
+    """Copy user metadata while protecting the reserved turn field."""
+    copied = copy_json_object(value, "metadata")
+    conversation_generation.reject_pending_generation_metadata(
+        copied,
+        label="user metadata",
+    )
+    return copied
+
+
+def validate_generation_configuration(
+    value: object,
+    *,
+    expected_model_id: str,
+    expected_input_mode: str,
+) -> GenerationConfigurationPayload:
+    """Validate one action snapshot at the public store boundary."""
+    return conversation_generation.validate_generation_configuration(
+        value,
+        expected_model_id=expected_model_id,
+        expected_input_mode=expected_input_mode,
+    )
+
+
+def parse_generation_configuration(
+    value: object,
+    *,
+    expected_model_id: str,
+    expected_input_mode: str,
+) -> GenerationConfigurationPayload:
+    """Parse durable/replay data without consulting the registry."""
+    return conversation_generation.parse_generation_configuration(
+        value,
+        expected_model_id=expected_model_id,
+        expected_input_mode=expected_input_mode,
+    )
+
+
+def default_generation_configuration(
+    *,
+    model_id: str,
+    input_mode: str,
+) -> GenerationConfigurationPayload:
+    """Preserve direct store callers predating action snapshots."""
+    return conversation_generation.default_generation_configuration(
+        model_id=model_id,
+        input_mode=input_mode,
+    )
+
+
+def generation_configuration_metadata(
+    configuration: GenerationConfigurationPayload,
+) -> JsonObject:
+    """Encode a validated snapshot under its reserved metadata key."""
+    raw = conversation_generation.generation_configuration_metadata(
+        configuration
+    )
+    return copy_json_object(raw, "pending generation metadata")
 
 
 def _copy_json_value(
@@ -1423,6 +1502,36 @@ def validate_turn_record(turn: TurnRecord) -> None:
         )
 
 
+def pending_generation_configuration(
+    turn: TurnRecord,
+    *,
+    required: bool = False,
+) -> Optional[GenerationConfigurationPayload]:
+    """Read a pending snapshot, translating invalid disk data."""
+    if turn.model_id is None or turn.input_mode is None:
+        if required:
+            raise ConversationCorruptError(
+                "pending generation configuration has no model"
+            )
+        return None
+    try:
+        configuration = (
+            conversation_generation.pending_generation_configuration(
+                turn.metadata,
+                expected_model_id=turn.model_id,
+                expected_input_mode=turn.input_mode,
+            )
+        )
+    except ValueError as exc:
+        raise ConversationCorruptError(str(exc)) from exc
+    if required and configuration is None:
+        raise ConversationCorruptError(
+            "forked pending assistant has no generation"
+            " configuration"
+        )
+    return configuration
+
+
 def validate_pending_turn(turn: TurnRecord) -> None:
     if turn.role != "assistant":
         raise ConversationCorruptError(
@@ -1437,17 +1546,28 @@ def validate_pending_turn(turn: TurnRecord) -> None:
             "the pending assistant is not an empty partial"
             " placeholder"
         )
-    if (
-        turn.context_pack
-        or turn.metadata
-        or turn.run_link is not None
-    ):
+    if turn.context_pack or turn.run_link is not None:
         raise ConversationCorruptError(
             "the pending assistant carries terminal data"
+        )
+    if turn.schema_version == LEGACY_SCHEMA_VERSION:
+        if turn.metadata and set(turn.metadata) != {
+            PENDING_GENERATION_KEY
+        }:
+            raise ConversationCorruptError(
+                "the legacy pending assistant carries terminal"
+                " metadata"
+            )
+        return
+    configuration = pending_generation_configuration(turn)
+    if turn.metadata and configuration is None:
+        raise ConversationCorruptError(
+            "the pending assistant carries terminal metadata"
         )
 
 
 def write_version(turn_dir: Path, turn: TurnRecord) -> None:
+    validate_turn_record(turn)
     path = version_path(turn_dir, turn.version)
     if path.exists():
         raise ConversationCorruptError(
@@ -1468,6 +1588,11 @@ def turn_replacement(
     assert current.role == "assistant"
     assert current.model_id is not None
     assert current.input_mode is not None
+    clean_metadata = copy_json_object(metadata, "metadata")
+    conversation_generation.reject_pending_generation_metadata(
+        clean_metadata,
+        label="completed assistant metadata",
+    )
     return TurnRecord(
         conversation_id=current.conversation_id,
         conversation_revision=current.conversation_revision + 1,
@@ -1482,7 +1607,7 @@ def turn_replacement(
         model_id=current.model_id,
         input_mode=current.input_mode,
         context_pack=copy_json_object(context_pack, "context_pack"),
-        metadata=copy_json_object(metadata, "metadata"),
+        metadata=clean_metadata,
         run_link=run_link,
         schema_version=current.schema_version,
         branch_id=current.branch_id,

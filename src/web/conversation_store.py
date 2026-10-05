@@ -32,6 +32,10 @@ TITLE_CHARS_MAX = core.TITLE_CHARS_MAX
 TEXT_CHARS_MAX = core.TEXT_CHARS_MAX
 IDENTIFIER_CHARS_MAX = core.IDENTIFIER_CHARS_MAX
 METADATA_JSON_CHARS_MAX = core.METADATA_JSON_CHARS_MAX
+PENDING_GENERATION_KEY = core.PENDING_GENERATION_KEY
+GENERATION_CONFIGURATION_CODEC_VERSION = (
+    core.GENERATION_CONFIGURATION_CODEC_VERSION
+)
 JSON_FILE_BYTES_MAX = core.JSON_FILE_BYTES_MAX
 TURN_JSON_ENVELOPE_BYTES_MAX = core.TURN_JSON_ENVELOPE_BYTES_MAX
 OPERATION_ID_PATTERN = core.OPERATION_ID_PATTERN
@@ -56,6 +60,7 @@ InputMode = core.InputMode
 JsonScalar = core.JsonScalar
 JsonValue = core.JsonValue
 JsonObject = core.JsonObject
+GenerationConfigurationPayload = core.GenerationConfigurationPayload
 
 ConversationNotFoundError = core.ConversationNotFoundError
 InvalidConversationIdError = core.InvalidConversationIdError
@@ -292,7 +297,7 @@ def append_user(
     clean_text = core.validate_text(text, role="user")
     clean_model_id = core.validate_model_id(model_id)
     clean_input_mode = core.validate_input_mode(input_mode)
-    clean_metadata = core.copy_json_object(metadata or {}, "metadata")
+    clean_metadata = core.copy_user_metadata(metadata or {})
     with core.STORE_LOCK.held(results_dir):
         conversation_dir = core.resolve_conversation_dir(
             results_dir, conversation_id
@@ -495,6 +500,8 @@ def fork_edit_user(
     text: str,
     model_id: str,
     input_mode: InputMode,
+    generation_configuration: Optional[Mapping[str, object]] = None,
+    allow_compatibility_default: bool = True,
     metadata: Optional[Mapping[str, object]] = None,
     branch_id: Optional[str] = None,
     expected_catalog_revision: Optional[int] = None,
@@ -512,7 +519,15 @@ def fork_edit_user(
     clean_text = core.validate_text(text, role="user")
     clean_model_id = core.validate_model_id(model_id)
     clean_input_mode = core.validate_input_mode(input_mode)
-    clean_metadata = core.copy_json_object(metadata or {}, "metadata")
+    assert isinstance(allow_compatibility_default, bool)
+    parsed_configuration = None
+    if generation_configuration is not None:
+        parsed_configuration = core.parse_generation_configuration(
+            generation_configuration,
+            expected_model_id=clean_model_id,
+            expected_input_mode=clean_input_mode,
+        )
+    clean_metadata = core.copy_user_metadata(metadata or {})
     with core.STORE_LOCK.held(results_dir):
         conversation_dir = core.resolve_conversation_dir(
             results_dir, conversation_id
@@ -531,16 +546,60 @@ def fork_edit_user(
             text=clean_text,
             model_id=clean_model_id,
             input_mode=clean_input_mode,
+            generation_configuration=parsed_configuration,
             metadata=clean_metadata,
         )
-        replayed = branches.replay_fork_operation_locked(
-            conversation_dir=conversation_dir,
-            state=state,
-            operation=operation,
-        )
+        try:
+            replayed = branches.replay_fork_operation_locked(
+                conversation_dir=conversation_dir,
+                state=state,
+                operation=operation,
+            )
+        except core.ConversationOperationConflictError:
+            if parsed_configuration is not None:
+                raise
+            replayed = None
         if replayed is not None:
             assert isinstance(replayed, core.EditUserForkResult)
             return replayed
+        if parsed_configuration is None:
+            if not allow_compatibility_default:
+                raise ValueError(
+                    "generation_configuration is required for a new"
+                    " edit fork"
+                )
+            clean_configuration = (
+                core.default_generation_configuration(
+                    model_id=clean_model_id,
+                    input_mode=clean_input_mode,
+                )
+            )
+            operation = branches.edit_fork_operation(
+                operation_id=operation_id,
+                source_branch_id=source_branch_id,
+                target_turn_id=user_turn_id,
+                text=clean_text,
+                model_id=clean_model_id,
+                input_mode=clean_input_mode,
+                generation_configuration=clean_configuration,
+                metadata=clean_metadata,
+            )
+            replayed = branches.replay_fork_operation_locked(
+                conversation_dir=conversation_dir,
+                state=state,
+                operation=operation,
+            )
+            if replayed is not None:
+                assert isinstance(replayed, core.EditUserForkResult)
+                return replayed
+        else:
+            clean_configuration = (
+                core.validate_generation_configuration(
+                    parsed_configuration,
+                    expected_model_id=clean_model_id,
+                    expected_input_mode=clean_input_mode,
+                )
+            )
         context = branches.prepare_fork_locked(
             conversation_dir=conversation_dir,
             state=state,
@@ -556,6 +615,7 @@ def fork_edit_user(
             text=clean_text,
             model_id=clean_model_id,
             input_mode=clean_input_mode,
+            generation_configuration=clean_configuration,
             metadata=clean_metadata,
         )
 
@@ -628,6 +688,8 @@ def fork_retry_assistant(
     expected_revision: int,
     model_id: str,
     input_mode: InputMode,
+    generation_configuration: Optional[Mapping[str, object]] = None,
+    allow_compatibility_default: bool = True,
     branch_id: Optional[str] = None,
     expected_catalog_revision: Optional[int] = None,
 ) -> RetryAssistantForkResult:
@@ -643,6 +705,14 @@ def fork_retry_assistant(
     )
     clean_model_id = core.validate_model_id(model_id)
     clean_input_mode = core.validate_input_mode(input_mode)
+    assert isinstance(allow_compatibility_default, bool)
+    parsed_configuration = None
+    if generation_configuration is not None:
+        parsed_configuration = core.parse_generation_configuration(
+            generation_configuration,
+            expected_model_id=clean_model_id,
+            expected_input_mode=clean_input_mode,
+        )
     with core.STORE_LOCK.held(results_dir):
         conversation_dir = core.resolve_conversation_dir(
             results_dir, conversation_id
@@ -660,17 +730,61 @@ def fork_retry_assistant(
             target_turn_id=assistant_turn_id,
             model_id=clean_model_id,
             input_mode=clean_input_mode,
+            generation_configuration=parsed_configuration,
         )
-        replayed = branches.replay_fork_operation_locked(
-            conversation_dir=conversation_dir,
-            state=state,
-            operation=operation,
-        )
+        try:
+            replayed = branches.replay_fork_operation_locked(
+                conversation_dir=conversation_dir,
+                state=state,
+                operation=operation,
+            )
+        except core.ConversationOperationConflictError:
+            if parsed_configuration is not None:
+                raise
+            replayed = None
         if replayed is not None:
             assert isinstance(
                 replayed, core.RetryAssistantForkResult
             )
             return replayed
+        if parsed_configuration is None:
+            if not allow_compatibility_default:
+                raise ValueError(
+                    "generation_configuration is required for a new"
+                    " retry fork"
+                )
+            clean_configuration = (
+                core.default_generation_configuration(
+                    model_id=clean_model_id,
+                    input_mode=clean_input_mode,
+                )
+            )
+            operation = branches.retry_fork_operation(
+                operation_id=operation_id,
+                source_branch_id=source_branch_id,
+                target_turn_id=assistant_turn_id,
+                model_id=clean_model_id,
+                input_mode=clean_input_mode,
+                generation_configuration=clean_configuration,
+            )
+            replayed = branches.replay_fork_operation_locked(
+                conversation_dir=conversation_dir,
+                state=state,
+                operation=operation,
+            )
+            if replayed is not None:
+                assert isinstance(
+                    replayed, core.RetryAssistantForkResult
+                )
+                return replayed
+        else:
+            clean_configuration = (
+                core.validate_generation_configuration(
+                    parsed_configuration,
+                    expected_model_id=clean_model_id,
+                    expected_input_mode=clean_input_mode,
+                )
+            )
         context = branches.prepare_fork_locked(
             conversation_dir=conversation_dir,
             state=state,
@@ -685,6 +799,7 @@ def fork_retry_assistant(
             operation=operation,
             model_id=clean_model_id,
             input_mode=clean_input_mode,
+            generation_configuration=clean_configuration,
         )
 
 
@@ -719,6 +834,8 @@ __all__ = (
     "EditUserForkResult",
     "FROZEN_NAME",
     "FrozenPayload",
+    "GENERATION_CONFIGURATION_CODEC_VERSION",
+    "GenerationConfigurationPayload",
     "IDENTIFIER_CHARS_MAX",
     "InputMode",
     "InvalidOperationIdError",
@@ -738,6 +855,7 @@ __all__ = (
     "OPERATION_ID_PATTERN",
     "PAGE_SIZE_DEFAULT",
     "PAGE_SIZE_MAX",
+    "PENDING_GENERATION_KEY",
     "RetryAssistantForkResult",
     "Role",
     "RunLink",

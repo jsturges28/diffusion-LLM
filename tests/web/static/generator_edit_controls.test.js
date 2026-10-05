@@ -39,6 +39,7 @@ class OpenSocket extends FakeSocket {}
 OpenSocket.OPEN = 1;
 
 const MASK = "\u2591";
+const SCHEMA_ID = "a".repeat(64);
 
 const DGEMMA = {
   id: "dgemma",
@@ -52,6 +53,7 @@ const DGEMMA = {
     unresolved_char: MASK,
     supported_devices: ["cuda"],
   },
+  generation_schema_ids: { cuda: SCHEMA_ID },
   param_specs: [],
   status: "active",
 };
@@ -78,6 +80,7 @@ const SMOL = {
     supports_substitution: true,
     supported_devices: ["cuda", "cpu"],
   },
+  generation_schema_ids: { cuda: SCHEMA_ID, cpu: SCHEMA_ID },
   param_specs: [],
   status: "active",
 };
@@ -160,6 +163,7 @@ function resident(model, worker) {
     type: "resident",
     model: model.id,
     device: "cuda",
+    generation_schema_id: SCHEMA_ID,
     operation: 1,
     worker: worker,
   };

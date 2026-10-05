@@ -53,6 +53,10 @@ const SMOL = {
       capture: "always",
     }],
   },
+  generation_schema_ids: {
+    cuda: "a".repeat(64),
+    cpu: "b".repeat(64),
+  },
   param_specs: [
     {
       name: "max_new_tokens",

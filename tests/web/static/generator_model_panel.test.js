@@ -16,6 +16,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const { loadPage } = require("./dom_stub.js");
+const SCHEMA_ID = "5".repeat(64);
 
 const SCRIPTS = [
   "custom_select.js",
@@ -45,6 +46,10 @@ const MODEL = {
     supported_devices: ["cuda", "cpu"],
     input_mode: "chat",
     unresolved_char: "?",
+  },
+  generation_schema_ids: {
+    cuda: SCHEMA_ID,
+    cpu: SCHEMA_ID,
   },
   param_specs: [
     {
@@ -156,6 +161,9 @@ const OTHER_MODEL = {
     family: "autoregressive",
     generation_shape: "append_only",
     supported_devices: ["cuda"],
+  },
+  generation_schema_ids: {
+    cuda: SCHEMA_ID,
   },
   param_specs: [],
   status: "idle",
@@ -375,6 +383,8 @@ test("conversation actions read current model and summary", () => {
     {
       modelId: "test-model",
       modelDisplay: "Test Model",
+      device: "cpu",
+      schemaId: SCHEMA_ID,
       inputMode: "chat",
       settingsSummary:
         "Gen Length 4, Steps 8, Temperature 0.7",
@@ -402,6 +412,45 @@ test("conversation actions read current model and summary", () => {
     h.panel.conversationConfiguration().settingsSummary,
     /Temperature 0.9/
   );
+});
+
+test("action factory seeds an independent fixed-model panel", () => {
+  const h = loadPanel({});
+  input(h, "temperature").value = "0.9";
+  input(h, "temperature").dispatch("input");
+  const storedBefore = h.page.sandbox.sessionStorage.getItem(
+    DRAFT_KEY
+  );
+  const mount = h.page.document.createElement("div");
+  h.page.document.body.appendChild(mount);
+
+  const local = h.panel.createActionRunSettings({
+    idPrefix: "action-0123456789abcdef-",
+    mount,
+  });
+  const temperature = local.root().querySelector(
+    "#action-0123456789abcdef-param-temperature"
+  );
+
+  assert.equal(temperature.value, "0.9");
+  assert.equal(local.snapshot().modelId, MODEL.id);
+  assert.equal(local.snapshot().device, "cpu");
+  assert.equal(local.snapshot().inputMode, "chat");
+  assert.equal(
+    local.root().classList.contains("run-settings-compact"),
+    true
+  );
+
+  temperature.value = "0.6";
+  temperature.dispatch("input");
+
+  assert.equal(input(h, "temperature").value, "0.9");
+  assert.equal(
+    h.page.sandbox.sessionStorage.getItem(DRAFT_KEY),
+    storedBefore
+  );
+  local.destroy();
+  assert.equal(mount.children.length, 0);
 });
 
 test("switch confirmation calls only the execution callback", () => {

@@ -27,6 +27,18 @@ var conversationActionViewCreate = (function () {
       dialog: function (kind) {
         return dialogFor(owner, kind).dialog;
       },
+      dialogSettingsMount: function (kind) {
+        var mount = dialogFor(owner, kind).settings;
+        if (!mount) {
+          throw new Error(
+            "Dialog has no Run settings mount"
+          );
+        }
+        return mount;
+      },
+      editSettingsMount: function (turnId) {
+        return editSettingsMount(owner, turnId);
+      },
       decorateTurn: function (settings) {
         decorateTurn(owner, settings);
       },
@@ -369,6 +381,7 @@ var conversationActionViewCreate = (function () {
       form.appendChild(editInput(settings));
     }
     form.appendChild(editNote(settings.edit.configuration));
+    form.appendChild(editSettings(settings));
     form.appendChild(editButtons(settings.edit));
     return form;
   }
@@ -411,12 +424,23 @@ var conversationActionViewCreate = (function () {
     var note = document.createElement("p");
     note.className = "conversation-inline-edit-note";
     note.textContent =
-      "Saving creates an alternate path and regenerates with "
-      + modelLabel(configuration) + ". "
-      + "Input mode: " + configuration.inputMode + ". "
-      + "Current Run settings: "
-      + configuration.settingsSummary + ".";
+      "Regenerate with " + modelLabel(configuration) + ". "
+      + "Device: " + deviceLabel(configuration.device) + ". "
+      + "Input mode: " + configuration.inputMode + ".";
     return note;
+  }
+
+  function editSettings(settings) {
+    var mount = document.createElement("div");
+    mount.className = "conversation-action-settings";
+    mount.setAttribute(
+      "data-conversation-edit-settings",
+      settings.turn.turn_id
+    );
+    if (settings.edit.settingsRoot !== null) {
+      mount.appendChild(settings.edit.settingsRoot);
+    }
+    return mount;
   }
 
   function editButtons(edit) {
@@ -701,6 +725,18 @@ var conversationActionViewCreate = (function () {
     return true;
   }
 
+  function editSettingsMount(owner, turnId) {
+    var selector =
+      "[data-conversation-edit-settings=\"" + turnId + "\"]";
+    var mount = owner.root.querySelector(selector);
+    if (!mount) {
+      throw new Error(
+        "Editable conversation card has no Run settings mount"
+      );
+    }
+    return mount;
+  }
+
   function focusTurn(owner, turnId) {
     var element = owner.root.querySelector(
       "[data-turn-id=\"" + turnId + "\"]"
@@ -780,6 +816,16 @@ var conversationActionViewCreate = (function () {
       + " (" + configuration.modelId + ")";
   }
 
+  function deviceLabel(device) {
+    if (device === "cuda") {
+      return "GPU";
+    }
+    if (device === "cpu") {
+      return "CPU";
+    }
+    return String(device).toUpperCase();
+  }
+
   function branchKey(point) {
     return point.turn_index + ":" + point.source_branch_id;
   }
@@ -824,6 +870,9 @@ var conversationActionViewCreate = (function () {
       confirm: requiredElement(
         "btn-conversation-" + kind + "-confirm"
       ),
+      settings: kind === "retry"
+        ? requiredElement("conversation-retry-settings")
+        : null,
     };
   }
 

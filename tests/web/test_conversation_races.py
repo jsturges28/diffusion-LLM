@@ -17,6 +17,7 @@ from typing import Callable
 
 from src.web import _conversation_branch_store as branch_store
 from src.web import _conversation_store_core as core_store
+from src.web import conversation_generation
 from src.web import conversation_store as store
 
 from process_race import race_context
@@ -24,6 +25,34 @@ from process_race import race_context
 
 PROCESS_COUNT = 6
 PAUSE_SECONDS = 0.05
+
+
+def _generation_configuration() -> dict[str, object]:
+    """Build the exact deferred snapshot shared by race processes."""
+    return {
+        "codec_version": (
+            store.GENERATION_CONFIGURATION_CODEC_VERSION
+        ),
+        "model_id": "llada",
+        "input_mode": "chat",
+        "device": "cuda",
+        "schema_id": (
+            conversation_generation.registry_generation_schema_id(
+                "llada", "cuda"
+            )
+        ),
+        "experimental": False,
+        "parameters": {
+            "steps": 128,
+            "gen_length": 160,
+            "block_length": 160,
+            "temperature": 0.7,
+            "cfg_scale": 0.0,
+            "seed": -1,
+            "remasking": "low_confidence",
+            "alternatives": True,
+        },
+    }
 
 
 def _pause_manifest_publication() -> None:
@@ -152,6 +181,7 @@ def _race_retry_fork(
             expected_catalog_revision=expected_catalog_revision,
             model_id="llada",
             input_mode="chat",
+            generation_configuration=_generation_configuration(),
         )
 
     _record(root, "fork", index, mutate)
@@ -177,6 +207,7 @@ def _race_duplicate_retry(
         expected_catalog_revision=expected_catalog_revision,
         model_id="llada",
         input_mode="chat",
+        generation_configuration=_generation_configuration(),
     )
     (root / f"duplicate-{index}.txt").write_text(
         result.branch.branch_id,
@@ -526,6 +557,14 @@ def test_concurrent_duplicate_fork_replays_one_branch(
     assert listed.catalog.revision == catalog.revision + 1
     assert {path.name for path in operations_root.iterdir()} == {
         f"{'d' * 32}.json"
+    }
+    pending = store.get_turns(
+        tmp_path,
+        created.id,
+        branch_id=listed.catalog.default_branch_id,
+    ).turns[-1]
+    assert pending.metadata == {
+        store.PENDING_GENERATION_KEY: _generation_configuration()
     }
 
 

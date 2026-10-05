@@ -22,6 +22,21 @@ const BRANCH_ID = "b_" + "b".repeat(32);
 const BRANCH_B = "b_" + "c".repeat(32);
 const BRANCH_C = "b_" + "d".repeat(32);
 const OPERATION_ID = "1".repeat(32);
+const SCHEMA_ID = "2".repeat(64);
+
+function generationConfiguration() {
+  return {
+    modelId: "llada",
+    inputMode: "chat",
+    device: "cuda",
+    schemaId: SCHEMA_ID,
+    experimental: false,
+    parameters: {
+      steps: 128,
+      temperature: 0.5,
+    },
+  };
+}
 
 function load() {
   const context = vm.createContext({
@@ -32,6 +47,7 @@ function load() {
     encodeURIComponent,
   });
   for (const name of [
+    "conversation_generation.js",
     "conversation_state.js",
     "conversation_client.js",
   ]) {
@@ -329,8 +345,10 @@ test("concurrent fork metadata refreshes after local append",
       deleted_branch_ids: [],
     }],
   });
+  let appendBody = null;
   const h = harness((url, init) => {
     if (init.method === "POST") {
+      appendBody = JSON.parse(init.body);
       return response({
         conversation: changedManifest,
         user_turn: user,
@@ -356,6 +374,7 @@ test("concurrent fork metadata refreshes after local append",
   assert.equal(state.turns.at(-2).text, "local append");
   assert.equal(state.turns.at(-1).partial, true);
   assert.equal(state.branchPoints.length, 1);
+  assert.equal("generation_configuration" in appendBody, false);
 });
 
 test("completion refuses a revision replaced by another window",
@@ -530,11 +549,24 @@ test("branch catalog and fork methods carry both CAS revisions",
           modelId: "llada",
           inputMode: "chat",
           metadata: {},
+          configuration: generationConfiguration(),
         });
       },
       result: {
         user_turn: turn(1, 1, { text: "edited" }),
         assistant_turn: turn(2, 2),
+        generation_configuration: {
+          codec_version: 1,
+          model_id: "llada",
+          input_mode: "chat",
+          device: "cuda",
+          schema_id: SCHEMA_ID,
+          experimental: false,
+          parameters: {
+            steps: 128,
+            temperature: 0.5,
+          },
+        },
       },
     },
     {
@@ -555,10 +587,23 @@ test("branch catalog and fork methods carry both CAS revisions",
           assistantTurnId: turnId(2),
           modelId: "llada",
           inputMode: "chat",
+          configuration: generationConfiguration(),
         });
       },
       result: {
         assistant_turn: turn(2, 2),
+        generation_configuration: {
+          codec_version: 1,
+          model_id: "llada",
+          input_mode: "chat",
+          device: "cuda",
+          schema_id: SCHEMA_ID,
+          experimental: false,
+          parameters: {
+            steps: 128,
+            temperature: 0.5,
+          },
+        },
       },
     },
   ];
@@ -589,7 +634,7 @@ test("branch catalog and fork methods carry both CAS revisions",
       ));
     });
 
-    await scenario.invoke(h.client);
+    const result = await scenario.invoke(h.client);
 
     const mutation = calls.find((call) =>
       call.init.method === "POST"
@@ -600,6 +645,30 @@ test("branch catalog and fork methods carry both CAS revisions",
     assert.equal(body.branch_revision, 3);
     assert.equal(body.catalog_revision, 1);
     assert.equal(body.operation_id, OPERATION_ID);
+    if (scenario.suffix.includes("delete-from-path")) {
+      assert.equal("generation_configuration" in body, false);
+    } else {
+      assert.deepEqual(body.generation_configuration, {
+        codec_version: 1,
+        model_id: "llada",
+        input_mode: "chat",
+        device: "cuda",
+        schema_id: SCHEMA_ID,
+        experimental: false,
+        parameters: {
+          steps: 128,
+          temperature: 0.5,
+        },
+      });
+      assert.equal(
+        result.store_configuration.schemaId,
+        SCHEMA_ID
+      );
+      assert.equal(
+        result.store_configuration.parameters.temperature,
+        0.5
+      );
+    }
   }
 });
 

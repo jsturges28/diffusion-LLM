@@ -13,6 +13,7 @@ const test = require("node:test");
 const { loadPage } = require("./dom_stub.js");
 
 const SCRIPTS = ["run_settings_core.js"];
+const SCHEMA_ID = "3".repeat(64);
 
 const SPECS = [
   {
@@ -165,7 +166,7 @@ test("wire values keep each declared parameter type", () => {
   const values = core.parameterValues(
     SPECS,
     rawValues({
-      gen_length: "12.9",
+      gen_length: "1.2e1",
       temperature: "0.95",
       strategy: "random",
       capture: false,
@@ -181,6 +182,26 @@ test("wire values keep each declared parameter type", () => {
     strategy: "random",
     capture: false,
   });
+});
+
+test("integer validation and snapshots use the same parser", () => {
+  const core = harness();
+  const raw = rawValues({ gen_length: "12.9" });
+  const validation = core.validate({
+    specs: SPECS,
+    rawValues: raw,
+    device: "cuda",
+    experimental: false,
+  });
+
+  assert.equal(
+    validation.message,
+    "Gen Length must be a whole number."
+  );
+  assert.equal(
+    core.parameterValues(SPECS, raw, false).gen_length,
+    12.9
+  );
 });
 
 test("experimental-only values and errors are omitted until enabled",
@@ -339,6 +360,23 @@ test("steps must divide by the derived block count", () => {
   assert.deepEqual(host(validation.invalidNames), ["steps"]);
 });
 
+test("divisibility uses the same exponent-aware integer parser", () => {
+  const core = harness();
+  const validation = core.validate({
+    specs: SPECS,
+    rawValues: rawValues({
+      gen_length: "1.2e1",
+      block_length: "4e0",
+      steps: "9e0",
+    }),
+    device: "cuda",
+    experimental: false,
+  });
+
+  assert.equal(validation.valid, true);
+  assert.deepEqual(host(validation.errors), []);
+});
+
 test("partial schemas do not acquire diffusion arithmetic", () => {
   const core = harness();
   const validation = core.validate({
@@ -397,12 +435,14 @@ test("configuration snapshots are detached and frozen", () => {
     specs: SPECS,
     rawValues: raw,
     device: "cpu",
+    schemaId: SCHEMA_ID,
     experimental: false,
   });
 
   raw.gen_length = "8";
 
   assert.equal(snapshot.parameters.gen_length, 4);
+  assert.equal(snapshot.device, "cpu");
   assert.equal(Object.isFrozen(snapshot), true);
   assert.equal(Object.isFrozen(snapshot.parameters), true);
   assert.equal(snapshot.valid, true);
@@ -419,6 +459,7 @@ test("invalid snapshots retain exact launch-blocking status", () => {
     specs: SPECS,
     rawValues: rawValues({ steps: "7" }),
     device: "cuda",
+    schemaId: SCHEMA_ID,
     experimental: false,
   });
 
@@ -438,6 +479,7 @@ test("snapshot identity rejects missing model context", () => {
     specs: SPECS,
     rawValues: rawValues(),
     device: "cuda",
+    schemaId: SCHEMA_ID,
     experimental: false,
   };
 
@@ -453,6 +495,12 @@ test("snapshot identity rejects missing model context", () => {
     ),
     /input mode/
   );
+  assert.throws(
+    () => core.configurationSnapshot(
+      Object.assign({}, base, { device: null })
+    ),
+    /active device/
+  );
 });
 
 test("schema reads do not mutate registry objects", () => {
@@ -464,6 +512,7 @@ test("schema reads do not mutate registry objects", () => {
     specs: SPECS,
     rawValues: rawValues(),
     device: "cpu",
+    schemaId: SCHEMA_ID,
     experimental: false,
   });
   core.configurationSnapshot({
@@ -473,6 +522,7 @@ test("schema reads do not mutate registry objects", () => {
     specs: SPECS,
     rawValues: rawValues(),
     device: "cpu",
+    schemaId: SCHEMA_ID,
     experimental: false,
   });
 

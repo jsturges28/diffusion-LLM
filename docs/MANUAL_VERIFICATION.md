@@ -344,9 +344,10 @@ kept when these were written:
   conversation boundaries, evaluation controls and accessibility.
 - **438 to 448**: **not yet validated.** These cover the
   chronology-first chat layout, accessible message actions, alternate
-  paths, all-model regeneration, path-local saved links, concurrency
-  and dropped replies, branch bounds and paging, transition guards,
-  restart and legacy behavior, and an optional real power-loss check.
+  paths, independent action-local Run settings, all-model regeneration,
+  path-local saved links, concurrency and dropped replies, branch bounds
+  and paging, transition guards, restart and legacy behavior, and an
+  optional real power-loss check.
 - **449 to 450**: **not yet validated.** These cover native desktop
   message copy and stable completed-canvas height while scrubbing.
 
@@ -5256,13 +5257,29 @@ models and target devices before anyone raises or lowers them.
     LLaDA, DiffusionGemma, SmolLM3 and Mamba-3, make the model resident,
     choose distinctive valid Run settings, then Edit an existing user
     message and Retry a completed assistant that was originally generated
-    with different settings. Before confirmation, the inline note or
-    dialog must name the current model, input mode and setting summary.
-    Controls and model switching must lock while that action is open.
+    with different settings. Each action must open a compact disclosure
+    seeded from the Draft. Change its values, toggle Experimental where
+    supported, and use Reset; none may alter the Draft chips or persisted
+    Draft values. Enter an invalid value while collapsed: confirmation
+    must expand the panel, announce every error and focus the first invalid
+    control. Check mouse, touch and keyboard tooltip access, including
+    Escape while focus stays on the icon. At narrow width, reach every
+    setting and both Retry buttons by keyboard, and confirm collapsed chips
+    retain accessible parameter names.
+
+    On the first valid confirmation, the panel must become read-only while
+    remaining expandable. Controls and model switching must stay locked.
     The resulting run and saved metadata must use that frozen
-    configuration, not the source response's model or later control
-    changes. The three instruction models must receive chat messages;
-    Mamba-3 must receive raw chronological completion text.
+    configuration, not the source response's settings or later Draft
+    changes. Drop the fork response once and verify replay uses one
+    operation and the same settings. Then interrupt the connection after
+    branch creation, reload, change the Draft, and press **Send**: the
+    pending assistant must still use its reserved snapshot. A model,
+    device or generation-schema mismatch must refuse launch with recovery
+    guidance instead of clamping. A legacy pending response with no
+    snapshot must request valid current Draft settings without claiming
+    guessed defaults. The three instruction models must receive chat
+    messages; Mamba-3 must receive raw chronological completion text.
 
 443. **Saved and Text only state belongs to each path.** Save the source
     response, create a Retry path and leave its new response unsaved, then

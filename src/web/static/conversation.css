@@ -520,6 +520,29 @@
   cursor: wait;
 }
 
+.conversation-action-settings:empty {
+  display: none;
+}
+
+.conversation-retry-box {
+  display: flex;
+  max-width: 680px;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.conversation-retry-box .modal-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: var(--border) transparent;
+  scrollbar-width: thin;
+}
+
+.conversation-retry-box .modal-footer {
+  flex: 0 0 auto;
+}
+
 .conversation-run-link {
   margin-left: auto;
   color: #78c8ff;
@@ -771,6 +794,16 @@
     min-width: 104px;
     padding-right: 12px;
     padding-left: 12px;
+  }
+
+  .conversation-retry-box {
+    width: calc(100% - 20px);
+    max-height: calc(100dvh - 20px);
+    padding: 16px;
+  }
+
+  .conversation-retry-box .modal-footer {
+    flex-wrap: wrap;
   }
 }
 

@@ -97,6 +97,14 @@
   transform: rotate(180deg);
 }
 
+.run-settings.is-disabled {
+  opacity: 0.68;
+}
+
+.run-settings.is-disabled .run-settings-summary {
+  cursor: pointer;
+}
+
 .run-settings-body,
 #run-settings-body {
   max-height: min(42vh, 360px);
@@ -229,6 +237,43 @@
   visibility: hidden;
 }
 
+.run-settings-compact .run-settings-summary {
+  min-height: 30px;
+  padding: 4px 7px;
+}
+
+.run-settings-compact .run-settings-body {
+  max-height: min(38vh, 300px);
+  padding: 7px;
+}
+
+.run-settings-compact .run-settings-param-fields {
+  gap: 8px;
+  grid-template-columns:
+    repeat(auto-fit, minmax(min(100%, 190px), 1fr));
+}
+
+.run-settings-compact .run-settings-group {
+  padding: 6px;
+}
+
+.run-settings-compact .run-settings-group-controls {
+  gap: 7px;
+}
+
+.run-settings .info-icon:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.run-settings .info-icon.is-open .tooltip {
+  display: block;
+}
+
+.run-settings .info-icon[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .run-settings-chevron {
     transition: none;
@@ -247,6 +292,22 @@
   }
 
   .run-settings-chip-label {
-    display: none;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .run-settings-compact .run-settings-body {
+    max-height: min(44dvh, 320px);
+  }
+
+  .run-settings-compact .run-settings-param-fields {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

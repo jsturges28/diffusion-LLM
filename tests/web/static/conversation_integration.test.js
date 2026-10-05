@@ -41,6 +41,7 @@ const MODEL = {
     unresolved_char: "\u2591",
     supports_resume: true,
   },
+  generation_schema_ids: { cuda: "c".repeat(64) },
   param_specs: [],
   status: "active",
 };

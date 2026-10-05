@@ -27,6 +27,7 @@ from typing import Any, Dict, Iterator, List, Optional
 import pytest
 from fastapi.testclient import TestClient
 
+from src.backends.registry import REGISTRY
 from src.web import model_manager, server
 
 STATIC = (
@@ -278,6 +279,23 @@ def test_a_model_reads_the_same_either_way(
         full = by_id[model["id"]]
         for key, value in model.items():
             assert full[key] == value, key
+
+
+def test_every_model_payload_has_all_device_schema_ids() -> None:
+    """The browser can compare any resident model/device pair."""
+    payload = server._models_boot_state()
+    by_id = {model["id"]: model for model in payload["models"]}
+
+    assert set(by_id) == set(REGISTRY)
+    for model_id, registered in REGISTRY.items():
+        identifiers = by_id[model_id]["generation_schema_ids"]
+        assert set(identifiers) == set(
+            registered.capabilities.supported_devices
+        )
+        assert all(
+            re.fullmatch(r"[0-9a-f]{64}", identifier)
+            for identifier in identifiers.values()
+        )
 
 
 def test_the_inlined_payload_omits_the_probed_fields(

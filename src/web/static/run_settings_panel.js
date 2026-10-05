@@ -9,6 +9,7 @@
 function runSettingsPanelCreate(options) {
   var settings = options || {};
   var core = runSettingsCoreCreate();
+  var ID_PREFIX_LENGTH_MAX = 64;
   var GROUP_LABELS = {
     general: "General",
     output: "Output",
@@ -65,6 +66,17 @@ function runSettingsPanelCreate(options) {
   if (!settings.root && idPrefix === "") {
     throw new TypeError(
       "Mounted Run settings needs a unique idPrefix"
+    );
+  }
+  if (
+    !settings.root
+    && (
+      idPrefix.length > ID_PREFIX_LENGTH_MAX
+      || !/^[a-z][a-z0-9-]*-$/.test(idPrefix)
+    )
+  ) {
+    throw new TypeError(
+      "Mounted Run settings idPrefix must be bounded and canonical"
     );
   }
 
@@ -143,11 +155,61 @@ function runSettingsPanelCreate(options) {
       + "parameter bounds. Extreme values may produce unstable "
       + "results.";
     info.appendChild(tooltip);
+    configureInfoIcon(
+      info,
+      tooltip,
+      elementId("experimental-tooltip")
+    );
+    return info;
+  }
+
+  function configureInfoIcon(info, tooltip, tooltipId) {
+    if (info._runSettingsInfoConfigured === true) {
+      return;
+    }
+    info._runSettingsInfoConfigured = true;
+    info.tabIndex = 0;
+    info.setAttribute("role", "button");
+    info.setAttribute("aria-expanded", "false");
+    info.setAttribute("aria-describedby", tooltipId);
+    tooltip.id = tooltipId;
+    tooltip.setAttribute("role", "tooltip");
     info.addEventListener("click", function (event) {
       event.preventDefault();
       event.stopPropagation();
+      if (info.getAttribute("aria-disabled") === "true") {
+        setInfoOpen(info, false);
+        return;
+      }
+      setInfoOpen(
+        info, !info.classList.contains("is-open")
+      );
     });
-    return info;
+    info.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setInfoOpen(info, false);
+        return;
+      }
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        if (info.getAttribute("aria-disabled") === "true") {
+          setInfoOpen(info, false);
+          return;
+        }
+        setInfoOpen(
+          info, !info.classList.contains("is-open")
+        );
+      }
+    });
+    info.addEventListener("blur", function () {
+      setInfoOpen(info, false);
+    });
+  }
+
+  function setInfoOpen(info, open) {
+    info.classList.toggle("is-open", open);
+    info.setAttribute("aria-expanded", open ? "true" : "false");
   }
 
   function buildResetButton() {
@@ -300,6 +362,7 @@ function runSettingsPanelCreate(options) {
   var modelId = null;
   var modelDisplay = "";
   var device = null;
+  var schemaId = null;
   var inputMode = null;
   var allModels = [];
   var inputs = {};
@@ -342,6 +405,7 @@ function runSettingsPanelCreate(options) {
       return;
     }
     wired = true;
+    configureExistingInfoIcons();
     listen(
       refs.experimental,
       "change",
@@ -361,6 +425,20 @@ function runSettingsPanelCreate(options) {
       rootListeners
     );
     syncExpanded();
+  }
+
+  function configureExistingInfoIcons() {
+    var icons = refs.root.querySelectorAll(".info-icon");
+    for (var index = 0; index < icons.length; index++) {
+      var tooltip = icons[index].querySelector(".tooltip");
+      if (tooltip) {
+        configureInfoIcon(
+          icons[index],
+          tooltip,
+          elementId("existing-tooltip-" + index)
+        );
+      }
+    }
   }
 
   function syncExpanded() {
@@ -490,10 +568,11 @@ function runSettingsPanelCreate(options) {
     var tooltip = document.createElement("span");
     tooltip.className = "tooltip";
     info.appendChild(tooltip);
-    info.addEventListener("click", function (event) {
-      event.preventDefault();
-      event.stopPropagation();
-    });
+    configureInfoIcon(
+      info,
+      tooltip,
+      elementId("tooltip-" + spec.name)
+    );
     tooltips[spec.name] = tooltip;
     return info;
   }
@@ -613,7 +692,7 @@ function runSettingsPanelCreate(options) {
     }
   }
 
-  function applyInputLimit(spec) {
+  function applyInputLimit(spec, clampValue) {
     var input = inputs[spec.name];
     if (!input || input.type !== "number") {
       return;
@@ -628,19 +707,21 @@ function runSettingsPanelCreate(options) {
     }
     input.min = range.min;
     input.max = range.max;
-    input.value = core.clampRawValue(
-      spec,
-      input.value,
-      device,
-      refs.experimental.checked
-    );
+    if (clampValue) {
+      input.value = core.clampRawValue(
+        spec,
+        input.value,
+        device,
+        refs.experimental.checked
+      );
+    }
   }
 
   function applyLimits() {
     applyControlVisibility();
     var specs = specsRead();
     for (var index = 0; index < specs.length; index++) {
-      applyInputLimit(specs[index]);
+      applyInputLimit(specs[index], true);
     }
     updateTooltips();
     validateAndRender();
@@ -697,6 +778,8 @@ function runSettingsPanelCreate(options) {
     var names = Object.keys(inputs);
     for (var index = 0; index < names.length; index++) {
       inputs[names[index]].classList.remove("input-warn");
+      inputs[names[index]].removeAttribute("aria-invalid");
+      inputs[names[index]].removeAttribute("aria-describedby");
     }
   }
 
@@ -710,8 +793,16 @@ function runSettingsPanelCreate(options) {
       var input = inputs[invalidNames[index]];
       if (input) {
         input.classList.add("input-warn");
+        input.setAttribute("aria-invalid", "true");
+        input.setAttribute(
+          "aria-describedby", refs.validation.id
+        );
       }
     }
+  }
+
+  function validationText() {
+    return validationState.errors.join(" ");
   }
 
   function revealFirstInvalid() {
@@ -738,7 +829,7 @@ function runSettingsPanelCreate(options) {
     });
     applyWarnings(validationState.invalidNames);
     refs.validation.hidden = validationState.valid;
-    refs.validation.textContent = validationState.message;
+    refs.validation.textContent = validationText();
     if (!validationState.valid && !refs.root.open) {
       revealFirstInvalid();
     }
@@ -763,6 +854,11 @@ function runSettingsPanelCreate(options) {
     value.textContent = core.summaryValue(
       spec, rawValues[spec.name]
     );
+    chip.setAttribute(
+      "aria-label",
+      spec.label + " " + value.textContent
+    );
+    chip.setAttribute("role", "group");
     chip.appendChild(label);
     chip.appendChild(value);
     refs.chips.appendChild(chip);
@@ -783,6 +879,15 @@ function runSettingsPanelCreate(options) {
     return Object.freeze({
       experimental: refs.experimental.checked,
       params: Object.freeze(currentRawValues()),
+    });
+  }
+
+  function formStateRead() {
+    ensureAlive();
+    return Object.freeze({
+      modelId: modelId,
+      experimental: refs.experimental.checked,
+      parameters: Object.freeze(currentRawValues()),
     });
   }
 
@@ -816,7 +921,7 @@ function runSettingsPanelCreate(options) {
     return null;
   }
 
-  function applyRawValue(spec, stored) {
+  function applyRawValue(spec, stored, clampValue) {
     var input = inputs[spec.name];
     if (!input) {
       return;
@@ -831,10 +936,19 @@ function runSettingsPanelCreate(options) {
       }
       return;
     }
-    input.value = String(stored);
+    input.value = String(
+      clampValue
+        ? core.clampRawValue(
+          spec,
+          stored,
+          device,
+          refs.experimental.checked
+        )
+        : stored
+    );
   }
 
-  function applyState(state) {
+  function applyState(state, options) {
     ensureAlive();
     if (!model || !state) {
       return;
@@ -845,18 +959,28 @@ function runSettingsPanelCreate(options) {
       );
     }
     refs.experimental.checked = state.experimental === true;
+    var clampValues = Boolean(options && options.clamp);
+    applyControlVisibility();
     var values = storedValues(state);
     var specs = specsRead();
+    for (var limitIndex = 0;
+      limitIndex < specs.length;
+      limitIndex++) {
+      applyInputLimit(specs[limitIndex], false);
+    }
     if (values) {
       for (var index = 0; index < specs.length; index++) {
         if (values[specs[index].name] !== undefined) {
           applyRawValue(
-            specs[index], values[specs[index].name]
+            specs[index],
+            values[specs[index].name],
+            clampValues
           );
         }
       }
     }
-    applyLimits();
+    updateTooltips();
+    validateAndRender();
     updateResetButton();
   }
 
@@ -910,6 +1034,7 @@ function runSettingsPanelCreate(options) {
     modelId = configuration.modelId || null;
     modelDisplay = configuration.modelDisplay || "";
     device = configuration.device || null;
+    schemaId = generationSchemaId(model, device);
     inputMode = configuration.inputMode || null;
     allModels = Array.isArray(configuration.models)
       ? configuration.models
@@ -933,13 +1058,38 @@ function runSettingsPanelCreate(options) {
     applyUniformWidth();
     remeasureWhenFontReady();
     var seed = configuration.seed;
+    var persisted = false;
     if (seed === undefined && readPersistedState) {
       seed = readPersistedState(modelId);
+      persisted = seed !== null && seed !== undefined;
     }
     if (seed) {
-      applyState(seed);
+      applyState(seed, { clamp: persisted });
     }
     updateResetButton();
+  }
+
+  function generationSchemaId(selectedModel, selectedDevice) {
+    if (!selectedModel || selectedDevice === null) {
+      return null;
+    }
+    var identifiers = selectedModel.generation_schema_ids;
+    if (!identifiers || typeof identifiers !== "object") {
+      return null;
+    }
+    var identifier = identifiers[selectedDevice];
+    if (identifier === undefined || identifier === null) {
+      return null;
+    }
+    if (
+      typeof identifier !== "string"
+      || !/^[0-9a-f]{64}$/.test(identifier)
+    ) {
+      throw new Error(
+        "Run settings device has no generation schema identity"
+      );
+    }
+    return identifier;
   }
 
   function parameterValuesRead() {
@@ -994,6 +1144,7 @@ function runSettingsPanelCreate(options) {
       specs: specsRead(),
       rawValues: currentRawValues(),
       device: device,
+      schemaId: schemaId,
       experimental: refs.experimental.checked,
     });
   }
@@ -1001,6 +1152,7 @@ function runSettingsPanelCreate(options) {
   function setDisabled(nextDisabled) {
     ensureAlive();
     disabled = nextDisabled === true;
+    refs.root.classList.toggle("is-disabled", disabled);
     refs.experimental.disabled = disabled;
     var names = Object.keys(inputs);
     for (var index = 0; index < names.length; index++) {
@@ -1122,6 +1274,7 @@ function runSettingsPanelCreate(options) {
     outputBudget: outputBudgetRead,
     validation: validationRead,
     snapshot: snapshotRead,
+    formState: formStateRead,
     root: rootRead,
     destroy: destroy,
   });

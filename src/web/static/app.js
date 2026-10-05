@@ -23,6 +23,9 @@ var conversationActions = conversationActionsCreate({
   readConfiguration: function () {
     return generatorModelPanel.conversationConfiguration();
   },
+  createRunSettingsPanel: function (settings) {
+    return generatorModelPanel.createActionRunSettings(settings);
+  },
   readBlockReason: conversationActionBlockReason,
   requestRender: function () {
     renderConversation(null);
@@ -32,6 +35,7 @@ var conversationActions = conversationActionsCreate({
   editUser: editConversationUserFork,
   deleteUser: deleteConversationFromPathFork,
   retryAssistant: retryConversationAssistantFork,
+  launchGeneration: launchConversationForkGeneration,
   createOperationId: createConversationOperationId,
 });
 var conversationView = conversationViewCreate({
@@ -78,6 +82,22 @@ var generatorModelPanel = generatorModelPanelCreate({
     return appSettings.gpuTicker;
   },
 });
+var pendingGenerationController =
+  pendingGenerationControllerCreate({
+    readState: function () {
+      return conversationState;
+    },
+    readActiveModel: generatorModelPanel.activeModel,
+    readActiveModelId: generatorModelPanel.activeModelId,
+    readActiveDevice: generatorModelPanel.activeDevice,
+    readInputMode: function () {
+      return generatorModelPanel.capabilities().input_mode;
+    },
+    readDraftConfiguration:
+      generatorModelPanel.conversationConfiguration,
+    readDraftValidation: generatorModelPanel.validation,
+    modelDisplayName: generatorModelPanel.modelDisplayName,
+  });
 var generatorChrome = generatorChromeCreate({
   onTpsToggle: toggleTpsMode,
   readReducedMotion: prefersReducedMotion,
@@ -467,13 +487,11 @@ function handleModelStatus(data) {
 // for, in which case the only question left is whether it is still
 // the worker that made the run on screen (adoptResidentWorker).
 //
-// When it is not, another window switched the model out from under
-// us. This page's cached model, device, capability gates and entire
-// parameter form describe a worker that no longer exists, so a
-// Generate from here would be labelled and parameterised for one
-// model and answered by another, often accepted through defaults
-// rather than refused. Reloading is what makes the page describe
-// what is actually there.
+// When the model, device, or generation schema differs, this page's
+// cached capability gates and parameter form no longer describe the
+// worker. A Generate from here could otherwise be accepted through
+// changed defaults or bounds. Reloading makes the page describe what
+// is actually there.
 function handleResident(data) {
   if (!data || !data.model) {
     return;
@@ -483,7 +501,10 @@ function handleResident(data) {
   var sameModel = data.model === activeId;
   var sameDevice =
     !data.device || !activeDevice || data.device === activeDevice;
-  if (sameModel && sameDevice) {
+  var activeSchema = activeGenerationSchemaId(activeDevice);
+  var sameSchema =
+    data.generation_schema_id === activeSchema;
+  if (sameModel && sameDevice && sameSchema) {
     adoptResidentWorker(data.worker);
     return;
   }
@@ -495,23 +516,42 @@ function handleResident(data) {
   generatorSocket.setReconnectSuppressed(true);
   updateGenerateButton();
   var name = generatorModelPanel.modelDisplayName(data.model);
+  var settingsChanged = sameModel && sameDevice;
   generatorChrome.setConnection("loading");
   generatorChrome.setLoadingText(
-    "Model changed to " + name + "\u2026"
+    settingsChanged
+      ? "Run settings changed for " + name + "\u2026"
+      : "Model changed to " + name + "\u2026"
   );
   generatorChrome.setLoadingProgress("idle", null);
   raiseLoadingOverlay();
   generatorChrome.setMessage(
-    "The model was changed to " + name + " in another window."
+    settingsChanged
+      ? "The Run settings schema for " + name
+        + " changed. Reloading the current app."
+      : "The model was changed to " + name + " in another window."
   );
   rescueRunThenReload();
 }
 
-// The same model and device, which may still be a different worker:
-// loaded again from another window, or after the supervisor restarted.
-// Everything this page was built for still holds, its model, device
-// and form, so nothing reloads. Only the run on screen goes stale,
-// held by no live worker, and it locks in place, still savable.
+function activeGenerationSchemaId(activeDevice) {
+  var model = generatorModelPanel.activeModel();
+  var identifiers = model && model.generation_schema_ids;
+  var identifier = identifiers && identifiers[activeDevice];
+  if (
+    typeof identifier !== "string"
+    || !/^[0-9a-f]{64}$/.test(identifier)
+  ) {
+    return "";
+  }
+  return identifier;
+}
+
+// The same model, device, and generation schema may still be a
+// different worker: loaded again from another window, or after the
+// supervisor restarted. Everything this page was built for still
+// holds, so nothing reloads. Only the run on screen goes stale, held
+// by no live worker, and it locks in place, still savable.
 //
 // The edit controller closes an open session unless it holds a
 // branch the page can still save. Confirm needs no worker.
@@ -1041,7 +1081,7 @@ function updateGenerateButton() {
       || generatorRun.saving()
       || !(
         modelReady
-        && generatorModelPanel.validation().valid
+        && pendingGenerationController.settingsValid()
       );
   }
   btnNewConversation.disabled =
@@ -1196,7 +1236,7 @@ function applyConversationAction(action) {
     conversationState, action
   );
   conversationState = nextState;
-  conversationActions.reconcile();
+  conversationActions.reconcile(action);
   var runIdentity = generatorRun
     ? generatorRun.conversationIdentity()
     : null;
@@ -1343,30 +1383,6 @@ function conversationPromptForSend() {
     return activeUser ? activeUser.text : "";
   }
   return generatorComposer.trimmedValue();
-}
-
-function conversationPendingMatchesModel() {
-  var conversation = conversationState.conversation;
-  if (
-    !conversation
-    || conversation.pending_assistant_id === null
-  ) {
-    return true;
-  }
-  var assistant = conversationStateTailAssistant(
-    conversationState
-  );
-  var modelId = generatorModelPanel.activeModelId();
-  if (assistant && assistant.model_id === modelId) {
-    return true;
-  }
-  generatorChrome.setMessage(
-    "This pending response belongs to "
-    + (assistant ? assistant.model_id : "another model")
-    + ". Switch back to retry it, or start a new conversation.",
-    { color: "var(--danger)" }
-  );
-  return false;
 }
 
 function reserveConversationAssistant(prompt) {
@@ -1809,11 +1825,8 @@ function editConversationUserFork(input) {
       modelId: input.modelId,
       inputMode: input.inputMode,
       metadata: input.metadata,
+      configuration: input.configuration,
     });
-  }).then(function (result) {
-    return conversationForkGenerationOutcome(
-      result, "edited path", input.configuration
-    );
   });
 }
 
@@ -1833,29 +1846,34 @@ function retryConversationAssistantFork(input) {
       assistantTurnId: input.assistantTurnId,
       modelId: input.modelId,
       inputMode: input.inputMode,
+      configuration: input.configuration,
     });
-  }).then(function (result) {
-    return conversationForkGenerationOutcome(
-      result, "retry path", input.configuration
-    );
   });
 }
 
-function conversationForkGenerationOutcome(
-  result, label, configuration
+function launchConversationForkGeneration(
+  result, label, storeConfiguration
 ) {
   if (result === false) {
     return false;
   }
+  if (storeConfiguration === null) {
+    return conversationForkDeferred(
+      result,
+      "The " + label + " is pending because its saved Run settings"
+      + " are unavailable. Review the current Draft settings, then"
+      + " press Send."
+    );
+  }
   var prompt = conversationPromptForSend();
   var unavailable = conversationForkLaunchUnavailable(
-    prompt, configuration
+    prompt, storeConfiguration
   );
   if (unavailable !== "") {
     return conversationForkDeferred(result, unavailable);
   }
   var launched = launchReservedGeneration(
-    prompt, configuration
+    prompt, storeConfiguration
   );
   if (!launched) {
     return conversationForkDeferred(
@@ -1885,25 +1903,7 @@ function conversationForkLaunchUnavailable(
       + " ready. Press Send when it reconnects."
     );
   }
-  var validation = configuration
-    ? {
-      valid: configuration.valid,
-      message: configuration.validationMessage,
-    }
-    : generatorModelPanel.validation();
-  if (!validation.valid) {
-    return (
-      "The new path is pending because its confirmed Run settings"
-      + " are invalid. Correct them, then press Send."
-    );
-  }
-  if (!conversationPendingMatchesModel()) {
-    return (
-      "The new path is pending for its reserved model. Switch back,"
-      + " then press Send."
-    );
-  }
-  return "";
+  return pendingGenerationController.launchBlockReason(configuration);
 }
 
 function conversationForkDeferred(result, message) {
@@ -1977,9 +1977,6 @@ function startGeneration() {
   if (isGenerating) {
     return Promise.resolve(false);
   }
-  if (!generatorModelPanel.validation().valid) {
-    return Promise.resolve(false);
-  }
   var conversation = conversationState.conversation;
   if (
     conversation
@@ -1987,13 +1984,13 @@ function startGeneration() {
   ) {
     return retryPendingConversation(conversation.id);
   }
+  if (!generatorModelPanel.validation().valid) {
+    return Promise.resolve(false);
+  }
 
   var prompt = conversationPromptForSend();
   if (!prompt) {
     generatorChrome.setMessage("Prompt is empty.");
-    return Promise.resolve(false);
-  }
-  if (!conversationPendingMatchesModel()) {
     return Promise.resolve(false);
   }
   setConversationBusy(true);
@@ -2028,12 +2025,31 @@ function retryPendingConversation(conversationId) {
         return false;
       }
       var prompt = conversationPromptForSend();
-      if (!prompt || !conversationPendingMatchesModel()) {
+      var configuration =
+        pendingGenerationController.retryConfiguration();
+      if (configuration === null) {
         setConversationBusy(false);
+        generatorChrome.setMessage(
+          "This legacy pending response needs valid current Draft"
+          + " settings before it can launch.",
+          { color: "var(--danger)" }
+        );
+        return false;
+      }
+      var blocked = pendingGenerationController.launchBlockReason(
+        configuration
+      );
+      if (!prompt || blocked !== "") {
+        setConversationBusy(false);
+        if (blocked !== "") {
+          generatorChrome.setMessage(
+            blocked, { color: "var(--danger)" }
+          );
+        }
         return false;
       }
       setConversationBusy(false);
-      return launchReservedGeneration(prompt);
+      return launchReservedGeneration(prompt, configuration);
     })
     .catch(function (error) {
       setConversationBusy(false);

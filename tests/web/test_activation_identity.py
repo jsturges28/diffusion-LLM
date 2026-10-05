@@ -392,6 +392,9 @@ def test_the_socket_says_which_model_answered(
     assert first["type"] == "resident"
     assert first["model"] == "llada"
     assert first["device"] == "cuda"
+    assert first["generation_schema_id"] == server._model_entry(
+        "llada", server.REGISTRY["llada"]
+    )["generation_schema_ids"]["cuda"]
     assert first["operation"] == harness.manager.activation_id
 
 

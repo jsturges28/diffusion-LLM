@@ -17,6 +17,47 @@ const BRANCH_A = "b_" + "a".repeat(32);
 const BRANCH_B = "b_" + "b".repeat(32);
 const BRANCH_C = "b_" + "c".repeat(32);
 const OPERATION_ONE = "0".repeat(31) + "1";
+const SCHEMA_ID = "6".repeat(64);
+
+const ACTION_MODEL = {
+  id: "test-model",
+  display_name: "Test Model",
+  capabilities: {
+    input_mode: "chat",
+  },
+  generation_schema_ids: { cuda: SCHEMA_ID },
+  param_specs: [
+    {
+      name: "steps",
+      label: "Steps",
+      type: "int",
+      default: 32,
+      group: "output",
+      prominence: "primary",
+      recommended: [1, 64],
+      experimental: [1, 128],
+    },
+    {
+      name: "temperature",
+      label: "Temperature",
+      type: "float",
+      default: 0.7,
+      group: "sampling",
+      prominence: "primary",
+      recommended: [0, 1],
+      experimental: [0, 2],
+      step: 0.1,
+    },
+    {
+      name: "watermark",
+      label: "KGW Watermark",
+      type: "bool",
+      default: false,
+      group: "signals",
+      experimental_only: true,
+    },
+  ],
+};
 
 function turn(index, overrides) {
   const assistant = index % 2 === 0;
@@ -86,6 +127,10 @@ function harness(overrides) {
   const settings = overrides || {};
   const page = loadPage({
     scripts: [
+      "custom_select.js",
+      "run_settings_core.js",
+      "run_settings_panel.js",
+      "conversation_generation.js",
       "conversation_action_view.js",
       "conversation_actions.js",
     ],
@@ -113,9 +158,85 @@ function harness(overrides) {
     edit: [],
     delete: [],
     retry: [],
+    launch: [],
     state: [],
+    panels: [],
   };
   let controller;
+
+  function readConfiguration() {
+    return settings.readConfiguration
+      ? settings.readConfiguration()
+      : {
+        modelId: "test-model",
+        modelDisplay: "Test Model",
+        device: "cuda",
+        schemaId: SCHEMA_ID,
+        inputMode: "chat",
+        settingsSummary: "Steps 32, Temperature 0.7",
+        parameters: { steps: 32, temperature: 0.7 },
+        experimental: false,
+        valid: true,
+        validationMessage: "",
+      };
+  }
+
+  function forkResult(raw, input, fallback) {
+    if (raw === false) {
+      return false;
+    }
+    let result = raw && raw.result ? raw.result : raw;
+    const launchOutcome = (
+      raw
+      && typeof raw === "object"
+      && Object.prototype.hasOwnProperty.call(raw, "launched")
+    ) ? raw : null;
+    if (launchOutcome !== null) {
+      result = raw.result || fallback;
+    }
+    const authoritative = settings.storeConfiguration
+      ? settings.storeConfiguration(input, result)
+      : input.configuration;
+    const stored = Object.assign({}, result, {
+      store_configuration: authoritative,
+    });
+    if (launchOutcome !== null) {
+      Object.defineProperty(stored, "_launchOutcome", {
+        value: launchOutcome,
+        configurable: true,
+      });
+    }
+    return stored;
+  }
+
+  function createRunSettingsPanel(options) {
+    if (settings.createRunSettingsPanel) {
+      return settings.createRunSettingsPanel(options);
+    }
+    const seed = readConfiguration();
+    const panel = page.context.runSettingsPanelCreate({
+      idPrefix: options.idPrefix,
+      mount: options.mount,
+      compact: true,
+    });
+    panel.wire();
+    panel.configure({
+      model: ACTION_MODEL,
+      models: [ACTION_MODEL],
+      modelId: seed.modelId,
+      modelDisplay: seed.modelDisplay,
+      device: seed.device,
+      inputMode: seed.inputMode,
+      seed,
+    });
+    calls.panels.push({
+      panel,
+      root: panel.root(),
+      idPrefix: options.idPrefix,
+      mount: options.mount,
+    });
+    return panel;
+  }
 
   function render() {
     const cards = state.turns.map((item) => {
@@ -144,18 +265,8 @@ function harness(overrides) {
 
   controller = page.context.conversationActionsCreate({
     readState: () => state,
-    readConfiguration: () => settings.readConfiguration
-      ? settings.readConfiguration()
-      : {
-        modelId: "test-model",
-        modelDisplay: "Test Model",
-        inputMode: "chat",
-        settingsSummary: "Steps 32, Temperature 0.7",
-        parameters: { steps: 32, temperature: 0.7 },
-        experimental: false,
-        valid: true,
-        validationMessage: "",
-      },
+    readConfiguration,
+    createRunSettingsPanel,
     readBlockReason: () => blockReason,
     requestRender: render,
     onStateChanged: (value) => calls.state.push(value),
@@ -167,14 +278,16 @@ function harness(overrides) {
     },
     editUser: (input) => {
       calls.edit.push(input);
-      return settings.editUser
+      const pending = settings.editUser
         ? settings.editUser(input)
         : Promise.resolve({
-          result: {
-            user_turn: { turn_id: "opaque-edited-user" },
-          },
-          launched: true,
+          user_turn: { turn_id: "opaque-edited-user" },
         });
+      return Promise.resolve(pending).then((raw) => forkResult(
+        raw,
+        input,
+        { user_turn: { turn_id: "opaque-edited-user" } }
+      ));
     },
     deleteUser: (input) => {
       calls.delete.push(input);
@@ -187,16 +300,37 @@ function harness(overrides) {
     },
     retryAssistant: (input) => {
       calls.retry.push(input);
-      return settings.retryAssistant
+      const pending = settings.retryAssistant
         ? settings.retryAssistant(input)
         : Promise.resolve({
-          result: {
-            assistant_turn: {
-              turn_id: "opaque-retried-assistant",
-            },
+          assistant_turn: {
+            turn_id: "opaque-retried-assistant",
           },
-          launched: true,
         });
+      return Promise.resolve(pending).then((raw) => forkResult(
+        raw,
+        input,
+        {
+          assistant_turn: {
+            turn_id: "opaque-retried-assistant",
+          },
+        }
+      ));
+    },
+    launchGeneration: (result, label, configuration) => {
+      calls.launch.push({ result, label, configuration });
+      if (settings.launchGeneration) {
+        return settings.launchGeneration(
+          result, label, configuration
+        );
+      }
+      if (result && result._launchOutcome) {
+        return result._launchOutcome;
+      }
+      return {
+        result,
+        launched: true,
+      };
     },
     createOperationId: settings.createOperationId || (() => {
       operationSerial += 1;
@@ -241,6 +375,25 @@ function action(cardElement, name) {
     (button) =>
       button.getAttribute("data-conversation-action") === name
   );
+}
+
+function actionPanel(harness, kind) {
+  const record = harness.calls.panels
+    .filter((candidate) =>
+      candidate.idPrefix.includes("-" + kind + "-")
+    )
+    .at(-1);
+  assert.ok(record, "missing " + kind + " Run settings panel");
+  return record;
+}
+
+function actionPanelInput(harness, kind, name) {
+  const record = actionPanel(harness, kind);
+  const input = record.root.querySelector(
+    "#" + record.idPrefix + "param-" + name
+  );
+  assert.ok(input, "missing " + kind + " control " + name);
+  return input;
 }
 
 function dispatch(h, target) {
@@ -567,7 +720,19 @@ test("inline edit Cancel restores exact text and focus", () => {
     editing.querySelector(
       ".conversation-inline-edit-note"
     ).textContent,
-    /Test Model \(test-model\).*Steps 32/
+    /Test Model \(test-model\).*Device: GPU.*Input mode: chat/
+  );
+  const form = editing.querySelector(".conversation-inline-edit");
+  const settingsMount = editing.querySelector(
+    ".conversation-action-settings"
+  );
+  const local = actionPanel(h, "edit");
+  assert.ok(settingsMount.querySelector(".run-settings-compact"));
+  assert.ok(
+    form.children.indexOf(settingsMount)
+      < form.children.indexOf(
+        form.querySelector(".conversation-inline-edit-actions")
+      )
   );
   input.value = "changed only in the draft";
   h.root.dispatch("input", { target: input });
@@ -581,6 +746,8 @@ test("inline edit Cancel restores exact text and focus", () => {
   );
   assert.equal(action(restored, "edit").focused, true);
   assert.equal(h.calls.edit.length, 0);
+  assert.equal(local.root.parentNode, null);
+  assert.deepEqual(local.root.listeners.toggle || [], []);
 });
 
 test("Escape cancels inline edit with no mutation", () => {
@@ -604,6 +771,38 @@ test("Escape cancels inline edit with no mutation", () => {
   assert.equal(action(card(h, "turn-3"), "edit").focused, true);
 });
 
+test("Edit and Retry get independent bounded Draft seeds", () => {
+  const h = harness();
+  dispatch(h, action(card(h, "turn-1"), "edit"));
+  const editPanel = actionPanel(h, "edit");
+  const editedTemperature = actionPanelInput(
+    h, "edit", "temperature"
+  );
+  editedTemperature.value = "0.9";
+  editedTemperature.dispatch("input");
+  dispatch(h, action(card(h, "turn-1"), "edit-cancel"));
+
+  dispatch(h, action(card(h, "turn-2"), "retry"));
+  const retryPanel = actionPanel(h, "retry");
+
+  assert.equal(
+    actionPanelInput(h, "retry", "temperature").value,
+    "0.7"
+  );
+  assert.notEqual(editPanel.idPrefix, retryPanel.idPrefix);
+  assert.ok(editPanel.idPrefix.length <= 64);
+  assert.ok(retryPanel.idPrefix.length <= 64);
+  assert.match(
+    editPanel.idPrefix,
+    /^conversation-edit-[0-9a-f]{32}-$/
+  );
+  assert.match(
+    retryPanel.idPrefix,
+    /^conversation-retry-[0-9a-f]{32}-$/
+  );
+  assert.equal(h.page.sandbox.sessionStorage.size, 0);
+});
+
 test("Save forks once with current model and edited text",
   async () => {
   const pending = deferred();
@@ -617,12 +816,17 @@ test("Save forks once with current model and edited text",
   );
   input.value = "edited question";
   h.root.dispatch("input", { target: input });
+  const local = actionPanel(h, "edit");
 
   dispatch(h, action(editing, "edit-save"));
   dispatch(h, action(card(h, "turn-3"), "edit-save"));
   assert.equal(h.calls.edit.length, 0);
   await tick();
   assert.equal(h.calls.edit.length, 1);
+  assert.equal(
+    actionPanelInput(h, "edit", "temperature").disabled,
+    true
+  );
   assert.deepEqual(host(h.calls.edit[0]), {
     operationId: OPERATION_ONE,
     userTurnId: "turn-3",
@@ -633,6 +837,8 @@ test("Save forks once with current model and edited text",
     configuration: {
       modelId: "test-model",
       modelDisplay: "Test Model",
+      device: "cuda",
+      schemaId: SCHEMA_ID,
       inputMode: "chat",
       settingsSummary: "Steps 32, Temperature 0.7",
       parameters: { steps: 32, temperature: 0.7 },
@@ -664,9 +870,11 @@ test("Save forks once with current model and edited text",
   });
   await tick();
   assert.equal(h.controller.blocking(), false);
+  assert.equal(local.root.parentNode, null);
+  assert.deepEqual(local.root.listeners.toggle || [], []);
 });
 
-test("inline Edit uses the configuration shown when opened",
+test("inline Edit confirms local values without changing Draft",
   async () => {
   let temperature = 0.7;
   const h = harness({
@@ -674,6 +882,8 @@ test("inline Edit uses the configuration shown when opened",
       return {
         modelId: "test-model",
         modelDisplay: "Test Model",
+        device: "cuda",
+        schemaId: SCHEMA_ID,
         inputMode: "chat",
         settingsSummary: "Temperature " + temperature,
         parameters: { temperature },
@@ -684,16 +894,54 @@ test("inline Edit uses the configuration shown when opened",
     },
   });
   dispatch(h, action(card(h, "turn-1"), "edit"));
-  temperature = 0.9;
+  const localTemperature = actionPanelInput(
+    h, "edit", "temperature"
+  );
+  localTemperature.value = "0.9";
+  localTemperature.dispatch("input");
+  temperature = 0.4;
 
   dispatch(h, action(card(h, "turn-1"), "edit-save"));
   await tick();
   await tick();
 
-  assert.equal(h.calls.edit[0].configuration.parameters.temperature, 0.7);
+  assert.equal(h.calls.edit[0].configuration.parameters.temperature, 0.9);
   assert.equal(
     h.calls.edit[0].configuration.settingsSummary,
-    "Temperature 0.7"
+    "Steps 32, Temperature 0.9"
+  );
+  assert.equal(temperature, 0.4);
+  assert.equal(h.page.sandbox.sessionStorage.size, 0);
+});
+
+test("invalid Edit settings block fork and focus first control",
+  async () => {
+  const h = harness();
+  dispatch(h, action(card(h, "turn-1"), "edit"));
+  const temperature = actionPanelInput(
+    h, "edit", "temperature"
+  );
+  temperature.value = "";
+  temperature.dispatch("input");
+
+  dispatch(h, action(card(h, "turn-1"), "edit-save"));
+  await tick();
+
+  assert.equal(h.calls.edit.length, 0);
+  assert.equal(actionPanel(h, "edit").root.open, true);
+  assert.equal(temperature.focused, true);
+  assert.equal(h.controller.blocking(), true);
+
+  temperature.value = "0.8";
+  temperature.dispatch("input");
+  dispatch(h, action(card(h, "turn-1"), "edit-save"));
+  await tick();
+  await tick();
+
+  assert.equal(h.calls.edit.length, 1);
+  assert.equal(
+    h.calls.edit[0].configuration.parameters.temperature,
+    0.8
   );
 });
 
@@ -704,6 +952,7 @@ test("a final Edit failure keeps its frozen action retryable", async () => {
     },
   });
   dispatch(h, action(card(h, "turn-1"), "edit"));
+  const local = actionPanel(h, "edit");
 
   dispatch(h, action(card(h, "turn-1"), "edit-save"));
   await tick();
@@ -718,6 +967,11 @@ test("a final Edit failure keeps its frozen action retryable", async () => {
   assert.match(
     h.page.registry.get("conversation-action-status").textContent,
     /edit rejected/
+  );
+  assert.equal(local.root.parentNode !== null, true);
+  assert.equal(
+    actionPanelInput(h, "edit", "temperature").disabled,
+    true
   );
 });
 
@@ -810,12 +1064,15 @@ test("native dialog dismissal restores the invoking control", () => {
   const dialog = h.page.registry.get(
     "conversation-retry-dialog"
   );
+  const local = actionPanel(h, "retry");
 
   dialog.close("");
 
   assert.equal(dialog.open, false);
   assert.equal(trigger.focused, true);
   assert.equal(h.calls.retry.length, 0);
+  assert.equal(local.root.parentNode, null);
+  assert.deepEqual(local.root.listeners.toggle || [], []);
 });
 
 test("confirmed Delete focuses its non-message marker",
@@ -864,6 +1121,85 @@ test("confirmed Delete focuses its non-message marker",
   assert.equal(marker.focused, true);
 });
 
+test("invalid Retry settings block fork and retain Cancel",
+  async () => {
+  const h = harness();
+  const trigger = action(card(h, "turn-2"), "retry");
+  dispatch(h, trigger);
+  const temperature = actionPanelInput(
+    h, "retry", "temperature"
+  );
+  temperature.value = "";
+  temperature.dispatch("input");
+
+  dispatchDialog(
+    h, "retry", "btn-conversation-retry-confirm"
+  );
+  await tick();
+
+  assert.equal(h.calls.retry.length, 0);
+  assert.equal(actionPanel(h, "retry").root.open, true);
+  assert.equal(temperature.focused, true);
+  assert.equal(
+    h.page.registry.get("conversation-retry-dialog").open,
+    true
+  );
+  assert.equal(
+    h.page.registry.get(
+      "btn-conversation-retry-cancel"
+    ).disabled,
+    false
+  );
+});
+
+test("Retry Reset and Experimental stay action-local",
+  async () => {
+  const h = harness();
+  dispatch(h, action(card(h, "turn-2"), "retry"));
+  const local = actionPanel(h, "retry");
+  const experimental = local.root.querySelector(
+    "#" + local.idPrefix + "toggle-experimental"
+  );
+  const reset = local.root.querySelector(
+    "#" + local.idPrefix + "btn-param-defaults"
+  );
+  const temperature = actionPanelInput(
+    h, "retry", "temperature"
+  );
+  const watermark = actionPanelInput(
+    h, "retry", "watermark"
+  );
+
+  temperature.value = "0.9";
+  temperature.dispatch("input");
+  experimental.checked = true;
+  experimental.dispatch("change");
+  watermark.checked = true;
+  watermark.dispatch("change");
+  reset.click();
+
+  assert.equal(temperature.value, "0.7");
+  assert.equal(experimental.checked, false);
+  assert.equal(watermark.closest(".mode-toggle").hidden, true);
+
+  experimental.checked = true;
+  experimental.dispatch("change");
+  watermark.checked = true;
+  watermark.dispatch("change");
+  dispatchDialog(
+    h, "retry", "btn-conversation-retry-confirm"
+  );
+  await tick();
+  await tick();
+
+  assert.equal(h.calls.retry[0].configuration.experimental, true);
+  assert.equal(
+    h.calls.retry[0].configuration.parameters.watermark,
+    true
+  );
+  assert.equal(h.page.sandbox.sessionStorage.size, 0);
+});
+
 test("Retry dialog freezes the named model and settings",
   async () => {
   const pending = deferred();
@@ -878,12 +1214,26 @@ test("Retry dialog freezes the named model and settings",
   assert.equal(dialog.open, true);
   assert.match(
     h.page.registry.get("conversation-retry-message").textContent,
-    /Test Model \(test-model\).*Steps 32, Temperature 0.7/
+    /Test Model \(test-model\).*Device: GPU/
   );
   assert.match(
     h.page.registry.get("conversation-retry-message").textContent,
     /Input mode: chat/
   );
+  const local = actionPanel(h, "retry");
+  assert.equal(
+    h.page.registry.get("conversation-retry-settings").firstChild,
+    local.root
+  );
+  assert.equal(
+    local.root.classList.contains("run-settings-compact"),
+    true
+  );
+  const localTemperature = actionPanelInput(
+    h, "retry", "temperature"
+  );
+  localTemperature.value = "0.9";
+  localTemperature.dispatch("input");
 
   dispatchDialog(
     h, "retry", "btn-conversation-retry-confirm"
@@ -900,9 +1250,11 @@ test("Retry dialog freezes the named model and settings",
     configuration: {
       modelId: "test-model",
       modelDisplay: "Test Model",
+      device: "cuda",
+      schemaId: SCHEMA_ID,
       inputMode: "chat",
-      settingsSummary: "Steps 32, Temperature 0.7",
-      parameters: { steps: 32, temperature: 0.7 },
+      settingsSummary: "Steps 32, Temperature 0.9",
+      parameters: { steps: 32, temperature: 0.9 },
       experimental: false,
       valid: true,
       validationMessage: "",
@@ -917,6 +1269,7 @@ test("Retry dialog freezes the named model and settings",
   assert.equal(progress.getAttribute("role"), "status");
   assert.equal(progress.getAttribute("aria-busy"), "true");
   assert.equal(progress.focused, true);
+  assert.equal(localTemperature.disabled, true);
 
   h.activeCard.hidden = false;
   pending.resolve({
@@ -931,6 +1284,54 @@ test("Retry dialog freezes the named model and settings",
   assert.equal(dialog.open, false);
   assert.equal(dialog.getAttribute("aria-busy"), "false");
   assert.equal(h.activeCard.focused, true);
+  assert.equal(local.root.parentNode, null);
+  assert.deepEqual(local.root.listeners.toggle || [], []);
+});
+
+test("retryable Retry failure keeps one frozen request and panel",
+  async () => {
+  let attempts = 0;
+  const h = harness({
+    retryAssistant() {
+      attempts += 1;
+      if (attempts === 1) {
+        return Promise.reject(new Error("network unavailable"));
+      }
+      return Promise.resolve({ launched: false });
+    },
+  });
+  dispatch(h, action(card(h, "turn-2"), "retry"));
+  const local = actionPanel(h, "retry");
+  const temperature = actionPanelInput(
+    h, "retry", "temperature"
+  );
+  temperature.value = "0.8";
+  temperature.dispatch("input");
+  dispatchDialog(
+    h, "retry", "btn-conversation-retry-confirm"
+  );
+  await tick();
+  await tick();
+
+  assert.equal(h.calls.retry.length, 1);
+  assert.equal(local.root.parentNode !== null, true);
+  assert.equal(temperature.disabled, true);
+
+  temperature.value = "0.2";
+  temperature.dispatch("input");
+  dispatchDialog(
+    h, "retry", "btn-conversation-retry-confirm"
+  );
+  await tick();
+  await tick();
+
+  assert.equal(h.calls.retry.length, 2);
+  assert.equal(h.calls.retry[0], h.calls.retry[1]);
+  assert.equal(
+    h.calls.retry[1].configuration.parameters.temperature,
+    0.8
+  );
+  assert.equal(local.root.parentNode, null);
 });
 
 test("reloaded Edit response reuses one durable operation", async () => {
@@ -972,6 +1373,7 @@ test("reloaded Edit response reuses one durable operation", async () => {
     h.calls.edit[0].operationId,
     h.calls.edit[1].operationId
   );
+  assert.equal(h.calls.edit[0], h.calls.edit[1]);
   assert.equal(h.calls.edit[1].text, "receipt edit");
 });
 
@@ -1051,6 +1453,7 @@ test("reloaded Retry response reuses its frozen receipt", async () => {
     h.calls.retry[0].operationId,
     h.calls.retry[1].operationId
   );
+  assert.equal(h.calls.retry[0], h.calls.retry[1]);
   assert.deepEqual(
     host(h.calls.retry[0].configuration),
     host(h.calls.retry[1].configuration)
@@ -1102,6 +1505,7 @@ test("reloaded old-page Edit automatically replays once",
     h.calls.edit[1].operationId
   );
   assert.equal(h.calls.edit[1].text, "frozen old edit");
+  assert.equal(h.calls.launch.length, 0);
   assert.equal(h.controller.blocking(), false);
 });
 
@@ -1180,6 +1584,7 @@ test("reloaded old-page Retry automatically replays once",
     host(h.calls.retry[0].configuration),
     host(h.calls.retry[1].configuration)
   );
+  assert.equal(h.calls.launch.length, 0);
   assert.equal(h.controller.blocking(), false);
 });
 
@@ -1256,6 +1661,7 @@ test("Edit branch conflict cancels its frozen operation",
     },
   });
   dispatch(h, action(card(h, "turn-1"), "edit"));
+  const firstPanel = actionPanel(h, "edit");
   dispatch(h, action(card(h, "turn-1"), "edit-save"));
   await tick();
   await tick();
@@ -1263,6 +1669,7 @@ test("Edit branch conflict cancels its frozen operation",
   assert.equal(h.calls.edit.length, 1);
   assert.equal(h.controller.blocking(), false);
   assert.ok(action(card(h, "turn-1"), "edit"));
+  assert.equal(firstPanel.root.parentNode, null);
 
   dispatch(h, action(card(h, "turn-1"), "edit"));
   dispatch(h, action(card(h, "turn-1"), "edit-save"));
@@ -1296,6 +1703,7 @@ test("Retry state conflict closes and requires a fresh operation",
     },
   });
   dispatch(h, action(card(h, "turn-2"), "retry"));
+  const firstPanel = actionPanel(h, "retry");
   dispatchDialog(
     h, "retry", "btn-conversation-retry-confirm"
   );
@@ -1308,6 +1716,7 @@ test("Retry state conflict closes and requires a fresh operation",
   assert.equal(h.calls.retry.length, 1);
   assert.equal(dialog.open, false);
   assert.equal(h.controller.blocking(), false);
+  assert.equal(firstPanel.root.parentNode, null);
 
   dispatch(h, action(card(h, "turn-2"), "retry"));
   dispatchDialog(
@@ -1321,6 +1730,118 @@ test("Retry state conflict closes and requires a fresh operation",
     h.calls.retry[0].operationId,
     h.calls.retry[1].operationId
   );
+});
+
+test("stale reconciliation destroys Edit and Retry panels", () => {
+  const editHarness = harness();
+  dispatch(
+    editHarness,
+    action(card(editHarness, "turn-1"), "edit")
+  );
+  const editPanel = actionPanel(editHarness, "edit");
+  const editState = editHarness.state();
+  editHarness.setState(Object.assign({}, editState, {
+    turns: editState.turns.filter(
+      (candidate) => candidate.turn_id !== "turn-1"
+    ),
+  }));
+
+  assert.equal(editPanel.root.parentNode, null);
+  assert.equal(editHarness.controller.blocking(), false);
+
+  const retryHarness = harness();
+  dispatch(
+    retryHarness,
+    action(card(retryHarness, "turn-2"), "retry")
+  );
+  const retryPanel = actionPanel(retryHarness, "retry");
+  const retryState = retryHarness.state();
+  retryHarness.setState(Object.assign({}, retryState, {
+    turns: retryState.turns.filter(
+      (candidate) => candidate.turn_id !== "turn-2"
+    ),
+  }));
+
+  assert.equal(retryPanel.root.parentNode, null);
+  assert.equal(
+    retryHarness.page.registry.get(
+      "conversation-retry-dialog"
+    ).open,
+    false
+  );
+  assert.equal(retryHarness.controller.blocking(), false);
+});
+
+test("closeAll destroys every local settings panel", () => {
+  const editHarness = harness();
+  dispatch(
+    editHarness,
+    action(card(editHarness, "turn-1"), "edit")
+  );
+  const editPanel = actionPanel(editHarness, "edit");
+  editHarness.controller.closeAll();
+
+  assert.equal(editPanel.root.parentNode, null);
+  assert.equal(editHarness.controller.blocking(), false);
+
+  const retryHarness = harness();
+  dispatch(
+    retryHarness,
+    action(card(retryHarness, "turn-2"), "retry")
+  );
+  const retryPanel = actionPanel(retryHarness, "retry");
+  retryHarness.controller.closeAll();
+
+  assert.equal(retryPanel.root.parentNode, null);
+  assert.equal(
+    retryHarness.page.registry.get(
+      "conversation-retry-dialog"
+    ).open,
+    false
+  );
+  assert.equal(retryHarness.controller.blocking(), false);
+});
+
+test("closeAll fences late Edit and Retry generation", async () => {
+  const editPending = deferred();
+  const edit = harness({
+    editUser() {
+      return editPending.promise;
+    },
+  });
+  dispatch(edit, action(card(edit, "turn-1"), "edit"));
+  dispatch(edit, action(card(edit, "turn-1"), "edit-save"));
+  await tick();
+  edit.controller.closeAll();
+  editPending.resolve({
+    user_turn: { turn_id: "late-edit-user" },
+  });
+  await tick();
+  await tick();
+
+  assert.equal(edit.calls.launch.length, 0);
+  assert.equal(edit.controller.blocking(), false);
+
+  const retryPending = deferred();
+  const retry = harness({
+    retryAssistant() {
+      return retryPending.promise;
+    },
+  });
+  dispatch(retry, action(card(retry, "turn-2"), "retry"));
+  dispatchDialog(
+    retry, "retry", "btn-conversation-retry-confirm"
+  );
+  await tick();
+  retry.controller.closeAll();
+  retryPending.resolve({
+    assistant_turn: { turn_id: "late-retry-assistant" },
+  });
+  await tick();
+  await tick();
+
+  assert.equal(retry.calls.launch.length, 0);
+  assert.equal(retry.controller.blocking(), false);
 });
 
 test("secure randomness failure blocks every fork", () => {
@@ -1421,6 +1942,38 @@ test("rapid branch clicks dispatch one guarded read", async () => {
     ".conversation-branch-pager"
   );
   assert.equal(focused.focused, true);
+});
+
+test("closeAll fences a late branch-selection callback", async () => {
+  const pending = deferred();
+  const state = initialState();
+  state.branchPoints = [{
+    turn_index: 1,
+    source_branch_id: BRANCH_A,
+    selected_branch_id: BRANCH_A,
+    branch_ids: [BRANCH_A, BRANCH_B],
+    deleted_branch_ids: [],
+  }];
+  const h = harness({
+    state,
+    selectBranch: () => pending.promise,
+  });
+  const next = card(h, "turn-1").querySelectorAll(
+    ".conversation-branch-button"
+  )[1];
+
+  dispatch(h, next);
+  await tick();
+  h.controller.closeAll();
+  pending.resolve(true);
+  await tick();
+
+  assert.equal(h.controller.blocking(), false);
+  assert.equal(
+    h.page.registry.get("conversation-action-status").textContent,
+    ""
+  );
+  assert.equal(next.focused, false);
 });
 
 test("branch selection falls back when its pager leaves the page",

@@ -219,6 +219,26 @@ def test_signal_tooltips_open_inside_scrollport() -> None:
     assert "left: auto" in tooltip
 
 
+def test_run_settings_tooltips_close_while_focus_remains() -> None:
+    """Escape owns keyboard state instead of the focus selector."""
+    styles = RUN_SETTINGS_CSS.read_text(encoding="utf-8")
+
+    assert ".run-settings .info-icon.is-open .tooltip" in styles
+    assert ".run-settings .info-icon:focus .tooltip" not in styles
+
+
+def test_mobile_summary_keeps_chip_names_accessible() -> None:
+    """Narrow layouts clip labels without hiding their text."""
+    styles = RUN_SETTINGS_CSS.read_text(encoding="utf-8")
+    mobile = styles[styles.index("@media (max-width: 700px)") :]
+    labels = _rule(
+        mobile, ".run-settings-chip-label {", 260
+    )
+
+    assert "position: absolute" in labels
+    assert "display: none" not in labels
+
+
 def test_run_settings_styles_support_mounted_instances() -> None:
     html = _html()
     styles = RUN_SETTINGS_CSS.read_text(encoding="utf-8")
@@ -286,6 +306,47 @@ def test_message_action_dialogs_are_native_and_cancel_first() -> None:
         assert dialog.index(cancel.group(0)) < dialog.index(
             confirm.group(0)
         )
+
+
+def test_retry_dialog_has_static_settings_mount() -> None:
+    """Retry keeps one stable host between its context and status."""
+    dialog = _block(
+        _html(), "conversation-retry-dialog", "dialog"
+    )
+
+    assert 'class="modal-box modal-box-confirm' in dialog
+    assert "conversation-retry-box" in dialog
+    assert dialog.count('id="conversation-retry-settings"') == 1
+    message_at = dialog.index('id="conversation-retry-message"')
+    settings_at = dialog.index('id="conversation-retry-settings"')
+    status_at = dialog.index('id="conversation-retry-status"')
+    assert message_at < settings_at
+    assert settings_at < status_at
+
+
+def test_retry_dialog_scroll_keeps_mobile_actions_reachable() -> None:
+    """A narrow Retry scrolls its body while its footer stays put."""
+    page_styles = CONVERSATION_CSS.read_text(encoding="utf-8")
+    settings_styles = RUN_SETTINGS_CSS.read_text(encoding="utf-8")
+    box = _rule(page_styles, ".conversation-retry-box {", 220)
+    body = _rule(
+        page_styles,
+        ".conversation-retry-box .modal-body {",
+        240,
+    )
+    mobile_start = page_styles.find("@media (max-width: 700px)")
+    assert mobile_start != -1
+    mobile = page_styles[mobile_start:]
+
+    assert "max-width: 680px" in box
+    assert "overflow: hidden" in box
+    assert "overflow-y: auto" in body
+    assert "width: calc(100% - 20px)" in mobile
+    assert "max-height: calc(100dvh - 20px)" in mobile
+    assert (
+        ".run-settings-compact .run-settings-body"
+        in settings_styles
+    )
 
 
 def test_action_mounts_and_live_feedback_ship_empty() -> None:

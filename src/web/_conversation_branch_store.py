@@ -77,10 +77,13 @@ def edit_fork_operation(
     text: str,
     model_id: str,
     input_mode: c.InputMode,
+    generation_configuration: Optional[
+        c.GenerationConfigurationPayload
+    ],
     metadata: c.JsonObject,
 ) -> c.ForkOperation:
     """Build the stable semantic identity for one edit fork."""
-    payload: Dict[str, object] = {
+    legacy_payload: Dict[str, object] = {
         "kind": "edit_user",
         "source_branch_id": source_branch_id,
         "target_turn_id": target_turn_id,
@@ -89,12 +92,18 @@ def edit_fork_operation(
         "input_mode": input_mode,
         "metadata": metadata,
     }
+    payload = dict(legacy_payload)
+    legacy_payload_for_replay: Optional[Dict[str, object]] = None
+    if generation_configuration is not None:
+        payload["generation_configuration"] = generation_configuration
+        legacy_payload_for_replay = legacy_payload
     return _fork_operation(
         operation_id=operation_id,
         kind="edit_user",
         source_branch_id=source_branch_id,
         target_turn_id=target_turn_id,
         payload=payload,
+        legacy_payload=legacy_payload_for_replay,
     )
 
 
@@ -126,21 +135,30 @@ def retry_fork_operation(
     target_turn_id: str,
     model_id: str,
     input_mode: c.InputMode,
+    generation_configuration: Optional[
+        c.GenerationConfigurationPayload
+    ],
 ) -> c.ForkOperation:
     """Build the stable semantic identity for one retry fork."""
-    payload: Dict[str, object] = {
+    legacy_payload: Dict[str, object] = {
         "kind": "retry_assistant",
         "source_branch_id": source_branch_id,
         "target_turn_id": target_turn_id,
         "model_id": model_id,
         "input_mode": input_mode,
     }
+    payload = dict(legacy_payload)
+    legacy_payload_for_replay: Optional[Dict[str, object]] = None
+    if generation_configuration is not None:
+        payload["generation_configuration"] = generation_configuration
+        legacy_payload_for_replay = legacy_payload
     return _fork_operation(
         operation_id=operation_id,
         kind="retry_assistant",
         source_branch_id=source_branch_id,
         target_turn_id=target_turn_id,
         payload=payload,
+        legacy_payload=legacy_payload_for_replay,
     )
 
 
@@ -151,12 +169,36 @@ def _fork_operation(
     source_branch_id: str,
     target_turn_id: str,
     payload: Dict[str, object],
+    legacy_payload: Optional[Dict[str, object]] = None,
 ) -> c.ForkOperation:
     c.validate_operation_id(operation_id)
     c.validate_branch_id(source_branch_id)
     validate_any_turn_id(target_turn_id)
+    digest = _fork_request_digest(payload)
+    legacy_digest = (
+        None
+        if legacy_payload is None
+        else _fork_request_digest(legacy_payload)
+    )
+    return c.ForkOperation(
+        operation_id=operation_id,
+        request_digest=digest,
+        kind=kind,
+        source_branch_id=source_branch_id,
+        target_turn_id=target_turn_id,
+        legacy_request_digest=legacy_digest,
+    )
+
+
+def _fork_request_digest(payload: Dict[str, object]) -> str:
+    canonical = dict(payload)
+    configuration = canonical.get("generation_configuration")
+    if configuration is not None:
+        canonical["generation_configuration"] = (
+            _canonical_generation_digest_value(configuration)
+        )
     encoded = json.dumps(
-        payload,
+        canonical,
         ensure_ascii=False,
         allow_nan=False,
         sort_keys=True,
@@ -164,12 +206,29 @@ def _fork_operation(
     ).encode("utf-8")
     digest = hashlib.sha256(encoded).hexdigest()
     assert c.SHA256_DIGEST_RE.fullmatch(digest) is not None
-    return c.ForkOperation(
-        operation_id=operation_id,
-        request_digest=digest,
-        kind=kind,
-        source_branch_id=source_branch_id,
-        target_turn_id=target_turn_id,
+    return digest
+
+
+def _canonical_generation_digest_value(value: object) -> object:
+    """Make equivalent JSON numbers hash alike across round trips."""
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, (str, int)):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else value
+    if isinstance(value, list):
+        return [
+            _canonical_generation_digest_value(item)
+            for item in value
+        ]
+    if isinstance(value, dict):
+        return {
+            key: _canonical_generation_digest_value(item)
+            for key, item in value.items()
+        }
+    raise TypeError(
+        "generation configuration digest contains a non-JSON value"
     )
 
 
@@ -2136,6 +2195,7 @@ def append_v2_locked(
         now=now,
         model_id=model_id,
         input_mode=input_mode,
+        metadata={},
     )
     _write_new_turn_pair(
         conversation_dir=conversation_dir,
@@ -2209,6 +2269,7 @@ def _new_v2_assistant_turn(
     now: str,
     model_id: str,
     input_mode: c.InputMode,
+    metadata: c.JsonObject,
 ) -> c.TurnRecord:
     turn_id, schema = _owned_turn_identity_for_new(branch, index)
     assert schema == c.SCHEMA_VERSION
@@ -2226,7 +2287,7 @@ def _new_v2_assistant_turn(
         model_id=model_id,
         input_mode=input_mode,
         context_pack={},
-        metadata={},
+        metadata=c.copy_json_object(metadata, "metadata"),
         run_link=None,
         schema_version=c.SCHEMA_VERSION,
         branch_id=branch.record.branch_id,
@@ -2632,8 +2693,16 @@ def _require_matching_operation(
     receipt: c.OperationReceipt,
     operation: c.ForkOperation,
 ) -> None:
-    matches = (
+    digest_matches = (
         receipt.request_digest == operation.request_digest
+    )
+    if operation.legacy_request_digest is not None:
+        digest_matches = digest_matches or (
+            receipt.request_digest
+            == operation.legacy_request_digest
+        )
+    matches = (
+        digest_matches
         and receipt.kind == operation.kind
         and receipt.source_branch_id == operation.source_branch_id
         and receipt.target_turn_id == operation.target_turn_id
@@ -2884,6 +2953,9 @@ def _replayed_edit_result(
         replaced_user_turn_id=target.turn_id,
         user_turn=user_turn,
         assistant_turn=assistant_turn,
+        generation_configuration=_fork_generation_configuration(
+            assistant_turn
+        ),
     )
 
 
@@ -2947,7 +3019,26 @@ def _replayed_retry_result(
         source_branch_id=source.record.branch_id,
         retried_assistant_turn_id=target.turn_id,
         assistant_turn=assistant_turn,
+        generation_configuration=_fork_generation_configuration(
+            assistant_turn
+        ),
     )
+
+
+def _fork_generation_configuration(
+    assistant_turn: c.TurnRecord,
+) -> Optional[c.GenerationConfigurationPayload]:
+    configuration = c.pending_generation_configuration(
+        assistant_turn,
+        required=False,
+    )
+    if configuration is not None:
+        return configuration
+    if assistant_turn.metadata:
+        raise c.ConversationCorruptError(
+            "legacy pending assistant carries unexpected metadata"
+        )
+    return None
 
 
 def materialize_fork_source_locked(
@@ -3029,6 +3120,7 @@ def fork_edit_user_locked(
     text: str,
     model_id: str,
     input_mode: c.InputMode,
+    generation_configuration: c.GenerationConfigurationPayload,
     metadata: c.JsonObject,
 ) -> c.EditUserForkResult:
     _assert_fork_operation(
@@ -3067,6 +3159,9 @@ def fork_edit_user_locked(
         now=now,
         model_id=model_id,
         input_mode=input_mode,
+        metadata=c.generation_configuration_metadata(
+            generation_configuration
+        ),
     )
     updated_record = replace(
         branch.record,
@@ -3100,6 +3195,9 @@ def fork_edit_user_locked(
         replaced_user_turn_id=context.target.turn_id,
         user_turn=user_turn,
         assistant_turn=assistant_turn,
+        generation_configuration=_fork_generation_configuration(
+            assistant_turn
+        ),
     )
 
 
@@ -3181,6 +3279,7 @@ def fork_retry_assistant_locked(
     operation: c.ForkOperation,
     model_id: str,
     input_mode: c.InputMode,
+    generation_configuration: c.GenerationConfigurationPayload,
 ) -> c.RetryAssistantForkResult:
     _assert_fork_operation(
         context=context,
@@ -3225,6 +3324,9 @@ def fork_retry_assistant_locked(
         now=branch.record.created_at,
         model_id=model_id,
         input_mode=input_mode,
+        metadata=c.generation_configuration_metadata(
+            generation_configuration
+        ),
     )
     updated_record = replace(
         branch.record,
@@ -3258,6 +3360,9 @@ def fork_retry_assistant_locked(
         source_branch_id=source.record.branch_id,
         retried_assistant_turn_id=context.target.turn_id,
         assistant_turn=assistant_turn,
+        generation_configuration=_fork_generation_configuration(
+            assistant_turn
+        ),
     )
 
 

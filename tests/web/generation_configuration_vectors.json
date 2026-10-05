@@ -1,0 +1,157 @@
+{
+  "valid": [
+    {
+      "name": "ordinary",
+      "wire": {
+        "codec_version": 1,
+        "model_id": "llada",
+        "input_mode": "chat",
+        "device": "cuda",
+        "schema_id": "1111111111111111111111111111111111111111111111111111111111111111",
+        "experimental": false,
+        "parameters": {
+          "steps": 128,
+          "temperature": 0.0,
+          "alternatives": true,
+          "remasking": "low_confidence"
+        }
+      },
+      "action": {
+        "codecVersion": 1,
+        "modelId": "llada",
+        "inputMode": "chat",
+        "device": "cuda",
+        "schemaId": "1111111111111111111111111111111111111111111111111111111111111111",
+        "experimental": false,
+        "parameters": {
+          "steps": 128,
+          "temperature": 0.0,
+          "alternatives": true,
+          "remasking": "low_confidence"
+        }
+      }
+    },
+    {
+      "name": "experimental_cpu",
+      "wire": {
+        "codec_version": 1,
+        "model_id": "smollm3",
+        "input_mode": "chat",
+        "device": "cpu",
+        "schema_id": "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+        "experimental": true,
+        "parameters": {
+          "max_new_tokens": 1024,
+          "temperature": 1.25,
+          "thinking": false
+        }
+      },
+      "action": {
+        "codecVersion": 1,
+        "modelId": "smollm3",
+        "inputMode": "chat",
+        "device": "cpu",
+        "schemaId": "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+        "experimental": true,
+        "parameters": {
+          "max_new_tokens": 1024,
+          "temperature": 1.25,
+          "thinking": false
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "missing_schema",
+      "wire": {
+        "codec_version": 1,
+        "model_id": "llada",
+        "input_mode": "chat",
+        "device": "cuda",
+        "experimental": false,
+        "parameters": {}
+      },
+      "error": "field"
+    },
+    {
+      "name": "uppercase_schema",
+      "wire": {
+        "codec_version": 1,
+        "model_id": "llada",
+        "input_mode": "chat",
+        "device": "cuda",
+        "schema_id": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "experimental": false,
+        "parameters": {}
+      },
+      "error": "lowercase hexadecimal"
+    },
+    {
+      "name": "unknown_field",
+      "wire": {
+        "codec_version": 1,
+        "model_id": "llada",
+        "input_mode": "chat",
+        "device": "cuda",
+        "schema_id": "1111111111111111111111111111111111111111111111111111111111111111",
+        "experimental": false,
+        "parameters": {},
+        "extra": true
+      },
+      "error": "field"
+    },
+    {
+      "name": "unsupported_codec",
+      "wire": {
+        "codec_version": 2,
+        "model_id": "llada",
+        "input_mode": "chat",
+        "device": "cuda",
+        "schema_id": "1111111111111111111111111111111111111111111111111111111111111111",
+        "experimental": false,
+        "parameters": {}
+      },
+      "error": "codec"
+    },
+    {
+      "name": "invalid_device",
+      "wire": {
+        "codec_version": 1,
+        "model_id": "llada",
+        "input_mode": "chat",
+        "device": "tpu",
+        "schema_id": "1111111111111111111111111111111111111111111111111111111111111111",
+        "experimental": false,
+        "parameters": {}
+      },
+      "error": "cpu or cuda"
+    },
+    {
+      "name": "non_boolean_mode",
+      "wire": {
+        "codec_version": 1,
+        "model_id": "llada",
+        "input_mode": "chat",
+        "device": "cuda",
+        "schema_id": "1111111111111111111111111111111111111111111111111111111111111111",
+        "experimental": 0,
+        "parameters": {}
+      },
+      "error": "boolean"
+    },
+    {
+      "name": "parameter_array",
+      "wire": {
+        "codec_version": 1,
+        "model_id": "llada",
+        "input_mode": "chat",
+        "device": "cuda",
+        "schema_id": "1111111111111111111111111111111111111111111111111111111111111111",
+        "experimental": false,
+        "parameters": []
+      },
+      "error": "object"
+    }
+  ]
+}

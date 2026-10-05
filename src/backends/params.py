@@ -26,6 +26,7 @@ that is one model's arithmetic rather than a property of the schema.
 
 from __future__ import annotations
 
+import math
 from typing import (
     Any,
     Dict,
@@ -43,6 +44,9 @@ from src.backends.protocol import (
 
 # What a resolved parameter can be, mirroring ParamSpec.default.
 ParamValue = Union[int, float, str, bool]
+PARAMETER_NUMBER_ABS_MAX = 10**100
+
+assert PARAMETER_NUMBER_ABS_MAX > 2**63
 
 
 def resolve_params(
@@ -214,12 +218,19 @@ def _as_number(spec: ParamSpec, given: Any) -> float:
     which field in it.
     """
     try:
-        return float(given)
-    except (TypeError, ValueError):
+        number = float(given)
+    except (OverflowError, TypeError, ValueError):
         raise ValueError(
             f"{spec.name} must be a number,"
             f" got {given!r}"
         ) from None
+    if not math.isfinite(number):
+        raise ValueError(f"{spec.name} must be finite")
+    if abs(number) > PARAMETER_NUMBER_ABS_MAX:
+        raise ValueError(
+            f"{spec.name} exceeds the numeric limit"
+        )
+    return number
 
 
 def _clamped(

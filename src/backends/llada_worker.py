@@ -48,7 +48,7 @@ from src.inference.hf_download import (
     download_with_progress,
     revision_from_snapshot,
 )
-from src.inference.llada_kernel import block_schedule
+from src.inference.llada_schedule import block_schedule
 from src.inference.load_progress import (
     load_target_bytes,
     sample_load_progress,

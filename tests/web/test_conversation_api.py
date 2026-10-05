@@ -14,7 +14,9 @@ responses stay bounded and lightweight.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import subprocess
 import sys
 import threading
@@ -30,6 +32,7 @@ from starlette.testclient import TestClient
 from src.web import _conversation_store_core as core_store
 from src.web import (
     conversation_api,
+    conversation_generation,
     conversation_store,
     run_store,
     server,
@@ -103,6 +106,45 @@ CONVERSATION_ROUTES = {
 
 def _operation_id() -> str:
     return uuid4().hex
+
+
+def _semantic_digest(payload: Dict[str, object]) -> str:
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _generation_configuration() -> Dict[str, object]:
+    """Build the exact ordinary LLaDA panel snapshot for API tests."""
+    return {
+        "codec_version": (
+            conversation_store.GENERATION_CONFIGURATION_CODEC_VERSION
+        ),
+        "model_id": "llada",
+        "input_mode": "chat",
+        "device": "cuda",
+        "schema_id": (
+            conversation_generation.registry_generation_schema_id(
+                "llada", "cuda"
+            )
+        ),
+        "experimental": False,
+        "parameters": {
+            "steps": 128,
+            "gen_length": 160,
+            "block_length": 160,
+            "temperature": 0.0,
+            "cfg_scale": 0.0,
+            "seed": -1,
+            "remasking": "low_confidence",
+            "alternatives": True,
+        },
+    }
 
 
 @pytest.fixture()
@@ -270,6 +312,7 @@ def _retry_fork(
             "catalog_revision": conversation["catalog_revision"],
             "model_id": "llada",
             "input_mode": "chat",
+            "generation_configuration": _generation_configuration(),
         },
     )
     assert response.status_code == 201, response.text
@@ -498,6 +541,7 @@ def test_lost_v1_fork_http_replay_needs_no_v2_branch_id(
         "catalog_revision": 0,
         "model_id": "llada",
         "input_mode": "chat",
+        "generation_configuration": _generation_configuration(),
     }
 
     first = client.post(route, json=body)
@@ -607,6 +651,7 @@ def test_retry_fork_lists_and_navigates_both_branches(
             "catalog_revision": current["catalog_revision"],
             "model_id": "llada",
             "input_mode": "chat",
+            "generation_configuration": _generation_configuration(),
         },
     )
 
@@ -716,6 +761,7 @@ def test_early_descendant_edit_omits_stale_ancestor_control(
             "text": "Edited question 1",
             "model_id": "llada",
             "input_mode": "chat",
+            "generation_configuration": _generation_configuration(),
         },
     )
     assert response.status_code == 201, response.text
@@ -757,6 +803,7 @@ def test_nested_delete_returns_only_its_effective_marker(
             "text": "Edited question",
             "model_id": "llada",
             "input_mode": "chat",
+            "generation_configuration": _generation_configuration(),
         },
     )
     assert edit_response.status_code == 201, edit_response.text
@@ -830,6 +877,7 @@ def test_edit_user_fork_returns_replacement_pair(
             "text": "Edited question",
             "model_id": "llada",
             "input_mode": "chat",
+            "generation_configuration": _generation_configuration(),
             "metadata": {"source": "edit"},
         },
     )
@@ -908,6 +956,7 @@ def test_lost_edit_post_replays_same_created_payload(
         "text": "Edited question",
         "model_id": "llada",
         "input_mode": "chat",
+        "generation_configuration": _generation_configuration(),
         "metadata": {"source": "replay"},
     }
 
@@ -975,6 +1024,7 @@ def test_lost_retry_post_replays_same_created_payload(
         "catalog_revision": conversation["catalog_revision"],
         "model_id": "llada",
         "input_mode": "chat",
+        "generation_configuration": _generation_configuration(),
     }
 
     first = client.post(route, json=request)
@@ -989,10 +1039,89 @@ def test_lost_retry_post_replays_same_created_payload(
     assert len(branches["branch_ids"]) == 2
 
 
-def test_changed_payload_operation_collision_is_a_conflict(
+def test_legacy_retry_replay_does_not_invent_settings(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Old receipts remain authoritative without guessed defaults."""
+    completed = _complete(client, _append(client, _create(client)))
+    conversation = _conversation_from(completed)
+    assistant = _turn_from(completed)
+    operation_id = "6" * 32
+    route = (
+        f"/api/conversations/{conversation['id']}/branches/"
+        f"retry-assistant/{assistant['turn_id']}"
+    )
+    request = {
+        "operation_id": operation_id,
+        "branch_id": conversation["branch_id"],
+        "branch_revision": conversation["branch_revision"],
+        "catalog_revision": conversation["catalog_revision"],
+        "model_id": "llada",
+        "input_mode": "chat",
+        "generation_configuration": _generation_configuration(),
+    }
+    first = client.post(route, json=request)
+    assert first.status_code == 201, first.text
+    result = first.json()
+    result_branch = result["branch"]["branch_id"]
+    pending_id = result["assistant_turn"]["turn_id"]
+    conversation_dir = (
+        tmp_path
+        / conversation_store.CONVERSATIONS_DIR_NAME
+        / str(conversation["id"])
+    )
+    turn_path = (
+        conversation_dir
+        / conversation_store.BRANCHES_DIR_NAME
+        / result_branch
+        / conversation_store.TURNS_DIR_NAME
+        / pending_id
+        / "00000001.json"
+    )
+    turn = json.loads(turn_path.read_text(encoding="utf-8"))
+    turn["metadata"] = {}
+    turn_path.write_text(json.dumps(turn), encoding="utf-8")
+    receipt_path = (
+        conversation_dir
+        / conversation_store.OPERATIONS_DIR_NAME
+        / f"{operation_id}.json"
+    )
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["request_digest"] = _semantic_digest(
+        {
+            "kind": "retry_assistant",
+            "source_branch_id": conversation["branch_id"],
+            "target_turn_id": assistant["turn_id"],
+            "model_id": "llada",
+            "input_mode": "chat",
+        }
+    )
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    del request["generation_configuration"]
+
+    replayed = client.post(route, json=request)
+    branches = client.get(
+        f"/api/conversations/{conversation['id']}/branches"
+    ).json()
+
+    assert replayed.status_code == 201, replayed.text
+    authoritative = replayed.json()["generation_configuration"]
+    assert authoritative is None
+    assert len(branches["branch_ids"]) == 2
+    monkeypatch.delitem(conversation_api.REGISTRY, "llada")
+
+    unavailable = client.post(route, json=request)
+
+    assert unavailable.status_code == 201, unavailable.text
+    assert unavailable.json()["generation_configuration"] is None
+
+
+def test_changed_configuration_operation_collision_is_a_conflict(
     client: TestClient,
 ) -> None:
-    """A reused id with changed edit text maps to a stable 409."""
+    """Changed hyperparameters under one id produce a stable 409."""
     completed = _complete(client, _append(client, _create(client)))
     conversation = _conversation_from(completed)
     page = client.get(
@@ -1012,9 +1141,14 @@ def test_changed_payload_operation_collision_is_a_conflict(
         "text": "First text",
         "model_id": "llada",
         "input_mode": "chat",
+        "generation_configuration": _generation_configuration(),
     }
     first = client.post(route, json=request)
-    request["text"] = "Changed text"
+    configuration = request["generation_configuration"]
+    assert isinstance(configuration, dict)
+    parameters = configuration["parameters"]
+    assert isinstance(parameters, dict)
+    parameters["temperature"] = 0.5
 
     collided = client.post(route, json=request)
 
@@ -1435,6 +1569,292 @@ def test_model_input_mode_mismatch_is_refused(
     assert "uses" in response.json()["error"]
 
 
+def test_retry_configuration_round_trips_then_completion_drops_it(
+    client: TestClient,
+) -> None:
+    """HTTP pages expose the snapshot only while pending."""
+    completed = _complete(client, _append(client, _create(client)))
+    conversation = _conversation_from(completed)
+    assistant = _turn_from(completed)
+    configuration = _generation_configuration()
+    parameters = configuration["parameters"]
+    assert isinstance(parameters, dict)
+    parameters["temperature"] = 0.8
+    response = client.post(
+        (
+            f"/api/conversations/{conversation['id']}/branches/"
+            f"retry-assistant/{assistant['turn_id']}"
+        ),
+        json={
+            "operation_id": "a" * 32,
+            "branch_id": conversation["branch_id"],
+            "branch_revision": conversation["branch_revision"],
+            "catalog_revision": conversation["catalog_revision"],
+            "model_id": "llada",
+            "input_mode": "chat",
+            "generation_configuration": configuration,
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    forked = response.json()
+    pending = forked["assistant_turn"]
+    assert pending["metadata"] == {
+        conversation_store.PENDING_GENERATION_KEY: configuration
+    }
+    completed_fork = _complete_fork(
+        client,
+        forked["conversation"],
+        pending,
+        text="Configured retry",
+    )
+    assert (
+        conversation_store.PENDING_GENERATION_KEY
+        not in _turn_from(completed_fork)["metadata"]
+    )
+
+
+def test_reserved_pending_metadata_injection_is_a_bad_request(
+    client: TestClient,
+) -> None:
+    """Only a validated fork may publish the reserved metadata key."""
+    conversation = _create(client)
+    injected = {
+        conversation_store.PENDING_GENERATION_KEY: {
+            "spoofed": True
+        }
+    }
+    append = client.post(
+        f"/api/conversations/{conversation['id']}/turns",
+        json={
+            "branch_id": conversation["branch_id"],
+            "branch_revision": conversation["branch_revision"],
+            "text": "Question",
+            "model_id": "llada",
+            "input_mode": "chat",
+            "metadata": injected,
+        },
+    )
+    assert append.status_code == 400
+
+    reserved = _append(client, conversation)
+    current = _conversation_from(reserved)
+    assistant = reserved["assistant_turn"]
+    assert isinstance(assistant, dict)
+    complete = client.put(
+        (
+            f"/api/conversations/{current['id']}/turns/"
+            f"{assistant['turn_id']}"
+        ),
+        json={
+            "branch_id": current["branch_id"],
+            "branch_revision": current["branch_revision"],
+            "text": "Answer",
+            "partial": False,
+            "metadata": injected,
+        },
+    )
+
+    assert complete.status_code == 400
+    latest = client.get(
+        f"/api/conversations/{current['id']}/metadata"
+        f"?branch_id={current['branch_id']}"
+    ).json()["conversation"]
+    assert latest["pending_assistant_id"] == assistant["turn_id"]
+
+
+@pytest.mark.parametrize(
+    ("case", "status"),
+    [
+        ("unknown_parameter", 400),
+        ("bool_as_int", 400),
+        ("missing_parameter", 400),
+        ("experimental_bool", 422),
+        ("unknown_field", 422),
+        ("missing_codec", 422),
+        ("future_codec", 422),
+        ("model_mismatch", 400),
+        ("input_mismatch", 400),
+        ("unsupported_device", 400),
+    ],
+)
+def test_retry_configuration_is_strict_at_http_boundary(
+    client: TestClient,
+    case: str,
+    status: int,
+) -> None:
+    """Malformed action snapshots never reach branch publication."""
+    completed = _complete(client, _append(client, _create(client)))
+    conversation = _conversation_from(completed)
+    assistant = _turn_from(completed)
+    configuration = _generation_configuration()
+    parameters = configuration["parameters"]
+    assert isinstance(parameters, dict)
+    if case == "unknown_parameter":
+        parameters["unknown"] = 1
+    elif case == "bool_as_int":
+        parameters["steps"] = True
+    elif case == "missing_parameter":
+        del parameters["steps"]
+    elif case == "experimental_bool":
+        configuration["experimental"] = 1
+    elif case == "unknown_field":
+        configuration["unknown"] = True
+    elif case == "missing_codec":
+        del configuration["codec_version"]
+    elif case == "future_codec":
+        configuration["codec_version"] = 2
+    elif case == "model_mismatch":
+        configuration["model_id"] = "mamba3"
+    elif case == "input_mismatch":
+        configuration["input_mode"] = "completion"
+    else:
+        assert case == "unsupported_device"
+        configuration["device"] = "cpu"
+    request = {
+        "operation_id": _operation_id(),
+        "branch_id": conversation["branch_id"],
+        "branch_revision": conversation["branch_revision"],
+        "catalog_revision": conversation["catalog_revision"],
+        "model_id": "llada",
+        "input_mode": "chat",
+        "generation_configuration": configuration,
+    }
+    response = client.post(
+        (
+            f"/api/conversations/{conversation['id']}/branches/"
+            f"retry-assistant/{assistant['turn_id']}"
+        ),
+        json=request,
+    )
+
+    assert response.status_code == status, response.text
+    branches = client.get(
+        f"/api/conversations/{conversation['id']}/branches"
+    ).json()
+    assert branches["branch_ids"] == [conversation["branch_id"]]
+
+
+def test_retry_requires_configuration_for_a_new_fork(
+    client: TestClient,
+) -> None:
+    """Only a matching pre-feature receipt may omit its snapshot."""
+    completed = _complete(client, _append(client, _create(client)))
+    conversation = _conversation_from(completed)
+    assistant = _turn_from(completed)
+    response = client.post(
+        (
+            f"/api/conversations/{conversation['id']}/branches/"
+            f"retry-assistant/{assistant['turn_id']}"
+        ),
+        json={
+            "operation_id": _operation_id(),
+            "branch_id": conversation["branch_id"],
+            "branch_revision": conversation["branch_revision"],
+            "catalog_revision": conversation["catalog_revision"],
+            "model_id": "llada",
+            "input_mode": "chat",
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    branches = client.get(
+        f"/api/conversations/{conversation['id']}/branches"
+    ).json()
+    assert branches["branch_ids"] == [conversation["branch_id"]]
+
+
+@pytest.mark.parametrize(
+    ("schema_id", "status"),
+    [(None, 422), ("A" * 64, 422), ("0" * 64, 400)],
+)
+def test_retry_configuration_requires_current_schema_id(
+    client: TestClient,
+    schema_id: Optional[str],
+    status: int,
+) -> None:
+    """Bad or stale schema identities cannot write."""
+    completed = _complete(client, _append(client, _create(client)))
+    conversation = _conversation_from(completed)
+    assistant = _turn_from(completed)
+    configuration = _generation_configuration()
+    if schema_id is None:
+        del configuration["schema_id"]
+    else:
+        configuration["schema_id"] = schema_id
+
+    response = client.post(
+        (
+            f"/api/conversations/{conversation['id']}/branches/"
+            f"retry-assistant/{assistant['turn_id']}"
+        ),
+        json={
+            "operation_id": _operation_id(),
+            "branch_id": conversation["branch_id"],
+            "branch_revision": conversation["branch_revision"],
+            "catalog_revision": conversation["catalog_revision"],
+            "model_id": "llada",
+            "input_mode": "chat",
+            "generation_configuration": configuration,
+        },
+    )
+
+    assert response.status_code == status, response.text
+    branches = client.get(
+        f"/api/conversations/{conversation['id']}/branches"
+    ).json()
+    assert branches["branch_ids"] == [conversation["branch_id"]]
+
+
+@pytest.mark.parametrize(
+    ("parameter", "value", "message"),
+    [
+        ("gen_length", 159, "divisible by block_length"),
+        ("block_length", 32, "steps .* divisible by"),
+        ("steps", 10**1000, "numeric limit"),
+        ("temperature", 1e101, "numeric limit"),
+    ],
+)
+def test_retry_configuration_rejects_relations_and_huge_numbers(
+    client: TestClient,
+    parameter: str,
+    value: object,
+    message: str,
+) -> None:
+    """Malformed snapshots are 400s and never publish a branch."""
+    completed = _complete(client, _append(client, _create(client)))
+    conversation = _conversation_from(completed)
+    assistant = _turn_from(completed)
+    configuration = _generation_configuration()
+    parameters = configuration["parameters"]
+    assert isinstance(parameters, dict)
+    parameters[parameter] = value
+
+    response = client.post(
+        (
+            f"/api/conversations/{conversation['id']}/branches/"
+            f"retry-assistant/{assistant['turn_id']}"
+        ),
+        json={
+            "operation_id": _operation_id(),
+            "branch_id": conversation["branch_id"],
+            "branch_revision": conversation["branch_revision"],
+            "catalog_revision": conversation["catalog_revision"],
+            "model_id": "llada",
+            "input_mode": "chat",
+            "generation_configuration": configuration,
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.json()["reason"] == "invalid_request"
+    assert re.search(message, response.json()["error"])
+    branches = client.get(
+        f"/api/conversations/{conversation['id']}/branches"
+    ).json()
+    assert branches["branch_ids"] == [conversation["branch_id"]]
+
+
 def test_missing_run_link_is_not_found(
     client: TestClient,
 ) -> None:
@@ -1760,6 +2180,7 @@ def test_stale_catalog_revision_is_a_distinct_conflict(
             "catalog_revision": 0,
             "model_id": "llada",
             "input_mode": "chat",
+            "generation_configuration": _generation_configuration(),
         },
     )
 
@@ -1910,6 +2331,7 @@ def test_new_schema_v2_fork_requires_explicit_branch_identity(
             "catalog_revision": conversation["catalog_revision"],
             "model_id": "llada",
             "input_mode": "chat",
+            "generation_configuration": _generation_configuration(),
         },
     )
 
@@ -1960,6 +2382,7 @@ def test_fork_operation_id_is_strict_lowercase_hex(
             "catalog_revision": conversation["catalog_revision"],
             "model_id": "llada",
             "input_mode": "chat",
+            "generation_configuration": _generation_configuration(),
         },
     )
 
@@ -2007,6 +2430,7 @@ def test_corrupt_operation_receipt_is_a_store_error(
         "catalog_revision": conversation["catalog_revision"],
         "model_id": "llada",
         "input_mode": "chat",
+        "generation_configuration": _generation_configuration(),
     }
     committed = client.post(route, json=request)
     assert committed.status_code == 201

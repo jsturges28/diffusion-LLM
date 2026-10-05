@@ -45,6 +45,7 @@ const MASK = "\u2591";
 
 const LOST = /lost its connection mid-run/;
 const REPLACED = /reloaded since this run was made/;
+const SCHEMA_ID = "a".repeat(64);
 
 // What a page sends that only the worker holding its run can answer.
 const STATEFUL = ["resume", "substitute", "probe", "rewind"];
@@ -62,6 +63,7 @@ function diffusionModel(id) {
       unresolved_char: MASK,
       supported_devices: ["cuda"],
     },
+    generation_schema_ids: { cuda: SCHEMA_ID },
     param_specs: [],
     status: "active",
   };
@@ -81,6 +83,7 @@ const SMOL = {
     supports_substitution: true,
     supported_devices: ["cuda", "cpu"],
   },
+  generation_schema_ids: { cuda: SCHEMA_ID, cpu: SCHEMA_ID },
   param_specs: [],
   status: "active",
 };
@@ -125,6 +128,7 @@ function resident(model, worker) {
     type: "resident",
     model: model.id,
     device: "cuda",
+    generation_schema_id: SCHEMA_ID,
     operation: 1,
   };
   if (worker !== undefined) {
@@ -401,6 +405,21 @@ test("a restart under the run locks it the same way", async () => {
   context.handleResident(resident(LLADA, "c1d2:1"));
 
   assert.equal(isLocked(registry.get("btn-edit-frames")), true);
+});
+
+test("a changed generation schema refuses the stale form", async () => {
+  const { context, registry } = await finishedLlada("b0a7:1");
+  const frame = resident(LLADA, "b0a7:2");
+  frame.generation_schema_id = "b".repeat(64);
+
+  context.handleResident(frame);
+
+  assert.equal(context.modelReady, false);
+  assert.equal(registry.get("btn-generate").disabled, true);
+  assert.match(
+    registry.get("status-message").textContent,
+    /Run settings schema/
+  );
 });
 
 test("reconnecting to the same worker leaves the run editable", async () => {

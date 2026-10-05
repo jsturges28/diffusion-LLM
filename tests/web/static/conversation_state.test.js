@@ -14,10 +14,10 @@ const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
-const SOURCE = path.join(
+const STATIC = path.join(
   __dirname,
   "..", "..", "..",
-  "src", "web", "static", "conversation_state.js"
+  "src", "web", "static"
 );
 const CONVERSATION_ID = "a".repeat(32);
 const BRANCH_ID = "b_" + "b".repeat(32);
@@ -25,7 +25,15 @@ const OTHER_BRANCH_ID = "b_" + "c".repeat(32);
 
 function load() {
   const context = vm.createContext({});
-  vm.runInContext(fs.readFileSync(SOURCE, "utf8"), context);
+  for (const name of [
+    "conversation_generation.js",
+    "conversation_state.js",
+  ]) {
+    vm.runInContext(
+      fs.readFileSync(path.join(STATIC, name), "utf8"),
+      context
+    );
+  }
   return context;
 }
 
@@ -43,6 +51,22 @@ function turn(index, overrides) {
     context_pack: {},
     metadata: {},
     run_link: null,
+  }, overrides || {});
+}
+
+function pendingGenerationConfiguration(overrides) {
+  return Object.assign({
+    codec_version: 1,
+    model_id: "llada",
+    input_mode: "chat",
+    device: "cuda",
+    schema_id: "1".repeat(64),
+    experimental: false,
+    parameters: {
+      steps: 128,
+      temperature: 0.75,
+      alternatives: true,
+    },
   }, overrides || {});
 }
 
@@ -235,6 +259,147 @@ test("compact turns discard heavy arbitrary metadata", () => {
   assert.equal(state.turns[1].metadata.status, "completed");
   assert.equal("frames" in state.turns[1].metadata, false);
   assert.equal("candidates" in state.turns[1].metadata, false);
+});
+
+test("pending configuration is retained by a pure reader", () => {
+  const api = load();
+  const configuration = pendingGenerationConfiguration();
+  const state = api.conversationStateReduce(
+    api.conversationStateCreate(),
+    {
+      type: "loaded",
+      conversation: manifest(2, {
+        schema_version: 2,
+        branch_id: BRANCH_ID,
+        branch_revision: 3,
+        catalog_revision: 0,
+        default_branch_id: BRANCH_ID,
+        pending_assistant_id: "00000002",
+        tail_version: 1,
+      }),
+      page: {
+        schema_version: 2,
+        conversation_id: CONVERSATION_ID,
+        branch_id: BRANCH_ID,
+        branch_revision: 3,
+        revision: 3,
+        catalog_revision: 0,
+        default_branch_id: BRANCH_ID,
+        turns: [
+          turn(1),
+          turn(2, {
+            version: 1,
+            text: "",
+            partial: true,
+            metadata: {
+              pending_generation_v1: configuration,
+            },
+          }),
+        ],
+        next_before: null,
+        has_more: false,
+        branch_points: [],
+      },
+    }
+  );
+
+  const durable =
+    api.conversationStatePendingGenerationConfiguration(state);
+  assert.equal(durable.modelId, "llada");
+  assert.equal(durable.codecVersion, 1);
+  assert.equal(durable.inputMode, "chat");
+  assert.equal(durable.device, "cuda");
+  assert.equal(durable.experimental, false);
+  assert.equal(durable.parameters.temperature, 0.75);
+  assert.equal(Object.isFrozen(durable), true);
+  assert.equal(Object.isFrozen(durable.parameters), true);
+});
+
+test("historical user and completed reserved keys stay ordinary", () => {
+  const api = load();
+  const user = api.conversationStateTurn(
+    turn(1, {
+      metadata: {
+        pending_generation_v1: { historical: "user" },
+      },
+    }),
+    "b_" + CONVERSATION_ID,
+    1
+  );
+  const compact = api.conversationStateTurn(
+    turn(2, {
+      metadata: {
+        status: "completed",
+        pending_generation_v1: { historical: "completed" },
+      },
+    }),
+    "b_" + CONVERSATION_ID,
+    2
+  );
+  const legacyPending = api.conversationStateTurn(
+    turn(2, {
+      version: 1,
+      text: "",
+      partial: true,
+      metadata: {
+        pending_generation_v1: { historical: "pending" },
+      },
+    }),
+    "b_" + CONVERSATION_ID,
+    1,
+    "00000002"
+  );
+
+  assert.equal("pending_generation_v1" in user.metadata, false);
+  assert.equal(compact.metadata.status, "completed");
+  assert.equal("pending_generation_v1" in compact.metadata, false);
+  assert.equal(
+    "pending_generation_v1" in legacyPending.metadata,
+    false
+  );
+});
+
+test("pending configuration parser rejects invalid bounded shapes",
+  () => {
+  const api = load();
+  const scenarios = [
+    pendingGenerationConfiguration({ unknown: true }),
+    pendingGenerationConfiguration({ codec_version: 2 }),
+    pendingGenerationConfiguration({ model_id: "mamba3" }),
+    pendingGenerationConfiguration({
+      experimental: 1,
+    }),
+    pendingGenerationConfiguration({
+      parameters: { temperature: Infinity },
+    }),
+    pendingGenerationConfiguration({
+      parameters: { temperature: 1e101 },
+    }),
+    pendingGenerationConfiguration({
+      parameters: Object.fromEntries(
+        Array.from({ length: 65 }, (_, index) => [
+          "parameter_" + index,
+          index,
+        ])
+      ),
+    }),
+  ];
+
+  for (const configuration of scenarios) {
+    assert.throws(() => api.conversationStateTurn(
+      turn(2, {
+        version: 1,
+        text: "",
+        partial: true,
+        metadata: {
+          pending_generation_v1: configuration,
+        },
+      }),
+      "b_" + CONVERSATION_ID,
+      2,
+      "00000002"
+    ));
+  }
 });
 
 function opaqueTurn(index, role, branchId) {

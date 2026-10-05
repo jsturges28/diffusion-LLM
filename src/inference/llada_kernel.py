@@ -24,12 +24,15 @@ callers and only the step and the schedule are shared.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Optional, Tuple
 
 import numpy as np
 import torch
 
+from src.inference.llada_schedule import (
+    BlockSchedule as BlockSchedule,
+    block_schedule as block_schedule,
+)
 from src.inference.logit_signals import (
     Candidates,
     entropy_nats,
@@ -43,65 +46,6 @@ from src.inference.logit_signals import (
 MASK_ID: int = 126336
 
 assert MASK_ID > 0, "the mask id is a real vocabulary entry"
-
-
-@dataclass(frozen=True)
-class BlockSchedule:
-    """How a run is divided into blocks, and steps within a block.
-
-    Frozen because it is derived once per run and read many times; a
-    caller that could edit it would be able to disagree with the
-    validation that produced it.
-    """
-
-    num_blocks: int
-    steps_per_block: int
-
-    @property
-    def total_steps(self) -> int:
-        return self.num_blocks * self.steps_per_block
-
-
-def block_schedule(
-    *, gen_length: int, block_length: int, steps: int
-) -> BlockSchedule:
-    """Divide ``gen_length`` into blocks and ``steps`` between them.
-
-    Raises ``ValueError`` naming the offending pair when the division
-    does not come out even. That is an operating error, not a broken
-    invariant: the three values arrive from a request, so the worker
-    turns this into an invalid-request envelope rather than crashing.
-
-    One owner for arithmetic that used to be written three times: here
-    by way of the worker's validation, as bare asserts inside the
-    generate loop, and in the browser's `validateDivisibility`. The
-    browser's copy stays, because disabling the button beats refusing
-    a request, but it is now the only duplicate and it is on the other
-    side of a network boundary.
-    """
-    if block_length <= 0:
-        raise ValueError(
-            f"block_length ({block_length}) must be positive"
-        )
-    if steps <= 0:
-        raise ValueError(f"steps ({steps}) must be positive")
-    if gen_length % block_length != 0:
-        raise ValueError(
-            f"gen_length ({gen_length}) must be"
-            f" divisible by block_length ({block_length})"
-        )
-    num_blocks = gen_length // block_length
-    if steps % num_blocks != 0:
-        raise ValueError(
-            f"steps ({steps}) must be divisible by"
-            f" num_blocks ({num_blocks})"
-        )
-    schedule = BlockSchedule(
-        num_blocks=num_blocks,
-        steps_per_block=steps // num_blocks,
-    )
-    assert schedule.total_steps == steps, "steps must be preserved"
-    return schedule
 
 
 def add_gumbel_noise(

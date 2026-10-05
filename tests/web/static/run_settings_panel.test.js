@@ -17,12 +17,17 @@ const SCRIPTS = [
   "run_settings_core.js",
   "run_settings_panel.js",
 ];
+const SCHEMA_ID = "4".repeat(64);
 
 const MODEL = {
   id: "test-model",
   display_name: "Test Model",
   capabilities: {
     input_mode: "chat",
+  },
+  generation_schema_ids: {
+    cpu: SCHEMA_ID,
+    cuda: SCHEMA_ID,
   },
   param_specs: [
     {
@@ -104,6 +109,10 @@ const OTHER_MODEL = {
   display_name: "Other Model",
   capabilities: {
     input_mode: "completion",
+  },
+  generation_schema_ids: {
+    cpu: SCHEMA_ID,
+    cuda: SCHEMA_ID,
   },
   param_specs: [
     {
@@ -191,6 +200,20 @@ test("factory boundary requires one uniquely prefixed host", () => {
     }),
     /must be a function/
   );
+  assert.throws(
+    () => page.context.runSettingsPanelCreate({
+      idPrefix: "x".repeat(65) + "-",
+      mount,
+    }),
+    /bounded and canonical/
+  );
+  assert.throws(
+    () => page.context.runSettingsPanelCreate({
+      idPrefix: "Bad prefix-",
+      mount,
+    }),
+    /bounded and canonical/
+  );
 });
 
 test("mounted disclosures use native details and prefixed labels",
@@ -239,6 +262,35 @@ test("native disclosure mirrors user-expanded state", () => {
   harness.root.open = false;
   harness.root.dispatch("toggle");
   assert.equal(summary.getAttribute("aria-expanded"), "false");
+});
+
+test("parameter help is reachable by keyboard and touch", () => {
+  const page = pageHarness();
+  const harness = mountPanel(page, "help-");
+  const info = input(
+    harness, "help-", "gen_length"
+  ).closest(".param-group").querySelector(".info-icon");
+  const tooltip = info.querySelector(".tooltip");
+
+  assert.equal(info.tabIndex, 0);
+  assert.equal(info.getAttribute("role"), "button");
+  assert.equal(info.getAttribute("aria-expanded"), "false");
+  assert.equal(tooltip.getAttribute("role"), "tooltip");
+  assert.equal(
+    info.getAttribute("aria-describedby"), tooltip.id
+  );
+
+  info.dispatch("keydown", {
+    key: "Enter",
+    preventDefault() {},
+  });
+  assert.equal(info.classList.contains("is-open"), true);
+  assert.equal(info.getAttribute("aria-expanded"), "true");
+  info.dispatch("keydown", {
+    key: "Escape",
+    preventDefault() {},
+  });
+  assert.equal(info.classList.contains("is-open"), false);
 });
 
 test("two seeded panels keep independent values", () => {
@@ -312,7 +364,49 @@ test("configure seed is copied into the initial snapshot", () => {
   assert.equal(snapshot.parameters.temperature, 1.2);
   assert.equal(snapshot.parameters.watermark, true);
   assert.equal(snapshot.experimental, true);
+  assert.equal(
+    mount.querySelector("#seed-param-temperature").max,
+    2
+  );
   assert.equal(Object.isFrozen(snapshot), true);
+});
+
+test("action seeds preserve invalid raw values for confirmation",
+  () => {
+  const page = pageHarness();
+  const mount = page.document.createElement("div");
+  const panel = page.context.runSettingsPanelCreate({
+    idPrefix: "invalid-seed-",
+    mount,
+  });
+  panel.wire();
+  configure(panel, {
+    seed: {
+      modelId: MODEL.id,
+      experimental: false,
+      parameters: {
+        gen_length: "6",
+        block_length: "4",
+        steps: "8",
+        temperature: "",
+      },
+    },
+  });
+
+  assert.equal(
+    mount.querySelector("#invalid-seed-param-gen_length").value,
+    "6"
+  );
+  assert.equal(
+    mount.querySelector("#invalid-seed-param-temperature").value,
+    ""
+  );
+  assert.equal(panel.validation().valid, false);
+  assert.equal(
+    panel.formState().parameters.temperature,
+    ""
+  );
+  assert.equal(Object.isFrozen(panel.formState()), true);
 });
 
 test("Reset restores device defaults and recommended mode", () => {
@@ -363,6 +457,11 @@ test("invalid collapsed settings reveal and focus first control",
     assert.equal(summary.getAttribute("aria-expanded"), "true");
     assert.equal(length.focused, true);
     assert.equal(length.classList.contains("input-warn"), true);
+    assert.equal(length.getAttribute("aria-invalid"), "true");
+    assert.equal(
+      length.getAttribute("aria-describedby"),
+      "invalid-validation-hint"
+    );
     assert.equal(status.hidden, false);
     assert.equal(status.getAttribute("role"), "status");
     assert.equal(
@@ -371,6 +470,38 @@ test("invalid collapsed settings reveal and focus first control",
     );
   }
 );
+
+test("validation status describes every invalid control", () => {
+  const page = pageHarness();
+  const harness = mountPanel(page, "errors-");
+  const length = input(harness, "errors-", "gen_length");
+  const temperature = input(
+    harness, "errors-", "temperature"
+  );
+  const status = byId(
+    harness, "errors-", "validation-hint"
+  );
+
+  length.value = "";
+  length.dispatch("input");
+  temperature.value = "";
+  temperature.dispatch("input");
+
+  assert.match(
+    status.textContent,
+    /Gen Length is empty or invalid\./
+  );
+  assert.match(
+    status.textContent,
+    /Temperature is empty or invalid\./
+  );
+  assert.equal(
+    length.getAttribute("aria-describedby"), status.id
+  );
+  assert.equal(
+    temperature.getAttribute("aria-describedby"), status.id
+  );
+});
 
 test("Experimental reveals controls and updates range help", () => {
   const page = pageHarness();
@@ -428,6 +559,11 @@ test("primary chips follow live values and invalid status", () => {
     ).textContent,
     "0.9"
   );
+  assert.equal(
+    temperature.getAttribute("aria-label"),
+    "Temperature 0.9"
+  );
+  assert.equal(temperature.getAttribute("role"), "group");
 
   input(harness, "chips-", "gen_length").value = "8";
   input(harness, "chips-", "gen_length").dispatch("input");
@@ -440,7 +576,7 @@ test("primary chips follow live values and invalid status", () => {
   assert.equal(steps.classList.contains("is-invalid"), true);
 });
 
-test("disabled state removes every editable tab stop", () => {
+test("frozen state keeps disclosure and help readable", () => {
   const page = pageHarness();
   const harness = mountPanel(page, "disabled-");
   const experimental = byId(
@@ -449,10 +585,21 @@ test("disabled state removes every editable tab stop", () => {
   const reset = byId(
     harness, "disabled-", "btn-param-defaults"
   );
+  const summary = byId(
+    harness, "disabled-", "run-settings-summary"
+  );
   const strategy = input(harness, "disabled-", "strategy");
+  const info = input(
+    harness, "disabled-", "gen_length"
+  ).closest(".param-group").querySelector(".info-icon");
 
   harness.panel.setDisabled(true);
 
+  assert.equal(harness.root.getAttribute("aria-disabled"), null);
+  assert.equal(summary.getAttribute("aria-disabled"), null);
+  assert.equal(summary.getAttribute("tabindex"), null);
+  assert.equal(info.getAttribute("aria-disabled"), null);
+  assert.equal(info.tabIndex, 0);
   assert.equal(experimental.disabled, true);
   assert.equal(reset.disabled, true);
   assert.equal(strategy.getAttribute("aria-disabled"), "true");
@@ -461,6 +608,18 @@ test("disabled state removes every editable tab stop", () => {
     input(harness, "disabled-", "gen_length").disabled,
     true
   );
+  harness.root.open = true;
+  harness.root.dispatch("toggle");
+  assert.equal(summary.getAttribute("aria-expanded"), "true");
+  info.dispatch("click", {
+    preventDefault() {},
+    stopPropagation() {},
+  });
+  assert.equal(info.classList.contains("is-open"), true);
+
+  harness.panel.setDisabled(false);
+  assert.equal(summary.getAttribute("tabindex"), null);
+  assert.equal(info.tabIndex, 0);
 });
 
 test("a panel without persistence never writes Draft storage", () => {
@@ -520,6 +679,33 @@ test("optional persistence reads and writes per model", () => {
     input(harness, "persist-", "max_new_tokens").value,
     "48"
   );
+});
+
+test("persisted Draft values clamp to active device bounds", () => {
+  const page = pageHarness();
+  const harness = mountPanel(page, "clamped-", {
+    readPersistedState() {
+      return {
+        experimental: false,
+        params: {
+          gen_length: "99",
+          block_length: "4",
+          steps: "8",
+          temperature: "9",
+        },
+      };
+    },
+  });
+
+  assert.equal(
+    input(harness, "clamped-", "gen_length").value,
+    "8"
+  );
+  assert.equal(
+    input(harness, "clamped-", "temperature").value,
+    "1"
+  );
+  assert.equal(harness.panel.validation().valid, true);
 });
 
 test("programmatic apply neither persists nor reports a user edit",
@@ -626,6 +812,7 @@ test("destroy removes generated DOM and listeners", () => {
     () => harness.panel.outputBudget(),
     () => harness.panel.validation(),
     () => harness.panel.snapshot(),
+    () => harness.panel.formState(),
     () => harness.panel.root(),
   ];
 

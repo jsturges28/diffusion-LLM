@@ -856,6 +856,46 @@ function generatorModelPanelCreate(options) {
     return runSettingsPanel.snapshot();
   }
 
+  function actionRunSettingsCreate(settings) {
+    if (!settings || typeof settings !== "object") {
+      throw new TypeError(
+        "Action Run settings needs mount information"
+      );
+    }
+    if (!settings.mount || typeof settings.idPrefix !== "string") {
+      throw new TypeError(
+        "Action Run settings needs a mount and idPrefix"
+      );
+    }
+    if (!activeModel || activeModelId === null) {
+      throw new Error(
+        "Action Run settings needs an active model"
+      );
+    }
+    var capabilities = activeModel.capabilities || {};
+    var panel = runSettingsPanelCreate({
+      idPrefix: settings.idPrefix,
+      mount: settings.mount,
+      compact: true,
+    });
+    try {
+      panel.wire();
+      panel.configure({
+        model: activeModel,
+        models: [activeModel],
+        modelId: activeModelId,
+        modelDisplay: activeDisplayName(),
+        device: activeDevice,
+        inputMode: capabilities.input_mode || null,
+        seed: runSettingsPanel.formState(),
+      });
+    } catch (error) {
+      panel.destroy();
+      throw error;
+    }
+    return panel;
+  }
+
   function readParamStateAll() {
     var raw = null;
     try {
@@ -940,5 +980,6 @@ function generatorModelPanelCreate(options) {
     outputBudget: outputBudgetRead,
     validation: validationRead,
     conversationConfiguration: conversationConfigurationRead,
+    createActionRunSettings: actionRunSettingsCreate,
   };
 }
