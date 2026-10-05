@@ -714,6 +714,16 @@ Only the active tail always has token evidence, while older turns keep
 it only if explicitly saved, so aggregating what happened to survive
 would select on persistence and look more comprehensive than it is.
 
+A later chat-facing watermark pass can make that boundary easier to
+navigate without changing it. The active rich assistant already supports
+the token-level Watermark overlay. A frozen assistant card may show a
+compact attested summary and, when it has a Saved run link, load that
+turn's token coloring on demand or open the same evidence in Analytics.
+A Text only turn has no retained membership records and must say so rather
+than recoloring decoded text after the fact. This per-turn integration is
+compatible with saved-conversation paging; it is not a reason to invent the
+biased conversation-level total described above.
+
 Pasted-text detection belongs to the resident append-only worker
 because tokenizer identity is part of the keyed domain. It tokenizes
 raw text with no chat template or special-token wrappers, loads but
@@ -939,6 +949,74 @@ paths can remain useful forever as text plus optional Analytics links; XAI
 interventions need live worker state or explicitly saved run artifacts.
 Browsing an old path must therefore never rehydrate its frames or make its
 tail eligible for run editing.
+
+**A saved conversation should be an immutable selected-path snapshot,
+not one giant run and not the whole branch DAG.** Raised on 2026-10-05
+after durable paths made the missing Analytics unit clear.
+
+Conversation text is already durable. What a new Save Conversation action
+would add is a named, inspectable research object in Analytics: one selected
+path pinned at a particular head, with its ordered user and assistant turns
+and references to the separately saved XAI run for each assistant where one
+exists. Analytics could page through those turns and load each linked run's
+own frames, charts and parameters without pretending several model calls
+were one run. The current Save Run stays the atomic artifact and remains
+useful on its own; a conversation snapshot groups those artifacts rather
+than copying their heavy files.
+
+The boundary must stay honest. A past Text only response has already released
+its frames, candidates and token records, so saving the conversation later
+cannot recover them. The snapshot can preserve its text and say Text only.
+It can save the active tail before publication and reference older turns that
+were saved explicitly. If continuous capture becomes useful, a separate
+Record future turns mode could auto-save each new assistant run after the
+user opts in; it must not silently make every ordinary conversation an
+auto-save session.
+
+Because a conversation is now a DAG, "whole conversation" is ambiguous.
+The first version should save only the path currently on screen and its
+current head. Saving another alternate creates another snapshot. Exporting
+the complete branch tree is a separate archival operation with different
+size and navigation semantics. The snapshot must also decide whether it
+copies compact turn text into bounded pages or pins immutable source nodes;
+deleting the live conversation must not leave a saved Analytics object whose
+text can no longer be opened.
+
+Bookmarks fit inside this object as path-local turn references, optionally
+with a short label. They should not copy a run or create another run catalog.
+This meets the existing per-run notes backlog: the durable abstraction likely
+wants typed annotations whose target is a run, conversation snapshot or turn.
+A conversation note, a bookmarked conclusion and a per-run note can then
+share one CAS-protected annotation store instead of becoming three unrelated
+flat fields. Collections still answer which artifacts belong together;
+annotations answer what the user concluded.
+
+**Conversation token usage needs two named quantities and a model-specific
+meter.** Raised on 2026-10-05 after cross-model follow-ups confirmed that the
+selected path is already packed correctly.
+
+The useful Cursor-like wheel is context pressure for the next inference, not
+a claim that the model remembers every durable turn. Its ring should follow
+the selected path and resident model, using the exact context-pack count that
+already drives the Draft readout. A segmented ring can distinguish packed
+prompt tokens, the requested output reserve and remaining effective budget.
+Clicking it should open a Context / Token usage dialog that names:
+
+- the resident model and input mode whose tokenizer and template were used;
+- packed prompt tokens, output reserve and effective total budget;
+- included and omitted durable turn counts and the first included turn;
+- checkpoint or policy ceiling where one lowered the effective budget; and
+- optional cumulative input and generated-token totals for the selected path,
+  clearly separated from the next-request context figure.
+
+That distinction matters after a model switch. The same conversation text can
+tokenize differently under LLaDA, DiffusionGemma and SmolLM3, while Mamba-3
+packs raw chronological text rather than a chat template. The ring must
+recount against the resident model and current output setting, update after a
+path change, and never describe omitted older turns as present in context.
+Cumulative totals are historical accounting and may need new per-turn token
+metadata; they must not be substituted for the exact next-inference count
+just because they are cheaper to display.
 
 **The Analytics table wants roving tabindex, and has not got it.**
 Recorded 2026-09-02, after the keyboard work made everything else on
