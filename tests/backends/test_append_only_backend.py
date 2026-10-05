@@ -23,6 +23,7 @@ from src.backends import append_only_backend
 from src.backends.append_only_backend import AppendOnlyBackend
 from src.backends.registry import SMOLLM3
 from src.backends.text_adapter import SMOLLM3_TEXT
+from src.inference.kgw_key import WatermarkKey
 
 
 class _Backend(AppendOnlyBackend):
@@ -63,6 +64,38 @@ class _StubStreamer:
         async for _ in generator:
             pass
         return True
+
+
+class _BackendTokenizer:
+    """Raw-tokenizer stand-in that records special-token policy."""
+
+    class _Inner:
+        @staticmethod
+        def to_str() -> str:
+            return '{"test":"tokenizer"}'
+
+    backend_tokenizer = _Inner()
+
+    def __init__(self) -> None:
+        self.add_special_tokens: List[bool] = []
+
+    def encode(
+        self, text: str, *, add_special_tokens: bool
+    ) -> List[int]:
+        self.add_special_tokens.append(add_special_tokens)
+        return [ord(character) % 256 for character in text]
+
+
+class _BackendModel:
+    """Output width only. Calling it would fail the detector test."""
+
+    class _Config:
+        vocab_size = 256
+
+    config = _Config()
+
+    def __call__(self, *_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("detector must not run a model forward")
 
 
 def _install(
@@ -127,3 +160,170 @@ def test_a_model_with_thinking_keeps_its_choice(
     assert calls[0]["thinking"] is True
     assert backend.last_run_state is not None
     assert backend.last_run_state["thinking"] is True
+
+
+def _detector_backend() -> _Backend:
+    backend = _Backend(declares_thinking=True)
+    backend.tokenizer = _BackendTokenizer()
+    backend.model = _BackendModel()
+    return backend
+
+
+def _detect(backend: _Backend, **payload: Any) -> _StubWebSocket:
+    ws = _StubWebSocket()
+    request: Dict[str, Any] = {
+        "text": "a" * 60,
+        "request_id": 7,
+    }
+    request.update(payload)
+    asyncio.run(
+        backend.handle_detect_watermark(
+            ws,  # type: ignore[arg-type]
+            request,
+        )
+    )
+    return ws
+
+
+def test_pasted_text_detector_uses_raw_tokenizer_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = _detector_backend()
+    monkeypatch.setattr(
+        append_only_backend,
+        "load_key",
+        lambda: WatermarkKey(bytes(range(32)), "0123456789abcdef"),
+    )
+
+    ws = _detect(backend, z_threshold=3.5)
+
+    reply = ws.sent[0]
+    assert reply["type"] == "detect_watermark_result"
+    assert reply["request_id"] == 7
+    assert reply["token_count"] == 60
+    assert reply["scored_count"] == 59
+    assert reply["key_id"] == "0123456789abcdef"
+    assert reply["model_id"] == "smollm3"
+    assert reply["gamma"] == pytest.approx(0.25)
+    assert reply["vocab_size"] == 256
+    assert reply["display_threshold"] == pytest.approx(3.5)
+    assert backend.tokenizer.add_special_tokens == [False]
+
+
+def test_pasted_text_detector_loads_but_never_creates_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = _detector_backend()
+
+    def missing() -> WatermarkKey:
+        raise FileNotFoundError("no key")
+
+    monkeypatch.setattr(append_only_backend, "load_key", missing)
+
+    ws = _detect(backend)
+
+    assert ws.sent[0]["code"] == "watermark_key_missing"
+    assert ws.sent[0]["scope"] == "request"
+
+
+def test_pasted_text_detector_refuses_wrong_expected_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = _detector_backend()
+    monkeypatch.setattr(
+        append_only_backend,
+        "load_key",
+        lambda: WatermarkKey(bytes(range(32)), "0123456789abcdef"),
+    )
+
+    ws = _detect(backend, expected_key_id="ffffffffffffffff")
+
+    assert ws.sent[0]["code"] == "watermark_key_mismatch"
+    assert ws.sent[0]["request_id"] == 7
+
+
+def test_pasted_text_detector_refuses_text_past_bound() -> None:
+    backend = _detector_backend()
+
+    ws = _detect(
+        backend,
+        text="x"
+        * (append_only_backend.WATERMARK_DETECT_TEXT_MAX_CHARS + 1),
+    )
+
+    assert ws.sent[0]["code"] == "invalid_request"
+    assert "limit" in ws.sent[0]["message"]
+
+
+def test_pasted_text_detector_refuses_token_count_past_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = _detector_backend()
+    monkeypatch.setattr(
+        append_only_backend,
+        "load_key",
+        lambda: WatermarkKey(bytes(range(32)), "0123456789abcdef"),
+    )
+
+    ws = _detect(
+        backend,
+        text="x"
+        * (append_only_backend.WATERMARK_DETECT_TOKENS_MAX + 1),
+    )
+
+    assert ws.sent[0]["code"] == "invalid_request"
+    assert "tokens" in ws.sent[0]["message"]
+
+
+def test_pasted_text_detector_reports_insecure_key_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = _detector_backend()
+
+    def insecure() -> WatermarkKey:
+        raise PermissionError("key mode is 0644")
+
+    monkeypatch.setattr(append_only_backend, "load_key", insecure)
+
+    ws = _detect(backend)
+
+    assert ws.sent[0]["code"] == "watermark_key_state"
+    assert ws.sent[0]["scope"] == "request"
+    assert "0644" in ws.sent[0]["message"]
+
+
+def test_generation_reports_key_state_before_beginning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = _detector_backend()
+
+    def insecure() -> WatermarkKey:
+        raise PermissionError("key mode is 0644")
+
+    monkeypatch.setattr(
+        append_only_backend,
+        "load_or_create_key",
+        insecure,
+    )
+
+    ws = _generate(
+        backend,
+        experimental=True,
+        watermark=True,
+    )
+
+    assert ws.sent[0]["code"] == "invalid_request"
+    assert "key state" in ws.sent[0]["message"]
+    assert backend.run_counter == 0
+
+
+@pytest.mark.parametrize("gamma", [0.0, 1.0, float("nan"), True])
+def test_pasted_text_detector_refuses_invalid_gamma(
+    gamma: Any,
+) -> None:
+    backend = _detector_backend()
+
+    ws = _detect(backend, gamma=gamma)
+
+    assert ws.sent[0]["code"] == "invalid_request"
+    assert "gamma" in ws.sent[0]["message"].lower()

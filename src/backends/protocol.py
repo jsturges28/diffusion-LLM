@@ -158,9 +158,7 @@ class SignalChannel(BaseModel):
     # one quantity would make the Analytics scale a guess. A fraction
     # is a share of something between 0 and 1 that is not a
     # probability: what reading a token erased from a state.
-    unit: Literal[
-        "probability", "nats", "fraction", "categorical"
-    ]
+    unit: Literal["probability", "nats", "fraction", "categorical"]
     axes: Tuple[Axis, ...]
     location: Literal["token_record", "frame_scalar", "sidecar"]
     # Where to find it: a key on each token record, a metadata key
@@ -253,12 +251,8 @@ class ModelCapabilities(BaseModel):
     # Required rather than defaulted: a model that says nothing would
     # otherwise be filed silently as diffusion on both axes, and that
     # mislabelling is what the split exists to prevent.
-    family: Literal[
-        "diffusion", "autoregressive", "state_space"
-    ]
-    generation_shape: Literal[
-        "append_only", "iterative_canvas"
-    ]
+    family: Literal["diffusion", "autoregressive", "state_space"]
+    generation_shape: Literal["append_only", "iterative_canvas"]
     # How a prompt reaches the model, and a third thing neither axis
     # above can answer: an instruction-tuned model of any family
     # wraps the prompt in a template's role markers, while a base
@@ -302,6 +296,11 @@ class ModelCapabilities(BaseModel):
     # ``remask_renoises`` is one: the page should be told what a model
     # does, not left to infer it from which fields happen to exist.
     adaptive_stopping: bool = False
+    # Whether the resident worker can apply and detect this project's
+    # keyed KGW watermark. Separate from the signal manifest: signals
+    # describe what a run may contain, while this also gates the
+    # tokenizer-only pasted-text detector before any run exists.
+    supports_watermark: bool = False
     # Character shown for an unresolved token in the UI.
     unresolved_char: str = "\u2591"
     # Placements this model can actually load onto, and the single
@@ -339,9 +338,8 @@ class ModelCapabilities(BaseModel):
 
     @model_validator(mode="after")
     def _context_devices_declared(self) -> "ModelCapabilities":
-        undeclared = (
-            set(self.context_policy.overrides)
-            - set(self.supported_devices)
+        undeclared = set(self.context_policy.overrides) - set(
+            self.supported_devices
         )
         if undeclared:
             names = ", ".join(sorted(undeclared))
@@ -379,19 +377,15 @@ SAVED_MODEL_TYPE_AUTOREGRESSIVE = "autoregressive"
 SAVED_MODEL_TYPE_DIFFUSION = "diffusion"
 
 _SAVED_MODEL_TYPE_BY_SHAPE: Dict[str, str] = {
-    GENERATION_SHAPE_APPEND_ONLY: (
-        SAVED_MODEL_TYPE_AUTOREGRESSIVE
-    ),
-    GENERATION_SHAPE_ITERATIVE_CANVAS: (
-        SAVED_MODEL_TYPE_DIFFUSION
-    ),
+    GENERATION_SHAPE_APPEND_ONLY: (SAVED_MODEL_TYPE_AUTOREGRESSIVE),
+    GENERATION_SHAPE_ITERATIVE_CANVAS: (SAVED_MODEL_TYPE_DIFFUSION),
 }
 
 # A shape with no on-disk spelling would be saved as an empty string
 # or crash at save time, which is a poor place to learn about it.
-assert len(_SAVED_MODEL_TYPE_BY_SHAPE) == len(
-    GENERATION_SHAPES
-), "every generation shape needs an on-disk model_type"
+assert len(_SAVED_MODEL_TYPE_BY_SHAPE) == len(GENERATION_SHAPES), (
+    "every generation shape needs an on-disk model_type"
+)
 
 
 def saved_model_type(generation_shape: str) -> str:
@@ -525,6 +519,11 @@ MSG_PROBE_RESULT = "probe_result"
 # be tens of thousands of objects to deliver a single integer.
 MSG_COUNT_PROMPT = "count_prompt"
 MSG_COUNT_PROMPT_RESULT = "count_prompt_result"
+# Score pasted text with the resident append-only model's raw
+# tokenizer and an existing local KGW key. This performs no model
+# forward pass and is safe to answer beside a generation.
+MSG_DETECT_WATERMARK = "detect_watermark"
+MSG_DETECT_WATERMARK_RESULT = "detect_watermark_result"
 # Put the retained run back the way generation left it, discarding
 # any branch a resume committed.
 #
@@ -578,8 +577,8 @@ ERROR_SCOPE_FATAL = "fatal"
 # must roll back, because the client truncates the run optimistically
 # before the worker answers.
 ERROR_SCOPE_RUN = "run"
-# One auxiliary request failed (tokenize, count, probe). Concerns
-# only whatever asked, and must disturb nothing else.
+# One auxiliary request failed (tokenize, count, detect, probe).
+# Concerns only whatever asked, and must disturb nothing else.
 ERROR_SCOPE_REQUEST = "request"
 
 ERROR_SCOPES: Tuple[str, ...] = (
@@ -597,6 +596,10 @@ ERROR_BUSY = "busy"
 ERROR_INVALID_REQUEST = "invalid_request"
 ERROR_GENERATION_FAILED = "generation_failed"
 ERROR_UNKNOWN_MESSAGE = "unknown_message"
+ERROR_UNSUPPORTED = "unsupported"
+ERROR_WATERMARK_KEY_MISSING = "watermark_key_missing"
+ERROR_WATERMARK_KEY_MISMATCH = "watermark_key_mismatch"
+ERROR_WATERMARK_KEY_STATE = "watermark_key_state"
 # The run a stateful request names is not the run the worker holds.
 ERROR_STALE_RUN = "stale_run"
 # Structured-context failures are split so an API client can
@@ -615,6 +618,7 @@ REQUEST_SCOPES: Dict[str, str] = {
     MSG_SUBSTITUTE: ERROR_SCOPE_RUN,
     MSG_TOKENIZE: ERROR_SCOPE_REQUEST,
     MSG_COUNT_PROMPT: ERROR_SCOPE_REQUEST,
+    MSG_DETECT_WATERMARK: ERROR_SCOPE_REQUEST,
     MSG_PROBE: ERROR_SCOPE_REQUEST,
     # Request-scoped despite writing run state, because of when it is
     # sent: an edit session opens with one, so a run-scoped refusal
@@ -692,16 +696,13 @@ def resume_remask_positions(
             )
         return []
     if not isinstance(raw, list) or len(raw) == 0:
-        raise ValueError(
-            "remask_positions must be a non-empty list."
-        )
+        raise ValueError("remask_positions must be a non-empty list.")
     positions: List[int] = []
     for item in raw:
         pos = int(item)
         if pos < 0 or pos >= length:
             raise ValueError(
-                f"remask position {pos} out of range"
-                f" [0, {length})."
+                f"remask position {pos} out of range [0, {length})."
             )
         positions.append(pos)
     assert len(positions) > 0, "an edit remasks something"

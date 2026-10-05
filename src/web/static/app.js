@@ -164,6 +164,14 @@ var generatorSocket = generatorSocketCreate({
   onMalformed: generatorSocketMalformed,
   onFatal: generatorSocketFatal,
 });
+var generatorWatermark = generatorWatermarkCreate({
+  sendRequest: function (payload) {
+    return generatorSocket.send(payload);
+  },
+  readParameters: function () {
+    return generatorModelPanel.parameterValues();
+  },
+});
 
 // ---- State ----
 
@@ -383,6 +391,9 @@ function handleMessage(data) {
       break;
     case "count_prompt_result":
       generatorComposer.handleCountResult(data);
+      break;
+    case "detect_watermark_result":
+      generatorWatermark.handleResult(data);
       break;
     case "resource_sample":
       generatorChrome.handleResourceSample(data);
@@ -637,6 +648,7 @@ function handleFrame(data) {
   }
   if (appended.append) {
     handleAppendFrame(data, appended);
+    generatorReadouts.refreshWatermark();
     return;
   }
   // The token view needs per-position metadata; a model that does not
@@ -860,6 +872,9 @@ function handleDone(data) {
 }
 
 function handleError(data) {
+  if (generatorWatermark.handleError(data)) {
+    return;
+  }
   // How far this reaches is the worker's to say (see wire_errors.js).
   // Everything below used to run for every error, which meant a probe
   // refused because a generation was busy closed What If and threw
@@ -1513,6 +1528,7 @@ function resetStatus() {
 // Clear all live-run state (frames, edits, overlays, gates) back to a
 // pre-run baseline. Shared by Generate and New Conversation.
 function resetRunState() {
+  generatorWatermark.close();
   generatorEdit.reset();
   generatorRun.reset();
   generatorCanvas.reset();
@@ -2061,6 +2077,7 @@ generatorCanvas.wire();
 generatorReadouts.wire();
 generatorCandidates.wire();
 generatorEdit.wire();
+generatorWatermark.wire();
 generatorModals.wire();
 
 // Raising the loading curtain has to clear the modals first. They are
@@ -2072,6 +2089,7 @@ generatorModals.wire();
 function raiseLoadingOverlay() {
   generatorModals.closeAll();
   generatorComposer.closeImport();
+  generatorWatermark.close();
   generatorChrome.showLoading();
 }
 
@@ -2123,6 +2141,7 @@ function applyModelInfo(info) {
     inputMode: capabilities.input_mode,
     contextLength: generatorModelPanel.activeContext(),
   });
+  generatorWatermark.configure(capabilities);
   // Needs the active model, since the glow is tuned per model
   // class. Outside the guard above because it falls back to the
   // diffusion pair, which is the right reading when the active

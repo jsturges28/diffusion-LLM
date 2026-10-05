@@ -420,3 +420,31 @@ test("forgetting declared over frames is not carried", () => {
 
   assert.equal(api.overlaySeriesCarriesForgetting(trajectory), false);
 });
+
+test("watermark membership follows records and declared axes", () => {
+  const api = load();
+  const saved = fixture(APPEND);
+  const withoutRecords = varied(APPEND, (payload) => {
+    payload.positions.forEach((token) => {
+      delete token.g;
+      delete token.we;
+    });
+  });
+  const wrongShape = varied(APPEND, (payload) => {
+    api.overlaySeriesChannel(
+      payload, "watermark_membership"
+    ).axes = ["frame", "position"];
+  });
+  const legacy = varied(APPEND, (payload) => {
+    payload.signals = null;
+  });
+
+  assert.equal(api.overlaySeriesCarriesWatermark(saved), true);
+  assert.equal(
+    api.overlaySeriesCarriesWatermark(withoutRecords), false
+  );
+  assert.equal(
+    api.overlaySeriesCarriesWatermark(wrongShape), false
+  );
+  assert.equal(api.overlaySeriesCarriesWatermark(legacy), true);
+});

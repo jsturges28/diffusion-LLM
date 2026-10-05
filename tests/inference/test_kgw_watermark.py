@@ -29,6 +29,7 @@ from src.inference.kgw_watermark import (
     KgwOnlineDetector,
     KgwWatermark,
     detect_token_ids,
+    detection_display_status,
 )
 
 KEY = bytes(range(32))
@@ -260,15 +261,33 @@ def test_short_text_reports_insufficient_evidence() -> None:
 
 def test_fifty_evidence_tokens_are_scored() -> None:
     config = _config(vocab_size=256)
-    ids = _strong_sequence(
-        KgwWatermark(config), KGW_EVIDENCE_MIN + 1
-    )
+    ids = _strong_sequence(KgwWatermark(config), KGW_EVIDENCE_MIN + 1)
     evidence = [False] + [True] * KGW_EVIDENCE_MIN
 
     result = detect_token_ids(ids, evidence, config=config)
 
     assert result.scored_count == KGW_EVIDENCE_MIN
     assert result.status == "scored"
+
+
+def test_display_status_uses_only_evidence_and_threshold() -> None:
+    config = _config(vocab_size=256)
+    ids = _strong_sequence(KgwWatermark(config), KGW_EVIDENCE_MIN + 1)
+    result = detect_token_ids(
+        ids,
+        [False] + [True] * KGW_EVIDENCE_MIN,
+        config=config,
+    )
+
+    assert result.green_rate == pytest.approx(1.0)
+    assert (
+        detection_display_status(result, z_threshold=4.0)
+        == "threshold_crossed"
+    )
+    assert (
+        detection_display_status(result, z_threshold=100.0)
+        == "threshold_not_crossed"
+    )
 
 
 def test_small_vocab_z_score_uses_exact_cardinality_p0() -> None:
@@ -297,6 +316,23 @@ def test_detector_refuses_non_boolean_evidence() -> None:
             [1, 2],
             [False, 1],  # type: ignore[list-item]
             config=_config(),
+        )
+
+
+def test_detector_stops_on_cooperative_cancellation() -> None:
+    calls = 0
+
+    def cancelled() -> bool:
+        nonlocal calls
+        calls += 1
+        return calls > 3
+
+    with pytest.raises(InterruptedError, match="cancelled"):
+        detect_token_ids(
+            [1, 2, 3, 4, 5],
+            [False, True, True, True, True],
+            config=_config(),
+            cancelled=cancelled,
         )
 
 

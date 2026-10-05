@@ -254,5 +254,7 @@
    "unit": "probability"
   }
  ],
- "stop_rule": null
+ "stop_rule": null,
+ "watermark": null,
+ "watermark_display_threshold": null
 }

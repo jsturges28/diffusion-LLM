@@ -171,11 +171,12 @@ state-space generation alongside it, replayed through the same tooling.
 Interactive **remasking and resume**: pick tokens at any frame, remask
 them, and regenerate from there, keeping the pre-edit run for
 comparison. **What If?** substitution for the two left-to-right models.
-Six token overlays: a confidence heatmap, commit order, entropy,
+Seven token overlays: a confidence heatmap, commit order, entropy,
 DiffusionGemma's **revisions**, how often each position changed its
 mind, a diff against the pre-edit run with an Original/Edited
 crossfade, and Mamba-3's **forgetting**, what reading each token
-erased from its state.
+erased from its state, plus experimental keyed **KGW watermark**
+membership on SmolLM3 and Mamba-3.
 
 Per-token **confidence** and **entropy** on every model, declared by
 the unit and the axes they vary over, so a reader knows whether a
@@ -183,6 +184,12 @@ signal belongs to a position or to a position at a frame. Optional
 top-5 **alternatives** capture with a hover popover and true ranks.
 For DiffusionGemma, a **stopping readout** shows how far each canvas
 is from its adaptive stop, by two thresholds you can set.
+
+Experimental KGW runs carry per-token evidence, an exact null rate,
+and a normal-approximation z-score in the generator and Analytics. A tokenizer-only
+pasted-text detector works while either left-to-right model is
+resident, without a model forward pass. Its configurable z threshold
+is a display aid, never an AI/human or authorship verdict.
 
 An **Analytics Suite** with a run browser, collections and favourites,
 a detail modal carrying the token canvas and four charts, run
@@ -196,7 +203,7 @@ configuration, so it costs no GPU memory and disturbs nothing loaded.
 
 A **desktop app**, durable server-side UI state, a host-wide lease so
 two instances cannot both load a model, and a lint ratchet plus over
-2,500 tests over the Python and browser code.
+3,000 tests over the Python and browser code.
 
 ## Documentation
 
@@ -225,3 +232,5 @@ stands today is in [docs/HANDOFF.md](docs/HANDOFF.md).
 - **LLaDA model:** [GSAI-ML/LLaDA-8B-Instruct](https://huggingface.co/GSAI-ML/LLaDA-8B-Instruct)
 - **DiffusionGemma model:** [google/diffusiongemma-26B-A4B-it](https://huggingface.co/google/diffusiongemma-26B-A4B-it)
 - **SmolLM3 model:** [HuggingFaceTB/SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B)
+- **KGW watermark:** Kirchenbauer et al., "A Watermark for Large Language Models," ICML 2023. [arXiv:2301.10226](https://arxiv.org/abs/2301.10226)
+- **Token-specific extension (not the origin of KGW):** Huo et al., "Token-Specific Watermarking with Enhanced Detectability and Semantic Coherence for Large Language Models." [arXiv:2402.18059](https://arxiv.org/abs/2402.18059)

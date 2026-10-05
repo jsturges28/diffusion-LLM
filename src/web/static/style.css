@@ -223,6 +223,14 @@ body {
   color: var(--accent);
 }
 
+.header-action {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font-family: inherit;
+  cursor: pointer;
+}
+
 /* Icon-only header link (the Settings gear): center the glyph so it
    aligns with the text links; it inherits color/hover from .header-link
    via the SVG's stroke="currentColor". */
@@ -1201,8 +1209,9 @@ button {
 .token-metrics-row {
   flex-shrink: 0;
   display: flex;
+  flex-wrap: wrap;
   align-items: stretch;
-  gap: 18px;
+  gap: 0 18px;
 }
 
 .token-metrics-row > .token-metrics {
@@ -1255,6 +1264,47 @@ button {
    progress is still on screen. */
 .stop-readout[data-compact] .stop-readout-text {
   display: none;
+}
+
+/* Experimental KGW score for the run/frame on screen. This is a
+   second line so all five required values remain visible instead of
+   forcing the token strip to surrender its own numbers. */
+.watermark-readout {
+  flex: 1 0 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  row-gap: 3px;
+  min-height: 18px;
+  padding: 0 2px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  letter-spacing: 0.03em;
+  white-space: normal;
+}
+
+.watermark-readout-label {
+  color: var(--text-primary);
+}
+
+.watermark-readout-label::after {
+  content: ":";
+}
+
+.watermark-readout-counts,
+.watermark-readout-rate,
+.watermark-readout-score,
+.watermark-readout-null {
+  font-variant-numeric: tabular-nums;
+}
+
+.watermark-status-threshold_crossed {
+  color: var(--text-primary);
+}
+
+.watermark-record-mismatch {
+  color: #ffb400;
 }
 
 /* ---- Output area ---- */
@@ -1421,6 +1471,62 @@ button {
 /* Compact confirmation dialog (e.g. delete a run). */
 .modal-box-confirm {
   max-width: 400px;
+}
+
+.watermark-detector-box {
+  max-width: 680px;
+}
+
+.watermark-detector-box textarea {
+  width: 100%;
+  min-height: 160px;
+  margin-top: 6px;
+  resize: vertical;
+  font-family: var(--font-mono);
+}
+
+.watermark-detector-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.watermark-detector-options label:last-child {
+  grid-column: 1 / -1;
+}
+
+.watermark-detector-options label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.watermark-detector-options input {
+  width: 100%;
+}
+
+.watermark-detector-result {
+  min-height: 44px;
+  margin-top: 16px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.watermark-detector-result.is-error {
+  color: var(--danger);
+}
+
+.watermark-detector-result.is-pending {
+  color: var(--text-secondary);
+}
+
+.watermark-detector-result.is-stale {
+  color: var(--warn);
 }
 
 .btn-danger {
@@ -2662,6 +2768,37 @@ input[type="checkbox"].app-checkbox:checked::after {
   display: inline;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Non-color evidence exclusion marker for the Watermark overlay.
+   The dashed outline and diagonal hatch remain distinguishable in
+   monochrome and sit on top of either membership color. */
+.token-watermark-favored {
+  text-decoration-line: underline;
+  text-decoration-style: double;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.16em;
+}
+
+.token-watermark-complement {
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.16em;
+}
+
+.token-watermark-excluded {
+  outline: 1px dashed currentColor;
+  outline-offset: 1px;
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0,
+    transparent 3px,
+    rgba(255, 255, 255, 0.24) 3px,
+    rgba(255, 255, 255, 0.24) 4px
+  );
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 
 /* An unsettled position cycling through its candidates. Its width is
@@ -4212,6 +4349,49 @@ input[type="checkbox"].app-checkbox:checked::after {
 
 .revision-more {
   background: #00a8e0;
+}
+
+/* KGW membership legend shared by the generator footer and
+   Analytics header. Membership is not correctness or confidence. */
+.watermark-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.watermark-legend[hidden] {
+  display: none;
+}
+
+.watermark-legend-swatch {
+  width: 10px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.watermark-favored {
+  background: #35d07f;
+  border-bottom: 3px double var(--text-primary);
+}
+
+.watermark-complement {
+  background: #ff6b6b;
+  border-bottom: 2px dotted var(--text-primary);
+}
+
+.watermark-excluded {
+  border: 1px dashed var(--text-primary);
+  background: repeating-linear-gradient(
+    135deg,
+    transparent 0,
+    transparent 2px,
+    var(--text-primary) 2px,
+    var(--text-primary) 3px
+  );
 }
 
 /* Settings rows that pair a label + description with a toggle. */

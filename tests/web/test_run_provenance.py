@@ -182,13 +182,31 @@ def _watermark_positions() -> List[Dict[str, Any]]:
 
 def _watermarked_request(
     watermark: Dict[str, Any] | None = None,
+    **overrides: Any,
 ) -> SaveRunRequest:
     active = WATERMARK if watermark is None else watermark
-    return _request(
-        frames=None,
-        frame_positions=_watermark_positions(),
-        provenance=_provenance(watermark=active),
-    )
+    base: Dict[str, Any] = {
+        "model": "smollm3",
+        "frames": None,
+        "frame_positions": _watermark_positions(),
+        "params": {
+            "watermark": True,
+            "watermark_gamma": 0.25,
+            "watermark_delta": 2.0,
+            "watermark_z_threshold": 4.0,
+        },
+        "provenance": _provenance(
+            model_id="smollm3",
+            checkpoint="HuggingFaceTB/SmolLM3-3B",
+            tokenizer={
+                "fingerprint": "ab" * 32,
+                "model_vocab_size": 128_256,
+            },
+            watermark=active,
+        ),
+    }
+    base.update(overrides)
+    return _request(**base)
 
 
 # -- the run's facts beat the supervisor's --
@@ -305,11 +323,92 @@ def test_watermark_counts_must_match_final_token_records() -> None:
     positions[-1]["we"] = False
 
     with pytest.raises(ValueError, match="scored count"):
-        _request(
-            frames=None,
+        _watermarked_request(
             frame_positions=positions,
-            provenance=_provenance(watermark=WATERMARK),
         )
+
+
+def test_watermark_requires_capable_attested_model() -> None:
+    provenance = _provenance(
+        model_id="llada",
+        tokenizer={
+            "fingerprint": "ab" * 32,
+            "model_vocab_size": 128_256,
+        },
+        watermark=WATERMARK,
+    )
+
+    with pytest.raises(ValueError, match="capable model"):
+        _watermarked_request(
+            model="llada",
+            provenance=provenance,
+        )
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {
+            "watermark": False,
+            "watermark_gamma": 0.25,
+            "watermark_delta": 2.0,
+        },
+        {
+            "watermark": True,
+            "watermark_gamma": 0.3,
+            "watermark_delta": 2.0,
+        },
+        {
+            "watermark": True,
+            "watermark_gamma": 0.25,
+            "watermark_delta": 3.0,
+        },
+    ],
+)
+def test_watermark_parameters_must_match_attestation(
+    params: Dict[str, object],
+) -> None:
+    with pytest.raises(ValueError, match="watermark"):
+        _watermarked_request(params=params)
+
+
+def test_watermark_tokenizer_domain_must_match_parent() -> None:
+    provenance = _provenance(
+        model_id="smollm3",
+        tokenizer={
+            "fingerprint": "cd" * 32,
+            "model_vocab_size": 128_256,
+        },
+        watermark=WATERMARK,
+    )
+
+    with pytest.raises(ValueError, match="fingerprint"):
+        _watermarked_request(provenance=provenance)
+
+
+def test_watermark_token_ids_stay_inside_attested_vocab() -> None:
+    positions = _watermark_positions()
+    positions[-1]["id"] = 128_256
+
+    with pytest.raises(ValueError, match="outside"):
+        _watermarked_request(frame_positions=positions)
+
+
+def test_original_watermark_flags_are_complete_but_separate() -> None:
+    original = _watermark_positions()
+    original[3].pop("we")
+
+    with pytest.raises(ValueError, match="original.*evidence"):
+        _watermarked_request(original_frame_positions=original)
+
+    changed = _watermark_positions()
+    for record in changed:
+        record["g"] = not record["g"]
+    accepted = _watermarked_request(original_frame_positions=changed)
+
+    assert accepted.provenance is not None
+    assert accepted.provenance.watermark is not None
+    assert accepted.provenance.watermark.green_count == 28
 
 
 def test_the_model_commit_is_recorded_beside_the_app_s(
@@ -395,9 +494,7 @@ def test_an_attested_run_without_a_window_omits_it(
     """Absent, not borrowed. A checkpoint that reported no window
     must not inherit the resident model's ceiling, which is exactly
     the kind of plausible wrong number this finding is about."""
-    block = _context_metadata(
-        1240, _provenance(context_length=None)
-    )
+    block = _context_metadata(1240, _provenance(context_length=None))
 
     assert block == {"prompt_tokens": 1240}
 
@@ -505,9 +602,7 @@ def test_the_attested_model_wins_over_the_claimed_one(
     meta = _build_metadata(
         _request(
             model="SmolLM3-3B",
-            provenance=_provenance(
-                model_id="LLaDA-8B-Instruct"
-            ),
+            provenance=_provenance(model_id="LLaDA-8B-Instruct"),
         )
     )
 
@@ -525,9 +620,7 @@ def test_a_mismatch_is_recorded_rather_than_refused(
         meta = _build_metadata(
             _request(
                 model="SmolLM3-3B",
-                provenance=_provenance(
-                    model_id="LLaDA-8B-Instruct"
-                ),
+                provenance=_provenance(model_id="LLaDA-8B-Instruct"),
             )
         )
 
@@ -693,9 +786,7 @@ def test_an_interrupted_run_is_described_by_its_opening_frame(
     frames."""
     opening = _provenance(signals=_llada_manifest())
 
-    meta = _build_metadata(
-        _request(provenance=opening, partial=True)
-    )
+    meta = _build_metadata(_request(provenance=opening, partial=True))
 
     assert meta["processor"] == "CPU"
     assert meta["reproducibility"]["attested"] is True

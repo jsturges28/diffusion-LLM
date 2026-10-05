@@ -24,6 +24,7 @@ tests/web/test_frames_fixtures.py` and review their diff.
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Tuple
@@ -153,16 +154,52 @@ def _smollm3_append() -> Dict[str, Any]:
         _record(word, 200 + position, 1.2 + position / 10)
         for position, word in enumerate(WORDS)
     ]
+    positions[0].update({"g": True, "we": False})
+    positions[1].update({"g": True, "we": True})
+    positions[2].update({"g": False, "we": True})
+    p0 = 0.25
+    z_score = (1 - 2 * p0) / math.sqrt(2 * p0 * (1 - p0))
     return {
         "model": "smollm3",
         "prompt": "explain yeast",
-        "params": {},
+        "params": {
+            "watermark": True,
+            "watermark_gamma": 0.25,
+            "watermark_delta": 2.0,
+            "watermark_z_threshold": 3.5,
+        },
         "frame_positions": positions,
         "final_text": "".join(WORDS),
         "provenance": {
             "model_id": "smollm3",
             "device": "cuda",
+            "tokenizer": {
+                "fingerprint": "ab" * 32,
+                "model_vocab_size": 128256,
+            },
             "signals": _signals("smollm3"),
+            "watermark": {
+                "scheme": "kgw",
+                "version": 1,
+                "key_id": "0123456789abcdef",
+                "gamma": 0.25,
+                "delta": 2.0,
+                "vocab_size": 128256,
+                "green_list_size": 32064,
+                "tokenizer_fingerprint": "ab" * 32,
+                "seeding_contract": "test contract",
+                "rng_contract": "test generator",
+                "exclusions": [
+                    "first output token",
+                    "user-forced tokens",
+                ],
+                "status": "insufficient_evidence",
+                "green_count": 1,
+                "scored_count": 2,
+                "green_rate": 0.5,
+                "z_score": z_score,
+                "p0": p0,
+            },
         },
     }
 
@@ -221,3 +258,7 @@ def test_the_fixtures_are_the_two_shapes_a_run_arrives_in(
     assert len(snapshot["original_frames"]) == len(WORDS) + 1
     assert append["frames"] is None
     assert len(append["positions"]) == len(WORDS)
+    assert append["watermark"]["record_consistency"] == "consistent"
+    assert append["watermark"]["recomputed"]["green_count"] == 1
+    assert append["watermark"]["recomputed"]["scored_count"] == 2
+    assert append["watermark_display_threshold"] == 3.5

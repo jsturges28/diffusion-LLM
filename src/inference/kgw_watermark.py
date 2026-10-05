@@ -23,6 +23,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import (
     Any,
+    Callable,
     Dict,
     Optional,
     Sequence,
@@ -38,6 +39,7 @@ KGW_CACHE_ENTRIES = 32
 KGW_DEVICE_CACHE_ENTRIES = 32
 KGW_DEVICE_CACHES_MAX = 2
 KGW_EVIDENCE_MIN = 50
+KGW_DISPLAY_Z_THRESHOLD_DEFAULT = 4.0
 
 KGW_SEEDING_CONTRACT = (
     "HMAC-SHA256 over scheme version, model id, tokenizer "
@@ -61,6 +63,9 @@ assert KGW_DEVICE_CACHE_ENTRIES == KGW_CACHE_ENTRIES, (
 )
 assert KGW_DEVICE_CACHES_MAX > 0, "at least one device is supported"
 assert KGW_EVIDENCE_MIN >= 2, "detection needs multiple samples"
+assert KGW_DISPLAY_Z_THRESHOLD_DEFAULT > 0.0, (
+    "the display threshold must be positive"
+)
 
 GreenIds = NDArray[np.int64]
 
@@ -129,24 +134,32 @@ class DetectionResult:
     z_score: float
     p0: float
 
+    @property
+    def green_rate(self) -> float:
+        """The observed favored-set share among scored tokens."""
+        if self.scored_count == 0:
+            return 0.0
+        rate = self.green_count / self.scored_count
+        assert 0.0 <= rate <= 1.0
+        return rate
+
     def as_dict(self) -> Dict[str, object]:
         return {
             "status": self.status,
             "green_count": self.green_count,
             "scored_count": self.scored_count,
+            "green_rate": self.green_rate,
             "z_score": self.z_score,
             "p0": self.p0,
         }
 
 
 class KgwAccumulator:
-    """Exact-null-probability online z-score bookkeeping."""
+    """Exact-null-rate, normal-z online bookkeeping."""
 
     def __init__(self, p0: float) -> None:
         if not math.isfinite(p0) or not 0.0 < p0 < 1.0:
-            raise ValueError(
-                "p0 must be finite and between 0 and 1"
-            )
+            raise ValueError("p0 must be finite and between 0 and 1")
         self.p0 = p0
         self.green_count = 0
         self.scored_count = 0
@@ -172,9 +185,7 @@ class KgwAccumulator:
             raise ValueError("membership and evidence lengths differ")
         self.green_count = 0
         self.scored_count = 0
-        for green, scored in zip(
-            memberships, evidence, strict=True
-        ):
+        for green, scored in zip(memberships, evidence, strict=True):
             if green is not None and not isinstance(green, bool):
                 raise TypeError("green membership must be boolean")
             if scored is not None and not isinstance(scored, bool):
@@ -219,9 +230,7 @@ class KgwWatermark:
     def green_ids(self, previous_token: int) -> GreenIds:
         return self.cache.get(previous_token)
 
-    def is_green(
-        self, *, previous_token: int, token_id: int
-    ) -> bool:
+    def is_green(self, *, previous_token: int, token_id: int) -> bool:
         _validate_token(token_id, self.config.vocab_size)
         green = self.green_ids(previous_token)
         offset = int(np.searchsorted(green, token_id))
@@ -380,6 +389,7 @@ def detect_token_ids(
     evidence: Sequence[bool],
     *,
     config: KgwConfig,
+    cancelled: Optional[Callable[[], bool]] = None,
 ) -> DetectionResult:
     """Score token ids using only their output-side predecessors."""
     if len(token_ids) != len(evidence):
@@ -387,6 +397,8 @@ def detect_token_ids(
     detector = KgwOnlineDetector(KgwWatermark(config))
     result = detector.accumulator.result()
     for token_id, scored in zip(token_ids, evidence, strict=True):
+        if cancelled is not None and cancelled():
+            raise InterruptedError("watermark detection cancelled")
         result = detector.add(token_id, evidence=scored)
     return result
 
@@ -406,9 +418,7 @@ def tokenizer_fingerprint(tokenizer: Any) -> str:
     backend = getattr(tokenizer, "backend_tokenizer", None)
     serialize = getattr(backend, "to_str", None)
     if not callable(serialize):
-        raise ValueError(
-            "watermarking needs a tokenizer fingerprint"
-        )
+        raise ValueError("watermarking needs a tokenizer fingerprint")
     encoded = str(serialize()).encode("utf-8")
     if not encoded:
         raise ValueError("tokenizer fingerprint source is empty")
@@ -453,6 +463,29 @@ def detection_status(scored_count: int) -> str:
     return "insufficient_evidence"
 
 
+def detection_display_status(
+    result: DetectionResult,
+    *,
+    z_threshold: float = KGW_DISPLAY_Z_THRESHOLD_DEFAULT,
+) -> str:
+    """Turn an evidence score into a threshold display label.
+
+    This is deliberately a presentation decision, not an authorship
+    verdict. The statistical result remains ``scored`` once enough
+    evidence exists; a user-configurable threshold only decides which
+    of two neutral labels the UI shows.
+    """
+    if not math.isfinite(z_threshold) or z_threshold < 0.0:
+        raise ValueError(
+            "display z threshold must be finite and non-negative"
+        )
+    if result.scored_count < KGW_EVIDENCE_MIN:
+        return "insufficient_evidence"
+    if result.z_score >= z_threshold:
+        return "threshold_crossed"
+    return "threshold_not_crossed"
+
+
 def detection_z_score(
     *, green_count: int, scored_count: int, p0: float
 ) -> float:
@@ -469,9 +502,7 @@ def detection_z_score(
     return (green_count - expected) / math.sqrt(variance)
 
 
-def _green_ids(
-    config: KgwConfig, previous_token: int
-) -> GreenIds:
+def _green_ids(config: KgwConfig, previous_token: int) -> GreenIds:
     """Select exact ids with a local, pinned PCG64 generator."""
     seed = _seed(config, previous_token)
     generator = np.random.Generator(np.random.PCG64(seed))
@@ -502,9 +533,7 @@ def _seed(config: KgwConfig, previous_token: int) -> int:
         "version",
         struct.pack(">I", KGW_VERSION),
     )
-    _hmac_field(
-        digest, "model", config.model_id.encode("utf-8")
-    )
+    _hmac_field(digest, "model", config.model_id.encode("utf-8"))
     _hmac_field(
         digest,
         "tokenizer",
@@ -523,9 +552,7 @@ def _seed(config: KgwConfig, previous_token: int) -> int:
     return int.from_bytes(digest.digest()[:8], "big")
 
 
-def _hmac_field(
-    digest: hmac.HMAC, name: str, value: bytes
-) -> None:
+def _hmac_field(digest: hmac.HMAC, name: str, value: bytes) -> None:
     label = name.encode("ascii")
     digest.update(struct.pack(">H", len(label)))
     digest.update(label)

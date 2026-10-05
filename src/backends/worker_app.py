@@ -39,6 +39,7 @@ from src.backends.protocol import (
     ERROR_UNKNOWN_MESSAGE,
     MSG_CANCEL,
     MSG_COUNT_PROMPT,
+    MSG_DETECT_WATERMARK,
     MSG_GENERATE,
     MSG_MODEL_STATUS,
     MSG_PROBE,
@@ -71,8 +72,10 @@ logger = logging.getLogger("diffusion_worker")
 # second, so reaching this means a backend is ignoring the signal
 # rather than that it is merely busy.
 SETTLE_WARN_SECONDS = 30.0
+AUXILIARY_TASKS_PER_SESSION_MAX = 1
 
 assert SETTLE_WARN_SECONDS > 0.0, "a warning must have a delay"
+assert AUXILIARY_TASKS_PER_SESSION_MAX > 0
 
 
 def _log_generation_outcome(
@@ -90,6 +93,20 @@ def _log_generation_outcome(
     error = task.exception()
     if error is not None:
         logger.error("generation failed", exc_info=error)
+
+
+def _log_detector_outcome(
+    task: "asyncio.Task[None]",
+) -> None:
+    """Report a detached detector failure.
+
+    The socket stays open because this task owns one request only.
+    """
+    if task.cancelled():
+        return
+    error = task.exception()
+    if error is not None:
+        logger.error("watermark detector failed", exc_info=error)
 
 
 class _Generation:
@@ -132,6 +149,27 @@ class _Generation:
         assert not self.busy(), "one generation at a time"
         task = asyncio.create_task(work)
         task.add_done_callback(_log_generation_outcome)
+        self._task = task
+        return task
+
+
+class _DetectorGate:
+    """The one CPU-heavy detector job this worker may run."""
+
+    def __init__(self) -> None:
+        self._task: Optional["asyncio.Task[None]"] = None
+
+    def busy(self) -> bool:
+        if self._task is None:
+            return False
+        return not self._task.done()
+
+    def start(
+        self, work: "Coroutine[Any, Any, None]"
+    ) -> "asyncio.Task[None]":
+        assert not self.busy(), "one detector job at a time"
+        task = asyncio.create_task(work)
+        task.add_done_callback(_log_detector_outcome)
         self._task = task
         return task
 
@@ -221,9 +259,7 @@ async def _send_busy(
     """
     await ws.send_json(
         request_error(
-            message=(
-                "A generation is already running. Please wait."
-            ),
+            message=("A generation is already running. Please wait."),
             code=ERROR_BUSY,
             request_type=request_type,
             request_id=request_id_of(data),
@@ -325,8 +361,12 @@ class _Session:
     stream: FrameStreamer
     streaming: Dict[str, _Handler]
     concurrent: Dict[str, _Handler]
+    background: Dict[str, _Handler]
     exclusive: Dict[str, _Handler]
     mine: Optional["asyncio.Task[None]"] = None
+    auxiliary: Dict["asyncio.Task[None]", threading.Event] = field(
+        default_factory=dict
+    )
 
 
 def create_worker_app(
@@ -342,6 +382,10 @@ def create_worker_app(
     # Worker-scoped, like the lock it replaces: one model on one
     # device, so two connected windows contend for the same slot.
     generation = _Generation()
+    # Detector scoring is CPU-heavy and independent of generation,
+    # but admitting one per socket would create an unbounded queue of
+    # green-list work across windows.
+    detector = _DetectorGate()
 
     @contextlib.asynccontextmanager
     async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -364,7 +408,7 @@ def create_worker_app(
 
     @app.websocket("/ws")
     async def _ws(ws: WebSocket) -> None:
-        await _serve_socket(ws, backend, load, generation)
+        await _serve_socket(ws, backend, load, generation, detector)
 
     return app
 
@@ -463,12 +507,10 @@ def _open_session(ws: WebSocket, backend: Backend) -> _Session:
             MSG_RESUME: backend.handle_resume,
             MSG_SUBSTITUTE: backend.handle_substitute,
         },
-        # Answered even while a generation runs: both are tokenizer
-        # reads costing microseconds, and refusing them would stall a
-        # preview or a prompt count behind a running model, which is
-        # exactly when the user is still typing.
+        # Answered even while a generation runs: these are tokenizer
+        # reads and neither performs a model forward.
         #
-        # They are the only thing that can now write to this socket
+        # They are the only requests that can write to this socket
         # alongside a streaming generation. That is safe because each
         # reply is a single complete WebSocket text frame and the
         # transport writes frames in order, so a reply lands between
@@ -476,6 +518,12 @@ def _open_session(ws: WebSocket, backend: Backend) -> _Session:
         concurrent={
             MSG_TOKENIZE: backend.handle_tokenize,
             MSG_COUNT_PROMPT: backend.handle_count_prompt,
+        },
+        # Started rather than awaited so the receive loop can read a
+        # Cancel while scoring. The worker-wide gate bounds this work
+        # across sockets, and the session owns the task for cleanup.
+        background={
+            MSG_DETECT_WATERMARK: backend.handle_detect_watermark,
         },
         # Refused while a generation runs, unlike the two above, and
         # for a different reason each. The probe runs a forward pass,
@@ -499,6 +547,7 @@ async def _serve_socket(
     backend: Backend,
     load: _LoadState,
     generation: _Generation,
+    detector: _DetectorGate,
 ) -> None:
     """One socket, from accepting it to settling its generation."""
     await ws.accept()
@@ -528,7 +577,7 @@ async def _serve_socket(
             return
         while True:
             data = await ws.receive_json()
-            await _dispatch(session, generation, data)
+            await _dispatch(session, generation, detector, data)
     except WebSocketDisconnect:
         logger.info("worker client disconnected")
     finally:
@@ -537,14 +586,28 @@ async def _serve_socket(
         # holds nothing; waiting on it would add a step to every
         # disconnect to settle a task that owns no device.
         meter.cancel()
+        session.cancel_event.set()
+        await _settle_auxiliary(session)
         # The socket is going away for some reason, and every reason
         # means nothing will read this run's frames again. Stopping
         # and then waiting is what makes the disconnect bounded
         # rather than hidden: without the wait, the supervisor
         # believes this worker is idle while a model still holds the
         # device.
-        session.cancel_event.set()
         await _settle_generation(session.mine)
+
+
+async def _settle_auxiliary(session: _Session) -> None:
+    """Cancel cooperatively and await this socket's detector work."""
+    owned = list(session.auxiliary.items())
+    for _task, cancel_event in owned:
+        cancel_event.set()
+    if not owned:
+        return
+    await asyncio.gather(
+        *(task for task, _event in owned),
+        return_exceptions=True,
+    )
 
 
 async def _greet(
@@ -576,6 +639,7 @@ async def _greet(
 async def _dispatch(
     session: _Session,
     generation: _Generation,
+    detector: _DetectorGate,
     data: Dict[str, Any],
 ) -> None:
     """Route one message by its type."""
@@ -592,6 +656,9 @@ async def _dispatch(
     if mtype in session.concurrent:
         await session.concurrent[mtype](session.ws, data)
         return
+    if mtype in session.background:
+        await _start_background(session, detector, mtype, data)
+        return
     if mtype in session.exclusive:
         await _run_exclusive(session, generation, mtype, data)
         return
@@ -606,6 +673,50 @@ async def _dispatch(
             scope=ERROR_SCOPE_REQUEST,
             request_id=request_id_of(data),
         )
+    )
+
+
+async def _start_background(
+    session: _Session,
+    detector: _DetectorGate,
+    mtype: str,
+    data: Dict[str, Any],
+) -> None:
+    """Start one bounded auxiliary request without blocking reads."""
+    if detector.busy():
+        await session.ws.send_json(
+            request_error(
+                message=(
+                    "Watermark detection is already running."
+                    " Wait for it to finish and try again."
+                ),
+                code=ERROR_BUSY,
+                request_type=mtype,
+                request_id=request_id_of(data),
+            )
+        )
+        return
+    if len(session.auxiliary) >= AUXILIARY_TASKS_PER_SESSION_MAX:
+        await session.ws.send_json(
+            request_error(
+                message="This session already has detector work.",
+                code=ERROR_BUSY,
+                request_type=mtype,
+                request_id=request_id_of(data),
+            )
+        )
+        return
+    cancel_event = threading.Event()
+    task = detector.start(
+        session.background[mtype](
+            session.ws,
+            data,
+            cancel_event=cancel_event,
+        )
+    )
+    session.auxiliary[task] = cancel_event
+    task.add_done_callback(
+        lambda finished: session.auxiliary.pop(finished, None)
     )
 
 

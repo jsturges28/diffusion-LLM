@@ -53,6 +53,8 @@ function generatorReadoutsCreate(options) {
     requiredElement("entropy-profile-readout");
   var tokenMetricsStrip = requiredElement("token-metrics");
   var stopReadout = requiredElement("stop-readout");
+  var watermarkReadout =
+    requiredElement("watermark-readout");
 
   var ENTROPY_PROFILE_CURRENT = 1;
   var ENTROPY_PROFILE_FILLED = 0.68;
@@ -129,6 +131,7 @@ function generatorReadoutsCreate(options) {
   function boot() {
     overlaysBuildTokenMetrics(tokenMetricsStrip);
     overlaysBuildStopReadout(stopReadout);
+    overlaysBuildWatermarkReadout(watermarkReadout);
   }
 
   function wire() {
@@ -567,7 +570,64 @@ function generatorReadoutsCreate(options) {
     overlaysRenderStopReadout(
       stopReadout, stopReadoutReading()
     );
+    refreshWatermark();
     overlaysFitStopReadout(tokenMetricsStrip, stopReadout);
+  }
+
+  function refreshWatermark() {
+    overlaysRenderWatermarkReadout(
+      watermarkReadout, watermarkReadoutReading()
+    );
+  }
+
+  function watermarkReadoutReading() {
+    if (
+      typeof canvas.watermarkAvailable !== "function"
+      || !canvas.watermarkAvailable()
+    ) {
+      return null;
+    }
+    var provenance = typeof run.provenance === "function"
+      ? run.provenance()
+      : null;
+    var watermark = provenance && provenance.watermark;
+    if (!watermark || typeof watermark.p0 !== "number") {
+      return null;
+    }
+    var original =
+      canvas.layersActive()
+      && canvas.layerIsOriginal(null);
+    var tokens = canvas.drawnTokens(original);
+    var stats = overlaysWatermarkStats(tokens, watermark.p0);
+    if (stats === null) {
+      return null;
+    }
+    return {
+      stats: stats,
+      threshold: watermarkDisplayThreshold(),
+    };
+  }
+
+  function watermarkDisplayThreshold() {
+    var params = run.parameters() || {};
+    var value = params.watermark_z_threshold;
+    if (
+      typeof value === "number"
+      && isFinite(value)
+      && value >= 0
+    ) {
+      return value;
+    }
+    var fallback = modelState().parameterDefaults;
+    var defaultValue = fallback.watermark_z_threshold;
+    if (
+      typeof defaultValue === "number"
+      && isFinite(defaultValue)
+      && defaultValue >= 0
+    ) {
+      return defaultValue;
+    }
+    return 4;
   }
 
   function stopReadoutReading() {
@@ -682,6 +742,7 @@ function generatorReadoutsCreate(options) {
 
   function applyModel() {
     setProfileVisible(false);
+    overlaysRenderWatermarkReadout(watermarkReadout, null);
   }
 
   function setTokenHover(position, target) {
@@ -705,7 +766,8 @@ function generatorReadoutsCreate(options) {
     deactivate();
     profileLayers = null;
     profileLayout = null;
-    refreshStop();
+    overlaysRenderStopReadout(stopReadout, null);
+    overlaysRenderWatermarkReadout(watermarkReadout, null);
   }
 
   function outputReset() {
@@ -738,6 +800,7 @@ function generatorReadoutsCreate(options) {
     setCandidateHover: setCandidateHover,
     clearMetrics: clearMetrics,
     refreshStop: refreshStop,
+    refreshWatermark: refreshWatermark,
     deactivate: deactivate,
     reset: reset,
     outputReset: outputReset,

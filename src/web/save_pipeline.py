@@ -262,23 +262,20 @@ class WatermarkProvenance(BaseModel):
     delta: float = Field(ge=0.0)
     vocab_size: int = Field(ge=2)
     green_list_size: int = Field(ge=1)
-    tokenizer_fingerprint: str = Field(
-        min_length=1, max_length=256
-    )
+    tokenizer_fingerprint: str = Field(min_length=1, max_length=256)
     seeding_contract: str = Field(min_length=1, max_length=512)
     rng_contract: str = Field(min_length=1, max_length=512)
     exclusions: List[str] = Field(min_length=1, max_length=8)
     status: Literal["insufficient_evidence", "scored"]
     green_count: int = Field(ge=0)
     scored_count: int = Field(ge=0)
+    green_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     z_score: float
     p0: float = Field(gt=0.0, lt=1.0)
 
     @model_validator(mode="before")
     @classmethod
-    def _secret_never_crosses(
-        cls, value: object
-    ) -> object:
+    def _secret_never_crosses(cls, value: object) -> object:
         if isinstance(value, dict) and "secret" in value:
             raise ValueError(
                 "watermark provenance must not contain a secret"
@@ -297,6 +294,20 @@ class WatermarkProvenance(BaseModel):
             )
         if self.green_count > self.scored_count:
             raise ValueError("green count exceeds scored count")
+        expected_rate = (
+            self.green_count / self.scored_count
+            if self.scored_count > 0
+            else 0.0
+        )
+        if self.green_rate is not None and not math.isclose(
+            self.green_rate,
+            expected_rate,
+            rel_tol=1e-15,
+            abs_tol=1e-15,
+        ):
+            raise ValueError(
+                "watermark green rate disagrees with its counts"
+            )
         expected_p0 = null_probability(
             green_list_size=self.green_list_size,
             vocab_size=self.vocab_size,
@@ -378,10 +389,7 @@ class ContextPackProvenance(BaseModel):
             raise ValueError(
                 "context pack exceeds its effective budget"
             )
-        if (
-            self.effective_total_budget
-            > self.requested_total_budget
-        ):
+        if self.effective_total_budget > self.requested_total_budget:
             raise ValueError(
                 "effective context budget exceeds the request"
             )
@@ -524,8 +532,9 @@ def _check_attested_conversation(body: SaveRunRequest) -> None:
 
 
 def _check_watermark_records(body: SaveRunRequest) -> None:
-    """Reconcile current token evidence with worker provenance."""
+    """Reconcile records, parameters, and worker provenance."""
     records = _live_token_records(body)
+    original = _original_token_records(body)
     watermark = (
         body.provenance.watermark
         if body.provenance is not None
@@ -536,19 +545,30 @@ def _check_watermark_records(body: SaveRunRequest) -> None:
             raise ValueError(
                 "watermark token fields need watermark provenance"
             )
+        if original is not None and _has_watermark_fields(original):
+            raise ValueError(
+                "original watermark fields need watermark provenance"
+            )
         return
+    _check_watermark_identity(body, watermark)
     if records is None or not records:
         raise ValueError(
             "watermark provenance needs final token records"
         )
-    if any(record.g is None for record in records):
-        raise ValueError("watermarked tokens need membership flags")
-    if any(record.we is None for record in records):
-        raise ValueError("watermarked tokens need evidence flags")
+    _check_watermark_record_set(
+        records,
+        vocab_size=watermark.vocab_size,
+        label="watermarked tokens",
+    )
+    if original is not None:
+        _check_watermark_record_set(
+            original,
+            vocab_size=watermark.vocab_size,
+            label="original watermarked tokens",
+        )
     scored = sum(record.we is True for record in records)
     green = sum(
-        record.we is True and record.g is True
-        for record in records
+        record.we is True and record.g is True for record in records
     )
     if watermark.scored_count != scored:
         raise ValueError(
@@ -560,6 +580,85 @@ def _check_watermark_records(body: SaveRunRequest) -> None:
         )
 
 
+def _check_watermark_identity(
+    body: SaveRunRequest,
+    watermark: WatermarkProvenance,
+) -> None:
+    provenance = body.provenance
+    assert provenance is not None
+    entry = REGISTRY.get(provenance.model_id)
+    if entry is None or not entry.capabilities.supports_watermark:
+        raise ValueError(
+            "watermark provenance requires a watermark-capable model"
+        )
+    if body.model != provenance.model_id:
+        raise ValueError(
+            "watermark model differs from worker provenance"
+        )
+    if body.params.get("watermark") is not True:
+        raise ValueError(
+            "watermark provenance requires watermark=true"
+        )
+    _check_watermark_parameter(
+        body.params,
+        "watermark_gamma",
+        watermark.gamma,
+    )
+    _check_watermark_parameter(
+        body.params,
+        "watermark_delta",
+        watermark.delta,
+    )
+    fingerprint = provenance.tokenizer.get("fingerprint")
+    if fingerprint != watermark.tokenizer_fingerprint:
+        raise ValueError(
+            "watermark tokenizer fingerprint differs from provenance"
+        )
+    width = provenance.tokenizer.get("model_vocab_size")
+    if width != watermark.vocab_size:
+        raise ValueError(
+            "watermark vocabulary differs from model provenance"
+        )
+
+
+def _check_watermark_parameter(
+    params: Mapping[str, Any],
+    name: str,
+    attested: float,
+) -> None:
+    value = params.get(name)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be a saved number")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f"{name} must be finite")
+    if not math.isclose(
+        number,
+        attested,
+        rel_tol=1e-15,
+        abs_tol=1e-15,
+    ):
+        raise ValueError(f"{name} differs from worker provenance")
+
+
+def _check_watermark_record_set(
+    records: List[TokenRecord],
+    *,
+    vocab_size: int,
+    label: str,
+) -> None:
+    for record in records:
+        if record.id < 0 or record.id >= vocab_size:
+            raise ValueError(
+                f"{label} contain token id {record.id} outside"
+                f" [0, {vocab_size})"
+            )
+        if record.g is None:
+            raise ValueError(f"{label} need membership flags")
+        if record.we is None:
+            raise ValueError(f"{label} need evidence flags")
+
+
 def _live_token_records(
     body: SaveRunRequest,
 ) -> Optional[List[TokenRecord]]:
@@ -568,6 +667,19 @@ def _live_token_records(
         return body.frame_positions
     if body.frame_tokens:
         return body.frame_tokens[-1]
+    return None
+
+
+def _original_token_records(
+    body: SaveRunRequest,
+) -> Optional[List[TokenRecord]]:
+    """The pre-edit layer's final records, when one was retained."""
+    if body.original_frame_positions is not None:
+        return body.original_frame_positions
+    if body.original_frame_tokens:
+        for frame in reversed(body.original_frame_tokens):
+            if frame:
+                return frame
     return None
 
 
@@ -768,9 +880,7 @@ def _context_metadata(
 ) -> Dict[str, Any]:
     """The prompt and context-window block, when measurable."""
     packed = (
-        provenance.context_pack
-        if provenance is not None
-        else None
+        provenance.context_pack if provenance is not None else None
     )
     if prompt_len is None and packed is None:
         return {}
@@ -783,9 +893,7 @@ def _context_metadata(
     assert measured >= 0, "prompt length must be non-negative"
     block: Dict[str, Any] = {"prompt_tokens": measured}
     if packed is not None:
-        block["context_pack"] = packed.model_dump(
-            exclude_none=True
-        )
+        block["context_pack"] = packed.model_dump(exclude_none=True)
     if provenance is not None:
         window = provenance.context_length
     else:

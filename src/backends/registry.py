@@ -215,6 +215,20 @@ _KGW_PARAMETERS: Tuple[ParamSpec, ...] = (
         experimental_only=True,
         help="Logit bias added before temperature and truncation.",
     ),
+    ParamSpec(
+        name="watermark_z_threshold",
+        label="Display z Threshold",
+        type=ParamType.FLOAT,
+        default=4.0,
+        group=ParamGroup.SIGNALS,
+        step=0.1,
+        recommended=(0.0, 10.0),
+        experimental=(0.0, 20.0),
+        experimental_only=True,
+        help="Experimental display threshold for the detector"
+        " readout. It does not change sampling and is not an"
+        " authorship verdict.",
+    ),
 )
 
 
@@ -508,6 +522,7 @@ SMOLLM3 = ModelInfo(
         supports_resume=False,
         supports_substitution=True,
         supports_cfg=False,
+        supports_watermark=True,
         # The model a GPU-less host can use, so CPU is a placement
         # this one genuinely supports rather than one it inherited.
         supported_devices=("cuda", "cpu"),
@@ -686,6 +701,7 @@ MAMBA3 = ModelInfo(
         # a cache can; in float32 the replay is exact.
         supports_substitution=True,
         supports_cfg=False,
+        supports_watermark=True,
         # CPU decoding cleared the bar set to decide exactly this:
         # 4.3 tokens a second in float32 against 3 (manual item 328).
         supported_devices=("cuda", "cpu"),

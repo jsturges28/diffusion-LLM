@@ -814,6 +814,247 @@ function overlaysForgettingReading(tok) {
   return "Forgetting: " + tok.f.toFixed(3);
 }
 
+// ---- KGW watermark membership and detector readout ----
+//
+// These colors describe keyed set membership only. They never mean
+// correct/incorrect, confidence, quality, or authorship. A token with
+// ``we=false`` was excluded from detector evidence (the first output
+// token and a user-forced What If token today), so it also gets the
+// non-color outline/pattern class defined in style.css.
+var OVERLAYS_WATERMARK_FAVORED = "#35d07f";
+var OVERLAYS_WATERMARK_COMPLEMENT = "#ff6b6b";
+var OVERLAYS_WATERMARK_EVIDENCE_MIN = 50;
+
+function watermarkColor(tok) {
+  if (!tok || typeof tok.g !== "boolean") {
+    return null;
+  }
+  return tok.g
+    ? OVERLAYS_WATERMARK_FAVORED
+    : OVERLAYS_WATERMARK_COMPLEMENT;
+}
+
+function overlaysWatermarkTokenClass(tok) {
+  if (!tok || typeof tok.g !== "boolean") {
+    return "";
+  }
+  var classes = [
+    tok.g
+      ? "token-watermark-favored"
+      : "token-watermark-complement",
+  ];
+  if (tok.we === false) {
+    classes.push("token-watermark-excluded");
+  }
+  return classes.join(" ");
+}
+
+function overlaysWatermarkReading(tok) {
+  if (!tok || typeof tok.g !== "boolean") {
+    return "";
+  }
+  var set = tok.g ? "keyed favored set" : "keyed complement";
+  if (tok.we === false) {
+    return "Watermark: " + set + "; excluded from detector score";
+  }
+  if (tok.we === true) {
+    return "Watermark: " + set + "; included in detector score";
+  }
+  return "Watermark: " + set + "; evidence flag unavailable";
+}
+
+function overlaysWatermarkDescription(tok) {
+  var reading = overlaysWatermarkReading(tok);
+  return reading ? reading.replace("Watermark: ", "") : "";
+}
+
+function overlaysTokensCarryWatermark(tokens) {
+  if (!Array.isArray(tokens)) {
+    return false;
+  }
+  for (var i = 0; i < tokens.length; i++) {
+    if (tokens[i] && typeof tokens[i].g === "boolean") {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Recompute one frame's score from durable token evidence. ``p0`` is
+// the exact worker-attested null probability; membership alone cannot
+// recover it for a padded output vocabulary, so an invalid or absent
+// value returns null rather than inventing one.
+function overlaysWatermarkStats(tokens, p0) {
+  if (!overlaysTokensCarryWatermark(tokens)) {
+    return null;
+  }
+  if (
+    typeof p0 !== "number"
+    || !isFinite(p0)
+    || p0 <= 0
+    || p0 >= 1
+  ) {
+    return null;
+  }
+  var green = 0;
+  var scored = 0;
+  for (var i = 0; i < tokens.length; i++) {
+    var tok = tokens[i];
+    if (
+      !tok
+      || typeof tok.g !== "boolean"
+      || typeof tok.we !== "boolean"
+    ) {
+      return null;
+    }
+    if (tok.we !== true) {
+      continue;
+    }
+    scored += 1;
+    if (tok.g) {
+      green += 1;
+    }
+  }
+  var variance = scored * p0 * (1 - p0);
+  var zScore = scored > 0
+    ? (green - scored * p0) / Math.sqrt(variance)
+    : 0;
+  return {
+    status: scored < OVERLAYS_WATERMARK_EVIDENCE_MIN
+      ? "insufficient_evidence"
+      : "scored",
+    green_count: green,
+    scored_count: scored,
+    green_rate: scored > 0 ? green / scored : 0,
+    z_score: zScore,
+    p0: p0,
+  };
+}
+
+function overlaysWatermarkDisplayStatus(stats, threshold) {
+  if (
+    !stats
+    || stats.scored_count < OVERLAYS_WATERMARK_EVIDENCE_MIN
+  ) {
+    return "insufficient_evidence";
+  }
+  if (
+    typeof threshold !== "number"
+    || !isFinite(threshold)
+    || threshold < 0
+  ) {
+    throw new RangeError(
+      "watermark display threshold must be non-negative"
+    );
+  }
+  return stats.z_score >= threshold
+    ? "threshold_crossed"
+    : "threshold_not_crossed";
+}
+
+function overlaysBuildWatermarkReadout(el) {
+  if (!el) {
+    return;
+  }
+  el.textContent = "";
+  var nodes = {
+    label: overlaysWatermarkReadoutNode(
+      el, "watermark-readout-label", "Experimental KGW"
+    ),
+    counts: overlaysWatermarkReadoutNode(
+      el, "watermark-readout-counts", ""
+    ),
+    rate: overlaysWatermarkReadoutNode(
+      el, "watermark-readout-rate", ""
+    ),
+    score: overlaysWatermarkReadoutNode(
+      el, "watermark-readout-score", ""
+    ),
+    nullRate: overlaysWatermarkReadoutNode(
+      el, "watermark-readout-null", ""
+    ),
+    status: overlaysWatermarkReadoutNode(
+      el, "watermark-readout-status", ""
+    ),
+  };
+  el.overlaysWatermarkNodes = nodes;
+  el.hidden = true;
+}
+
+function overlaysWatermarkReadoutNode(el, className, text) {
+  var node = document.createElement("span");
+  node.className = className;
+  node.textContent = text;
+  el.appendChild(node);
+  return node;
+}
+
+// ``reading`` is {stats, threshold, recordConsistency?}. The threshold is
+// explicitly called a display threshold because it changes no score,
+// token, or statistical null and cannot identify who wrote text.
+function overlaysRenderWatermarkReadout(el, reading) {
+  if (!el || !el.overlaysWatermarkNodes) {
+    return;
+  }
+  if (!reading || !reading.stats) {
+    el.hidden = true;
+    el.removeAttribute("title");
+    return;
+  }
+  var stats = reading.stats;
+  var threshold = reading.threshold;
+  var status = overlaysWatermarkDisplayStatus(stats, threshold);
+  var nodes = el.overlaysWatermarkNodes;
+  nodes.counts.textContent =
+    "green/scored "
+    + stats.green_count + "/" + stats.scored_count;
+  nodes.rate.textContent =
+    "green rate " + (stats.green_rate * 100).toFixed(1) + "%";
+  nodes.score.textContent = "z " + stats.z_score.toFixed(2);
+  nodes.nullRate.textContent =
+    "p0 " + overlaysWatermarkExactProbability(stats.p0);
+  nodes.status.textContent = overlaysWatermarkStatusText(
+    status, threshold, reading.recordConsistency
+  );
+  nodes.status.className =
+    "watermark-readout-status watermark-status-" + status;
+  if (reading.recordConsistency === "mismatch") {
+    nodes.status.className += " watermark-record-mismatch";
+  }
+  el.title = (
+    "Experimental keyed-set score. Green means the keyed favored"
+    + " set and red its complement, never correctness or confidence."
+    + " The configurable z threshold is display-only and is not an"
+    + " AI/human or authorship verdict."
+  );
+  el.hidden = false;
+}
+
+function overlaysWatermarkExactProbability(value) {
+  return String(value);
+}
+
+function overlaysWatermarkStatusText(
+  status, threshold, recordConsistency
+) {
+  var text;
+  if (status === "insufficient_evidence") {
+    text = "insufficient evidence (<50 scored)";
+  } else if (status === "threshold_crossed") {
+    text = "threshold crossed @ display z " + threshold;
+  } else {
+    text = "threshold not crossed @ display z " + threshold;
+  }
+  if (recordConsistency === "consistent") {
+    text += " \u00b7 record counts consistent";
+  } else if (recordConsistency === "mismatch") {
+    text += " \u00b7 record counts differ from attestation";
+  } else if (recordConsistency === "unavailable") {
+    text += " \u00b7 record consistency unavailable";
+  }
+  return text;
+}
+
 // Per-position commit step for a run: the step after which a position
 // last changed to its final value. Derived purely from the frame
 // token stream (the final frame is ground truth), so it is exact for
@@ -1752,6 +1993,22 @@ function overlaysSyncTokenSpan(span, index, tok, mask, opts) {
   if (span.textContent !== text) {
     span.textContent = text;
   }
+  var description = opts.descriptionFor
+    ? opts.descriptionFor(index, tok, masked)
+    : "";
+  if (description) {
+    var accessibleText = String(text).trim();
+    if (!accessibleText) {
+      accessibleText = "Whitespace token";
+    }
+    span.setAttribute(
+      "aria-label", accessibleText + ". " + description
+    );
+    span.setAttribute("title", description);
+  } else {
+    overlaysRemoveAttribute(span, "aria-label");
+    overlaysRemoveAttribute(span, "title");
+  }
   // Cleared rather than skipped when absent: on a reused span the
   // previous frame's value would otherwise stick.
   var color = opts.colorFor ? opts.colorFor(index, tok) : null;
@@ -1765,6 +2022,16 @@ function overlaysSyncTokenSpan(span, index, tok, mask, opts) {
   var nextOpacity = opacity !== null ? String(opacity) : "";
   if (span.style.opacity !== nextOpacity) {
     span.style.opacity = nextOpacity;
+  }
+}
+
+function overlaysRemoveAttribute(element, name) {
+  if (typeof element.removeAttribute === "function") {
+    element.removeAttribute(name);
+    return;
+  }
+  if (element.getAttribute(name) !== null) {
+    element.setAttribute(name, "");
   }
 }
 

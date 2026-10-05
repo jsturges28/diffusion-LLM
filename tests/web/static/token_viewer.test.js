@@ -63,6 +63,24 @@ const ENTROPY_BY_FRAME = {
   capture: "always",
 };
 
+const WATERMARK_MEMBERSHIP = {
+  name: "watermark_membership",
+  unit: "categorical",
+  axes: ["position"],
+  location: "token_record",
+  key: "g",
+  capture: "opt_in",
+};
+
+const WATERMARK_EVIDENCE = {
+  name: "watermark_evidence",
+  unit: "categorical",
+  axes: ["position"],
+  location: "token_record",
+  key: "we",
+  capture: "opt_in",
+};
+
 // Frame `at` of a saved diffusion run: the first `at` + 1 positions
 // decided and the rest still masked. Entropy is the frame plus a
 // tenth of the position, offset by `base`, so a bar read at the
@@ -110,6 +128,46 @@ function edited() {
     original_frames: frames(10),
     remask_edits: [{ frame_index: 1, token_positions: [2] }],
   });
+}
+
+function watermarkTokens(layer, invert) {
+  for (let frame = 0; frame < layer.length; frame++) {
+    for (let index = 0; index < layer[frame].length; index++) {
+      layer[frame][index].g = invert
+        ? index % 2 !== 0
+        : index % 2 === 0;
+      layer[frame][index].we = index !== 0;
+    }
+  }
+}
+
+function watermarked(overrides) {
+  const data = payload({
+    signals: [
+      ENTROPY_BY_FRAME,
+      WATERMARK_MEMBERSHIP,
+      WATERMARK_EVIDENCE,
+    ],
+    watermark: {
+      attested: {
+        p0: 0.25,
+        green_count: 1,
+        scored_count: 3,
+        z_score: 0.3333333333333333,
+      },
+      recomputed: {
+        p0: 0.25,
+        green_count: 1,
+        scored_count: 3,
+        green_rate: 1 / 3,
+        z_score: 0.3333333333333333,
+      },
+      record_consistency: "consistent",
+    },
+    watermark_display_threshold: 4,
+  });
+  watermarkTokens(data.frames, false);
+  return Object.assign(data, overrides || {});
 }
 
 // The viewer as the page creates and boots it. Chart keeps what each
@@ -267,6 +325,81 @@ test("a run begun as autoregressive offers no Commit Order", () => {
 
   assert.deepEqual(
     pickerValues(page), ["none", "heatmap", "entropy"]
+  );
+});
+
+test("saved watermark records offer the overlay and readout", () => {
+  const page = load();
+  page.viewer.show(watermarked());
+  page.viewer.setMode("watermark");
+
+  assert.ok(pickerValues(page).includes("watermark"));
+  const spans = newestSpans(page);
+  assert.equal(
+    spans[0].style.color,
+    page.context.OVERLAYS_WATERMARK_FAVORED
+  );
+  assert.equal(
+    spans[0].classList.contains("token-watermark-excluded"),
+    true
+  );
+  const readout = page.registry.get("watermark-readout");
+  assert.equal(readout.hidden, false);
+  assert.match(
+    readout.overlaysWatermarkNodes.status.textContent,
+    /insufficient evidence/
+  );
+  assert.match(
+    readout.overlaysWatermarkNodes.status.textContent,
+    /record counts consistent/
+  );
+});
+
+test(
+  "legacy membership draws without inventing detector metadata",
+  () => {
+  const page = load();
+  const data = watermarked({
+    signals: null,
+    watermark: null,
+    watermark_display_threshold: null,
+  });
+
+  page.viewer.show(data);
+  page.viewer.setMode("watermark");
+
+  assert.ok(pickerValues(page).includes("watermark"));
+  assert.equal(page.registry.get("watermark-readout").hidden, true);
+  }
+);
+
+test("watermark crossfade keeps each layer's membership", () => {
+  const page = load();
+  const data = watermarked({
+    original_frames: frames(10),
+    remask_edits: [{ frame_index: 1, token_positions: [2] }],
+  });
+  watermarkTokens(data.original_frames, true);
+
+  page.viewer.show(data);
+  page.viewer.setMode("watermark");
+
+  const output = page.registry.get("overlay-output");
+  const originals = output.querySelectorAll(
+    ".token-layer-original"
+  );
+  const editedLayers = output.querySelectorAll(
+    ".token-layer-edited"
+  );
+  const original = originals[originals.length - 1];
+  const editedLayer = editedLayers[editedLayers.length - 1];
+  assert.equal(
+    original.children[0].style.color,
+    page.context.OVERLAYS_WATERMARK_COMPLEMENT
+  );
+  assert.equal(
+    editedLayer.children[0].style.color,
+    page.context.OVERLAYS_WATERMARK_FAVORED
   );
 });
 

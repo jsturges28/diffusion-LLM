@@ -421,6 +421,54 @@ test("snapshot and append frames render through one API", () => {
   );
 });
 
+test("watermark overlay follows records and exclusions", () => {
+  const { page, canvas } = harness((state) => {
+    state.append = true;
+    state.frames = [];
+    state.positions = [
+      token(1, { g: true, we: false }),
+      token(2, { g: false, we: true }),
+    ];
+    state.capabilities.generation_shape = "append_only";
+    state.capabilities.signals.push(
+      { name: "watermark_membership", axes: ["position"] },
+      { name: "watermark_evidence", axes: ["position"] }
+    );
+  });
+
+  canvas.activate();
+  assert.ok(pickerValues(page).includes("watermark"));
+  canvas.setOverlayMode("watermark");
+  canvas.renderFrame(1);
+
+  const output = page.registry.get("output-area");
+  const spans = withClass(output, "token-span");
+  assert.equal(
+    spans[0].style.color,
+    page.context.OVERLAYS_WATERMARK_FAVORED
+  );
+  assert.equal(
+    spans[1].style.color,
+    page.context.OVERLAYS_WATERMARK_COMPLEMENT
+  );
+  assert.equal(
+    spans[0].classList.contains("token-watermark-excluded"),
+    true
+  );
+  assert.equal(
+    spans[0].classList.contains("token-watermark-favored"),
+    true
+  );
+  assert.match(
+    spans[0].getAttribute("aria-label"),
+    /keyed favored set/
+  );
+  assert.equal(
+    page.registry.get("watermark-legend").hidden,
+    false
+  );
+});
+
 test("chrome placeholders can take and return the output area", () => {
   const { page, state, canvas } = harness();
   const chrome = page.context.generatorChromeCreate({

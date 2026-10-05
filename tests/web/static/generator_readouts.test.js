@@ -56,6 +56,7 @@ function defaultState() {
       confidence_threshold: 0.005,
       stability_threshold: 1,
     },
+    provenance: null,
     model: {
       capabilities: { adaptive_stopping: true },
       parameterDefaults: {},
@@ -80,6 +81,7 @@ function defaultState() {
     },
     entropyDeclared: true,
     entropyAvailable: true,
+    watermarkAvailable: false,
     blend: 1,
     favorsOriginal: false,
     layered: true,
@@ -108,6 +110,9 @@ function fakeRun(state) {
     parameters() {
       return state.parameters;
     },
+    provenance() {
+      return state.provenance;
+    },
   };
 }
 
@@ -130,6 +135,9 @@ function fakeCanvas(state) {
     },
     entropyAvailable() {
       return state.entropyAvailable;
+    },
+    watermarkAvailable() {
+      return state.watermarkAvailable;
     },
     layerIsOriginal(target) {
       const layer = target && target.closest
@@ -408,4 +416,41 @@ test("adaptive stopping uses scrubber and segment snapshots", () => {
   state.model.capabilities.adaptive_stopping = false;
   readouts.refreshStop();
   assert.equal(stop.hidden, true);
+});
+
+test("watermark readout follows tokens and threshold", () => {
+  const { page, state, readouts } = harness((draftState) => {
+    draftState.watermarkAvailable = true;
+    draftState.model.capabilities.adaptive_stopping = false;
+    draftState.parameters.watermark_z_threshold = 4;
+    draftState.provenance = {
+      watermark: { p0: 0.25 },
+    };
+    draftState.edited = [{ g: true, we: false }];
+    for (let index = 0; index < 50; index++) {
+      draftState.edited.push({ g: true, we: true });
+    }
+    draftState.layered = false;
+  });
+
+  readouts.refreshWatermark();
+  const watermark = page.registry.get("watermark-readout");
+  const nodes = watermark.overlaysWatermarkNodes;
+  assert.equal(watermark.hidden, false);
+  assert.equal(
+    nodes.counts.textContent,
+    "green/scored 50/50"
+  );
+  assert.equal(nodes.rate.textContent, "green rate 100.0%");
+  assert.match(nodes.status.textContent, /threshold crossed/);
+
+  state.parameters.watermark_z_threshold = 100;
+  readouts.refreshWatermark();
+  assert.match(nodes.status.textContent, /threshold not crossed/);
+
+  readouts.clearTokenHover();
+  assert.equal(watermark.hidden, false);
+
+  readouts.reset();
+  assert.equal(watermark.hidden, true);
 });

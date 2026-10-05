@@ -63,6 +63,7 @@ function generator() {
     about: page.registry.get("modal-about"),
     help: page.registry.get("modal-help"),
     imports: page.registry.get("modal-import"),
+    detector: page.registry.get("modal-watermark-detector"),
   };
 }
 
@@ -174,10 +175,17 @@ test("raising the loading overlay closes the dialogs", () => {
   // overlay at 100 would otherwise have About floating over it.
   const h = generator();
   open(h, "about");
+  h.page.context.generatorWatermark.configure({
+    supports_watermark: true,
+  });
+  h.page.registry
+    .get("btn-watermark-detector")
+    .dispatch("click");
 
   h.page.context.raiseLoadingOverlay();
 
   assert.equal(h.about.open, false);
+  assert.equal(h.detector.open, false);
   assert.equal(
     h.page.registry.get("loading-overlay").classes.has("hidden"),
     false
@@ -193,4 +201,19 @@ test("it still raises the overlay when nothing is open", () => {
     h.page.registry.get("loading-overlay").classes.has("hidden"),
     false
   );
+});
+
+test("resetting the active conversation closes Detector", () => {
+  const h = generator();
+  h.page.context.generatorWatermark.configure({
+    supports_watermark: true,
+  });
+  h.page.registry
+    .get("btn-watermark-detector")
+    .dispatch("click");
+  assert.equal(h.detector.open, true);
+
+  h.page.context.resetRunState();
+
+  assert.equal(h.detector.open, false);
 });

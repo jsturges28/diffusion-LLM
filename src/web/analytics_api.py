@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
@@ -55,6 +56,11 @@ from src.backends.protocol import (
     ParamSpec,
 )
 from src.backends.registry import REGISTRY
+from src.inference.kgw_watermark import (
+    KGW_DISPLAY_Z_THRESHOLD_DEFAULT,
+    detection_status,
+    detection_z_score,
+)
 from src.web import run_store
 
 
@@ -113,6 +119,7 @@ STOP_RULE_PARAMS: Tuple[str, ...] = (
     "stability_threshold",
     "max_denoising_steps",
 )
+WATERMARK_THRESHOLD_PARAM = "watermark_z_threshold"
 
 assert COMPARE_RUNS_MAX > 1, "a comparison needs two runs"
 assert len(set(COMPARE_REASONS)) == len(COMPARE_REASONS)
@@ -465,6 +472,7 @@ def _compute_run_frames(
     data = load_run_frames(run_dir)
     positions = data["positions"]
     original_positions = data["original_positions"]
+    watermark = _watermark_payload(metadata, data)
     return {
         "run_id": run_id,
         "frames": None if positions is not None else data["frames"],
@@ -485,7 +493,174 @@ def _compute_run_frames(
         "canvas_index": metadata.get("canvas_index"),
         "stop_rule": _stop_rule(metadata),
         "signals": metadata.get(run_store.SIGNALS_KEY),
+        "watermark": watermark,
+        "watermark_display_threshold": (
+            _watermark_display_threshold(metadata)
+            if watermark is not None
+            else None
+        ),
     }
+
+
+def _watermark_payload(
+    metadata: Dict[str, Any], data: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """Pair worker attestation with a token-record recomputation."""
+    attested = metadata.get("watermark")
+    if not isinstance(attested, dict):
+        return None
+    described = dict(attested)
+    model_id = metadata.get("backend")
+    if isinstance(model_id, str) and model_id:
+        described.setdefault("model_id", model_id)
+    payload: Dict[str, Any] = {
+        "attested": described,
+        "recomputed": None,
+        "record_consistency": "unavailable",
+    }
+    records = _watermark_final_records(data)
+    p0 = attested.get("p0")
+    if not records or not _valid_probability(p0):
+        return payload
+    if not all(
+        isinstance(record.get("g"), bool)
+        and isinstance(record.get("we"), bool)
+        for record in records
+    ):
+        return payload
+    scored = sum(record["we"] is True for record in records)
+    green = sum(
+        record["we"] is True and record["g"] is True
+        for record in records
+    )
+    exact_p0 = float(p0)
+    recomputed = {
+        "status": detection_status(scored),
+        "green_count": green,
+        "scored_count": scored,
+        "green_rate": green / scored if scored > 0 else 0.0,
+        "z_score": detection_z_score(
+            green_count=green,
+            scored_count=scored,
+            p0=exact_p0,
+        ),
+        "p0": exact_p0,
+    }
+    payload["recomputed"] = recomputed
+    payload["record_consistency"] = (
+        "consistent"
+        if _watermark_scores_match(attested, recomputed)
+        else "mismatch"
+    )
+    return payload
+
+
+def _watermark_final_records(
+    data: Dict[str, Any],
+) -> Optional[List[Dict[str, Any]]]:
+    """The saved run's final current layer, never its baseline."""
+    positions = data.get("positions")
+    if isinstance(positions, list):
+        return positions
+    frames = data.get("frames")
+    if not isinstance(frames, list):
+        return None
+    for frame in reversed(frames):
+        if isinstance(frame, list):
+            return frame
+    return None
+
+
+def _valid_probability(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+        and 0.0 < float(value) < 1.0
+    )
+
+
+def _watermark_scores_match(
+    attested: Dict[str, Any], recomputed: Dict[str, Any]
+) -> bool:
+    """Whether counts and score agree across worker and records."""
+    if attested.get("green_count") != recomputed["green_count"]:
+        return False
+    if attested.get("scored_count") != recomputed["scored_count"]:
+        return False
+    if attested.get("status") != recomputed["status"]:
+        return False
+    if not _watermark_rate_matches(attested, recomputed):
+        return False
+    score = attested.get("z_score")
+    if not isinstance(score, (int, float)) or isinstance(score, bool):
+        return False
+    return math.isclose(
+        float(score),
+        float(recomputed["z_score"]),
+        rel_tol=1e-12,
+        abs_tol=1e-12,
+    )
+
+
+def _watermark_rate_matches(
+    attested: Dict[str, Any], recomputed: Dict[str, Any]
+) -> bool:
+    """Match an optional new rate while accepting old attestations."""
+    rate = attested.get("green_rate")
+    if rate is None:
+        return True
+    if isinstance(rate, bool) or not isinstance(rate, (int, float)):
+        return False
+    return math.isclose(
+        float(rate),
+        float(recomputed["green_rate"]),
+        rel_tol=1e-12,
+        abs_tol=1e-12,
+    )
+
+
+def _watermark_display_threshold(
+    metadata: Dict[str, Any],
+) -> float:
+    """The saved display choice, or its stable default."""
+    params = metadata.get("params")
+    value = (
+        params.get(WATERMARK_THRESHOLD_PARAM)
+        if isinstance(params, dict)
+        else None
+    )
+    entry = REGISTRY.get(str(metadata.get("backend", "")))
+    if entry is not None:
+        for spec in entry.param_specs:
+            if spec.name == WATERMARK_THRESHOLD_PARAM:
+                coerced = _watermark_threshold_value(spec, value)
+                return float(coerced)
+    if _valid_threshold(value):
+        return float(value)
+    return KGW_DISPLAY_Z_THRESHOLD_DEFAULT
+
+
+def _watermark_threshold_value(
+    spec: ParamSpec, value: Any
+) -> ParamValue:
+    """Validate a saved threshold through its registry spec."""
+    default = default_of(spec, device=None)
+    if value is None:
+        return default
+    try:
+        return coerce(spec, value, device=None, experimental=True)
+    except ValueError:
+        return default
+
+
+def _valid_threshold(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+        and float(value) >= 0.0
+    )
 
 
 def _stop_rule(

@@ -66,7 +66,8 @@ in an analytics suite.
 - **Workers**: `src/backends/{llada,dgemma,smollm3,mamba3}_worker.py` via
   `run_worker.py`; contract in `protocol.py` / `registry.py` /
   `worker_base.py` (the model side), served by `worker_app.py` (app, routes,
-  load); the two left-to-right workers share `append_only_backend.py`. LLaDA
+  load); the two left-to-right workers share `append_only_backend.py`,
+  including raw-tokenizer KGW detection with no model forward. LLaDA
   to `.venv` (transformers 4.38.2); DiffusionGemma to `.venv-dgemma`
   (transformers 5.13); SmolLM3 and Mamba-3 to `.venv-ar` (transformers 4.53;
   Mamba-3 is plain PyTorch). `run_worker.py` takes `--device`, forwarded via
@@ -81,7 +82,8 @@ in an analytics suite.
   `src/web/static/` holds `menu`, `index`/`app`, `analytics`, `settings` and
   `vision`, plus `overlays.js` for the shared visuals and settings model and
   `persist.js` for durable UI state; `conversation_state`, `_client` and
-  `_view` own the generator's bounded durable transcript.
+  `_view` own the generator's bounded durable transcript, and
+  `generator_watermark.js` owns the request-fenced pasted-text detector.
   Analytics reads runs via `overlay_series.js`, draws with `line_charts.js` and
   `token_viewer.js` on `chart_support.js`; `detail_requests.js` fences fetches.
   Chart libraries and webfont are vendored in `static/vendor/` for offline use.
@@ -181,11 +183,15 @@ predate the campaign and have never been validated.
 
 ## Where to pick up
 
-**Durable bounded chat** is the newest surface. Conversations live under
+**Experimental KGW views and detection** are the newest surface. SmolLM3
+and Mamba-3 emit keyed membership and evidence flags, share an accessible
+Watermark overlay and exact null rate plus normal-z readout with Analytics,
+and expose a tokenizer-only detector while resident. The display threshold
+is not an authorship verdict. Conversations still live under
 the shared data root, use CAS revisions across windows, restore their
 newest 50-turn page, and keep at most 200 compact turns in browser memory.
 Only the active tail owns frames and edit tools; older responses keep text
 and link a run only when it was explicitly saved. Exact context packing
 drops oldest whole exchanges and attests absolute omitted-turn counts.
-Hardware and display checks start at manual item 419. The next feature
+Hardware and display checks start at manual item 425. The next feature
 comes from the backlog in `docs/ROADMAP.md`.

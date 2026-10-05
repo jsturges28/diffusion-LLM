@@ -324,6 +324,19 @@ function overlaySeriesHasTokenValue(series, key) {
   return false;
 }
 
+function overlaySeriesHasTokenBoolean(series, key) {
+  var final = overlaySeriesFinal(series);
+  if (!final) {
+    return false;
+  }
+  for (var i = 0; i < final.length; i++) {
+    if (final[i] && typeof final[i][key] === "boolean") {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Whether the saved run carries per-token forgetting to colour by.
 // The run's own manifest decides the shape when it has one, as it
 // does for entropy: forgetting is one value per position, and a run
@@ -336,6 +349,31 @@ function overlaySeriesCarriesForgetting(data) {
   }
   return overlaySeriesHasTokenValue(
     overlaySeriesOf(data, false), "f"
+  );
+}
+
+// Whether durable records can draw keyed membership. New runs also
+// declare both channels as one value per position; a legacy run with
+// boolean ``g`` records but no manifest remains readable.
+function overlaySeriesCarriesWatermark(data) {
+  var membership =
+    overlaySeriesChannel(data, "watermark_membership");
+  var evidence =
+    overlaySeriesChannel(data, "watermark_evidence");
+  if (
+    membership
+    && overlaySeriesChannelShape(membership) !== "position"
+  ) {
+    return false;
+  }
+  if (
+    evidence
+    && overlaySeriesChannelShape(evidence) !== "position"
+  ) {
+    return false;
+  }
+  return overlaySeriesHasTokenBoolean(
+    overlaySeriesOf(data, false), "g"
   );
 }
 

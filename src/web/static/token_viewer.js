@@ -66,12 +66,16 @@ function tokenViewerCreate(options) {
   var tokenMetricsStrip =
     document.getElementById("token-metrics");
   var stopReadout = document.getElementById("stop-readout");
+  var watermarkReadout =
+    document.getElementById("watermark-readout");
   var overlayReadout =
     document.getElementById("overlay-readout");
   var overlayLegend =
     document.getElementById("overlay-legend");
   var overlayRevisionLegend =
     document.getElementById("overlay-revision-legend");
+  var overlayWatermarkLegend =
+    document.getElementById("overlay-watermark-legend");
   var overlayEmpty =
     document.getElementById("overlay-empty");
   var overlayScrubber =
@@ -848,6 +852,7 @@ function tokenViewerCreate(options) {
     overlayReadout.hidden = true;
     overlayLegend.hidden = true;
     overlayRevisionLegend.hidden = true;
+    overlayWatermarkLegend.hidden = true;
     if (overlayDiffControls) {
       overlayDiffControls.hidden = true;
     }
@@ -877,6 +882,7 @@ function tokenViewerCreate(options) {
     overlayReadout.hidden = true;
     overlayLegend.hidden = true;
     overlayRevisionLegend.hidden = true;
+    overlayWatermarkLegend.hidden = true;
     if (overlayDiffControls) {
       overlayDiffControls.hidden = true;
     }
@@ -928,6 +934,9 @@ function tokenViewerCreate(options) {
     if (overlaySeriesCarriesForgetting(data)) {
       options.push({ value: "forgetting", label: "Forgetting" });
     }
+    if (overlaySeriesCarriesWatermark(data)) {
+      options.push({ value: "watermark", label: "Watermark" });
+    }
     // Commit Order tints by resolution step, which a left-to-right
     // run does not have (its commit order is just position order).
     if (!overlayIsAutoregressive) {
@@ -971,6 +980,7 @@ function tokenViewerCreate(options) {
     }
     overlayLegend.hidden = mode !== "commit";
     overlayRevisionLegend.hidden = mode !== "revisions";
+    overlayWatermarkLegend.hidden = mode !== "watermark";
     if (overlayDiffControls) {
       overlayDiffControls.hidden = mode !== "diff";
     }
@@ -995,6 +1005,8 @@ function tokenViewerCreate(options) {
       renderEntropyOverlay();
     } else if (overlayMode === "forgetting") {
       renderForgettingOverlay();
+    } else if (overlayMode === "watermark") {
+      renderWatermarkOverlay();
     } else {
       renderNoneOverlay();
     }
@@ -1105,6 +1117,25 @@ function tokenViewerCreate(options) {
     });
   }
 
+  // KGW keyed-set membership. Green is the favored set and red its
+  // complement. Evidence exclusions add the shared non-color hatch.
+  function renderWatermarkOverlay() {
+    overlayReadout.hidden = true;
+    overlayReadout.textContent = "";
+    renderOverlayTokens({
+      frame: overlayFrameAt(overlayFrameIndex),
+      colorFor: function (index, tok) {
+        return watermarkColor(tok);
+      },
+      classFor: function (index, tok) {
+        return overlaysWatermarkTokenClass(tok);
+      },
+      descriptionFor: function (index, tok) {
+        return overlaysWatermarkDescription(tok);
+      },
+    });
+  }
+
   // Commit Order. Unlike the per-token modes above, its colors come
   // from the frame stream rather than from fields on the token, so
   // the pre-edit layer cannot be described by the same callback: it
@@ -1189,7 +1220,8 @@ function tokenViewerCreate(options) {
     tokenHighlightPos = null;
     var edited = {
       colorFor: overlayColorFn(opts.colorFor),
-      classFor: editedClassFn,
+      classFor: overlayClassFn(opts.classFor, true),
+      descriptionFor: opts.descriptionFor,
       revealMask: overlaysDrawsGuess(analyticsSettings),
       opacityFor: overlayOpacityFn,
     };
@@ -1198,6 +1230,12 @@ function tokenViewerCreate(options) {
       renderOverlayLayers(original, opts.frame || [], edited, {
         colorFor: overlayColorFn(
           opts.originalColorFor || opts.colorFor
+        ),
+        classFor: overlayClassFn(
+          opts.originalClassFor || opts.classFor, false
+        ),
+        descriptionFor: (
+          opts.originalDescriptionFor || opts.descriptionFor
         ),
         revealMask: overlaysDrawsGuess(analyticsSettings),
         opacityFor: overlayOpacityFn,
@@ -1281,6 +1319,28 @@ function tokenViewerCreate(options) {
     return "";
   }
 
+  function overlayClassFn(classFor, markEdited) {
+    return function (index, tok, masked) {
+      if (masked) {
+        return "";
+      }
+      var classes = [];
+      if (markEdited) {
+        var edited = editedClassFn(index);
+        if (edited) {
+          classes.push(edited);
+        }
+      }
+      if (typeof classFor === "function") {
+        var extra = classFor(index, tok, masked);
+        if (extra) {
+          classes.push(extra);
+        }
+      }
+      return classes.join(" ");
+    };
+  }
+
   // Stack the pre-edit run under the branch at the crossfade's mix.
   function renderOverlayLayers(
     origTokens, editedTokens, edited, original
@@ -1294,6 +1354,8 @@ function tokenViewerCreate(options) {
       opacity: 1 - compareBlend,
       interactive: !editedTakes,
       colorFor: original.colorFor,
+      classFor: original.classFor,
+      descriptionFor: original.descriptionFor,
       revealMask: original.revealMask,
       opacityFor: original.opacityFor,
     });
@@ -1303,6 +1365,7 @@ function tokenViewerCreate(options) {
       interactive: editedTakes,
       colorFor: edited.colorFor,
       classFor: edited.classFor,
+      descriptionFor: edited.descriptionFor,
       revealMask: edited.revealMask,
       opacityFor: edited.opacityFor,
     });
@@ -1521,6 +1584,9 @@ function tokenViewerCreate(options) {
 
   function refreshStopReadout() {
     overlaysRenderStopReadout(stopReadout, stopReadoutReading());
+    overlaysRenderWatermarkReadout(
+      watermarkReadout, watermarkReadoutReading()
+    );
     overlaysFitStopReadout(tokenMetricsStrip, stopReadout);
   }
 
@@ -1542,6 +1608,88 @@ function tokenViewerCreate(options) {
       overlaySeriesStopSource(overlayData, series, original)
     );
     return overlaysStopReadingAt(track, index, rule);
+  }
+
+  function watermarkReadoutReading() {
+    if (!overlayData || !overlayData.watermark) {
+      return null;
+    }
+    var saved = overlayData.watermark;
+    var attested = saved.attested;
+    if (!attested || typeof attested.p0 !== "number") {
+      return null;
+    }
+    var original = metricsLayered() && metricsLayerIsOriginal(null);
+    var tokens = original
+      ? overlayClampedFrame(overlayBaseline())
+      : overlayFrameAt(overlayFrameIndex);
+    var stats = overlaysWatermarkStats(tokens, attested.p0);
+    var recordConsistency = null;
+    if (stats === null && !original) {
+      stats = watermarkSavedStats(saved);
+    }
+    if (!original && overlayAtFinalFrame()) {
+      recordConsistency = saved.record_consistency || null;
+    }
+    if (stats === null) {
+      return null;
+    }
+    return {
+      stats: stats,
+      threshold: watermarkThreshold(),
+      recordConsistency: recordConsistency,
+    };
+  }
+
+  function watermarkSavedStats(saved) {
+    var stats = saved.recomputed || saved.attested;
+    if (!stats) {
+      return null;
+    }
+    var scored = Number(stats.scored_count);
+    var green = Number(stats.green_count);
+    var p0 = Number(stats.p0);
+    var zScore = Number(stats.z_score);
+    if (
+      !isFinite(scored)
+      || !isFinite(green)
+      || !isFinite(p0)
+      || !isFinite(zScore)
+      || scored < 0
+      || green < 0
+      || green > scored
+      || p0 <= 0
+      || p0 >= 1
+    ) {
+      return null;
+    }
+    return {
+      status: scored < OVERLAYS_WATERMARK_EVIDENCE_MIN
+        ? "insufficient_evidence"
+        : "scored",
+      green_count: green,
+      scored_count: scored,
+      green_rate: scored > 0 ? green / scored : 0,
+      z_score: zScore,
+      p0: p0,
+    };
+  }
+
+  function overlayAtFinalFrame() {
+    return overlayFrameIndex
+      === overlaySeriesLength(overlayPrimary()) - 1;
+  }
+
+  function watermarkThreshold() {
+    var value = overlayData.watermark_display_threshold;
+    if (
+      typeof value === "number"
+      && isFinite(value)
+      && value >= 0
+    ) {
+      return value;
+    }
+    return 4;
   }
 
   // Chart hover has no span, so it falls back to whichever layer
@@ -1651,6 +1799,9 @@ function tokenViewerCreate(options) {
   function metricsExtra(index, tok) {
     if (overlayMode === "forgetting") {
       return overlaysForgettingReading(tok);
+    }
+    if (overlayMode === "watermark") {
+      return overlaysWatermarkReading(tok);
     }
     if (overlayMode === "commit") {
       var steps = metricsHoverOriginal
@@ -2417,6 +2568,7 @@ function tokenViewerCreate(options) {
     }
     overlaysBuildTokenMetrics(tokenMetricsStrip);
     overlaysBuildStopReadout(stopReadout);
+    overlaysBuildWatermarkReadout(watermarkReadout);
   }
 
   // The crossfade's position: 0 for the run an edit branched from, 1

@@ -1,9 +1,10 @@
 """The worker shell every append-only model shares.
 
 SmolLM3 and Mamba-3 both decode left to right through
-``src/inference/ar_sampler.py`` and serve the same three requests:
-generate, What If substitution, and the typed-token probe. Those
-handlers need only a model, a tokenizer and a text adapter, so they
+``src/inference/ar_sampler.py`` and serve the same four requests:
+generate, What If substitution, the typed-token probe, and raw-text
+KGW detection. Those handlers need only a model, a tokenizer and a
+text adapter, so they
 live here once instead of in each worker. A worker adds ``load()``,
 its registry entry and its adapter.
 
@@ -22,9 +23,10 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
+import math
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import WebSocket
 
@@ -34,10 +36,16 @@ from src.backends.protocol import (
     ERROR_GENERATION_FAILED,
     ERROR_INVALID_REQUEST,
     ERROR_STALE_RUN,
+    ERROR_WATERMARK_KEY_MISMATCH,
+    ERROR_WATERMARK_KEY_MISSING,
+    ERROR_WATERMARK_KEY_STATE,
+    MSG_DETECT_WATERMARK,
+    MSG_DETECT_WATERMARK_RESULT,
     MSG_GENERATE,
     MSG_PROBE,
     MSG_PROBE_RESULT,
     MSG_SUBSTITUTE,
+    ParamSpec,
     request_error,
     request_id_of,
 )
@@ -53,14 +61,101 @@ from src.inference.ar_sampler import (
     streaming_generate,
     streaming_substitute,
 )
-from src.inference.kgw_key import load_or_create_key
+from src.inference.kgw_key import load_key, load_or_create_key
 from src.inference.kgw_watermark import (
+    KGW_DISPLAY_Z_THRESHOLD_DEFAULT,
+    KGW_SCHEME,
+    KGW_VERSION,
     KgwConfig,
     KgwWatermark,
+    detect_token_ids,
+    detection_display_status,
     tokenizer_fingerprint,
 )
 
 logger = logging.getLogger("append_only_backend")
+
+WATERMARK_DETECT_TEXT_MAX_CHARS = 100_000
+WATERMARK_DETECT_TOKENS_MAX = 4_096
+
+assert WATERMARK_DETECT_TEXT_MAX_CHARS > 0
+assert WATERMARK_DETECT_TOKENS_MAX > 0
+
+
+class _WatermarkKeyMismatch(ValueError):
+    """The detector was asked to use another key identity."""
+
+
+class _WatermarkKeyStateError(OSError):
+    """The durable KGW key exists but cannot be used safely."""
+
+
+def _parameter_default(
+    specs: List[ParamSpec], name: str
+) -> Union[int, float, str, bool]:
+    """Read one registry default without restating its value."""
+    for spec in specs:
+        if spec.name == name:
+            return spec.default
+    raise AssertionError(f"missing detector parameter {name}")
+
+
+def _validate_watermark_detection_text(value: object) -> str:
+    """One non-empty pasted string within the worker's bound."""
+    if not isinstance(value, str):
+        raise TypeError("Detector text must be a string.")
+    if value == "":
+        raise ValueError("Paste text to detect first.")
+    if len(value) > WATERMARK_DETECT_TEXT_MAX_CHARS:
+        raise ValueError(
+            "Detector text is "
+            f"{len(value):,} characters; the limit is "
+            f"{WATERMARK_DETECT_TEXT_MAX_CHARS:,}."
+        )
+    return value
+
+
+def _validate_watermark_detection_gamma(value: object) -> float:
+    """A finite keyed-set fraction strictly inside (0, 1)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError("Detector gamma must be a number.")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("Detector gamma must be finite.")
+    if not 0.0 < number < 1.0:
+        raise ValueError("Detector gamma must be between 0 and 1.")
+    return number
+
+
+def _validate_watermark_detection_threshold(value: object) -> float:
+    """A finite non-negative display threshold."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError("Display z threshold must be a number.")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("Display z threshold must be finite.")
+    if number < 0.0:
+        raise ValueError("Display z threshold must be non-negative.")
+    return number
+
+
+def _validate_watermark_detection_key(
+    value: object,
+) -> Optional[str]:
+    """An optional lowercase 64-bit key identifier."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError("Expected key id must be a string.")
+    if len(value) != 16:
+        raise ValueError(
+            "Expected key id must be 16 hexadecimal characters."
+        )
+    if any(char not in "0123456789abcdef" for char in value):
+        raise ValueError(
+            "Expected key id must be lowercase hexadecimal."
+        )
+    return value
 
 
 class AppendOnlyBackend(Backend):
@@ -133,7 +228,10 @@ class AppendOnlyBackend(Backend):
             raise ValueError(
                 "KGW watermarking needs the model vocabulary width."
             )
-        key = load_or_create_key()
+        try:
+            key = load_or_create_key()
+        except OSError as exc:
+            raise _WatermarkKeyStateError(str(exc)) from exc
         config = KgwConfig(
             secret=key.secret,
             key_id=key.key_id,
@@ -146,6 +244,188 @@ class AppendOnlyBackend(Backend):
             delta=float(params["watermark_delta"]),
         )
         return KgwWatermark(config)
+
+    async def handle_detect_watermark(
+        self,
+        ws: WebSocket,
+        data: Dict[str, Any],
+        cancel_event: Optional[threading.Event] = None,
+    ) -> None:
+        """Tokenize raw pasted text and score it without a forward."""
+        request_id = request_id_of(data)
+        try:
+            request = self._validate_watermark_detection(data)
+            result = await asyncio.to_thread(
+                self._detect_watermark_text,
+                text=request["text"],
+                gamma=request["gamma"],
+                z_threshold=request["z_threshold"],
+                expected_key_id=request["expected_key_id"],
+                cancel_event=cancel_event,
+            )
+        except InterruptedError:
+            return
+        except FileNotFoundError:
+            await ws.send_json(
+                request_error(
+                    message=(
+                        "No local KGW key exists yet. Enable the"
+                        " watermark for a run first."
+                    ),
+                    code=ERROR_WATERMARK_KEY_MISSING,
+                    request_type=MSG_DETECT_WATERMARK,
+                    request_id=request_id,
+                )
+            )
+            return
+        except _WatermarkKeyStateError as exc:
+            await ws.send_json(
+                request_error(
+                    message=(
+                        "The local KGW key could not be read safely:"
+                        f" {exc}"
+                    ),
+                    code=ERROR_WATERMARK_KEY_STATE,
+                    request_type=MSG_DETECT_WATERMARK,
+                    request_id=request_id,
+                )
+            )
+            return
+        except _WatermarkKeyMismatch as exc:
+            await ws.send_json(
+                request_error(
+                    message=str(exc),
+                    code=ERROR_WATERMARK_KEY_MISMATCH,
+                    request_type=MSG_DETECT_WATERMARK,
+                    request_id=request_id,
+                )
+            )
+            return
+        except (ValueError, TypeError) as exc:
+            await ws.send_json(
+                request_error(
+                    message=str(exc),
+                    code=ERROR_INVALID_REQUEST,
+                    request_type=MSG_DETECT_WATERMARK,
+                    request_id=request_id,
+                )
+            )
+            return
+        result["type"] = MSG_DETECT_WATERMARK_RESULT
+        result["request_id"] = 0 if request_id is None else request_id
+        await ws.send_json(result)
+
+    def _validate_watermark_detection(
+        self, data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Validate bounded detector inputs before scheduling work."""
+        text = _validate_watermark_detection_text(data.get("text"))
+        gamma = _validate_watermark_detection_gamma(
+            data.get(
+                "gamma",
+                _parameter_default(
+                    self.model_info.param_specs,
+                    "watermark_gamma",
+                ),
+            )
+        )
+        threshold = _validate_watermark_detection_threshold(
+            data.get("z_threshold", KGW_DISPLAY_Z_THRESHOLD_DEFAULT)
+        )
+        expected = _validate_watermark_detection_key(
+            data.get("expected_key_id")
+        )
+        return {
+            "text": text,
+            "gamma": gamma,
+            "z_threshold": threshold,
+            "expected_key_id": expected,
+        }
+
+    def _detect_watermark_text(
+        self,
+        *,
+        text: str,
+        gamma: float,
+        z_threshold: float,
+        expected_key_id: Optional[str],
+        cancel_event: Optional[threading.Event],
+    ) -> Dict[str, Any]:
+        """Score ids from the raw tokenizer with the existing key."""
+        tokenizer = getattr(self, "tokenizer", None)
+        if tokenizer is None:
+            raise ValueError("No tokenizer is loaded.")
+        width = describe_output_width(self.model)
+        if width is None:
+            raise ValueError(
+                "KGW detection needs the model vocabulary width."
+            )
+        try:
+            key = load_key()
+        except FileNotFoundError:
+            raise
+        except OSError as exc:
+            raise _WatermarkKeyStateError(str(exc)) from exc
+        if (
+            expected_key_id is not None
+            and expected_key_id != key.key_id
+        ):
+            raise _WatermarkKeyMismatch(
+                f"The loaded key id is {key.key_id}, not "
+                f"{expected_key_id}."
+            )
+        config = KgwConfig(
+            secret=key.secret,
+            key_id=key.key_id,
+            model_id=self.model_info.id,
+            tokenizer_fingerprint=tokenizer_fingerprint(tokenizer),
+            vocab_size=width,
+            gamma=gamma,
+            delta=0.0,
+        )
+        encoded = tokenizer.encode(text, add_special_tokens=False)
+        token_ids = [int(token_id) for token_id in encoded]
+        if len(token_ids) > WATERMARK_DETECT_TOKENS_MAX:
+            raise ValueError(
+                "Detector text became "
+                f"{len(token_ids):,} tokens; the limit is "
+                f"{WATERMARK_DETECT_TOKENS_MAX:,}."
+            )
+        if cancel_event is not None and cancel_event.is_set():
+            raise InterruptedError("watermark detection cancelled")
+        evidence = [index > 0 for index in range(len(token_ids))]
+        detected = detect_token_ids(
+            token_ids,
+            evidence,
+            config=config,
+            cancelled=(
+                cancel_event.is_set
+                if cancel_event is not None
+                else None
+            ),
+        )
+        return {
+            "scheme": KGW_SCHEME,
+            "version": KGW_VERSION,
+            "key_id": key.key_id,
+            "model_id": self.model_info.id,
+            "tokenizer_fingerprint": (config.tokenizer_fingerprint),
+            "vocab_size": config.vocab_size,
+            "green_list_size": config.green_list_size,
+            "gamma": gamma,
+            "token_count": len(token_ids),
+            "evidence_status": detected.status,
+            "status": detection_display_status(
+                detected,
+                z_threshold=z_threshold,
+            ),
+            "display_threshold": z_threshold,
+            **{
+                name: value
+                for name, value in detected.as_dict().items()
+                if name != "status"
+            },
+        }
 
     async def handle_generate(
         self,
@@ -170,6 +450,18 @@ class AppendOnlyBackend(Backend):
             await ws.send_json(
                 request_error(
                     message=str(exc),
+                    code=ERROR_INVALID_REQUEST,
+                    request_type=MSG_GENERATE,
+                    request_id=request_id_of(data),
+                )
+            )
+            return
+        except _WatermarkKeyStateError as exc:
+            await ws.send_json(
+                request_error(
+                    message=(
+                        f"KGW key state could not be prepared: {exc}"
+                    ),
                     code=ERROR_INVALID_REQUEST,
                     request_type=MSG_GENERATE,
                     request_id=request_id_of(data),
@@ -241,9 +533,7 @@ class AppendOnlyBackend(Backend):
             state["max_new_tokens"] = params["max_new_tokens"]
             state["thinking"] = thinking
             state["seed"] = params["seed"]
-            state["alternatives_enabled"] = params[
-                "alternatives"
-            ]
+            state["alternatives_enabled"] = params["alternatives"]
             if watermark is not None:
                 state["watermark_run"] = watermark
             self.last_run_state = state
@@ -376,9 +666,7 @@ class AppendOnlyBackend(Backend):
                 forced_alts=request["forced_alts"],
                 prefix_ids=state["ids"][:position],
                 prefix_confs=state["confidences"][:position],
-                prefix_entropies=state["entropies"][
-                    :position
-                ],
+                prefix_entropies=state["entropies"][:position],
                 prefix_alts=state["alternatives"][:position],
                 prefix_signals=_prefix_signals(state, position),
                 max_new_tokens=state["max_new_tokens"],

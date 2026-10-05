@@ -196,6 +196,13 @@
   min-height: 220px;
 }
 
+/* KGW adds one compact run-level line below the token strip. Give it
+   room by borrowing from the transcript instead of reducing the
+   output canvas to one line of tokens. */
+#active-turn-workspace:has(.watermark-readout:not([hidden])) {
+  min-height: 255px;
+}
+
 #active-turn-toolbar {
   display: flex;
   flex: 0 0 auto;

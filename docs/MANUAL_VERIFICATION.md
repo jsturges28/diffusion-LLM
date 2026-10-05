@@ -338,9 +338,10 @@ kept when these were written:
   conversation display, model inputs, saved/text-only distinction,
   two-window recovery, tail-only edits, and restart behavior on a real
   display with real workers.
-- **425 to 428**: **not yet validated.** These cover KGW's CUDA cost,
-  real-checkpoint sampling parity, What If evidence, durable key
-  permissions and tokenizer-id detection.
+- **425 to 437**: **not yet validated.** These cover KGW's CUDA/CPU
+  cost, real-checkpoint sampling parity, views, What If evidence,
+  durable key permissions, saved validation, pasted-text detection,
+  conversation boundaries, evaluation controls and accessibility.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -5072,7 +5073,7 @@ models and target devices before anyone raises or lowers them.
     pre-conversation snapshot remains on the legacy single-prompt path
     until Send.
 
-## AR-only KGW watermark core
+## AR-only KGW watermark, views and detector
 
 425. **Synthetic CUDA cost.** In `.venv-ar`, run
     `python scripts/benchmark_kgw.py --repeats 50`, then repeat with
@@ -5113,3 +5114,83 @@ models and target devices before anyone raises or lowers them.
     replacement. An explicit wrong experiment key must fail the id
     check, and fewer than 50 evidence tokens must report
     `insufficient_evidence`, with no AI or human label.
+
+429. **GPU and CPU latency.** On SmolLM3 and Mamba-3, run the same
+    256-token prompt on each supported device with KGW off, Delta 0,
+    and Delta 2. Record total T/s and median per-token latency. Repeat
+    the pasted-text detector on a 1,000-token and a near-4,096-token
+    input. Confirm the detector causes no model forward, no visible
+    generation stall and no persistent VRAM increase. A text that
+    tokenizes to 4,097 tokens must be refused after tokenization.
+
+430. **Off, on and Delta 0 views.** With a fixed key, seed and prompt,
+    confirm watermark-off and watermark-on/Delta-0 token ids and all
+    base-model signals match exactly. Off offers no Watermark overlay
+    or readout. Delta 0 does, and its token colors, evidence hatches
+    and count/z readout follow the records despite exerting no bias.
+    Delta 2 may change ids and should usually raise the favored rate.
+
+431. **Pasted-text key failures and stale replies.** Open Detector on
+    each append-only model. With the key removed, Detect must say no
+    local key exists and must not create one. Restore it, enter the
+    wrong expected id, and confirm a mismatch in the dialog. Start a
+    long detection, close/reopen the dialog and detect different text:
+    the old reply must not replace the new result. Switch to either
+    diffusion model and confirm the Detector button is absent.
+
+432. **Saved round trip and legacy behavior.** Save an enabled run,
+    open it in Analytics and compare every `g`/`we` record, favored
+    and scored count, favored rate, z-score, `p0`, key id and display
+    threshold with the generator. Analytics must say the record counts
+    and derived score are consistent with worker attestation, without
+    claiming keyed-membership validation. Temporarily copy a run and
+    remove its watermark metadata while keeping token membership: the
+    overlay may remain available, but no detector score may be
+    invented. Alter one count in another copy and confirm Analytics
+    warns that records differ from attestation.
+
+433. **What If, scrub and crossfade.** Make a middle-token What If
+    branch on each append-only model. The forced token must keep a
+    green/red membership, gain the non-color exclusion pattern and
+    read "excluded from detector score" on hover. Later generated
+    tokens score. Scrub both runs and drag Original/Edited across the
+    midpoint: colors, hatches, tooltip wording and the run readout
+    must switch to the layer on screen without disturbing Diff,
+    Entropy or Alternatives.
+
+434. **Conversation turns and reset.** Complete two watermarked
+    assistant turns, one saved and one text-only, then start a new
+    conversation. Only the active tail may retain a live watermark
+    readout; the saved earlier turn may reopen its own Analytics run;
+    the text-only turn must not claim retained evidence. No
+    conversation-level score should appear. New Conversation and a
+    model switch must clear the active readout and close Detector.
+
+435. **Raw tokenizer parity.** Paste text containing leading spaces,
+    newlines and model control-looking strings. Capture the detector
+    token count and score, encode the same exact string with
+    `add_special_tokens=False`, then feed those ids to
+    `scripts/detect_kgw.py`. Key id, `p0`, counts and z-score must
+    match. Confirm no chat-template role markers, BOS/EOS wrappers or
+    reasoning controls were added.
+
+436. **Color and pattern accessibility.** On generator and Analytics,
+    inspect a run containing favored, complement and excluded tokens
+    under normal color, grayscale, a red-green color-vision filter,
+    browser zoom at 200%, high contrast and keyboard-only navigation.
+    The double versus dotted underlines, legend and assistive copy must
+    identify favored versus complement without color; every excluded token
+    must remain distinguishable by its
+    dashed outline/hatch without color; text and focus rings must stay
+    legible. Green must never be described as correct or confident.
+
+437. **Paired evaluation controls.** Export paired watermarked and
+    watermark-off JSON/JSONL records and run
+    the `scripts.evaluate_kgw` module with length bins and an explicit wrong
+    key. Repeat using a saved-run directory directly and raw ids with an
+    evidence sidecar. Check reported domains and bin counts against the
+    source records, verify mismatched key or gamma pairs are refused, wrong-key
+    scores lose the matching-key separation, and spot-check
+    repetition, chosen base probability and latency summaries. The
+    output must contain no semantic-quality, factuality, AI/human or
+    authorship verdict.

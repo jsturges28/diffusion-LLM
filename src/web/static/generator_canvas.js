@@ -67,6 +67,7 @@ function generatorCanvasCreate(options) {
   var diffSummary = requiredElement("diff-summary");
   var commitLegend = requiredElement("commit-legend");
   var revisionLegend = requiredElement("revision-legend");
+  var watermarkLegend = requiredElement("watermark-legend");
   var diffOverlayControls =
     requiredElement("diff-overlay-controls");
   var diffOriginalSlider =
@@ -939,6 +940,21 @@ function generatorCanvasCreate(options) {
     return runCarriesTokenValue("f");
   }
 
+  function watermarkAvailable() {
+    var membership = declaredChannel("watermark_membership");
+    var evidence = declaredChannel("watermark_evidence");
+    if (!membership || !evidence) {
+      return false;
+    }
+    if ((membership.axes || []).join("|") !== "position") {
+      return false;
+    }
+    if ((evidence.axes || []).join("|") !== "position") {
+      return false;
+    }
+    return overlaysTokensCarryWatermark(run.frameTokensLast());
+  }
+
   function runCarriesTokenValue(key) {
     var tokens = run.frameTokensLast();
     if (!tokens) {
@@ -982,6 +998,9 @@ function generatorCanvasCreate(options) {
         ? forgettingColor(token.f)
         : null;
     }
+    if (mode === "watermark") {
+      return watermarkColor(token);
+    }
     return tokenFrameColor(index, isOriginal, mode);
   }
 
@@ -1015,6 +1034,9 @@ function generatorCanvasCreate(options) {
     var mode = effectiveColorMode();
     if (mode === "forgetting") {
       return overlaysForgettingReading(token);
+    }
+    if (mode === "watermark") {
+      return overlaysWatermarkReading(token);
     }
     if (mode === "commit") {
       var step = tokenCommitStep(index, isOriginal);
@@ -1108,6 +1130,12 @@ function generatorCanvasCreate(options) {
         }
         return tokenColor(index, token, isOriginal);
       },
+      descriptionFor: function (index, token, masked) {
+        if (masked || effectiveColorMode() !== "watermark") {
+          return "";
+        }
+        return overlaysWatermarkDescription(token);
+      },
     };
   }
 
@@ -1119,6 +1147,12 @@ function generatorCanvasCreate(options) {
       return "";
     }
     var classes = [];
+    if (overlayMode === "watermark") {
+      var watermarkClass = overlaysWatermarkTokenClass(token);
+      if (watermarkClass) {
+        classes.push(watermarkClass);
+      }
+    }
     if (positionWasEdited(index)) {
       classes.push("token-edited");
     }
@@ -1437,6 +1471,7 @@ function generatorCanvasCreate(options) {
   function updateOverlayLegends() {
     commitLegend.hidden = overlayMode !== "commit";
     revisionLegend.hidden = overlayMode !== "revisions";
+    watermarkLegend.hidden = overlayMode !== "watermark";
   }
 
   function updateDiffControls() {
@@ -1516,6 +1551,7 @@ function generatorCanvasCreate(options) {
       diff: diffAvailable(),
       entropy: entropyAvailable(),
       forgetting: forgettingAvailable(),
+      watermark: watermarkAvailable(),
       revisions: revisionsAvailable(),
       append: isAppendOnly(),
     };
@@ -1531,6 +1567,12 @@ function generatorCanvasCreate(options) {
     if (
       overlayMode === "forgetting"
       && !available.forgetting
+    ) {
+      overlayMode = "none";
+    }
+    if (
+      overlayMode === "watermark"
+      && !available.watermark
     ) {
       overlayMode = "none";
     }
@@ -1560,6 +1602,12 @@ function generatorCanvasCreate(options) {
       selectOptions.push({
         value: "forgetting",
         label: "Forgetting",
+      });
+    }
+    if (available.watermark) {
+      selectOptions.push({
+        value: "watermark",
+        label: "Watermark",
       });
     }
     if (!available.append) {
@@ -1752,6 +1800,7 @@ function generatorCanvasCreate(options) {
     entropyAvailable: entropyAvailable,
     entropyDeclared: entropyDeclared,
     forgettingAvailable: forgettingAvailable,
+    watermarkAvailable: watermarkAvailable,
     blend: function () {
       return runBlend;
     },

@@ -48,8 +48,10 @@ from src.backends.protocol import (
     ERROR_MALFORMED_MESSAGES,
     ERROR_NO_TOKENIZER,
     ERROR_STALE_RUN,
+    ERROR_UNSUPPORTED,
     MSG_COUNT_PROMPT,
     MSG_COUNT_PROMPT_RESULT,
+    MSG_DETECT_WATERMARK,
     MSG_RESOURCE_SAMPLE,
     MSG_REWIND,
     MSG_TOKENIZE,
@@ -281,9 +283,7 @@ class FrameStreamer:
         and disagree about which fields a done frame has.
         """
         assert frame.get("type") == "done", frame.get("type")
-        frame["elapsed"] = round(
-            time.monotonic() - start_time, 2
-        )
+        frame["elapsed"] = round(time.monotonic() - start_time, 2)
         self._stamp_terminal(frame)
         await self._ws.send_json(frame)
 
@@ -395,6 +395,12 @@ def worker_envelope(backend: Backend) -> Dict[str, Any]:
         described = watermark.provenance()
         assert "secret" not in described, (
             "watermark provenance must never carry its key"
+        )
+        tokenizer_description = envelope["tokenizer"]
+        assert isinstance(tokenizer_description, dict)
+        tokenizer_description.setdefault(
+            "fingerprint",
+            described["tokenizer_fingerprint"],
         )
         envelope["watermark"] = described
     context_pack = getattr(backend, "run_context_pack", None)
@@ -770,10 +776,7 @@ class Backend(ABC):
         expected_assistant = retained.get("assistant_turn_id")
         claimed_conversation = data.get("conversation_id")
         claimed_assistant = data.get("assistant_turn_id")
-        if (
-            claimed_conversation is None
-            or claimed_assistant is None
-        ):
+        if claimed_conversation is None or claimed_assistant is None:
             raise StaleRunError(
                 "This request did not identify its conversation"
                 " response."
@@ -830,9 +833,7 @@ class Backend(ABC):
         substitute a captured candidate there, and continue forward
         (override if supported).
         """
-        raise NotImplementedError(
-            "substitution not supported"
-        )
+        raise NotImplementedError("substitution not supported")
 
     async def handle_rewind(
         self, ws: WebSocket, data: Dict[str, Any]
@@ -896,9 +897,11 @@ class Backend(ABC):
             )
             return
         raw = data.get("text", "")
-        text = raw[:TOKENIZE_TEXT_MAX_CHARS] if (
-            isinstance(raw, str)
-        ) else ""
+        text = (
+            raw[:TOKENIZE_TEXT_MAX_CHARS]
+            if (isinstance(raw, str))
+            else ""
+        )
         pieces = tokenize_pieces(tokenizer, text)
         await ws.send_json(
             {
@@ -931,9 +934,11 @@ class Backend(ABC):
             await self._handle_count_messages(ws, data)
             return
         raw = data.get("text", "")
-        text = raw[:COUNT_PROMPT_MAX_CHARS] if (
-            isinstance(raw, str)
-        ) else ""
+        text = (
+            raw[:COUNT_PROMPT_MAX_CHARS]
+            if (isinstance(raw, str))
+            else ""
+        )
         # Off the event loop, because this is bounded at one million
         # characters rather than at something small: templating and
         # encoding that much is real work, and doing it inline stalled
@@ -951,11 +956,30 @@ class Backend(ABC):
                 # wrong rather than merely late.
                 "request_id": int(data.get("request_id", 0)),
                 "chars": len(text),
-                "truncated": len(text) < len(raw) if (
-                    isinstance(raw, str)
-                ) else False,
+                "truncated": len(text) < len(raw)
+                if (isinstance(raw, str))
+                else False,
                 "count": count,
             }
+        )
+
+    async def handle_detect_watermark(
+        self,
+        ws: WebSocket,
+        data: Dict[str, Any],
+        cancel_event: Optional[threading.Event] = None,
+    ) -> None:
+        """Refuse KGW detection on models without that capability."""
+        await ws.send_json(
+            request_error(
+                message=(
+                    "Watermark detection is available only while an"
+                    " autoregressive or state-space model is active."
+                ),
+                code=ERROR_UNSUPPORTED,
+                request_type=MSG_DETECT_WATERMARK,
+                request_id=request_id_of(data),
+            )
         )
 
     async def _handle_count_messages(
@@ -1247,9 +1271,7 @@ def describe_tokenizer(
     """
     if tokenizer is None:
         return {}
-    described: Dict[str, Any] = {
-        "class": type(tokenizer).__name__
-    }
+    described: Dict[str, Any] = {"class": type(tokenizer).__name__}
     assert described["class"], "tokenizer class name is empty"
 
     name = getattr(tokenizer, "name_or_path", None)
@@ -1313,8 +1335,11 @@ def describe_context_length(
     approve a prompt that overflows or refuse one that fits.
     """
     for candidate in (
-        getattr(getattr(model, "config", None),
-                "max_position_embeddings", None),
+        getattr(
+            getattr(model, "config", None),
+            "max_position_embeddings",
+            None,
+        ),
         getattr(tokenizer, "model_max_length", None),
     ):
         if _is_sane_context_length(candidate):

@@ -102,6 +102,7 @@ def test_server_does_not_reexport_moved_analytics_names() -> None:
 
 def test_api_dependencies_are_immutable(tmp_path: Path) -> None:
     """The router's control-plane inputs cannot drift in place."""
+
     def results_dir() -> Path:
         return tmp_path
 
@@ -130,18 +131,14 @@ def test_server_dependencies_remain_live(
         return "First GPU"
 
     monkeypatch.setattr(server, "RESULTS_DIR", first)
-    monkeypatch.setattr(
-        model_manager, "gpu_name", first_gpu_name
-    )
+    monkeypatch.setattr(model_manager, "gpu_name", first_gpu_name)
     first_body = client.get("/api/analytics/system").json()
 
     def second_gpu_name() -> str:
         return "Second GPU"
 
     monkeypatch.setattr(server, "RESULTS_DIR", second)
-    monkeypatch.setattr(
-        model_manager, "gpu_name", second_gpu_name
-    )
+    monkeypatch.setattr(model_manager, "gpu_name", second_gpu_name)
     second_body = client.get("/api/analytics/system").json()
 
     assert first_body == {
@@ -152,3 +149,29 @@ def test_server_dependencies_remain_live(
         "gpu_name": "Second GPU",
         "results_dir": str(second),
     }
+
+
+def test_saved_watermark_records_expose_mismatch() -> None:
+    """Analytics recomputes instead of trusting disk blindly."""
+    payload = analytics_api._watermark_payload(
+        {
+            "watermark": {
+                "green_count": 2,
+                "scored_count": 2,
+                "z_score": 2.0,
+                "p0": 0.25,
+            }
+        },
+        {
+            "positions": [
+                {"g": True, "we": False},
+                {"g": True, "we": True},
+                {"g": False, "we": True},
+            ]
+        },
+    )
+
+    assert payload is not None
+    assert payload["record_consistency"] == "mismatch"
+    assert payload["recomputed"]["green_count"] == 1
+    assert payload["recomputed"]["scored_count"] == 2

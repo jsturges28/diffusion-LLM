@@ -130,6 +130,10 @@ class _StubBackend(Backend):
         # Set when a parked generation saw its stop signal, which is
         # what the cancel tests below are really asserting.
         self.cancelled = threading.Event()
+        self.detector_parks = False
+        self.detector_started = threading.Event()
+        self.detector_cancelled = threading.Event()
+        self.detector_release = threading.Event()
         self.probes: List[Dict[str, Any]] = []
         self.resumes: List[Dict[str, Any]] = []
         self._gate: Optional[asyncio.Event] = None
@@ -243,6 +247,38 @@ class _StubBackend(Backend):
                 "request_id": data.get("request_id"),
             }
         )
+
+    async def handle_detect_watermark(
+        self,
+        ws: Any,
+        data: Dict[str, Any],
+        cancel_event: Optional[threading.Event] = None,
+    ) -> None:
+        if not self.detector_parks:
+            await super().handle_detect_watermark(
+                ws, data, cancel_event
+            )
+            return
+        assert cancel_event is not None
+        completed = await asyncio.to_thread(
+            self._hold_detector, cancel_event
+        )
+        if not completed:
+            return
+        await ws.send_json(
+            {
+                "type": "detect_watermark_result",
+                "request_id": data.get("request_id"),
+            }
+        )
+
+    def _hold_detector(self, cancel_event: threading.Event) -> bool:
+        self.detector_started.set()
+        while not self.detector_release.wait(HOLD_POLL_SECONDS):
+            if cancel_event.is_set():
+                self.detector_cancelled.set()
+                return False
+        return True
 
 
 @pytest.fixture()
@@ -420,9 +456,9 @@ def test_a_cancel_reaches_a_generation_already_running(
 
         socket.send_json({"type": "cancel"})
 
-        assert backend.cancelled.wait(
-            timeout=HOLD_TIMEOUT_SECONDS
-        ), "the running generation never saw the cancel"
+        assert backend.cancelled.wait(timeout=HOLD_TIMEOUT_SECONDS), (
+            "the running generation never saw the cancel"
+        )
         done = socket.receive_json()
 
     assert done["type"] == "done"
@@ -449,6 +485,117 @@ def test_the_loop_keeps_reading_while_a_generation_runs(
     # What matters is that an answer arrived during the run.
     assert reply["type"] == "error"
     assert reply["code"] == ERROR_NO_TOKENIZER
+
+
+def test_diffusion_detector_refusal_is_concurrent_and_scoped(
+    backend: _StubBackend, client: TestClient
+) -> None:
+    """A diffusion worker answers this auxiliary request immediately.
+
+    Passing proves the request does not queue behind generation and
+    its unsupported result cannot unwind the run already in flight.
+    """
+    with _window(client) as socket:
+        _park(backend, socket)
+        socket.send_json(
+            {
+                "type": "detect_watermark",
+                "text": "pasted text",
+                "request_id": 12,
+            }
+        )
+        reply = socket.receive_json()
+        _release(backend, socket)
+
+    assert reply["code"] == "unsupported"
+    assert reply["scope"] == ERROR_SCOPE_REQUEST
+    assert reply["request_type"] == "detect_watermark"
+    assert reply["request_id"] == 12
+
+
+def test_detector_work_does_not_delay_cancel(
+    backend: _StubBackend, client: TestClient
+) -> None:
+    """A long detector task leaves the receive loop free for Stop."""
+    backend.detector_parks = True
+    with _window(client) as socket:
+        _park(backend, socket)
+        socket.send_json(
+            {
+                "type": "detect_watermark",
+                "text": "long",
+                "request_id": 13,
+            }
+        )
+        assert backend.detector_started.wait(
+            timeout=HOLD_TIMEOUT_SECONDS
+        )
+        started = time.monotonic()
+        socket.send_json({"type": "cancel"})
+        assert backend.cancelled.wait(timeout=1.0)
+        cancel_latency = time.monotonic() - started
+        done = socket.receive_json()
+        backend.detector_release.set()
+        detector = socket.receive_json()
+
+    assert cancel_latency < 1.0
+    assert done["type"] == "done"
+    assert detector["type"] == "detect_watermark_result"
+
+
+def test_detector_gate_refuses_another_window(
+    backend: _StubBackend, client: TestClient
+) -> None:
+    """One worker runs at most one expensive detector job."""
+    backend.detector_parks = True
+    with _two_windows(client) as (first, second):
+        first.send_json(
+            {
+                "type": "detect_watermark",
+                "text": "first",
+                "request_id": 14,
+            }
+        )
+        assert backend.detector_started.wait(
+            timeout=HOLD_TIMEOUT_SECONDS
+        )
+        second.send_json(
+            {
+                "type": "detect_watermark",
+                "text": "second",
+                "request_id": 15,
+            }
+        )
+        refusal = second.receive_json()
+        backend.detector_release.set()
+        answer = first.receive_json()
+
+    assert refusal["code"] == ERROR_BUSY
+    assert refusal["scope"] == ERROR_SCOPE_REQUEST
+    assert refusal["request_id"] == 15
+    assert answer["request_id"] == 14
+
+
+def test_disconnect_cancels_and_settles_detector(
+    backend: _StubBackend, client: TestClient
+) -> None:
+    """A closed socket leaves no detached tokenizer work."""
+    backend.detector_parks = True
+    with _window(client) as socket:
+        socket.send_json(
+            {
+                "type": "detect_watermark",
+                "text": "long",
+                "request_id": 16,
+            }
+        )
+        assert backend.detector_started.wait(
+            timeout=HOLD_TIMEOUT_SECONDS
+        )
+
+    assert backend.detector_cancelled.wait(
+        timeout=HOLD_TIMEOUT_SECONDS
+    )
 
 
 def test_a_cancel_from_another_window_leaves_a_run_alone(
@@ -496,9 +643,7 @@ def test_the_worker_takes_work_again_after_a_cancel(
     with _window(client) as socket:
         _park(backend, socket)
         socket.send_json({"type": "cancel"})
-        assert backend.cancelled.wait(
-            timeout=HOLD_TIMEOUT_SECONDS
-        )
+        assert backend.cancelled.wait(timeout=HOLD_TIMEOUT_SECONDS)
         assert socket.receive_json()["type"] == "done"
 
         backend.parks = False
@@ -520,9 +665,7 @@ def test_a_cancel_does_not_carry_into_the_next_run(
     with _window(client) as socket:
         _park(backend, socket)
         socket.send_json({"type": "cancel"})
-        assert backend.cancelled.wait(
-            timeout=HOLD_TIMEOUT_SECONDS
-        )
+        assert backend.cancelled.wait(timeout=HOLD_TIMEOUT_SECONDS)
         assert socket.receive_json()["type"] == "done"
         backend.cancelled.clear()
         backend.parked.clear()
@@ -682,9 +825,7 @@ def test_a_rewind_is_a_known_message(
     client would get if the dispatch branch went missing."""
     with _window(client) as socket:
         token = _generate(socket, "hello")
-        socket.send_json(
-            {"type": "rewind", "run_token": token}
-        )
+        socket.send_json({"type": "rewind", "run_token": token})
         # A second request behind it, as the canary: if the rewind
         # answered at all, that answer arrives here instead.
         socket.send_json(

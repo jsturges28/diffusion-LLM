@@ -1265,7 +1265,8 @@ html, body {
    stopping readout beside it takes the same padding, so the two stay
    on one line. */
 #overlay-viewer .token-metrics,
-#overlay-viewer .stop-readout {
+#overlay-viewer .stop-readout,
+#overlay-viewer .watermark-readout {
   padding-top: 0;
   padding-bottom: 8px;
 }

@@ -36,6 +36,12 @@ recent suffix under a provisional per-model context policy. Only the
 tail assistant owns live XAI state, and saved runs link back to it
 without changing Analytics' one-row-per-run catalog.
 
+The newest XAI slice is experimental KGW watermarking on SmolLM3 and
+Mamba-3: keyed sampling, a shared accessible membership overlay,
+record-count-consistent per-run readouts, a tokenizer-only pasted-text detector and
+paired offline evaluation. It is deliberately a token statistic, not
+an authorship classifier.
+
 The audit remediation campaign that ran from 2026-08-10 is complete except
 for a short remainder, tracked finding by finding in
 `docs/audit/IMPLEMENTATION_LEDGER.md`. A second audit followed on
@@ -650,7 +656,8 @@ They moved here from `docs/HANDOFF.md` when `META-01` reduced it to a cold-start
 page.
 
 **KGW watermarking is an autoregressive sampling signal, not an
-authorship verdict.** Recorded 2026-10-04 with the AR-only core.
+authorship verdict.** Recorded 2026-10-04 with the AR-only core and
+completed with its views, detector and evaluation surface.
 
 The shipped boundary is SmolLM3 and Mamba-3. KGW needs a defined
 left-to-right predecessor and a single raw-logit sampling decision, so
@@ -675,14 +682,60 @@ this CPU, the synthetic 128,256-id benchmark measured about 1.1 ms
 median to select a cache miss, 0.18 ms to apply an uncached tensor bias,
 and 0.10 ms for a cached bias. CUDA remains a hardware checklist item.
 
-Detection reports the exact null probability
-`p0 = green_list_size / vocab_size`, its count and z-score. Fewer than
+Detection reports the exact null rate
+`p0 = green_list_size / vocab_size`, its count and a
+normal-approximation z-score. Fewer than
 50 scored tokens is `insufficient_evidence`, never an AI or human label.
 The first output token is biased but excluded because an output-only
 detector lacks the prompt predecessor. A token forced by What If keeps
 its membership for inspection but is also excluded; generated tokens
-after it score normally. The detector UI and overlay are deliberately
-the next slice, not part of the sampling core.
+after it score normally.
+
+The shared Watermark overlay uses green plus a double underline for
+keyed favored-set membership and red plus a dotted underline for its
+complement, never correctness or confidence. An excluded token keeps
+that style and gains a dashed outline plus hatch, so both membership
+and evidence inclusion remain legible without color. Generator and
+Analytics use the same primitives and legends,
+and each Original/Edited layer keeps its own membership. Saved
+Analytics recomputes counts and z-score from token records when
+possible and checks count and derived-score consistency with worker
+attestation. This is not cryptographic membership validation; old records with
+membership but no attestation may still be colored, but no score is
+invented for them.
+
+The z threshold is a configurable **display threshold**. It changes
+only whether 50-or-more evidence tokens read `threshold crossed` or
+`threshold not crossed`; it does not change the exact null rate,
+normal-approximation score or generation. Repeated predecessor tokens
+reuse a green list and are dependent, so the display threshold is not
+a calibrated p-value. A conversation-level total was deliberately deferred.
+Only the active tail always has token evidence, while older turns keep
+it only if explicitly saved, so aggregating what happened to survive
+would select on persistence and look more comprehensive than it is.
+
+Pasted-text detection belongs to the resident append-only worker
+because tokenizer identity is part of the keyed domain. It tokenizes
+raw text with no chat template or special-token wrappers, loads but
+never creates the existing key, performs no model forward, and is
+request-id and input-mutation fenced. One worker admits one detector
+job at a time, and runs it outside the socket receive loop so Stop
+still arrives. Diffusion workers reply unsupported under request
+scope. Counts for chosen text make this a local membership oracle, so
+it is not an adversarial network service. The offline evaluator stays
+equally narrow: domain-compatible length-binned score/rate,
+wrong-key hooks, repetition, base chosen probability and recorded
+latency under strict input bounds. It makes no semantic-quality claim.
+
+The scheme originates with Kirchenbauer et al.,
+["A Watermark for Large Language Models"](https://arxiv.org/abs/2301.10226).
+[arXiv:2402.18059](https://arxiv.org/abs/2402.18059) is Huo et al.'s
+later token-specific extension, not the origin and not the method
+implemented here. Context-width schemes, learned token-specific
+splits, attack/robustness evaluation, calibrated p-values and any
+semantic-quality benchmark remain later alternatives. Each changes
+the claim or threat model enough to require a separate design rather
+than another toggle on this detector.
 
 **Conversation text is durable; XAI artifacts remain explicit and
 tail-owned.** Recorded 2026-10-04, when multi-turn chat shipped.

@@ -67,6 +67,7 @@ const GENERATOR_SCRIPTS = [
   "generator_readouts.js",
   "generator_candidates.js",
   "generator_edit.js",
+  "generator_watermark.js",
   "generator_modals.js",
   "app.js",
 ];

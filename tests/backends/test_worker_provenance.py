@@ -206,9 +206,7 @@ def test_an_opening_that_claims_a_cost_is_refused() -> None:
 
     with pytest.raises(AssertionError):
         asyncio.run(
-            stream.run(
-                _frames({"type": "frame", "text": "a"}), 0.0
-            )
+            stream.run(_frames({"type": "frame", "text": "a"}), 0.0)
         )
 
 
@@ -236,9 +234,7 @@ def test_a_worker_sent_done_is_timed_like_any_other() -> None:
     socket = _StubSocket()
     stream = _streamer(socket)
 
-    asyncio.run(
-        stream.send_done({"type": "done"}, 0.0)
-    )
+    asyncio.run(stream.send_done({"type": "done"}, 0.0))
 
     assert isinstance(socket.sent[-1]["elapsed"], float)
 
@@ -250,9 +246,7 @@ def test_send_done_refuses_a_non_terminal_frame() -> None:
     stream = _streamer(socket)
 
     with pytest.raises(AssertionError):
-        asyncio.run(
-            stream.send_done({"type": "frame"}, 0.0)
-        )
+        asyncio.run(stream.send_done({"type": "frame"}, 0.0))
 
 
 def test_a_streamer_without_provenance_stamps_nothing() -> None:
@@ -374,6 +368,7 @@ def test_enabled_watermark_is_worker_attested() -> None:
                 "scheme": "kgw",
                 "version": 1,
                 "key_id": "0123456789abcdef",
+                "tokenizer_fingerprint": "ab" * 32,
             }
 
     backend = _StubBackend("cpu")
@@ -383,6 +378,7 @@ def test_enabled_watermark_is_worker_attested() -> None:
 
     assert envelope["watermark"]["scheme"] == "kgw"
     assert envelope["watermark"]["key_id"] == "0123456789abcdef"
+    assert envelope["tokenizer"]["fingerprint"] == "ab" * 32
     assert "secret" not in envelope["watermark"]
 
 

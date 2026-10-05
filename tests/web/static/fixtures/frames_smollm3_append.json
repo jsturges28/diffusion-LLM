@@ -12,23 +12,29 @@
   {
    "c": 0.5,
    "e": 1.2,
+   "g": true,
    "id": 200,
    "m": false,
-   "t": " Yeast"
+   "t": " Yeast",
+   "we": false
   },
   {
    "c": 0.5,
    "e": 1.3,
+   "g": true,
    "id": 201,
    "m": false,
-   "t": " eats"
+   "t": " eats",
+   "we": true
   },
   {
    "c": 0.5,
    "e": 1.4,
+   "g": false,
    "id": 202,
    "m": false,
-   "t": " sugar"
+   "t": " sugar",
+   "we": true
   }
  ],
  "records_available": true,
@@ -102,5 +108,40 @@
    "unit": "categorical"
   }
  ],
- "stop_rule": null
+ "stop_rule": null,
+ "watermark": {
+  "attested": {
+   "delta": 2.0,
+   "exclusions": [
+    "first output token",
+    "user-forced tokens"
+   ],
+   "gamma": 0.25,
+   "green_count": 1,
+   "green_list_size": 32064,
+   "green_rate": 0.5,
+   "key_id": "0123456789abcdef",
+   "model_id": "smollm3",
+   "p0": 0.25,
+   "rng_contract": "test generator",
+   "scheme": "kgw",
+   "scored_count": 2,
+   "seeding_contract": "test contract",
+   "status": "insufficient_evidence",
+   "tokenizer_fingerprint": "abababababababababababababababababababababababababababababababab",
+   "version": 1,
+   "vocab_size": 128256,
+   "z_score": 0.8164965809277261
+  },
+  "recomputed": {
+   "green_count": 1,
+   "green_rate": 0.5,
+   "p0": 0.25,
+   "scored_count": 2,
+   "status": "insufficient_evidence",
+   "z_score": 0.8164965809277261
+  },
+  "record_consistency": "consistent"
+ },
+ "watermark_display_threshold": 3.5
 }

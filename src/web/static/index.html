@@ -43,6 +43,8 @@
         <a href="/analytics.html" id="link-analytics" class="header-link">Analytics<span id="analytics-new-dot" class="analytics-new-dot is-empty" aria-hidden="true"></span></a>
         <a href="/vision.html"
           class="header-link header-link-sep">Vision</a>
+        <button id="btn-watermark-detector" type="button"
+          class="header-link header-action" hidden>Detector</button>
         <a href="#" id="link-about" class="header-link">About</a>
         <a href="#" id="link-help" class="header-link">Help</a>
         <a href="/settings.html" class="header-link header-link-icon"
@@ -133,6 +135,8 @@
     <div class="token-metrics-row">
       <div id="token-metrics" class="token-metrics"></div>
       <div id="stop-readout" class="stop-readout" hidden></div>
+      <div id="watermark-readout" class="watermark-readout"
+        role="status" aria-live="polite" hidden></div>
     </div>
 
     <!-- Diffusion output area -->
@@ -282,6 +286,19 @@
           <span class="commit-legend-label">twice</span>
           <span class="revision-legend-swatch revision-more"></span>
           <span class="commit-legend-label">3+</span>
+        </span>
+        <span id="watermark-legend" class="watermark-legend"
+          aria-label="Watermark membership legend" hidden>
+          <span class="watermark-legend-swatch watermark-favored"
+            aria-hidden="true"></span>
+          <span>favored set, double underline</span>
+          <span
+            class="watermark-legend-swatch watermark-complement"
+            aria-hidden="true"></span>
+          <span>complement, dotted underline</span>
+          <span class="watermark-legend-swatch watermark-excluded"
+            aria-hidden="true"></span>
+          <span>excluded from score</span>
         </span>
       </span>
       <!-- One row. Chips are inserted before the resting message and
@@ -467,6 +484,51 @@
     </div>
   </dialog>
 
+  <!-- Tokenizer-only KGW detector for the resident AR worker. -->
+  <dialog id="modal-watermark-detector" class="modal-overlay">
+    <div class="modal-box watermark-detector-box" tabindex="-1"
+      autofocus>
+      <button class="modal-close" id="btn-watermark-close"
+        aria-label="Close">&times;</button>
+      <h2>Experimental KGW detector</h2>
+      <div class="modal-body">
+        <p>Paste up to 100,000 characters and 4,096 tokens to score
+          with the resident model's raw tokenizer and existing local
+          key. Model, tokenizer, vocabulary, gamma and key must match
+          the generating setup. This does not run the model. The
+          uncalibrated threshold is display-only, not an AI/human or
+          authorship verdict. Chosen-text queries expose membership,
+          so keep this detector on localhost.</p>
+        <label for="watermark-detector-text">Text</label>
+        <textarea id="watermark-detector-text" rows="8"
+          maxlength="100000" spellcheck="false"
+          placeholder="Paste text to score..."></textarea>
+        <div class="watermark-detector-options">
+          <label>Green fraction
+            <input id="watermark-detector-gamma" type="number"
+              min="0.01" max="0.5" step="0.01" value="0.25" />
+          </label>
+          <label>Display z threshold
+            <input id="watermark-detector-threshold" type="number"
+              min="0" max="20" step="0.1" value="4" />
+          </label>
+          <label>Expected key id, optional
+            <input id="watermark-detector-key" type="text"
+              maxlength="16" autocomplete="off"
+              placeholder="16 lowercase hex characters" />
+          </label>
+        </div>
+        <div id="watermark-detector-result"
+          class="watermark-detector-result" role="status"
+          aria-live="polite"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-watermark-detect" class="btn-accent"
+          type="button">Detect</button>
+      </div>
+    </div>
+  </dialog>
+
   <!-- About modal -->
   <dialog id="modal-about" class="modal-overlay">
     <div class="modal-box" tabindex="-1" autofocus>
@@ -482,7 +544,7 @@
         <p><strong>DiffusionGemma-26B-A4B:</strong> Google's block-autoregressive text-diffusion model, a 26B-parameter Mixture-of-Experts (~4B active) built on Gemma 4, run here as a self-quantized 4-bit <strong>NF4</strong> checkpoint (~18 GB VRAM). It denoises 256-token canvases with an entropy-bounded sampler and <em>adaptive stopping</em>: a canvas ends once it holds still and its mean entropy falls below a threshold, both of which you can set, and a readout above the canvas shows how far it has left to go. It chains canvases for longer outputs, and exposes an optional step-by-step <em>reasoning</em> (thinking) channel. It also changes its mind, settling a position on one token and later another, which flashes cyan while it runs and is counted afterwards by the <strong>Revisions</strong> overlay.</p>
         <p><strong>SmolLM3-3B:</strong> a compact 3B-parameter <strong>autoregressive</strong> (left-to-right) decoder-only transformer, included as a baseline for contrast with the diffusion models. It streams tokens one at a time with per-token sampling confidence, runs in bf16 on <strong>GPU or CPU</strong> (selectable per activation, so GPU-less hosts can still use it), and exposes an optional reasoning (thinking) channel. Because it generates strictly left to right, it has no interactive remasking / Edit Frames; it carries its own explainability tools instead: per-token <strong>entropy</strong>, an optional top-5 <strong>Alternatives</strong> capture, and <strong>What If?</strong> substitution, which can force one of those five or any token you type, reporting what the model gave your choice and where it ranked.</p>
         <p><strong>Mamba-3-1.5B:</strong> a <strong>state-space</strong> model. It writes left to right like SmolLM3 but keeps no cache of past tokens: everything it knows lives in a fixed-size memory that each token first decays and then writes into. It is a base model, so it continues your text rather than answering it, and it runs in float32 on <strong>GPU or CPU</strong>, on this project's own PyTorch implementation. It shares SmolLM3's tools, What If? included, and adds one of its own: per-token <strong>forgetting</strong>, how much of its memory reading each token erased, drawn by the <strong>Forgetting</strong> overlay.</p>
-        <p>Both left-to-right models also offer experimental <strong>KGW watermarking</strong>: a keyed sampling bias with saved token evidence and an exact-null score, deliberately not an authorship label.</p>
+        <p>Both left-to-right models also offer experimental <strong>KGW watermarking</strong>, the keyed red-green sampling method introduced by Kirchenbauer et al. Enabled runs get a shared Watermark overlay, exact null rate and normal-approximation z-score in the generator and Analytics. Green with a double underline means keyed favored-set membership, red with a dotted underline means its complement, and a hatch marks tokens excluded from evidence; none means correct, confident, AI or human. A header <strong>Detector</strong> scores up to 4,096 pasted tokens with the resident raw tokenizer and existing key, without a model forward. Its configurable z threshold is uncalibrated and display-only, never an authorship label. The local detector exposes membership information for chosen text, so it must not be offered on an untrusted network. The later token-specific method in arXiv:2402.18059 is not the origin or the method implemented here.</p>
         <p class="modal-links">
           LLaDA:
           <a href="https://arxiv.org/abs/2502.09992" target="_blank" rel="noopener">Paper</a>
@@ -662,11 +724,13 @@
           <dt>Alternatives</dt>
           <dd>Captures the five most likely tokens at every position, not just the one that was chosen. Hovering a token then shows what the model nearly said instead, and it is required for <strong>What If?</strong> substitution. On by default, since it is what the hover popover and What If? both run on; turn it off to save a little time per token. On LLaDA and DiffusionGemma it captures the five at every step rather than once, and a run long enough to pass its budget keeps every few steps instead.</dd>
           <dt>KGW Watermark</dt>
-          <dd>An experimental SmolLM3 and Mamba-3 signal. It biases an exact, keyed set of token ids before Temperature, Top-k and Top-p. It records evidence for later scoring, not an AI or human verdict.</dd>
+          <dd>An experimental SmolLM3 and Mamba-3 signal based on Kirchenbauer et al.'s keyed red-green method. It biases an exact favored set before Temperature, Top-k and Top-p, then records membership and detector-evidence inclusion. It is not an AI or human verdict.</dd>
           <dt>Green Fraction</dt>
           <dd>The exact share of output ids placed on each keyed green list.</dd>
           <dt>Green Bias</dt>
           <dd>The logit bias added to those ids. Set it to 0 to record membership with output identical to an unwatermarked run at the same seed.</dd>
+          <dt>Display z Threshold</dt>
+          <dd>The experimental line used only to choose the readout words <em>threshold crossed</em> or <em>threshold not crossed</em> once at least 50 evidence tokens exist. It changes neither sampling nor the score and is not an authorship threshold.</dd>
         </dl>
         <h5>Mamba-3 (state space)</h5>
         <p>The same as SmolLM3's, with the same lower ceiling on CPU, less <strong>Thinking</strong>: a base model has no reasoning channel for it to select.</p>
@@ -684,8 +748,11 @@
         <h4>The metrics strip</h4>
         <p>The thin row directly above the output is where a single token's numbers are read. Hover a token and it fills in: the token itself, its <strong>position</strong> in the canvas, its <strong>confidence</strong> and its <strong>entropy</strong>, each with a small bar on the same color ramp the overlays use. Whitespace tokens are shown with visible stand-ins (<code>&middot;</code> for a space, <code>&crarr;</code> for a newline), so a token that looks like nothing still reads as something.</p>
         <p>It is always there, holding its labels and showing a dash for each value while nothing is hovered, rather than appearing under the pointer and pushing the text down every time you cross into it. A dash means the run does not carry that value, which is not the same as zero: a run saved before a signal existed was never measured rather than measured as nothing.</p>
-        <p>Two things feed it. Hovering a token is one. Sweeping the <strong>entropy profile</strong> below the scrubber is the other, so a column that catches your eye can be read without moving the pointer to the text. The strip follows the frame as well as the pointer: hold still and scrub, and the numbers change under you as the position resolves. It works during live generation too, on tokens that have only just arrived. Under an overlay that knows something extra about a position, that is appended: <em>Resolved at step N</em> under <strong>Commit Order</strong>, <em>Revisions: 2</em> under <strong>Revisions</strong>, <em>was: X</em> under <strong>Diff vs Original</strong>, or <em>Forgetting: 0.214</em> under <strong>Forgetting</strong>. While both runs are stacked, the right-hand end names which one you are reading, <strong>Original</strong> or <strong>Edited</strong>. The Analytics detail modal carries the same strip above its own token view, fed by both its tokens and its entropy chart.</p>
+        <p>Two things feed it. Hovering a token is one. Sweeping the <strong>entropy profile</strong> below the scrubber is the other, so a column that catches your eye can be read without moving the pointer to the text. The strip follows the frame as well as the pointer: hold still and scrub, and the numbers change under you as the position resolves. It works during live generation too, on tokens that have only just arrived. Under an overlay that knows something extra about a position, that is appended: <em>Resolved at step N</em> under <strong>Commit Order</strong>, <em>Revisions: 2</em> under <strong>Revisions</strong>, <em>was: X</em> under <strong>Diff vs Original</strong>, <em>Forgetting: 0.214</em> under <strong>Forgetting</strong>, or keyed membership and evidence inclusion under <strong>Watermark</strong>. While both runs are stacked, the right-hand end names which one you are reading, <strong>Original</strong> or <strong>Edited</strong>. The Analytics detail modal carries the same strip above its own token view, fed by both its tokens and its entropy chart.</p>
         <p>On DiffusionGemma, beside the strip, <strong>Stop</strong> shows how close the canvas is to stopping: its entropy against <strong>Stop Entropy</strong>, and what is still changing. Each turns green once it holds.</p>
+        <p>On an enabled KGW run, a second line reports favored/scored tokens, favored rate, a normal-approximation z-score, exact null rate <code>p0</code>, and evidence status. Repeated predecessor tokens reuse one green list and are dependent, so the display threshold is not a calibrated p-value. Fewer than 50 scored tokens says <em>insufficient evidence</em>; otherwise the words compare z with the display-only threshold. Saved Analytics recomputes from complete token records where possible and says whether their counts and derived score are consistent with worker attestation. It does not validate membership against the secret. None of these words labels text AI or human.</p>
+        <h4>Pasted-text detector</h4>
+        <p>With SmolLM3 or Mamba-3 resident, <strong>Detector</strong> in the header scores at most 100,000 pasted characters and 4,096 tokens using that model's raw tokenizer and the existing local key. It adds no chat template or special tokens and performs no model forward. You may set Green Fraction, a display z threshold and an expected key id. Model, tokenizer, vocabulary, gamma and key must all match the generating setup. Missing, mismatched and unreadable keys are request errors rather than reasons to create or substitute a key. The first pasted token is excluded because there is no predecessor in the pasted output. One detector job runs per worker, while Stop remains responsive; changing any input marks a pending result stale. The button is hidden on the diffusion models. Counts for chosen text expose membership information, so keep the app on localhost rather than offering this detector to untrusted clients.</p>
         <p>The right half stays empty until you hover a row of the <strong>candidate popover</strong>, which fills it with that candidate's probability at full precision, headed by a <strong style="color:#00ff41;">green</strong> chip where the hovered token's own chip is grey. The two chips are the whole legend: grey is the token the run committed here, green is one it only weighed. The rows themselves round to a tenth of a percent, which is enough for the five the model actually considered and not nearly enough for a token you typed yourself, so the precision lives out here where there is room for it. Every row also reports its <strong>rank</strong>, as in <code>#3 of 128,256</code> for the third candidate or <code>#41,203 of 128,256</code> for something you typed, which is the reading that still says something once the percentage has rounded away to nothing. The denominator is the model's output width rather than the tokenizer's vocabulary, and the two can differ (128,256 against 128,000 here) because a checkpoint pads its embedding for alignment; a rank is a place among the tokens that could have been ranked. The left half keeps reporting the token you are hovering the whole time, so you are always comparing the candidate against the position it would replace.</p>
         <h4>Step, Elapsed and T/s</h4>
         <p>The status bar's left side carries the run's readouts: the current <strong>Step</strong>, the <strong>Elapsed</strong> wall-clock time, and <strong>T/s</strong>, tokens per second. Elapsed and T/s both count the run as a whole, so an edit continues from where the run had got to rather than restarting. T/s shows the run average by default; click it (or focus it and press Enter) to switch to the last step alone, which is noisier but shows throughput as it changes. The choice is remembered.</p>
@@ -738,6 +805,7 @@
           <li><strong>Heatmap</strong>: recolor resolved tokens by confidence (see <em>Confidence and the heatmap</em> in the <strong>Reading a run</strong> tab).</li>
           <li><strong>Entropy</strong>: recolor resolved tokens from cool blue (decisive) to hot amber (torn), by how spread the model's distribution was (see <em>Entropy and alternatives</em> in the <strong>Reading a run</strong> tab). Listed for runs that carry the signal, which today means autoregressive runs.</li>
           <li><strong>Forgetting</strong>: recolor tokens on a violet ramp by how much of Mamba-3's memory reading each one erased, dim slate for little and bright lilac for much (see <em>Forgetting</em> in the <strong>Reading a run</strong> tab). Mamba-3 runs only.</li>
+          <li><strong>Watermark</strong>: on enabled KGW runs, green with a double underline marks the keyed favored set and red with a dotted underline marks its complement. The colors and underlines never mean correctness or confidence. The first output token and a user-forced What If token add a dashed outline and diagonal hatch, plus hover and screen-reader wording that says they are excluded from detector evidence. The permanently visible legend names all three states while the overlay is selected.</li>
           <li><strong>Commit Order</strong>: tint resolved tokens by the step at which they settled, from light green (early) to red-orange (late), with a matching gradient legend in the status bar. Diffusion runs only.</li>
           <li><strong>Revisions</strong>: tint each settled token by how many times its position had changed its mind by the frame you are viewing, pale cyan for once, saturated for twice and deep cyan for three or more, with a three-step legend in the status bar. A change of mind is a position settling on a different token from the one it last settled on; the token a position you remask settles on next is a birth, so it adds nothing to the count. Listed only for a run that revised something, which today means DiffusionGemma, since LLaDA never revisits a settled token.</li>
           <li><strong>Diff vs Original</strong>: compare an edited run against the original. Diffusion runs list it up front, disabled until you have edited and resumed a run; autoregressive runs list it once a <strong>What If?</strong> substitution has produced a branch. When active, a slim row below the scrubber adds independent <strong>Original</strong> / <strong>Edited</strong> opacity sliders and a <strong>Difference blend</strong> toggle (matching tokens cancel to black, divergences glow), plus a <em>Diverged N/total</em> readout.</li>
@@ -931,6 +999,7 @@
   <script src="/generator_readouts.js"></script>
   <script src="/generator_candidates.js"></script>
   <script src="/generator_edit.js"></script>
+  <script src="/generator_watermark.js"></script>
   <script src="/generator_modals.js"></script>
   <script src="/app.js"></script>
 </body>

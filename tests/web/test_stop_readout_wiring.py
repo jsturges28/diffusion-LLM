@@ -136,7 +136,8 @@ def test_the_modal_readout_takes_the_strips_padding() -> None:
 
     rule = _rule(
         css, "#overlay-viewer .token-metrics,\n"
-        "#overlay-viewer .stop-readout",
+        "#overlay-viewer .stop-readout,\n"
+        "#overlay-viewer .watermark-readout",
     )
 
     assert "padding-top: 0" in rule

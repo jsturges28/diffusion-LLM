@@ -204,6 +204,21 @@
                       ></span>
                       <span>3+</span>
                     </div>
+                    <div id="overlay-watermark-legend"
+                      class="watermark-legend"
+                      aria-label="Watermark membership legend" hidden>
+                      <span class="watermark-legend-swatch
+                        watermark-favored" aria-hidden="true"></span>
+                      <span>favored set, double underline</span>
+                      <span class="watermark-legend-swatch
+                        watermark-complement"
+                        aria-hidden="true"></span>
+                      <span>complement, dotted underline</span>
+                      <span class="watermark-legend-swatch
+                        watermark-excluded"
+                        aria-hidden="true"></span>
+                      <span>excluded from score</span>
+                    </div>
                     <!-- Run-level crossfade between the pre-edit
                          run and the branch. Governs the token view
                          and the entropy chart from one place, so it
@@ -214,7 +229,8 @@
                       <span class="diff-slider-label diff-orig-label"
                         >Original</span>
                       <input type="range" id="run-blend"
-                        min="0" max="100" value="100" />
+                        min="0" max="100" value="100"
+                        aria-label="Crossfade between the original and edited runs" />
                       <span class="diff-slider-label diff-edit-label"
                         >Edited</span>
                     </div>
@@ -235,6 +251,9 @@
                   <div id="token-metrics" class="token-metrics"></div>
                   <div id="stop-readout" class="stop-readout"
                     hidden></div>
+                  <div id="watermark-readout"
+                    class="watermark-readout" role="status"
+                    aria-live="polite" hidden></div>
                 </div>
                 <!-- Bordered canvas; the overlay drawer tucks into
                      its top-right corner, like the generator's. -->
