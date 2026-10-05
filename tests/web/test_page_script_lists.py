@@ -89,3 +89,27 @@ def test_no_test_keeps_a_list_of_its_own() -> None:
     ]
 
     assert copies == []
+
+
+def test_action_view_loads_before_its_controller() -> None:
+    scripts = _page_scripts("index.html")
+
+    assert scripts.index("conversation_view.js") < scripts.index(
+        "conversation_action_view.js"
+    )
+    assert scripts.index(
+        "conversation_action_view.js"
+    ) < scripts.index("conversation_actions.js")
+
+
+def test_action_view_exports_only_its_factory() -> None:
+    source = (
+        STATIC / "conversation_action_view.js"
+    ).read_text(encoding="utf-8")
+    globals_found = re.findall(
+        r"^(?:var|function) ([A-Za-z0-9_$]+)",
+        source,
+        re.MULTILINE,
+    )
+
+    assert globals_found == ["conversationActionViewCreate"]

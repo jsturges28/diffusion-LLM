@@ -18,6 +18,7 @@ from typing import Dict, List, Tuple
 
 import pytest
 
+from src import conversation_identity
 from src.backends.context_pack import (
     MESSAGE_CANDIDATES_MAX,
     MESSAGE_CHARS_MAX,
@@ -127,8 +128,10 @@ def test_parse_accepts_an_absolute_candidate_offset() -> None:
             ],
             "candidate_turn_offset": 198,
             "conversation_id": "a" * 32,
-            "conversation_revision": 101,
+            "branch_id": "b_" + "b" * 32,
+            "branch_revision": 101,
             "assistant_turn_id": "00000200",
+            "assistant_turn_index": 200,
         }
     )
 
@@ -168,8 +171,140 @@ def test_candidate_location_ends_before_reserved_assistant() -> None:
                 ],
                 "candidate_turn_offset": 0,
                 "conversation_id": "a" * 32,
-                "conversation_revision": 3,
+                "branch_id": "b_" + "b" * 32,
+                "branch_revision": 3,
                 "assistant_turn_id": "00000004",
+                "assistant_turn_index": 4,
+            }
+        )
+
+    assert raised.value.code == ERROR_MALFORMED_MESSAGES
+
+
+def test_opaque_assistant_location_uses_its_explicit_index() -> None:
+    branch_id = "b_" + "b" * 32
+    opaque_id = conversation_identity.opaque_turn_id(
+        branch_id, 2
+    )
+
+    messages, conversation = parse_messages(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "question",
+                    "turn_id": "pending",
+                }
+            ],
+            "conversation_id": "a" * 32,
+            "branch_id": branch_id,
+            "branch_revision": 2,
+            "assistant_turn_id": opaque_id,
+            "assistant_turn_index": 2,
+        }
+    )
+
+    assert messages[-1].turn_id == "pending"
+    assert conversation is not None
+    assert conversation.assistant_turn_id == opaque_id
+
+
+def test_numeric_assistant_id_must_equal_its_index() -> None:
+    with pytest.raises(ContextRequestError, match="must equal"):
+        parse_messages(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "question",
+                        "turn_id": "00000001",
+                    }
+                ],
+                "conversation_id": "a" * 32,
+                "branch_id": "b_" + "b" * 32,
+                "branch_revision": 2,
+                "assistant_turn_id": "00000004",
+                "assistant_turn_index": 2,
+            }
+        )
+
+
+def _forged_opaque_turn_id() -> str:
+    valid = conversation_identity.opaque_turn_id(
+        "b_" + "b" * 32, 2
+    )
+    replacement = "0" if valid[-1] != "0" else "1"
+    return valid[:-1] + replacement
+
+
+@pytest.mark.parametrize(
+    "assistant_turn_id",
+    [
+        _forged_opaque_turn_id(),
+        "t_" + "b" * 32 + "_00000000_" + "0" * 16,
+    ],
+)
+def test_invalid_opaque_assistant_identity_is_refused(
+    assistant_turn_id: str,
+) -> None:
+    with pytest.raises(ContextRequestError):
+        parse_messages(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "question",
+                        "turn_id": "pending",
+                    }
+                ],
+                "conversation_id": "a" * 32,
+                "branch_id": "b_" + "b" * 32,
+                "branch_revision": 2,
+                "assistant_turn_id": assistant_turn_id,
+                "assistant_turn_index": 2,
+            }
+        )
+
+
+def test_schema_v1_conversation_identity_is_normalized() -> None:
+    _messages_result, conversation = parse_messages(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "question",
+                    "turn_id": "00000001",
+                }
+            ],
+            "conversation_id": "a" * 32,
+            "conversation_revision": 2,
+            "assistant_turn_id": "00000002",
+        }
+    )
+
+    assert conversation is not None
+    assert conversation.to_payload() == {
+        "conversation_id": "a" * 32,
+        "branch_id": "b_" + "a" * 32,
+        "branch_revision": 2,
+        "assistant_turn_id": "00000002",
+        "assistant_turn_index": 2,
+    }
+
+
+def test_partial_branch_identity_is_refused() -> None:
+    with pytest.raises(ContextRequestError) as raised:
+        parse_messages(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "question",
+                        "turn_id": "pending",
+                    }
+                ],
+                "conversation_id": "a" * 32,
+                "branch_id": "b_" + "b" * 32,
             }
         )
 
@@ -303,14 +438,18 @@ def test_parse_accepts_exact_turn_and_conversation_metadata() -> None:
                 }
             ],
             "conversation_id": "a" * 32,
-            "conversation_revision": 2,
+            "branch_id": "b_" + "b" * 32,
+            "branch_revision": 2,
             "assistant_turn_id": "00000002",
+            "assistant_turn_index": 2,
         }
     )
 
     assert messages[0].content == "question"
     assert conversation is not None
+    assert conversation.branch_id == "b_" + "b" * 32
     assert conversation.assistant_turn_id == "00000002"
+    assert conversation.assistant_turn_index == 2
 
 
 @pytest.mark.parametrize(

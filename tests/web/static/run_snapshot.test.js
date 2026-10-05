@@ -44,9 +44,10 @@ const STORED_FIELDS = [
   "model",
   "device",
   "conversationId",
-  "conversationRevision",
+  "branchId",
+  "branchRevision",
   "assistantTurnId",
-  "conversationTurnIndex",
+  "assistantTurnIndex",
   "conversationTurnVersion",
   "conversationTailText",
   "prompt",
@@ -159,9 +160,10 @@ function finishedRecord(api, overrides) {
     model: "llada",
     device: "cuda",
     conversationId: null,
-    conversationRevision: null,
+    branchId: null,
+    branchRevision: null,
     assistantTurnId: null,
-    conversationTurnIndex: null,
+    assistantTurnIndex: null,
     conversationTurnVersion: null,
     conversationTailText: null,
     prompt: "the box's text",
@@ -502,6 +504,104 @@ test("a snapshot with no device still restores", () => {
   });
 
   assert.notEqual(state, null);
+});
+
+test("a numeric legacy conversation snapshot gains a branch", () => {
+  const api = load();
+  const stored = JSON.parse(
+    tierText(api, finishedRecord(api), 0)
+  );
+  delete stored.branchId;
+  delete stored.branchRevision;
+  delete stored.assistantTurnIndex;
+  stored.conversationId = "a".repeat(32);
+  stored.conversationRevision = 7;
+  stored.assistantTurnId = "00000002";
+  stored.conversationTurnIndex = 2;
+  stored.conversationTurnVersion = 3;
+  stored.conversationTailText = "answer";
+
+  const state = api.runSnapshotDecode(
+    JSON.stringify(stored), RESIDENT
+  );
+
+  assert.equal(state.branchId, "b_" + "a".repeat(32));
+  assert.equal(state.branchRevision, 7);
+  assert.equal(state.assistantTurnIndex, 2);
+});
+
+test("partial modern conversation identity rejects the snapshot", () => {
+  const api = load();
+
+  const state = decodeChanged(api, (stored) => {
+    stored.conversationId = "a".repeat(32);
+  });
+
+  assert.equal(state, null);
+});
+
+test("malformed modern conversation identity rejects the snapshot",
+  () => {
+  const api = load();
+
+  const state = decodeChanged(api, (stored) => {
+    stored.conversationId = "a".repeat(32);
+    stored.branchId = "b_" + "b".repeat(32);
+    stored.branchRevision = 3;
+    stored.assistantTurnId =
+      "t_" + "b".repeat(32)
+      + "_00000002_0000000000000002";
+    stored.assistantTurnIndex = 2;
+    stored.conversationTurnVersion = "2";
+    stored.conversationTailText = "answer";
+  });
+
+  assert.equal(state, null);
+});
+
+test("opaque turn checksums stay server-issued", () => {
+  const api = load();
+
+  const state = decodeChanged(api, (stored) => {
+    stored.conversationId = "a".repeat(32);
+    stored.branchId = "b_" + "b".repeat(32);
+    stored.branchRevision = 3;
+    stored.assistantTurnId =
+      "t_" + "b".repeat(32)
+      + "_00000002_0000000000000002";
+    stored.assistantTurnIndex = 2;
+    stored.conversationTurnVersion = 2;
+    stored.conversationTailText = "answer";
+  });
+
+  assert.notEqual(state, null);
+  assert.equal(
+    state.assistantTurnId,
+    "t_" + "b".repeat(32)
+      + "_00000002_0000000000000002"
+  );
+});
+
+test("incomplete numeric legacy identity rejects the snapshot", () => {
+  const api = load();
+  const stored = JSON.parse(
+    tierText(api, finishedRecord(api), 0)
+  );
+  delete stored.branchId;
+  delete stored.branchRevision;
+  delete stored.assistantTurnIndex;
+  stored.conversationId = "a".repeat(32);
+  stored.conversationRevision = 7;
+  stored.assistantTurnId = "00000002";
+  stored.conversationTurnIndex = 2;
+  stored.conversationTurnVersion = null;
+  stored.conversationTailText = "answer";
+
+  const state = api.runSnapshotDecode(
+    JSON.stringify(stored), RESIDENT
+  );
+
+  assert.equal(state, null);
 });
 
 test("a snapshot without the run's identity reads as unknown", () => {

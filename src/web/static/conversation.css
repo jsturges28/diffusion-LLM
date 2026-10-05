@@ -79,6 +79,23 @@
   color: var(--danger);
 }
 
+.conversation-action-status {
+  min-height: 16px;
+  margin: 3px 0 7px;
+  color: var(--accent);
+  font-size: 10px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.conversation-action-status.is-error {
+  color: var(--danger);
+}
+
+.conversation-action-status[hidden] {
+  display: none;
+}
+
 #btn-load-older {
   display: block;
   margin: 0 auto 10px;
@@ -181,6 +198,238 @@
   white-space: pre-wrap;
 }
 
+.conversation-turn-actions,
+.conversation-active-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 6px;
+  opacity: 0.62;
+  transition: opacity 0.15s ease;
+}
+
+.conversation-turn:hover > .conversation-turn-actions,
+.conversation-turn:focus-within > .conversation-turn-actions,
+.conversation-active-actions:focus-within,
+#active-assistant-card:hover .conversation-active-actions {
+  opacity: 1;
+}
+
+.conversation-action {
+  display: inline-flex;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.conversation-action:hover:not(:disabled) {
+  border-color: var(--border);
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text-primary);
+}
+
+.conversation-action:focus-visible,
+.conversation-branch-button:focus-visible,
+.conversation-inline-edit button:focus-visible,
+.conversation-action-danger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.conversation-inline-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.conversation-inline-edit-input {
+  width: 100%;
+  min-height: 78px;
+  max-height: 260px;
+  resize: vertical;
+  font: inherit;
+  line-height: inherit;
+}
+
+.conversation-inline-edit-status {
+  display: flex;
+  min-height: 78px;
+  align-items: center;
+  margin: 0;
+  color: var(--text-secondary);
+  cursor: wait;
+  font-family: var(--font-ui);
+  font-size: 10px;
+}
+
+.conversation-inline-edit-status:focus {
+  outline: none;
+}
+
+.conversation-inline-edit-status:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.conversation-inline-edit-note {
+  margin: 0;
+  color: var(--text-dim);
+  font-family: var(--font-ui);
+  font-size: 9px;
+  line-height: 1.45;
+  white-space: normal;
+}
+
+.conversation-inline-edit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.conversation-inline-edit-actions button {
+  min-height: 28px;
+  padding: 5px 9px;
+  font-size: 9px;
+}
+
+.conversation-branch-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: max-content;
+  max-width: 100%;
+  margin-top: 7px;
+  color: var(--text-dim);
+}
+
+.conversation-branch-pager:focus {
+  outline: none;
+}
+
+.conversation-branch-pager:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.conversation-branch-button {
+  display: inline-flex;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.conversation-branch-button:hover:not(:disabled) {
+  border-color: rgba(79, 195, 247, 0.55);
+  color: #78c8ff;
+}
+
+.conversation-branch-button:disabled {
+  cursor: default;
+  opacity: 0.28;
+}
+
+.conversation-branch-position {
+  min-width: 76px;
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.conversation-deletion-marker {
+  display: flex;
+  align-self: flex-end;
+  width: min(88%, 820px);
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px dashed rgba(255, 177, 66, 0.34);
+  border-radius: var(--radius);
+  background: rgba(255, 177, 66, 0.035);
+}
+
+.conversation-deletion-marker:focus {
+  outline: none;
+}
+
+.conversation-deletion-marker:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.conversation-deletion-label {
+  color: #ffb142;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.conversation-deletion-marker .conversation-branch-pager {
+  margin-top: 0;
+}
+
+.conversation-clipboard-fallback {
+  position: fixed;
+  top: -10000px;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.conversation-action-danger {
+  padding: 7px 14px;
+  border: 1px solid rgba(255, 92, 92, 0.5);
+  border-radius: var(--radius);
+  background: rgba(255, 92, 92, 0.12);
+  color: #ff8c8c;
+}
+
+.conversation-action-danger:hover:not(:disabled) {
+  border-color: rgba(255, 92, 92, 0.8);
+  background: rgba(255, 92, 92, 0.2);
+}
+
+.conversation-dialog-status {
+  margin: 10px 0 0;
+  color: var(--danger);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.conversation-dialog-status:focus {
+  outline: none;
+}
+
+.conversation-dialog-status:focus-visible {
+  outline: 2px solid var(--danger);
+  outline-offset: 3px;
+}
+
+.conversation-confirmation-dialog.is-pending {
+  cursor: wait;
+}
+
 .conversation-run-link {
   margin-left: auto;
   color: #78c8ff;
@@ -209,6 +458,20 @@
 }
 
 #active-assistant-card[hidden] {
+  display: none;
+}
+
+.conversation-active-actions {
+  justify-content: flex-start;
+  margin: 4px 0 10px;
+}
+
+.conversation-active-actions > .conversation-turn-actions {
+  margin-top: 0;
+  opacity: 1;
+}
+
+.conversation-active-actions[hidden] {
   display: none;
 }
 
@@ -363,6 +626,15 @@
     width: 100%;
   }
 
+  .conversation-turn,
+  .conversation-deletion-marker {
+    width: 96%;
+  }
+
+  .conversation-deletion-marker {
+    flex-wrap: wrap;
+  }
+
   #composer-row {
     gap: 8px;
   }
@@ -371,5 +643,26 @@
     min-width: 104px;
     padding-right: 12px;
     padding-left: 12px;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .conversation-turn-actions,
+  .conversation-active-actions {
+    opacity: 1;
+  }
+
+  .conversation-action,
+  .conversation-branch-button {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conversation-turn-actions,
+  .conversation-active-actions {
+    transition: none;
   }
 }

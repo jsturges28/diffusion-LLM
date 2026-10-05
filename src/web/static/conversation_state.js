@@ -13,6 +13,11 @@ var CONVERSATION_TURNS_MAX =
   CONVERSATION_PAGE_SIZE * CONVERSATION_PAGES_MAX;
 var CONVERSATION_MESSAGE_TURNS_MAX =
   CONVERSATION_TURNS_MAX - 1;
+var CONVERSATION_BRANCH_POINTS_MAX = 256;
+var CONVERSATION_BRANCHES_MAX = 256;
+var CONVERSATION_IDENTIFIER_CHARS_MAX = 128;
+var CONVERSATION_SCHEMA_LEGACY = 1;
+var CONVERSATION_SCHEMA_BRANCHES = 2;
 
 if (CONVERSATION_TURNS_MAX !== 200) {
   throw new Error("Conversation cache must hold 200 turns");
@@ -24,7 +29,9 @@ if (CONVERSATION_MESSAGE_TURNS_MAX % 2 !== 1) {
 function conversationStateCreate() {
   return conversationStateSeal({
     conversation: null,
+    selectedBranchId: null,
     turns: [],
+    branchPoints: [],
     nextBefore: null,
     hasMore: false,
     pagesLoaded: 0,
@@ -46,6 +53,7 @@ function conversationStateReduce(state, action) {
       next = conversationStateCreated(action.conversation);
       break;
     case "loaded":
+    case "forked":
       next = conversationStateLoaded(action);
       break;
     case "older_started":
@@ -64,6 +72,9 @@ function conversationStateReduce(state, action) {
     case "run_linked":
       next = conversationStateTailChanged(state, action);
       break;
+    case "catalog_refreshed":
+      next = conversationStateCatalogRefreshed(state, action);
+      break;
     case "failed":
       next = conversationStateCopy(state, {
         loadingOlder: false,
@@ -80,9 +91,12 @@ function conversationStateReduce(state, action) {
 }
 
 function conversationStateCreated(conversation) {
+  var manifest = conversationStateManifest(conversation);
   return {
-    conversation: conversationStateManifest(conversation),
+    conversation: manifest,
+    selectedBranchId: manifest.branch_id,
     turns: [],
+    branchPoints: [],
     nextBefore: null,
     hasMore: false,
     pagesLoaded: 0,
@@ -93,15 +107,20 @@ function conversationStateCreated(conversation) {
 
 function conversationStateLoaded(action) {
   var manifest = conversationStateManifest(action.conversation);
-  var page = conversationStatePage(action.page, manifest.id);
-  if (page.revision !== manifest.revision) {
+  var page = conversationStatePage(
+    action.page, manifest.id, manifest.branch_id
+  );
+  conversationStatePageMatchesManifest(page, manifest);
+  if (page.branchRevision !== manifest.branch_revision) {
     throw new Error(
       "Conversation page and manifest revisions differ"
     );
   }
   return {
     conversation: manifest,
+    selectedBranchId: manifest.branch_id,
     turns: conversationStateTrim(page.turns),
+    branchPoints: page.branchPoints,
     nextBefore: page.nextBefore,
     hasMore: page.hasMore,
     pagesLoaded: page.turns.length > 0 ? 1 : 0,
@@ -115,12 +134,23 @@ function conversationStateOlder(state, rawPage) {
     throw new Error("Cannot add a page without a conversation");
   }
   var page = conversationStatePage(
-    rawPage, state.conversation.id
+    rawPage,
+    state.conversation.id,
+    state.selectedBranchId
   );
-  if (page.revision !== state.conversation.revision) {
+  conversationStatePageMatchesManifest(
+    page, state.conversation
+  );
+  if (
+    page.branchRevision
+    !== state.conversation.branch_revision
+  ) {
     throw new Error("Older page has a stale conversation revision");
   }
   var turns = conversationStateMerge(page.turns, state.turns);
+  var branchPoints = conversationStateMergeBranchPoints(
+    page.branchPoints, state.branchPoints
+  );
   var pages = Math.min(
     CONVERSATION_PAGES_MAX,
     state.pagesLoaded + (page.turns.length > 0 ? 1 : 0)
@@ -130,6 +160,7 @@ function conversationStateOlder(state, rawPage) {
     && turns.length < CONVERSATION_TURNS_MAX;
   return conversationStateCopy(state, {
     turns: conversationStateTrim(turns),
+    branchPoints: branchPoints,
     nextBefore: canLoad ? page.nextBefore : null,
     hasMore: canLoad,
     pagesLoaded: pages,
@@ -140,21 +171,63 @@ function conversationStateOlder(state, rawPage) {
 
 function conversationStateAppended(state, action) {
   var manifest = conversationStateManifest(action.conversation);
-  var turns = conversationStateMerge(state.turns, [
-    conversationStateTurn(action.userTurn),
-    conversationStateTurn(action.assistantTurn),
-  ]);
+  conversationStateSameSelectedBranch(state, manifest);
+  var user = conversationStateTurn(
+    action.userTurn,
+    manifest.branch_id,
+    manifest.schema_version
+  );
+  var assistant = conversationStateTurn(
+    action.assistantTurn,
+    manifest.branch_id,
+    manifest.schema_version
+  );
+  var turns = conversationStateMerge(
+    state.turns, [user, assistant]
+  );
   return conversationStateCopy(state, {
     conversation: manifest,
     turns: conversationStateTrim(turns),
+    branchPoints: conversationStateAppendBranchPoints({
+      points: state.branchPoints,
+      branchId: manifest.branch_id,
+      userIndex: user.index,
+    }),
     loadingOlder: false,
     error: "",
   });
 }
 
+function conversationStateAppendBranchPoints(options) {
+  return options.points.map(function (point) {
+    if (
+      point.turn_index !== options.userIndex
+      || point.deleted_branch_ids.indexOf(options.branchId) === -1
+    ) {
+      return point;
+    }
+    return conversationStateBranchPoint({
+      turn_index: point.turn_index,
+      source_branch_id: point.source_branch_id,
+      selected_branch_id: point.selected_branch_id,
+      branch_ids: point.branch_ids,
+      deleted_branch_ids: point.deleted_branch_ids.filter(
+        function (deletedId) {
+          return deletedId !== options.branchId;
+        }
+      ),
+    });
+  });
+}
+
 function conversationStateTailChanged(state, action) {
   var manifest = conversationStateManifest(action.conversation);
-  var changed = conversationStateTurn(action.turn);
+  conversationStateSameSelectedBranch(state, manifest);
+  var changed = conversationStateTurn(
+    action.turn,
+    manifest.branch_id,
+    manifest.schema_version
+  );
   var turns = state.turns.filter(function (turn) {
     return turn.turn_id !== changed.turn_id;
   });
@@ -163,6 +236,53 @@ function conversationStateTailChanged(state, action) {
   return conversationStateCopy(state, {
     conversation: manifest,
     turns: conversationStateTrim(turns),
+    error: "",
+  });
+}
+
+function conversationStateCatalogRefreshed(state, action) {
+  if (state.conversation === null) {
+    throw new Error("Cannot refresh an empty conversation");
+  }
+  var manifest = conversationStateManifest(action.conversation);
+  conversationStateSameSelectedBranch(state, manifest);
+  if (
+    manifest.branch_revision
+    !== state.conversation.branch_revision
+  ) {
+    throw new Error(
+      "Catalog refresh changed the selected branch revision"
+    );
+  }
+  if (
+    !Array.isArray(action.pages)
+    || action.pages.length < 1
+    || action.pages.length > CONVERSATION_PAGES_MAX
+  ) {
+    throw new RangeError(
+      "Catalog refresh page count is out of bounds"
+    );
+  }
+  var points = [];
+  for (var index = 0; index < action.pages.length; index++) {
+    var page = conversationStatePage(
+      action.pages[index],
+      manifest.id,
+      manifest.branch_id
+    );
+    conversationStatePageMatchesManifest(page, manifest);
+    if (page.branchRevision !== manifest.branch_revision) {
+      throw new Error(
+        "Catalog refresh page has another branch revision"
+      );
+    }
+    points = conversationStateMergeBranchPoints(
+      points, page.branchPoints
+    );
+  }
+  return conversationStateCopy(state, {
+    conversation: manifest,
+    branchPoints: points,
     error: "",
   });
 }
@@ -183,6 +303,24 @@ function conversationStateMerge(earlier, later) {
   });
   turns.sort(conversationStateTurnOrder);
   return turns;
+}
+
+function conversationStateMergeBranchPoints(earlier, later) {
+  var byLocation = {};
+  var combined = earlier.concat(later);
+  for (var index = 0; index < combined.length; index++) {
+    var point = conversationStateBranchPoint(combined[index]);
+    var key = point.turn_index + ":" + point.source_branch_id;
+    byLocation[key] = point;
+  }
+  var points = Object.keys(byLocation).map(function (key) {
+    return byLocation[key];
+  });
+  points.sort(conversationStateBranchPointOrder);
+  if (points.length > CONVERSATION_BRANCH_POINTS_MAX) {
+    throw new RangeError("Conversation branch points exceed 256");
+  }
+  return points;
 }
 
 function conversationStateTrim(turns) {
@@ -206,18 +344,32 @@ function conversationStateManifest(raw) {
   if (!raw || typeof raw !== "object") {
     throw new TypeError("Conversation manifest must be an object");
   }
+  var schemaVersion = conversationStateSchemaVersion(raw);
   var id = conversationStateString(raw.id, "conversation id");
   if (!/^[0-9a-f]{32}$/.test(id)) {
     throw new TypeError("Conversation id has an invalid format");
   }
-  var revision = conversationStatePositive(
-    raw.revision, "conversation revision"
+  var branchId = conversationStateSelectedBranchId(
+    raw.branch_id, id, schemaVersion
+  );
+  var branchRevision = conversationStateRevision(
+    raw, schemaVersion, "conversation"
+  );
+  var catalogRevision = conversationStateCatalogRevision(
+    raw.catalog_revision, schemaVersion
+  );
+  var defaultBranchId = conversationStateDefaultBranchId(
+    raw.default_branch_id,
+    branchId,
+    schemaVersion
   );
   var turnCount = conversationStateNonnegative(
     raw.turn_count, "conversation turn count"
   );
-  var tailId = conversationStateOptionalString(raw.tail_turn_id);
-  var pending = conversationStateOptionalString(
+  var tailId = conversationStateOptionalTurnId(
+    raw.tail_turn_id
+  );
+  var pending = conversationStateOptionalTurnId(
     raw.pending_assistant_id
   );
   var tailVersion = raw.tail_version === null
@@ -226,12 +378,21 @@ function conversationStateManifest(raw) {
       raw.tail_version, "tail version"
     );
   conversationStateManifestInvariants(
-    turnCount, tailId, tailVersion, pending
+    turnCount,
+    tailId,
+    tailVersion,
+    pending,
+    schemaVersion
   );
   return Object.freeze({
+    schema_version: schemaVersion,
     id: id,
     title: typeof raw.title === "string" ? raw.title : "",
-    revision: revision,
+    branch_id: branchId,
+    branch_revision: branchRevision,
+    revision: branchRevision,
+    catalog_revision: catalogRevision,
+    default_branch_id: defaultBranchId,
     turn_count: turnCount,
     tail_turn_id: tailId,
     tail_version: tailVersion,
@@ -239,7 +400,9 @@ function conversationStateManifest(raw) {
   });
 }
 
-function conversationStateTurn(raw) {
+function conversationStateTurn(
+  raw, selectedBranchId, schemaVersion
+) {
   if (!raw || typeof raw !== "object") {
     throw new TypeError("Conversation turn must be an object");
   }
@@ -247,8 +410,14 @@ function conversationStateTurn(raw) {
   if (role !== "user" && role !== "assistant") {
     throw new TypeError("Conversation turn has an invalid role");
   }
+  var branchId = raw.branch_id;
+  if (branchId === undefined || branchId === null) {
+    branchId = selectedBranchId;
+  }
+  branchId = conversationStateBranchId(branchId, "turn branch id");
   var turn = {
-    turn_id: conversationStateString(raw.turn_id, "turn id"),
+    turn_id: conversationStateTurnIdValue(raw.turn_id),
+    branch_id: branchId,
     index: conversationStatePositive(raw.index, "turn index"),
     version: conversationStatePositive(raw.version, "turn version"),
     role: role,
@@ -260,8 +429,10 @@ function conversationStateTurn(raw) {
     metadata: conversationStateMetadata(raw.metadata),
     run_link: conversationStateRunLink(raw.run_link),
   };
-  var expectedId = conversationStateTurnId(turn.index);
-  if (turn.turn_id !== expectedId) {
+  if (
+    schemaVersion === CONVERSATION_SCHEMA_LEGACY
+    && turn.turn_id !== conversationStateTurnId(turn.index)
+  ) {
     throw new Error("Conversation turn id and index differ");
   }
   var expectedRole = turn.index % 2 === 1
@@ -274,7 +445,7 @@ function conversationStateTurn(raw) {
 }
 
 function conversationStateManifestInvariants(
-  turnCount, tailId, tailVersion, pending
+  turnCount, tailId, tailVersion, pending, schemaVersion
 ) {
   if (turnCount % 2 !== 0) {
     throw new Error("Conversation turn count must be even");
@@ -289,7 +460,13 @@ function conversationStateManifestInvariants(
     }
     return;
   }
-  if (tailId !== conversationStateTurnId(turnCount)) {
+  if (tailId === null) {
+    throw new Error("Conversation tail needs an id");
+  }
+  if (
+    schemaVersion === CONVERSATION_SCHEMA_LEGACY
+    && tailId !== conversationStateTurnId(turnCount)
+  ) {
     throw new Error("Conversation tail does not match turn count");
   }
   if (tailVersion === null) {
@@ -303,7 +480,9 @@ function conversationStateManifestInvariants(
   }
 }
 
-function conversationStatePage(raw, conversationId) {
+function conversationStatePage(
+  raw, conversationId, selectedBranchId
+) {
   if (!raw || typeof raw !== "object") {
     throw new TypeError("Conversation page must be an object");
   }
@@ -318,7 +497,21 @@ function conversationStatePage(raw, conversationId) {
   if (raw.turns.length > CONVERSATION_PAGE_SIZE) {
     throw new RangeError("Conversation page exceeds 50 turns");
   }
-  var turns = raw.turns.map(conversationStateTurn);
+  var schemaVersion = conversationStateSchemaVersion(raw);
+  var branchId = conversationStateSelectedBranchId(
+    raw.branch_id,
+    conversationId,
+    schemaVersion,
+    selectedBranchId
+  );
+  var branchRevision = conversationStateRevision(
+    raw, schemaVersion, "page"
+  );
+  var turns = raw.turns.map(function (turn) {
+    return conversationStateTurn(
+      turn, branchId, schemaVersion
+    );
+  });
   turns.sort(conversationStateTurnOrder);
   if (turns.length > 0 && turns[0].role !== "user") {
     throw new Error("Conversation page must start on a user turn");
@@ -329,13 +522,142 @@ function conversationStatePage(raw, conversationId) {
     }
   }
   return {
-    revision: conversationStatePositive(
-      raw.revision, "page revision"
+    schemaVersion: schemaVersion,
+    branchId: branchId,
+    branchRevision: branchRevision,
+    catalogRevision: conversationStateCatalogRevision(
+      raw.catalog_revision, schemaVersion
+    ),
+    defaultBranchId: conversationStateDefaultBranchId(
+      raw.default_branch_id,
+      branchId,
+      schemaVersion
     ),
     turns: turns,
+    branchPoints: conversationStateBranchPoints(
+      raw.branch_points, schemaVersion
+    ),
     nextBefore: conversationStateOptionalString(raw.next_before),
     hasMore: raw.has_more === true,
   };
+}
+
+function conversationStatePageMatchesManifest(page, manifest) {
+  if (page.schemaVersion !== manifest.schema_version) {
+    throw new Error("Conversation page schema changed while loading");
+  }
+  if (page.branchId !== manifest.branch_id) {
+    throw new Error("Conversation page belongs to another branch");
+  }
+  if (page.catalogRevision !== manifest.catalog_revision) {
+    throw new Error(
+      "Conversation catalog changed while loading a page"
+    );
+  }
+  if (page.defaultBranchId !== manifest.default_branch_id) {
+    throw new Error(
+      "Conversation default branch changed while loading"
+    );
+  }
+}
+
+function conversationStateSameSelectedBranch(state, manifest) {
+  if (state.conversation === null) {
+    throw new Error("Conversation mutation has no active state");
+  }
+  if (state.conversation.id !== manifest.id) {
+    throw new Error("Conversation mutation changed conversation");
+  }
+  if (state.selectedBranchId !== manifest.branch_id) {
+    throw new Error("Conversation mutation changed selected branch");
+  }
+}
+
+function conversationStateBranchPoints(raw, schemaVersion) {
+  if (
+    raw === undefined
+    && schemaVersion === CONVERSATION_SCHEMA_LEGACY
+  ) {
+    return [];
+  }
+  if (!Array.isArray(raw)) {
+    throw new TypeError("Conversation branch points must be a list");
+  }
+  if (raw.length > CONVERSATION_BRANCH_POINTS_MAX) {
+    throw new RangeError("Conversation branch points exceed 256");
+  }
+  var points = raw.map(conversationStateBranchPoint);
+  points.sort(conversationStateBranchPointOrder);
+  for (var index = 1; index < points.length; index++) {
+    if (
+      points[index].turn_index === points[index - 1].turn_index
+      && points[index].source_branch_id
+        === points[index - 1].source_branch_id
+    ) {
+      throw new Error("Conversation branch point is duplicated");
+    }
+  }
+  return points;
+}
+
+function conversationStateBranchPoint(raw) {
+  if (!raw || typeof raw !== "object") {
+    throw new TypeError(
+      "Conversation branch point must be an object"
+    );
+  }
+  var source = conversationStateBranchId(
+    raw.source_branch_id, "source branch id"
+  );
+  var selected = conversationStateBranchId(
+    raw.selected_branch_id, "selected branch id"
+  );
+  var branches = conversationStateBranchIdList(
+    raw.branch_ids, "branch ids"
+  );
+  var deleted = conversationStateBranchIdList(
+    raw.deleted_branch_ids, "deleted branch ids", true
+  );
+  if (branches.indexOf(source) === -1) {
+    throw new Error("Branch point source is not an alternative");
+  }
+  if (branches.indexOf(selected) === -1) {
+    throw new Error("Branch point selection is not an alternative");
+  }
+  for (var index = 0; index < deleted.length; index++) {
+    if (branches.indexOf(deleted[index]) === -1) {
+      throw new Error("Deleted branch is not an alternative");
+    }
+  }
+  return Object.freeze({
+    turn_index: conversationStatePositive(
+      raw.turn_index, "branch point turn index"
+    ),
+    source_branch_id: source,
+    selected_branch_id: selected,
+    branch_ids: branches,
+    deleted_branch_ids: deleted,
+  });
+}
+
+function conversationStateBranchIdList(raw, name, emptyAllowed) {
+  if (!Array.isArray(raw)) {
+    throw new TypeError(name + " must be a list");
+  }
+  if (
+    (!emptyAllowed && raw.length < 1)
+    || raw.length > CONVERSATION_BRANCHES_MAX
+  ) {
+    throw new RangeError(name + " count is out of bounds");
+  }
+  var values = raw.map(function (value) {
+    return conversationStateBranchId(value, name);
+  });
+  if (new Set(values).size !== values.length) {
+    throw new Error(name + " contains a duplicate");
+  }
+  Object.freeze(values);
+  return values;
 }
 
 function conversationStateContextPack(raw) {
@@ -416,6 +738,12 @@ function conversationStateCanEdit(state, identity) {
     return false;
   }
   var manifest = state.conversation;
+  if (identity.conversation_id !== manifest.id) {
+    return false;
+  }
+  if (identity.branch_id !== manifest.branch_id) {
+    return false;
+  }
   if (manifest.pending_assistant_id !== null) {
     return false;
   }
@@ -423,13 +751,19 @@ function conversationStateCanEdit(state, identity) {
     return false;
   }
   if (
-    !Number.isInteger(identity.conversation_revision)
-    || manifest.revision !== identity.conversation_revision
+    !Number.isInteger(identity.branch_revision)
+    || manifest.branch_revision !== identity.branch_revision
   ) {
     return false;
   }
   var assistant = conversationStateTailAssistant(state);
   if (assistant === null) {
+    return false;
+  }
+  if (
+    !Number.isInteger(identity.assistant_turn_index)
+    || assistant.index !== identity.assistant_turn_index
+  ) {
     return false;
   }
   if (
@@ -547,10 +881,19 @@ function conversationStateAddIdentity(state, payload) {
   ) {
     return;
   }
+  var assistant = conversationStateTailAssistant(state);
+  if (
+    assistant === null
+    || assistant.turn_id !== conversation.pending_assistant_id
+  ) {
+    throw new Error("Pending assistant is missing from the cache");
+  }
   payload.conversation_id = conversation.id;
-  payload.conversation_revision = conversation.revision;
+  payload.branch_id = conversation.branch_id;
+  payload.branch_revision = conversation.branch_revision;
   payload.assistant_turn_id =
     conversation.pending_assistant_id;
+  payload.assistant_turn_index = assistant.index;
 }
 
 function conversationStateIdentity(state) {
@@ -568,9 +911,10 @@ function conversationStateIdentity(state) {
   }
   return {
     conversation_id: state.conversation.id,
-    conversation_revision: state.conversation.revision,
+    branch_id: state.conversation.branch_id,
+    branch_revision: state.conversation.branch_revision,
     assistant_turn_id: tail,
-    turn_index: parseInt(tail, 10),
+    assistant_turn_index: assistant.index,
     assistant_turn_version: assistant.version,
     assistant_text: assistant.text,
   };
@@ -583,9 +927,31 @@ function conversationStateAssert(state) {
   if (!Array.isArray(state.turns)) {
     throw new TypeError("Conversation state turns must be a list");
   }
+  if (!Array.isArray(state.branchPoints)) {
+    throw new TypeError(
+      "Conversation state branch points must be a list"
+    );
+  }
+  if (state.conversation === null) {
+    if (state.selectedBranchId !== null) {
+      throw new Error("Empty state cannot select a branch");
+    }
+  } else if (
+    state.selectedBranchId !== state.conversation.branch_id
+  ) {
+    throw new Error("Selected branch and manifest differ");
+  }
   if (state.turns.length > CONVERSATION_TURNS_MAX) {
     throw new RangeError(
       "Conversation state exceeds its cache bound"
+    );
+  }
+  if (
+    state.branchPoints.length
+    > CONVERSATION_BRANCH_POINTS_MAX
+  ) {
+    throw new RangeError(
+      "Conversation branch points exceed their cache bound"
     );
   }
   for (var index = 1; index < state.turns.length; index++) {
@@ -604,6 +970,7 @@ function conversationStateAssert(state) {
 
 function conversationStateSeal(state) {
   Object.freeze(state.turns);
+  Object.freeze(state.branchPoints);
   return Object.freeze(state);
 }
 
@@ -611,8 +978,132 @@ function conversationStateTurnOrder(left, right) {
   return left.index - right.index;
 }
 
+function conversationStateBranchPointOrder(left, right) {
+  if (left.turn_index !== right.turn_index) {
+    return left.turn_index - right.turn_index;
+  }
+  return left.source_branch_id.localeCompare(
+    right.source_branch_id
+  );
+}
+
 function conversationStateTurnId(index) {
   return String(index).padStart(8, "0");
+}
+
+function conversationStateSchemaVersion(raw) {
+  var value = raw.schema_version;
+  if (value === undefined || value === null) {
+    return CONVERSATION_SCHEMA_LEGACY;
+  }
+  if (
+    value !== CONVERSATION_SCHEMA_LEGACY
+    && value !== CONVERSATION_SCHEMA_BRANCHES
+  ) {
+    throw new TypeError("Conversation schema version is unsupported");
+  }
+  return value;
+}
+
+function conversationStateSelectedBranchId(
+  raw, conversationId, schemaVersion, selectedBranchId
+) {
+  var legacy = "b_" + conversationId;
+  if (schemaVersion === CONVERSATION_SCHEMA_BRANCHES) {
+    return conversationStateBranchId(raw, "branch id");
+  }
+  var value = raw;
+  if (value === undefined || value === null) {
+    value = selectedBranchId || legacy;
+  }
+  var branchId = conversationStateBranchId(value, "branch id");
+  if (branchId !== legacy) {
+    throw new Error("Legacy conversation has a foreign branch");
+  }
+  return branchId;
+}
+
+function conversationStateDefaultBranchId(
+  raw, branchId, schemaVersion
+) {
+  if (raw === undefined || raw === null) {
+    if (schemaVersion === CONVERSATION_SCHEMA_BRANCHES) {
+      throw new TypeError("Conversation default branch is missing");
+    }
+    return branchId;
+  }
+  var defaultBranchId = conversationStateBranchId(
+    raw, "default branch id"
+  );
+  if (
+    schemaVersion === CONVERSATION_SCHEMA_LEGACY
+    && defaultBranchId !== branchId
+  ) {
+    throw new Error("Legacy default branch must be selected");
+  }
+  return defaultBranchId;
+}
+
+function conversationStateRevision(raw, schemaVersion, name) {
+  var value = raw.branch_revision;
+  if (value === undefined || value === null) {
+    if (schemaVersion === CONVERSATION_SCHEMA_BRANCHES) {
+      throw new TypeError(name + " branch revision is missing");
+    }
+    value = raw.revision;
+  }
+  var revision = conversationStatePositive(
+    value, name + " branch revision"
+  );
+  if (
+    raw.revision !== undefined
+    && raw.revision !== null
+    && raw.revision !== revision
+  ) {
+    throw new Error(name + " revision aliases differ");
+  }
+  return revision;
+}
+
+function conversationStateCatalogRevision(raw, schemaVersion) {
+  if (raw === undefined || raw === null) {
+    if (schemaVersion === CONVERSATION_SCHEMA_BRANCHES) {
+      throw new TypeError("Conversation catalog revision is missing");
+    }
+    return 0;
+  }
+  return conversationStateNonnegative(
+    raw, "conversation catalog revision"
+  );
+}
+
+function conversationStateBranchId(value, name) {
+  var branchId = conversationStateString(value, name);
+  if (!/^b_[0-9a-f]{32}$/.test(branchId)) {
+    throw new TypeError(name + " has an invalid format");
+  }
+  return branchId;
+}
+
+function conversationStateTurnIdValue(value) {
+  var turnId = conversationStateString(value, "turn id");
+  if (turnId.length > CONVERSATION_IDENTIFIER_CHARS_MAX) {
+    throw new RangeError("Turn id exceeds 128 characters");
+  }
+  var legacy = /^[0-9]{8}$/.test(turnId);
+  var opaque = /^t_[0-9a-f]{32}_[0-9]{8}_[0-9a-f]{16}$/
+    .test(turnId);
+  if (!legacy && !opaque) {
+    throw new TypeError("Turn id has an invalid format");
+  }
+  return turnId;
+}
+
+function conversationStateOptionalTurnId(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  return conversationStateTurnIdValue(value);
 }
 
 function conversationStateErrorText(error) {

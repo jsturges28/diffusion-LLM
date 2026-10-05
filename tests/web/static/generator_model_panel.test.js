@@ -295,6 +295,27 @@ test("schema controls preserve parameter values and budget reads",
   }
 );
 
+test("disabled panel removes model and parameter select tab stops",
+  () => {
+  const h = loadPanel({});
+  const model = h.page.registry.get("model-select");
+  const strategy = input(h, "strategy");
+
+  h.panel.setDisabled(true);
+
+  assert.equal(model.getAttribute("aria-disabled"), "true");
+  assert.equal(model.tabIndex, -1);
+  assert.equal(strategy.getAttribute("aria-disabled"), "true");
+  assert.equal(strategy.tabIndex, -1);
+
+  h.panel.setDisabled(false);
+
+  assert.equal(model.getAttribute("aria-disabled"), "false");
+  assert.equal(model.tabIndex, 0);
+  assert.equal(strategy.getAttribute("aria-disabled"), "false");
+  assert.equal(strategy.tabIndex, 0);
+});
+
 test("validation keeps the divisibility messages", () => {
   const h = loadPanel({});
   const hint = h.page.registry.get("validation-hint");
@@ -410,6 +431,42 @@ test("collapsed summary chips follow primary parameter values", () => {
   assert.equal(
     changed.querySelector(".run-settings-chip-value").textContent,
     "0.9"
+  );
+});
+
+test("conversation actions read current model and summary", () => {
+  const h = loadPanel({});
+  assert.deepEqual(
+    host(h.panel.conversationConfiguration()),
+    {
+      modelId: "test-model",
+      modelDisplay: "Test Model",
+      inputMode: "chat",
+      settingsSummary:
+        "Gen Length 4, Steps 8, Temperature 0.7",
+      parameters: {
+        gen_length: 4,
+        block_length: 4,
+        steps: 8,
+        temperature: 0.7,
+        thinking: false,
+        strategy: "low_confidence",
+      },
+      experimental: false,
+      valid: true,
+      validationMessage: "",
+    }
+  );
+  const frozen = h.panel.conversationConfiguration();
+  assert.equal(Object.isFrozen(frozen), true);
+  assert.equal(Object.isFrozen(frozen.parameters), true);
+
+  input(h, "temperature").value = "0.9";
+  input(h, "temperature").dispatch("input");
+
+  assert.match(
+    h.panel.conversationConfiguration().settingsSummary,
+    /Temperature 0.9/
   );
 });
 

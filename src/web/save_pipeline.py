@@ -35,6 +35,7 @@ from pydantic import (
     model_validator,
 )
 
+from src import conversation_identity
 from src.backends.context_pack import (
     IDENTIFIER_CHARS_MAX as CONTEXT_IDENTIFIER_CHARS_MAX,
 )
@@ -97,9 +98,16 @@ class SavePipelineContext:
 # added a signal to the client and forgot the server" into a run saved
 # without it and an HTTP 200 saying otherwise.
 STRICT = ConfigDict(extra="forbid")
-CONVERSATION_ID_PATTERN = r"^[0-9a-f]{32}$"
-ASSISTANT_TURN_ID_PATTERN = r"^[0-9]{8}$"
-CONVERSATION_TURN_INDEX_MAX = 1_000_000
+CONVERSATION_ID_PATTERN = (
+    conversation_identity.CONVERSATION_ID_PATTERN
+)
+BRANCH_ID_PATTERN = conversation_identity.BRANCH_ID_PATTERN
+ASSISTANT_TURN_ID_PATTERN = (
+    conversation_identity.TURN_ID_PATTERN
+)
+CONVERSATION_TURN_INDEX_MAX = (
+    conversation_identity.TURN_INDEX_MAX
+)
 
 
 class RemaskEdit(BaseModel):
@@ -349,12 +357,40 @@ class ContextConversationProvenance(BaseModel):
     model_config = STRICT
 
     conversation_id: str = Field(
-        max_length=CONTEXT_IDENTIFIER_CHARS_MAX
+        max_length=CONTEXT_IDENTIFIER_CHARS_MAX,
+        pattern=CONVERSATION_ID_PATTERN,
     )
-    conversation_revision: int = Field(ge=1)
+    branch_id: str = Field(
+        max_length=CONTEXT_IDENTIFIER_CHARS_MAX,
+        pattern=BRANCH_ID_PATTERN,
+    )
+    branch_revision: int = Field(ge=1, strict=True)
     assistant_turn_id: str = Field(
-        max_length=CONTEXT_IDENTIFIER_CHARS_MAX
+        max_length=CONTEXT_IDENTIFIER_CHARS_MAX,
+        pattern=ASSISTANT_TURN_ID_PATTERN,
     )
+    assistant_turn_index: int = Field(
+        ge=1,
+        le=CONVERSATION_TURN_INDEX_MAX,
+        strict=True,
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy(cls, value: object) -> object:
+        return _normalize_legacy_attestation(value)
+
+    @model_validator(mode="after")
+    def _valid_turn_identity(
+        self,
+    ) -> "ContextConversationProvenance":
+        conversation_identity.validate_assistant_turn_identity(
+            conversation_id=self.conversation_id,
+            branch_id=self.branch_id,
+            assistant_turn_id=self.assistant_turn_id,
+            assistant_turn_index=self.assistant_turn_index,
+        )
+        return self
 
 
 class ContextPackProvenance(BaseModel):
@@ -393,6 +429,18 @@ class ContextPackProvenance(BaseModel):
             raise ValueError(
                 "effective context budget exceeds the request"
             )
+        conversation = self.conversation
+        if conversation is not None:
+            expected_index = (
+                self.first_included_index
+                + len(self.included_turn_ids)
+                + 1
+            )
+            if conversation.assistant_turn_index != expected_index:
+                raise ValueError(
+                    "context pack does not end before its reserved"
+                    " assistant turn"
+                )
         return self
 
 
@@ -443,6 +491,10 @@ class SaveRunRequest(BaseModel):
         default=None,
         pattern=CONVERSATION_ID_PATTERN,
     )
+    branch_id: Optional[str] = Field(
+        default=None,
+        pattern=BRANCH_ID_PATTERN,
+    )
     assistant_turn_id: Optional[str] = Field(
         default=None,
         pattern=ASSISTANT_TURN_ID_PATTERN,
@@ -451,9 +503,22 @@ class SaveRunRequest(BaseModel):
         default=None,
         ge=1,
         le=CONVERSATION_TURN_INDEX_MAX,
+        strict=True,
+    )
+    assistant_turn_version: Optional[int] = Field(
+        default=None,
+        ge=1,
+        strict=True,
     )
     prompt_len: Optional[int] = Field(default=None, ge=0)
     partial: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_conversation(
+        cls, value: object
+    ) -> object:
+        return _normalize_legacy_save_body(value)
 
     @model_validator(mode="after")
     def _within_bounds(self) -> "SaveRunRequest":
@@ -490,40 +555,120 @@ class SaveRunRequest(BaseModel):
 CountedField = Tuple[str, Optional[Sized]]
 
 
+def _normalize_legacy_attestation(value: object) -> object:
+    """Upgrade the complete schema-v1 worker identity shape."""
+    if not isinstance(value, Mapping):
+        return value
+    legacy_keys = {
+        "conversation_id",
+        "conversation_revision",
+        "assistant_turn_id",
+    }
+    if set(value) != legacy_keys:
+        return value
+    conversation_id = value["conversation_id"]
+    assistant_turn_id = value["assistant_turn_id"]
+    branch_id = conversation_identity.legacy_branch_id(
+        conversation_id
+    )
+    assistant_index = conversation_identity.legacy_turn_index(
+        assistant_turn_id
+    )
+    return {
+        "conversation_id": conversation_id,
+        "branch_id": branch_id,
+        "branch_revision": value["conversation_revision"],
+        "assistant_turn_id": assistant_turn_id,
+        "assistant_turn_index": assistant_index,
+    }
+
+
+def _normalize_legacy_save_body(value: object) -> object:
+    """Upgrade only a complete numeric schema-v1 save identity."""
+    if not isinstance(value, Mapping):
+        return value
+    if "branch_id" in value:
+        return value
+    keys = (
+        "conversation_id",
+        "assistant_turn_id",
+        "turn_index",
+    )
+    if not all(key in value for key in keys):
+        return value
+    assistant_turn_id = value["assistant_turn_id"]
+    if not conversation_identity.is_legacy_turn_id(
+        assistant_turn_id
+    ):
+        return value
+    turn_index = conversation_identity.validate_turn_index(
+        value["turn_index"],
+        name="turn_index",
+    )
+    numeric_index = conversation_identity.legacy_turn_index(
+        assistant_turn_id
+    )
+    if numeric_index != turn_index:
+        raise ValueError(
+            "numeric assistant_turn_id must equal turn_index"
+        )
+    normalized = dict(value)
+    normalized["branch_id"] = (
+        conversation_identity.legacy_branch_id(
+            value["conversation_id"]
+        )
+    )
+    return normalized
+
+
 def _check_conversation_metadata(body: SaveRunRequest) -> None:
     """Require one coherent optional durable-turn location."""
     fields = (
         body.conversation_id,
+        body.branch_id,
         body.assistant_turn_id,
         body.turn_index,
+        body.assistant_turn_version,
     )
     present = tuple(value is not None for value in fields)
     if any(present) and not all(present):
         raise ValueError(
-            "conversation_id, assistant_turn_id and turn_index"
-            " must be supplied together"
+            "conversation_id, branch_id, assistant_turn_id and"
+            " turn_index and assistant_turn_version must be"
+            " supplied together"
         )
     if not all(present):
         return
+    assert body.conversation_id is not None
+    assert body.branch_id is not None
     assert body.assistant_turn_id is not None
     assert body.turn_index is not None
-    if int(body.assistant_turn_id) != body.turn_index:
-        raise ValueError(
-            "assistant_turn_id does not match turn_index"
-        )
+    assert body.assistant_turn_version is not None
+    conversation_identity.validate_assistant_turn_identity(
+        conversation_id=body.conversation_id,
+        branch_id=body.branch_id,
+        assistant_turn_id=body.assistant_turn_id,
+        assistant_turn_index=body.turn_index,
+    )
     _check_attested_conversation(body)
 
 
 def _check_attested_conversation(body: SaveRunRequest) -> None:
     provenance = body.provenance
     if provenance is None or provenance.context_pack is None:
-        return
+        raise ValueError(
+            "conversation metadata needs worker attestation"
+        )
     attested = provenance.context_pack.conversation
     if attested is None:
-        return
+        raise ValueError(
+            "conversation metadata needs worker attestation"
+        )
     if (
         attested.conversation_id != body.conversation_id
+        or attested.branch_id != body.branch_id
         or attested.assistant_turn_id != body.assistant_turn_id
+        or attested.assistant_turn_index != body.turn_index
     ):
         raise ValueError(
             "save conversation metadata differs from the worker"
@@ -931,12 +1076,16 @@ def _conversation_metadata(
     """The optional durable conversation location for one run."""
     if body.conversation_id is None:
         return {}
+    assert body.branch_id is not None
     assert body.assistant_turn_id is not None
     assert body.turn_index is not None
+    assert body.assistant_turn_version is not None
     return {
         "conversation_id": body.conversation_id,
+        "branch_id": body.branch_id,
         "assistant_turn_id": body.assistant_turn_id,
         "turn_index": body.turn_index,
+        "assistant_turn_version": body.assistant_turn_version,
     }
 
 

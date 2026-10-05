@@ -625,6 +625,7 @@ function generatorEditCreate(options) {
     scrubberSlider.disabled = false;
     scrubberSlider.min = "0";
     unlockNavigation();
+    primaryStateChanged();
   }
 
   function capturePreEditCheckpoint() {
@@ -730,6 +731,7 @@ function generatorEditCreate(options) {
     canvas.deactivate();
     navigate(run.frameCount() - 1);
     updateGuidedUi();
+    primaryStateChanged();
   }
 
   function substitute(intent) {
@@ -815,6 +817,7 @@ function generatorEditCreate(options) {
     canvas.deactivate();
     navigate(startFrame);
     updateGuidedUi();
+    primaryStateChanged();
   }
 
   function exit() {
@@ -1624,6 +1627,9 @@ function generatorEditCreate(options) {
     },
     editing: function () {
       return runPhasesEditing(runPhase);
+    },
+    confirming: function () {
+      return confirmPending;
     },
     keepsWork: function () {
       return runPhasesKeepsWork(runPhase);

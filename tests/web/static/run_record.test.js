@@ -214,6 +214,8 @@ test("a resumed edit keeps the run's parameters", async () => {
     .querySelector("#param-temperature")
     .value = "1.5";
 
+  await context.conversationCompletion;
+  await context.conversationClient.flush();
   context.handleDone({ type: "done", final_text: "Yeast eats." });
   await context.saveRun();
 

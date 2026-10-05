@@ -342,6 +342,11 @@ kept when these were written:
   cost, real-checkpoint sampling parity, views, What If evidence,
   durable key permissions, saved validation, pasted-text detection,
   conversation boundaries, evaluation controls and accessibility.
+- **438 to 448**: **not yet validated.** These cover the
+  chronology-first chat layout, accessible message actions, alternate
+  paths, all-model regeneration, path-local saved links, concurrency
+  and dropped replies, branch bounds and paging, transition guards,
+  restart and legacy behavior, and an optional real power-loss check.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -5194,3 +5199,150 @@ models and target devices before anyone raises or lowers them.
     repetition, chosen base probability and latency summaries. The
     output must contain no semantic-quality, factuality, AI/human or
     authorship verdict.
+
+## Branching chat polish
+
+438. **The thread keeps its rich second response and honest empty
+    layout.** Start a new conversation in both the browser and desktop
+    launchers. Before sending, the unused assistant workspace is absent,
+    the green Draft user card sits near the top, and there is no empty
+    canvas or scrubber gap. Complete a response, send a second message,
+    and watch that response stream. The first exchange must stay compact
+    above it, the second assistant must keep a useful rich canvas height
+    throughout generation and after completion, and the Draft must remain
+    chronologically below it. Resize through narrow and tall windows.
+    Appending follows the new tail once; ordinary frame updates must not
+    keep stealing scroll position.
+
+439. **Message icons, copy and pointer modes are accessible.** On complete
+    user and assistant cards, confirm user Copy / Edit / Delete and
+    assistant Copy / Retry appear on hover and `:focus-within`, carry
+    useful tooltips and accessible names, and remain visible under coarse
+    pointer emulation. Reach and activate every icon by keyboard, close
+    inline Edit with Escape, and check confirmation focus returns to the
+    invoking icon. Copy user and assistant text containing spaces and
+    newlines and compare the clipboard byte for byte. Repeat with modern
+    clipboard permission denied so the fallback runs, then with both
+    paths unavailable: success or failure must be announced, temporary
+    input must be removed, and focus must be restored.
+
+440. **Edit, Delete, Retry and Path arrows agree.** Build at least three
+    exchanges. Edit an earlier user message and use **Save and
+    regenerate**, Retry an earlier assistant, Retry the active tail, and
+    Delete a different user message after reading the dependency count.
+    Each confirmed mutation must create exactly one alternate, follow it,
+    and expose labelled previous / next arrows with the right
+    `Path current / total` value below the divergent card. Use mouse,
+    Enter and Space on the arrows, including both disabled ends, and
+    confirm focus lands on the equivalent pager or safe transcript
+    fallback after each selection. Cancelled edits and dialogs must create
+    nothing.
+
+441. **Deletion is path-local and the original is restorable.** Delete a
+    middle user message whose answer has later dependent exchanges. The
+    named user, its assistant and every later turn must leave the new
+    path, while the inherited prefix remains. A compact **Messages removed
+    from this path** marker, not an empty message card, must sit at the
+    fork point with Path arrows. Follow the arrow back and verify the
+    original path is byte-for-byte intact, including Partial, Saved and
+    model badges, then return to the deletion path. Repeat by deleting the
+    first user message to produce an empty path, and send there once; the
+    new exchange should occupy that slot and retire the deletion marker
+    for the selected path.
+
+442. **Regeneration uses the named current model and settings.** For
+    LLaDA, DiffusionGemma, SmolLM3 and Mamba-3, make the model resident,
+    choose distinctive valid Run settings, then Edit an existing user
+    message and Retry a completed assistant that was originally generated
+    with different settings. Before confirmation, the inline note or
+    dialog must name the current model, input mode and setting summary.
+    Controls and model switching must lock while that action is open.
+    The resulting run and saved metadata must use that frozen
+    configuration, not the source response's model or later control
+    changes. The three instruction models must receive chat messages;
+    Mamba-3 must receive raw chronological completion text.
+
+443. **Saved and Text only state belongs to each path.** Save the source
+    response, create a Retry path and leave its new response unsaved, then
+    create another alternate and save that one. Browse all paths. The
+    source and inherited prefix must keep their original **Saved** links,
+    the unsaved response must say **Text only** and offer no frames, and
+    each saved alternate must open its own exact Analytics row. Merely
+    browsing paths must not create, replace, relink or delete any
+    Analytics row. Switching away from a path with live XAI must clear the
+    rich workspace; switching back may show durable text and its link, but
+    must not invent unsaved frames.
+
+444. **Stale windows conflict once and dropped replies do not duplicate.**
+    Open two browser windows on the same conversation and selected path.
+    Start competing appends or forks from the same revisions. Exactly one
+    shared write must win; the stale window must reload current state with
+    no duplicate user text or path. An explicit branch, catalog or state
+    conflict must close the stale Edit, Delete or Retry action after
+    reporting it; reopening must show the refreshed text and Delete count
+    and use a new operation id. Then put the windows on different
+    alternates and advance both from their own revisions; both should
+    commit. For Edit, Delete and Retry in turn, use a proxy or DevTools
+    setup that lets the POST reach the server but drops its response.
+    Restore transport and let the client replay once. The frozen operation
+    id must return the first result despite stale CAS coordinates, leaving
+    one receipt and one new path. Reusing that id with changed text or
+    semantics must be refused.
+
+445. **Branch bounds and paging fail closed.** Against a disposable data
+    root, prepare more than 50 turns and fork on each side of a page
+    boundary. The newest branch page must compose inherited and local
+    turns in chronological order; **Load older messages** must retain the
+    visual anchor and stop after four pages or 200 cached turns. Branch
+    pagers must appear only for fork points in the loaded range. Using the
+    API or a fixture builder, create 16 child paths at one fork point and
+    confirm a seventeenth child is refused, nest to depth 32 and confirm
+    another level is refused, then distribute forks until the catalog has
+    256 paths and confirm the next is refused. Every existing path must
+    remain readable and pageable after each clear limit error.
+
+446. **Path, save and edit guards preserve one owner.** While each of the
+    following is active, try the relevant Path arrow, Edit, Delete, Retry,
+    Send, New Conversation, model switch, Save Run, Edit Frames and What
+    If actions: generation, a run save, a pending disconnected response,
+    an inline message edit, a Delete or Retry confirmation, an Edit Frames
+    selection and an Edit Frames confirmation. Unsafe controls must be
+    disabled or report the specific wait/cancel reason, while Copy remains
+    local. No blocked action may clear the canvas or create a path. In a
+    second window, revise the selected tail before the first links a save;
+    the saved artifact may remain in Analytics, but it must not attach to
+    the wrong assistant. A stable pending response is the one exception:
+    its path actions stay locked, but **New Conversation** remains an
+    explicit escape and must create the new conversation before clearing
+    the pending one from view. Only the exact selected branch tail may
+    send probe, rewind, resume or substitution requests.
+
+447. **Restart, snapshots and schema v1 stay compatible.** Create nested
+    alternates, browse to a non-default path without mutating the
+    conversation catalog, and restart the supervisor and each launcher.
+    The active conversation, locally selected path and newest page must
+    restore. A session snapshot may restore the rich workspace only when
+    branch id and revision plus assistant id, index, version and text all
+    match; selecting another path or changing any coordinate must leave
+    compact durable text instead. Confirm a pre-conversation snapshot
+    remains on its legacy single-prompt path. Finally copy in a schema-v1
+    conversation, hash its turn files, read and append it without eager
+    conversion, then perform its first valid Edit or Retry. The old
+    numeric ids and file bytes must remain unchanged, the root must become
+    a v2 branch lazily, and subsequent new messages must receive opaque
+    ids. An invalid first fork must leave the fixture at v1.
+
+448. **A real power loss respects the catalog-last receipt boundary.**
+    This is optional and practical only with a disposable copied data root
+    inside a VM or test machine whose storage can be hard-cut safely. A
+    process kill is not equivalent because the kernel may still flush its
+    page cache. Repeatedly submit one fixed Edit, Delete or Retry operation
+    while cutting power at different publication moments, then restart and
+    inspect through the API rather than repairing files by hand. Before
+    the catalog commit, no child may be visible and bounded recovery may
+    remove unpublished branch or receipt artifacts. After the catalog
+    commit, exactly one complete child and matching receipt must be
+    visible, and replaying the same operation id must return that child.
+    No outcome may expose a half-written path, duplicate a branch, lose
+    the original path or make the conversation unreadable. Record the
+    filesystem and mount options with the result.

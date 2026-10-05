@@ -133,13 +133,18 @@ test("conversation location reaches the detail metadata", () => {
     run_id: "r1",
     backend: "smollm3",
     conversation_id: "a".repeat(32),
+    branch_id: "b_" + "b".repeat(32),
     assistant_turn_id: "00000004",
     turn_index: 4,
   });
 
   assert.ok(html.indexOf("Conversation") >= 0);
   assert.ok(html.indexOf("a".repeat(32)) >= 0);
-  assert.ok(html.indexOf("Assistant turn") >= 0);
+  assert.ok(html.indexOf("Branch") >= 0);
+  assert.ok(html.indexOf("b_" + "b".repeat(32)) >= 0);
+  assert.ok(html.indexOf("Assistant turn ID") >= 0);
+  assert.ok(html.indexOf("00000004") >= 0);
+  assert.ok(html.indexOf("Turn index") >= 0);
   assert.ok(html.indexOf(">4<") >= 0);
 });
 

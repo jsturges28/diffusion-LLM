@@ -156,8 +156,10 @@ def _finish_conversation_run(backend: _Backend) -> str:
         context_pack={
             "conversation": {
                 "conversation_id": "a" * 32,
-                "conversation_revision": 2,
+                "branch_id": "b_" + "b" * 32,
+                "branch_revision": 2,
                 "assistant_turn_id": "00000002",
+                "assistant_turn_index": 2,
             }
         }
     )
@@ -173,8 +175,10 @@ def test_conversation_run_requires_its_retained_turn_owner() -> None:
         {
             "run_token": token,
             "conversation_id": "a" * 32,
-            "conversation_revision": 9,
+            "branch_id": "b_" + "b" * 32,
+            "branch_revision": 9,
             "assistant_turn_id": "00000002",
+            "assistant_turn_index": 2,
         }
     )
 
@@ -187,16 +191,40 @@ def test_conversation_run_refuses_missing_turn_owner() -> None:
         backend.check_run_token({"run_token": token})
 
 
+def test_conversation_run_requires_assistant_turn_index() -> None:
+    backend = _Backend()
+    token = _finish_conversation_run(backend)
+
+    with pytest.raises(StaleRunError, match="identify"):
+        backend.check_run_token(
+            {
+                "run_token": token,
+                "conversation_id": "a" * 32,
+                "branch_id": "b_" + "b" * 32,
+                "assistant_turn_id": "00000002",
+            }
+        )
+
+
 @pytest.mark.parametrize(
-    ("conversation_id", "assistant_turn_id"),
+    (
+        "conversation_id",
+        "branch_id",
+        "assistant_turn_id",
+        "assistant_turn_index",
+    ),
     [
-        ("b" * 32, "00000002"),
-        ("a" * 32, "00000004"),
+        ("c" * 32, "b_" + "b" * 32, "00000002", 2),
+        ("a" * 32, "b_" + "c" * 32, "00000002", 2),
+        ("a" * 32, "b_" + "b" * 32, "00000004", 2),
+        ("a" * 32, "b_" + "b" * 32, "00000002", 4),
     ],
 )
 def test_conversation_run_refuses_another_turn(
     conversation_id: str,
+    branch_id: str,
     assistant_turn_id: str,
+    assistant_turn_index: int,
 ) -> None:
     backend = _Backend()
     token = _finish_conversation_run(backend)
@@ -206,7 +234,9 @@ def test_conversation_run_refuses_another_turn(
             {
                 "run_token": token,
                 "conversation_id": conversation_id,
+                "branch_id": branch_id,
                 "assistant_turn_id": assistant_turn_id,
+                "assistant_turn_index": assistant_turn_index,
             }
         )
 

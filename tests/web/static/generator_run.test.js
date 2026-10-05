@@ -46,6 +46,16 @@ function memoryStorage() {
   };
 }
 
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((accept, refuse) => {
+    resolve = accept;
+    reject = refuse;
+  });
+  return { promise, resolve, reject };
+}
+
 function harness(results) {
   const context = load();
   const storage = memoryStorage();
@@ -161,12 +171,30 @@ function snapshotFrame(index, text) {
 function conversationIdentity(overrides) {
   return Object.assign({
     conversation_id: "a".repeat(32),
-    conversation_revision: 2,
-    assistant_turn_id: "00000002",
-    turn_index: 2,
+    branch_id: "b_" + "b".repeat(32),
+    branch_revision: 2,
+    assistant_turn_id:
+      "t_" + "b".repeat(32) + "_00000002_0000000000000002",
+    assistant_turn_index: 2,
     assistant_turn_version: 1,
     assistant_text: "",
   }, overrides || {});
+}
+
+function assistantAction(text, version, partial) {
+  return {
+    type: "assistant_updated",
+    turn: {
+      turn_id:
+        "t_" + "b".repeat(32)
+        + "_00000002_0000000000000002",
+      index: 2,
+      version: version,
+      text: text,
+      partial: partial === true,
+      run_link: null,
+    },
+  };
 }
 
 function appendFrame(index, text) {
@@ -386,8 +414,13 @@ test("a conversation-bound run saves its durable turn location", () => {
   const payload = run.buildSavePayload();
 
   assert.equal(payload.conversation_id, "a".repeat(32));
-  assert.equal(payload.assistant_turn_id, "00000002");
+  assert.equal(payload.branch_id, "b_" + "b".repeat(32));
+  assert.equal(
+    payload.assistant_turn_id,
+    "t_" + "b".repeat(32) + "_00000002_0000000000000002"
+  );
   assert.equal(payload.turn_index, 2);
+  assert.equal(payload.assistant_turn_version, 1);
 });
 
 test("a session snapshot round trips through private state", () => {
@@ -423,19 +456,108 @@ test("session snapshots bind the active run to its conversation", () => {
   run.appendFrame(snapshotFrame(0, "a"));
   run.appendFrame(snapshotFrame(1, "b"));
   finish(run, "finished");
-  external.conversation.conversation_revision = 3;
+  external.conversation.branch_revision = 3;
   external.conversation.assistant_turn_version = 2;
   external.conversation.assistant_text = "finished";
-  assert.equal(run.refreshConversation(), true);
+  assert.equal(
+    run.refreshConversation(
+      assistantAction("finished", 2, false)
+    ),
+    true
+  );
 
   assert.equal(run.saveSession(), true);
   const stored = JSON.parse(storage.getItem("last-run"));
   assert.equal(stored.conversationId, "a".repeat(32));
-  assert.equal(stored.conversationRevision, 3);
-  assert.equal(stored.assistantTurnId, "00000002");
+  assert.equal(stored.branchId, "b_" + "b".repeat(32));
+  assert.equal(stored.branchRevision, 3);
+  assert.equal(stored.assistantTurnIndex, 2);
 
   run.reset();
   assert.equal(run.restoreSession(), true);
+  assert.equal(
+    run.conversationIdentity().assistant_turn_id,
+    "t_" + "b".repeat(32) + "_00000002_0000000000000002"
+  );
+});
+
+test("a reload cannot relabel frames to a newer same-text turn", () => {
+  const { run, external } = harness();
+  external.conversation = conversationIdentity();
+  run.begin("what ran", { steps: 2 });
+  run.appendFrame(snapshotFrame(0, "a"));
+  run.appendFrame(snapshotFrame(1, "finished"));
+  finish(run, "finished");
+  external.conversation = conversationIdentity({
+    branch_revision: 3,
+    assistant_turn_version: 2,
+    assistant_text: "finished",
+  });
+
+  assert.equal(
+    run.refreshConversation({ type: "loaded" }),
+    false
+  );
+  assert.equal(
+    run.conversationIdentity().assistant_turn_version,
+    1
+  );
+});
+
+test("a lost completion reload may adopt its exact terminal turn",
+  () => {
+  const { run, external } = harness();
+  external.conversation = conversationIdentity();
+  run.begin("what ran", { steps: 2 });
+  run.appendFrame(snapshotFrame(0, "a"));
+  run.appendFrame(snapshotFrame(1, "finished"));
+  finish(run, "finished");
+  external.conversation = conversationIdentity({
+    branch_revision: 3,
+    assistant_turn_version: 2,
+    assistant_text: "finished",
+  });
+  const terminal = assistantAction("finished", 2, false).turn;
+
+  assert.equal(
+    run.refreshConversation({
+      type: "loaded",
+      page: { turns: [terminal] },
+    }),
+    true
+  );
+  assert.equal(
+    run.conversationIdentity().assistant_turn_version,
+    2
+  );
+});
+
+test("numeric conversation snapshots still restore", () => {
+  const { run, external, storage } = harness();
+  external.conversation = conversationIdentity({
+    branch_id: "b_" + "a".repeat(32),
+    assistant_turn_id: "00000002",
+  });
+  run.begin("what ran", { steps: 2 });
+  run.appendFrame(snapshotFrame(0, "a"));
+  run.appendFrame(snapshotFrame(1, "b"));
+  finish(run, "finished");
+  assert.equal(run.saveSession(), true);
+  const stored = JSON.parse(storage.getItem("last-run"));
+  stored.conversationRevision = stored.branchRevision;
+  stored.conversationTurnIndex = stored.assistantTurnIndex;
+  delete stored.branchId;
+  delete stored.branchRevision;
+  delete stored.assistantTurnIndex;
+  storage.setItem("last-run", JSON.stringify(stored));
+
+  run.reset();
+
+  assert.equal(run.restoreSession(), true);
+  assert.equal(
+    run.conversationIdentity().branch_id,
+    "b_" + "a".repeat(32)
+  );
   assert.equal(
     run.conversationIdentity().assistant_turn_id,
     "00000002"
@@ -453,7 +575,8 @@ test("a snapshot from another conversation is retired", () => {
   run.reset();
   external.conversation = conversationIdentity({
     conversation_id: "b".repeat(32),
-    conversation_revision: 1,
+    branch_id: "b_" + "c".repeat(32),
+    branch_revision: 1,
   });
 
   assert.equal(run.restoreSession(), false);
@@ -468,15 +591,20 @@ test("a stale same-tail snapshot is retired", () => {
   run.appendFrame(snapshotFrame(1, "old answer"));
   finish(run, "old answer");
   external.conversation = conversationIdentity({
-    conversation_revision: 3,
+    branch_revision: 3,
     assistant_turn_version: 2,
     assistant_text: "old answer",
   });
-  assert.equal(run.refreshConversation(), true);
+  assert.equal(
+    run.refreshConversation(
+      assistantAction("old answer", 2, false)
+    ),
+    true
+  );
   assert.equal(run.saveSession(), true);
   run.reset();
   external.conversation = conversationIdentity({
-    conversation_revision: 4,
+    branch_revision: 4,
     assistant_turn_version: 3,
     assistant_text: "new answer",
   });
@@ -532,3 +660,52 @@ test(
     ]);
   }
 );
+
+test("a late old-run save cannot adopt into a reset run",
+  async () => {
+  const oldReply = deferred();
+  const newReply = deferred();
+  const { run, external } = harness([
+    oldReply.promise,
+    newReply.promise,
+  ]);
+  run.begin("old run", { steps: 2 });
+  run.appendFrame(snapshotFrame(0, "old"));
+  finish(run, "old result");
+  const oldSaving = run.save();
+  await Promise.resolve();
+
+  run.reset();
+  run.begin("new run", { steps: 4 });
+  run.appendFrame(snapshotFrame(0, "new"));
+  finish(run, "new result");
+  const newSaving = run.save();
+  await Promise.resolve();
+  oldReply.resolve({
+    success: true,
+    path: "runs/old-run",
+    run_id: "old-run",
+    revision: 1,
+  });
+
+  assert.equal(await oldSaving, false);
+  assert.equal(run.saving(), true);
+  newReply.resolve({
+    success: true,
+    path: "runs/new-run",
+    run_id: "new-run",
+    revision: 1,
+  });
+
+  assert.equal(await newSaving, true);
+  assert.equal(run.saved(), true);
+  assert.equal(run.savedRunId(), "new-run");
+  assert.equal(run.savedRevision(), 1);
+  assert.equal(run.finalText(), "new result");
+  assert.deepEqual(external.lifecycle, [
+    "start:original",
+    "start:original",
+    "success:new-run",
+    "settled",
+  ]);
+});

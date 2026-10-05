@@ -12,6 +12,15 @@ function conversationViewCreate(options) {
   var onLoadOlder = conversationViewCallback(
     options, "onLoadOlder"
   );
+  var decorateTurn = conversationViewCallback(
+    options, "decorateTurn"
+  );
+  var decorateActive = conversationViewCallback(
+    options, "decorateActive"
+  );
+  var deletionMarker = conversationViewCallback(
+    options, "deletionMarker"
+  );
   var root = conversationViewElement("conversation-transcript");
   var empty = conversationViewElement("conversation-empty");
   var status = conversationViewElement("conversation-status");
@@ -44,13 +53,25 @@ function conversationViewCreate(options) {
     var visible = conversationViewTurns(
       state, workspaceAssistantTurnId
     );
-    var nodes = [];
-    for (var index = 0; index < visible.length; index++) {
-      nodes.push(
-        conversationViewTurn(visible[index], state)
-      );
-    }
+    var nodes = conversationViewNodes({
+      visible: visible,
+      state: state,
+      decorateTurn: decorateTurn,
+      deletionMarker: deletionMarker,
+    });
     turnsRoot.replaceChildren.apply(turnsRoot, nodes);
+    var activeTurn = conversationViewTurnById(
+      state.turns, workspaceAssistantTurnId
+    );
+    decorateActive(
+      activeTurn,
+      activeTurn === null
+        ? []
+        : conversationViewPointsAt(
+          state.branchPoints, activeTurn.index
+        ),
+      workspaceVisible
+    );
     conversationViewEmpty(
       empty, state, visible.length, workspaceVisible
     );
@@ -60,7 +81,10 @@ function conversationViewCreate(options) {
     root.classList.toggle(
       "has-turns", visible.length > 0 || workspaceVisible
     );
-    if (visible.length > CONVERSATION_TURNS_MAX) {
+    if (
+      nodes.length
+      > CONVERSATION_TURNS_MAX + CONVERSATION_BRANCH_POINTS_MAX
+    ) {
       throw new Error("Transcript DOM exceeded its turn bound");
     }
   }
@@ -69,6 +93,82 @@ function conversationViewCreate(options) {
     wire: wire,
     render: render,
   });
+}
+
+function conversationViewNodes(options) {
+  var entries = [];
+  var turnIndexes = {};
+  for (var index = 0; index < options.visible.length; index++) {
+    var turn = options.visible[index];
+    turnIndexes[turn.index] = true;
+    entries.push({
+      index: turn.index,
+      order: index,
+      node: conversationViewTurn(
+        turn,
+        options.state,
+        options.decorateTurn,
+        conversationViewPointsAt(
+          options.state.branchPoints, turn.index
+        )
+      ),
+    });
+  }
+  conversationViewDeletionEntries(
+    entries,
+    turnIndexes,
+    options.state.branchPoints,
+    options.deletionMarker
+  );
+  entries.sort(conversationViewEntryOrder);
+  return entries.map(function (entry) {
+    return entry.node;
+  });
+}
+
+function conversationViewDeletionEntries(
+  entries, turnIndexes, points, deletionMarker
+) {
+  for (var index = 0; index < points.length; index++) {
+    var point = points[index];
+    var selectedIsDeleted =
+      point.deleted_branch_ids.indexOf(
+        point.selected_branch_id
+      ) !== -1;
+    if (!selectedIsDeleted || turnIndexes[point.turn_index]) {
+      continue;
+    }
+    entries.push({
+      index: point.turn_index,
+      order: CONVERSATION_TURNS_MAX + index,
+      node: deletionMarker(point),
+    });
+  }
+}
+
+function conversationViewEntryOrder(left, right) {
+  if (left.index !== right.index) {
+    return left.index - right.index;
+  }
+  return left.order - right.order;
+}
+
+function conversationViewPointsAt(points, turnIndex) {
+  return points.filter(function (point) {
+    return point.turn_index === turnIndex;
+  });
+}
+
+function conversationViewTurnById(turns, turnId) {
+  if (typeof turnId !== "string" || turnId === "") {
+    return null;
+  }
+  for (var index = turns.length - 1; index >= 0; index--) {
+    if (turns[index].turn_id === turnId) {
+      return turns[index];
+    }
+  }
+  return null;
 }
 
 function conversationViewTurns(state, workspaceAssistantTurnId) {
@@ -90,7 +190,9 @@ function conversationViewTurns(state, workspaceAssistantTurnId) {
   });
 }
 
-function conversationViewTurn(turn, state) {
+function conversationViewTurn(
+  turn, state, decorateTurn, branchPoints
+) {
   var article = document.createElement("article");
   article.className =
     "conversation-turn conversation-turn-" + turn.role;
@@ -121,6 +223,7 @@ function conversationViewTurn(turn, state) {
   text.textContent = turn.text;
   article.appendChild(header);
   article.appendChild(text);
+  decorateTurn(article, turn, branchPoints);
   return article;
 }
 

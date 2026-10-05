@@ -34,6 +34,7 @@
         <span class="model-select-label">Model</span>
         <div id="model-select" class="model-select" tabindex="0"
           role="combobox" aria-expanded="false"
+          aria-disabled="false"
           aria-controls="model-select-list" aria-haspopup="listbox">
           <span id="model-select-value" class="model-select-value"></span>
           <span class="model-select-caret" aria-hidden="true">&#9662;</span>
@@ -84,6 +85,9 @@
         </p>
         <p id="conversation-status" role="status"
           aria-live="polite" hidden></p>
+        <p id="conversation-action-status"
+          class="conversation-action-status" role="status"
+          aria-live="polite" aria-atomic="true" hidden></p>
         <div id="conversation-turns" role="log"
           aria-live="polite" aria-relevant="additions text"></div>
 
@@ -312,6 +316,9 @@
       </div>
     </footer>
         </section>
+        <div id="active-assistant-actions"
+          class="conversation-active-actions"
+          hidden></div>
         </article>
 
       <section id="controls" class="conversation-composer"
@@ -476,6 +483,64 @@
        never clipped by the output area's scroll box. -->
   <div id="token-alts-popover" hidden></div>
 
+  <!-- Durable message confirmations. Native dialogs keep the page
+       inert, answer Escape, and return focus through their controller. -->
+  <dialog id="conversation-delete-dialog"
+    class="modal-overlay conversation-confirmation-dialog"
+    aria-labelledby="conversation-delete-title"
+    aria-describedby="conversation-delete-message
+      conversation-delete-status">
+    <div class="modal-box modal-box-confirm">
+      <h2 id="conversation-delete-title">Delete from this path?</h2>
+      <div class="modal-body">
+        <p id="conversation-delete-message"></p>
+        <p id="conversation-delete-status"
+          class="conversation-dialog-status" role="alert"
+          aria-live="assertive" aria-atomic="true"
+          tabindex="-1" hidden></p>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-conversation-delete-cancel" type="button"
+          class="btn-secondary"
+          data-conversation-confirmation="cancel"
+          autofocus>Cancel</button>
+        <button id="btn-conversation-delete-confirm" type="button"
+          class="conversation-action-danger"
+          data-conversation-confirmation="confirm-delete">
+          Delete from path
+        </button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="conversation-retry-dialog"
+    class="modal-overlay conversation-confirmation-dialog"
+    aria-labelledby="conversation-retry-title"
+    aria-describedby="conversation-retry-message
+      conversation-retry-status">
+    <div class="modal-box modal-box-confirm">
+      <h2 id="conversation-retry-title">Retry this response?</h2>
+      <div class="modal-body">
+        <p id="conversation-retry-message"></p>
+        <p id="conversation-retry-status"
+          class="conversation-dialog-status" role="alert"
+          aria-live="assertive" aria-atomic="true"
+          tabindex="-1" hidden></p>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-conversation-retry-cancel" type="button"
+          class="btn-secondary"
+          data-conversation-confirmation="cancel"
+          autofocus>Cancel</button>
+        <button id="btn-conversation-retry-confirm" type="button"
+          class="btn-accent"
+          data-conversation-confirmation="confirm-retry">
+          Retry on a new path
+        </button>
+      </div>
+    </div>
+  </dialog>
+
   <!-- Import-replaces-prompt confirmation modal -->
   <dialog id="modal-import" class="modal-overlay">
     <div class="modal-box modal-box-confirm" tabindex="-1" autofocus>
@@ -546,7 +611,7 @@
       <h2><span class="title-accent">LLM</span> Visualizer</h2>
       <div class="modal-body">
         <p>This tool visualizes how language models actually produce text, in real time. Its depth is in <strong>discrete diffusion</strong>: instead of generating one token at a time (left to right), a diffusion LLM starts from noise or masked tokens and iteratively refines an entire block over many denoising steps. A compact <strong>autoregressive</strong> (left-to-right) model runs alongside them as a baseline for contrast, and a <strong>state-space</strong> model shows what a fixed-size memory keeps and forgets. Use the <strong>Model</strong> selector in the header to switch between the available models (only one is resident in GPU memory at a time).</p>
-        <p>Generation is organized as a durable conversation. Earlier exchanges remain as compact text while the newest assistant response owns the live explainability workspace. Context is packed from a bounded recent suffix without summaries or partial exchanges, and explicitly saved XAI runs link back to the response that produced them.</p>
+        <p>Generation is organized as a durable, branching conversation: compact cards stay in chronological order, the newest selected assistant owns the live explainability workspace, and a <strong>Draft</strong> user card follows the thread. User messages offer Copy, Edit and Delete from this path; assistant messages offer Copy and Retry, with visible Path arrows preserving every alternate. These conversation paths change which messages led to a response, while <strong>Edit Frames</strong> and <strong>What If?</strong> intervene only inside the exact active tail run. Context is packed from a bounded recent suffix without summaries or partial exchanges, and explicitly saved XAI runs link back to the response that produced them.</p>
         <h3>How diffusion LLMs work</h3>
         <p>The <strong>forward process</strong> corrupts text by independently replacing each token with a placeholder at a rate controlled by a noise schedule. The <strong>reverse process</strong> starts from a corrupted canvas and uses a Transformer with bidirectional attention to predict all positions simultaneously, then re-noises (re-masks) the least confident predictions. This repeats for <em>N</em> steps until the sequence converges. Unresolved positions are shown as <code>░</code> until they stabilize, and a Settings toggle can draw the prediction behind each one instead.</p>
         <h3>Models</h3>
@@ -627,10 +692,11 @@
         <ol>
           <li>On the <strong>Main Menu</strong>, pick a model. Rows that will not fit in the available GPU memory are greyed out. Selecting one loads it and opens this generator (the generator is reachable only after a model is chosen).</li>
           <li>Wait for the model to load (the overlay dismisses automatically). To switch models later, use the <strong>Model</strong> selector in the header; it unloads the current model and loads the other, since only one fits in GPU memory at a time.</li>
-          <li>Type a prompt in the text area.</li>
+          <li>Type a message in the green <strong>Draft</strong> user card.</li>
           <li>Open <strong>Run settings</strong> to adjust hyperparameters if desired, then click <strong>Send</strong>.</li>
           <li>Watch the canvas resolve into text in real time; unresolved positions appear as <code>░</code>, or, by <strong>Unsettled positions show</strong> in Settings, as the model's current guess at them, or as the candidates it was weighing, cycling once the run has finished.</li>
           <li>While the model runs, <strong>Send</strong> becomes <strong>Stop</strong> and the status bar shows an animated <em>Running&hellip;</em> until the run completes.</li>
+          <li>Use the icons below a user message to Copy, Edit or Delete from this path, and those below an assistant response to Copy or Retry. Edit and Retry show and freeze the current model and Run settings; visible Path arrows browse the preserved alternatives.</li>
         </ol>
         <h4>The prompt box</h4>
         <p>Below the text area, a readout says what your prompt costs against the model's <strong>context window</strong>, as in <code>1,240 / 65,536</code>. The figure on the left is not a character count: it is the number of tokens the model will actually receive, which includes the chat template's role markers and changes when <strong>Thinking</strong> is switched on, so it is counted by the same code that builds the real input rather than estimated here. The figure on the right is read from the checkpoint that is loaded, not from a table of model names, so it is right even for a checkpoint that has since changed. It appears once a model is resident and updates as you type, a moment behind your keystrokes.</p>
@@ -641,7 +707,7 @@
         <p>The <strong>import</strong> button, at the top right of the prompt box, loads a <code>.txt</code> or <code>.md</code> file into it. You can also drag a file onto the text area. The file is read in your browser and never uploaded anywhere. Markdown goes in as written, since the model reads it perfectly well and stripping it would misrepresent the file. If the prompt box is not empty, you are asked before it is replaced. Very large files are refused rather than truncated silently, and an import that lands tells you how many characters arrived; the readout above then says immediately what fraction of the window the file has taken, which is usually the thing you wanted to know.</p>
         <p>The <strong>history</strong> button beside it brings back prompts you have run. <strong>&lsaquo;</strong> and <strong>&rsaquo;</strong> step through them, the check keeps the one shown, and the cross puts back what you had typed. The <strong>trash</strong> deletes the prompt shown, on a second press: the first turns it red, and moving away takes that back. Browsing after a run is safe, because a save records the prompt the run was generated from, not what the box shows by then.</p>
         <h4>The active turn</h4>
-        <p><strong>Run settings</strong> is the disclosure above the composer. Its collapsed chips show the main output and sampling values; open it for grouped controls, Experimental, and Reset. <strong>Save Run</strong> explicitly preserves the active response's frames and signals. A saved frozen response links to Analytics; an unsaved one remains as honest <strong>Text only</strong>. <strong>Load older messages</strong> pages backward within the 200-turn browser cache. <strong>New Conversation</strong> creates durable state first and clears the workspace only after that succeeds.</p>
+        <p>The selected path reads top to bottom: compact earlier cards, one rich active assistant card, then the next <strong>Draft</strong>. <strong>Run settings</strong> is the disclosure in that Draft; its collapsed chips show the main output and sampling values, and opening it reveals grouped controls, Experimental and Reset. Message Edit, Delete and Retry create alternate conversation paths, and Delete removes the selected user message plus later dependent turns only from its new path. Arrow browsing is read-only and restores the original path without borrowing its live frames. <strong>Edit Frames</strong> and <strong>What If?</strong> are separate run interventions and stay limited to the exact selected active tail. <strong>Save Run</strong> explicitly preserves that response's frames and signals; a saved frozen response links to its exact Analytics run, while an unsaved one remains honest <strong>Text only</strong>. Path changes wait for a generation, save, pending response or open run edit to settle; an open message action also blocks Send, Save, New Conversation and model changes until it closes. An explicit path conflict closes the stale action so you can reopen it against refreshed history; only a lost response after a successful reload replays the same operation automatically. <strong>Load older messages</strong> pages backward within the 200-turn browser cache. <strong>New Conversation</strong> creates durable state first and clears the workspace only after that succeeds.</p>
         <h4>Moving between pages</h4>
         <p>Header links move between pages: <strong>Menu</strong> returns to model selection, <strong>Analytics</strong> opens the analytics suite, and <strong>Vision</strong> opens the image tokeniser, which inspects a model without loading it. From Analytics, Vision and Settings, a <strong>Generation</strong> link appears whenever a model is loaded. A <strong>gear icon</strong> in the header opens the shared <strong>Settings</strong> page.</p>
         <h4>Experimental mode</h4>
@@ -996,6 +1062,8 @@
   <script src="/conversation_state.js"></script>
   <script src="/conversation_client.js"></script>
   <script src="/conversation_view.js"></script>
+  <script src="/conversation_action_view.js"></script>
+  <script src="/conversation_actions.js"></script>
   <script src="/conversation_shell.js"></script>
   <script src="/generator_run.js"></script>
   <script src="/generator_socket.js"></script>

@@ -67,9 +67,11 @@ function conversationShellIdentityMatches(run, conversation) {
   }
   return (
     run.conversation_id === conversation.conversation_id
-    && run.conversation_revision
-      === conversation.conversation_revision
+    && run.branch_id === conversation.branch_id
+    && run.branch_revision === conversation.branch_revision
     && run.assistant_turn_id === conversation.assistant_turn_id
+    && run.assistant_turn_index
+      === conversation.assistant_turn_index
     && run.assistant_turn_version
       === conversation.assistant_turn_version
     && run.assistant_text === conversation.assistant_text

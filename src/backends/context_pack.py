@@ -26,6 +26,7 @@ from typing import (
     Union,
 )
 
+from src import conversation_identity
 from src.backends.protocol import (
     ERROR_CONTEXT_BOUNDS,
     ERROR_INVALID_MESSAGE_ORDER,
@@ -37,6 +38,19 @@ from src.backends.protocol import (
 MESSAGE_CANDIDATES_MAX = 257
 MESSAGE_CHARS_MAX = PROMPT_CHARS_MAX
 IDENTIFIER_CHARS_MAX = 128
+
+CONVERSATION_KEYS = (
+    "conversation_id",
+    "branch_id",
+    "branch_revision",
+    "assistant_turn_id",
+    "assistant_turn_index",
+)
+LEGACY_CONVERSATION_KEYS = (
+    "conversation_id",
+    "conversation_revision",
+    "assistant_turn_id",
+)
 
 assert MESSAGE_CANDIDATES_MAX % 2 == 1
 assert MESSAGE_CANDIDATES_MAX > 1
@@ -93,21 +107,35 @@ class ConversationMetadata:
     """The durable conversation location this request belongs to."""
 
     conversation_id: str
-    conversation_revision: int
+    branch_id: str
+    branch_revision: int
     assistant_turn_id: str
+    assistant_turn_index: int
 
     def __post_init__(self) -> None:
-        _identifier(self.conversation_id, "conversation_id")
-        _identifier(self.assistant_turn_id, "assistant_turn_id")
-        _positive_int(
-            self.conversation_revision, "conversation_revision"
+        _identity_positive_int(
+            self.branch_revision, "branch_revision"
         )
+        try:
+            conversation_identity.validate_assistant_turn_identity(
+                conversation_id=self.conversation_id,
+                branch_id=self.branch_id,
+                assistant_turn_id=self.assistant_turn_id,
+                assistant_turn_index=self.assistant_turn_index,
+            )
+        except ValueError as exc:
+            raise ContextRequestError(
+                str(exc),
+                code=ERROR_MALFORMED_MESSAGES,
+            ) from exc
 
     def to_payload(self) -> Dict[str, object]:
         return {
             "conversation_id": self.conversation_id,
-            "conversation_revision": self.conversation_revision,
+            "branch_id": self.branch_id,
+            "branch_revision": self.branch_revision,
             "assistant_turn_id": self.assistant_turn_id,
+            "assistant_turn_index": self.assistant_turn_index,
         }
 
 
@@ -462,47 +490,93 @@ def _parse_conversation(
     data: Mapping[str, object],
     messages: Tuple[MessageRecord, ...],
 ) -> Optional[ConversationMetadata]:
-    keys = (
-        "conversation_id",
-        "conversation_revision",
-        "assistant_turn_id",
-    )
-    present = tuple(key in data for key in keys)
+    all_keys = (*CONVERSATION_KEYS, "conversation_revision")
+    present = tuple(key in data for key in all_keys)
     if not any(present):
         return None
-    if not all(present):
-        raise ContextRequestError(
-            "conversation metadata requires conversation_id,"
-            " conversation_revision and assistant_turn_id",
-            code=ERROR_MALFORMED_MESSAGES,
-        )
-    conversation_id = _identifier(
-        data["conversation_id"], "conversation_id"
-    )
-    assistant_turn_id = _identifier(
-        data["assistant_turn_id"], "assistant_turn_id"
-    )
-    revision = data["conversation_revision"]
-    if (
-        isinstance(revision, bool)
-        or not isinstance(revision, int)
-        or revision < 1
-    ):
-        raise ContextRequestError(
-            "conversation_revision must be a positive integer",
-            code=ERROR_MALFORMED_MESSAGES,
-        )
-    if assistant_turn_id in {
+    if _is_legacy_conversation_metadata(data):
+        conversation = _parse_legacy_conversation(data)
+    else:
+        conversation = _parse_v2_conversation(data)
+    if conversation.assistant_turn_id in {
         message.turn_id for message in messages
     }:
         raise ContextRequestError(
             "assistant_turn_id must name the reserved next turn",
             code=ERROR_MALFORMED_MESSAGES,
         )
+    return conversation
+
+
+def _is_legacy_conversation_metadata(
+    data: Mapping[str, object],
+) -> bool:
+    """Recognize only the complete schema-v1 identity shape."""
+    if not all(key in data for key in LEGACY_CONVERSATION_KEYS):
+        return False
+    modern_only = (
+        "branch_id",
+        "branch_revision",
+        "assistant_turn_index",
+    )
+    return not any(key in data for key in modern_only)
+
+
+def _parse_legacy_conversation(
+    data: Mapping[str, object],
+) -> ConversationMetadata:
+    """Normalize a complete schema-v1 attestation to v2 fields."""
+    conversation_id = data["conversation_id"]
+    assistant_turn_id = data["assistant_turn_id"]
+    revision = _identity_positive_int(
+        data["conversation_revision"],
+        "conversation_revision",
+    )
+    try:
+        branch_id = conversation_identity.legacy_branch_id(
+            conversation_id
+        )
+        assistant_index = (
+            conversation_identity.legacy_turn_index(
+                assistant_turn_id
+            )
+        )
+    except ValueError as exc:
+        raise ContextRequestError(
+            str(exc),
+            code=ERROR_MALFORMED_MESSAGES,
+        ) from exc
     return ConversationMetadata(
         conversation_id=conversation_id,
-        conversation_revision=revision,
+        branch_id=branch_id,
+        branch_revision=revision,
         assistant_turn_id=assistant_turn_id,
+        assistant_turn_index=assistant_index,
+    )
+
+
+def _parse_v2_conversation(
+    data: Mapping[str, object],
+) -> ConversationMetadata:
+    """Parse the all-or-none schema-v2 identity shape."""
+    if (
+        "conversation_revision" in data
+        or not all(key in data for key in CONVERSATION_KEYS)
+    ):
+        raise ContextRequestError(
+            "conversation metadata requires conversation_id,"
+            " branch_id, branch_revision, assistant_turn_id and"
+            " assistant_turn_index",
+            code=ERROR_MALFORMED_MESSAGES,
+        )
+    return ConversationMetadata(
+        conversation_id=data["conversation_id"],
+        branch_id=data["branch_id"],
+        branch_revision=_identity_positive_int(
+            data["branch_revision"], "branch_revision"
+        ),
+        assistant_turn_id=data["assistant_turn_id"],
+        assistant_turn_index=data["assistant_turn_index"],
     )
 
 
@@ -512,15 +586,11 @@ def _validate_candidate_location(
     conversation: Optional[ConversationMetadata],
     offset: int,
 ) -> None:
-    """Tie numeric durable turn ids to the absolute suffix."""
+    """Tie the attested assistant index to the absolute suffix."""
     if conversation is None:
         return
-    assistant = conversation.assistant_turn_id
-    if not assistant.isascii() or not assistant.isdigit():
-        return
-    assistant_index = int(assistant)
     pending_index = offset + len(messages)
-    if assistant_index != pending_index + 1:
+    if conversation.assistant_turn_index != pending_index + 1:
         raise ContextRequestError(
             "candidate_turn_offset and messages do not end before"
             " the reserved assistant turn",
@@ -528,16 +598,16 @@ def _validate_candidate_location(
         )
 
 
-def _identifier(value: object, name: str) -> str:
-    if not isinstance(value, str) or not value:
+def _identity_positive_int(value: object, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
         raise ContextRequestError(
-            f"{name} must be a non-empty string",
+            f"{name} must be a positive integer",
             code=ERROR_MALFORMED_MESSAGES,
         )
-    if len(value) > IDENTIFIER_CHARS_MAX:
+    if value < 1:
         raise ContextRequestError(
-            f"{name} exceeds {IDENTIFIER_CHARS_MAX} characters",
-            code=ERROR_CONTEXT_BOUNDS,
+            f"{name} must be a positive integer",
+            code=ERROR_MALFORMED_MESSAGES,
         )
     return value
 

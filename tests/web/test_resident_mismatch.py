@@ -119,7 +119,7 @@ def test_an_unsaved_run_is_saved_before_the_reload() -> None:
         APP_JS, "function rescueRunThenReload()", 2600
     )
 
-    save = region.find("generatorRun.save()")
+    save = region.find("saveRun()")
     reload_call = region.find("location.reload()", save)
 
     assert save != -1
@@ -134,7 +134,7 @@ def test_a_saved_run_reloads_without_saving_again() -> None:
     )
 
     guard = region.find("generatorRun.saved()")
-    save = region.find("generatorRun.save()")
+    save = region.find("saveRun()")
 
     assert guard != -1
     assert guard < save

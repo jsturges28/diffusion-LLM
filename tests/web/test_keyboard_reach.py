@@ -47,7 +47,8 @@ _FOCUSABLE = re.compile(
     re.IGNORECASE,
 )
 _MODAL_OPEN = re.compile(
-    r'<dialog id="(?P<id>[a-z-]+)" class="modal-overlay">'
+    r'<dialog id="(?P<id>[a-z-]+)"'
+    r' class="[^"]*\bmodal-overlay\b[^"]*">'
 )
 
 
@@ -253,8 +254,22 @@ def test_a_modal_opens_focused_on_its_box(page: str) -> None:
     the close button: it took a ring the moment a modal opened, and
     the arrow keys could not scroll a long modal because nothing
     scrollable held focus. The box takes the focus instead, which
-    fixes both."""
+    fixes both. Short destructive confirmations intentionally focus
+    Cancel instead."""
     html = (STATIC / page).read_text(encoding="utf-8")
+    if page == "index.html":
+        for name in ("delete", "retry"):
+            start = html.index(
+                f'<dialog id="conversation-{name}-dialog"'
+            )
+            block = _block(html, start, "dialog")
+            assert "conversation-confirmation-dialog" in block
+            assert re.search(
+                rf'<button id="btn-conversation-{name}-cancel"'
+                r'[^>]*\bautofocus\b',
+                block,
+            )
+            html = html.replace(block, "")
 
     for match in re.finditer(r'<div class="modal-box[^>]*>', html):
         tag = match.group(0)
@@ -268,6 +283,32 @@ def test_the_box_shows_no_ring_of_its_own() -> None:
     rule = _rule(".modal-box:focus {", chars=120)
 
     assert "outline: none" in rule
+
+
+def test_conversation_dialogs_describe_message_and_status() -> None:
+    """Both changing descriptions belong to each dialog."""
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    for name in ("delete", "retry"):
+        start = html.index(
+            f'<dialog id="conversation-{name}-dialog"'
+        )
+        block = _block(html, start, "dialog")
+        opening = block[: block.index(">") + 1]
+        described = re.search(
+            r'aria-describedby="([^"]+)"', opening
+        )
+        assert described is not None
+        assert described.group(1).split() == [
+            f"conversation-{name}-message",
+            f"conversation-{name}-status",
+        ]
+        status = re.search(
+            rf'<p id="conversation-{name}-status"[^>]*>',
+            block,
+        )
+        assert status is not None
+        assert 'role="alert"' in status.group(0)
+        assert 'aria-live="assertive"' in status.group(0)
 
 
 def test_the_close_button_rings_when_tabbed_to() -> None:
@@ -304,6 +345,7 @@ def test_the_model_picker_is_a_combobox() -> None:
 
     assert 'role="combobox"' in tag
     assert 'aria-controls="model-select-list"' in tag
+    assert 'aria-disabled="false"' in tag
 
 
 def test_it_starts_collapsed_in_the_markup() -> None:

@@ -83,6 +83,7 @@ def _static_controller_ids() -> Set[str]:
             r'document\.getElementById\(\s*"([^"]+)"\s*\)'
         ),
         re.compile(r'requiredElement\(\s*"([^"]+)"\s*\)'),
+        re.compile(r'conversationActionsElement\(\s*"([^"]+)"\s*\)'),
     )
     for script in _page_scripts():
         source = script.read_text(encoding="utf-8")
@@ -121,8 +122,10 @@ def test_the_transcript_mount_has_bounded_native_controls() -> None:
         "btn-load-older",
         "conversation-empty",
         "conversation-status",
+        "conversation-action-status",
         "conversation-turns",
         "active-assistant-card",
+        "active-assistant-actions",
         "active-turn-workspace",
         "controls",
     }
@@ -218,6 +221,65 @@ def test_new_actions_are_native_buttons_with_names() -> None:
     assert 'aria-label="Save Run"' in html
 
 
+def test_message_action_dialogs_are_native_and_cancel_first() -> None:
+    html = _html()
+    for name in ("delete", "retry"):
+        dialog = _block(
+            html, f"conversation-{name}-dialog", "dialog"
+        )
+        cancel = re.search(
+            rf'<button id="btn-conversation-{name}-cancel"[^>]*>',
+            dialog,
+        )
+        confirm = re.search(
+            rf'<button id="btn-conversation-{name}-confirm"[^>]*>',
+            dialog,
+        )
+
+        assert cancel is not None
+        assert confirm is not None
+        assert 'type="button"' in cancel.group(0)
+        assert 'type="button"' in confirm.group(0)
+        assert "autofocus" in cancel.group(0)
+        assert "autofocus" not in confirm.group(0)
+        status = re.search(
+            rf'<p id="conversation-{name}-status"[^>]*>',
+            dialog,
+        )
+        assert status is not None
+        assert 'role="alert"' in status.group(0)
+        assert 'tabindex="-1"' in status.group(0)
+        assert dialog.index(cancel.group(0)) < dialog.index(
+            confirm.group(0)
+        )
+
+
+def test_action_mounts_and_live_feedback_ship_empty() -> None:
+    html = _html()
+    active = re.search(
+        r'<div id="active-assistant-actions"[^>]*>',
+        html,
+    )
+    feedback = re.search(
+        r'<p id="conversation-action-status"[^>]*>',
+        html,
+    )
+
+    assert active is not None
+    assert " hidden" in active.group(0)
+    assert 'role="group"' not in active.group(0)
+    assert feedback is not None
+    assert 'role="status"' in feedback.group(0)
+    assert 'aria-live="polite"' in feedback.group(0)
+
+
+def test_pending_cursor_is_scoped_to_conversation_dialogs() -> None:
+    css = CONVERSATION_CSS.read_text(encoding="utf-8")
+
+    assert ".conversation-confirmation-dialog.is-pending" in css
+    assert ".modal-overlay.is-pending" not in css
+
+
 def test_every_literal_controller_id_exists_once() -> None:
     """The stub creates missing ids, so check the shipped page."""
     html = _html()
@@ -236,6 +298,8 @@ def test_shell_controller_precedes_the_composition_root() -> None:
         html.index(f'src="/{script}"')
         for script in (
             "conversation_view.js",
+            "conversation_action_view.js",
+            "conversation_actions.js",
             "conversation_shell.js",
             "app.js",
         )
@@ -287,6 +351,28 @@ def test_draft_and_sent_user_cards_remain_distinct() -> None:
     assert "79, 195, 247" in sent
     assert "0, 255, 65" in draft
     assert "margin-top: auto" not in draft
+
+
+def test_message_actions_keep_keyboard_and_coarse_pointer_reach(
+) -> None:
+    styles = CONVERSATION_CSS.read_text(encoding="utf-8")
+    action = _rule(styles, ".conversation-action {", 420)
+    focus = _rule(
+        styles, ".conversation-action:focus-visible", 360
+    )
+    coarse = _rule(
+        styles, "@media (hover: none), (pointer: coarse)", 420
+    )
+    reduced = _rule(
+        styles, "@media (prefers-reduced-motion: reduce)", 300
+    )
+
+    assert "width: 28px" in action
+    assert "height: 28px" in action
+    assert "outline: 2px solid var(--accent)" in focus
+    assert "opacity: 1" in coarse
+    assert "width: 32px" in coarse
+    assert "transition: none" in reduced
 
 
 def test_generator_stylesheets_follow_the_shared_sheet() -> None:

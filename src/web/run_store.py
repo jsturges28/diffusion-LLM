@@ -27,8 +27,10 @@ file, so a bundle appears whole or does not appear at all. See
 
 from __future__ import annotations
 
+import contextlib
 import json
 import shutil
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -433,7 +435,7 @@ def save(
     # the same shape as the revision race below. Creates serialise
     # too as a result, which costs nothing: a save is a person
     # pressing a button.
-    with _PUBLISH_LOCK.held(root):
+    with publication_lock(root):
         target = _destination(
             root, run_id=run_id, run_token=run_token
         )
@@ -477,6 +479,21 @@ def _destination(
 # let both make a run for one generation, or both replace one
 # revision with the later silently winning (`A2-DATA-01`).
 _PUBLISH_LOCK = DataRootLock("runs.lock")
+
+
+@contextlib.contextmanager
+def publication_lock(root: Path) -> Iterator[None]:
+    """Hold saved-run identity stable across a cross-store decision.
+
+    When conversation ownership must also be changed, callers
+    acquire this lock first and ``conversations.lock`` second. This
+    module does not import the conversation store, so it cannot
+    acquire them in the inverse order.
+    """
+    if not isinstance(root, Path):
+        raise TypeError("run publication root must be a Path")
+    with _PUBLISH_LOCK.held(root):
+        yield
 
 
 def _publish_new(
@@ -659,6 +676,17 @@ def read_revision(root: Path, run_id: str) -> int:
     return 0
 
 
+def read_metadata(root: Path, run_id: str) -> Dict[str, Any]:
+    """Read one current run's complete metadata object."""
+    run_dir = resolve_run_dir(root, run_id)
+    raw = json.loads(
+        (run_dir / METADATA_NAME).read_text(encoding="utf-8")
+    )
+    if not isinstance(raw, dict):
+        raise ValueError("run metadata must be an object")
+    return raw
+
+
 def read_run_token(root: Path, run_id: str) -> Optional[str]:
     """The generation a saved run came from, or None if unrecorded."""
     try:
@@ -744,7 +772,7 @@ def publish_preview(
     """
     assert revision >= 1, "only a published run has a preview"
     assert staged.parent == root / STAGING_DIR_NAME, "drawn aside"
-    with _PUBLISH_LOCK.held(root):
+    with publication_lock(root):
         if _current_revision(root, run_id) == revision:
             staged.replace(root / run_id / PREVIEW_NAME)
             return True
@@ -776,7 +804,7 @@ def delete(root: Path, run_id: str) -> None:
     runs after the lock is released, since nothing can reach the
     renamed copy.
     """
-    with _PUBLISH_LOCK.held(root):
+    with publication_lock(root):
         run_dir = resolve_run_dir(root, run_id)
         trash_root = root / TRASH_DIR_NAME
         trash_root.mkdir(parents=True, exist_ok=True)

@@ -19,6 +19,17 @@ OpenSocket.OPEN = 1;
 
 const ID_ONE = "a".repeat(32);
 const ID_TWO = "b".repeat(32);
+const BRANCH_ID = "b_" + "c".repeat(32);
+const TURN_IDS = Object.freeze({
+  1: "t_" + "c".repeat(32)
+    + "_00000001_425e5371282a5cc5",
+  2: "t_" + "c".repeat(32)
+    + "_00000002_2b715ccacb6d6190",
+  3: "t_" + "c".repeat(32)
+    + "_00000003_05f510c99fb4c22a",
+  4: "t_" + "c".repeat(32)
+    + "_00000004_19fe2b301f53720c",
+});
 const MODEL = {
   id: "llada",
   display_name: "LLaDA",
@@ -61,13 +72,20 @@ function response(body, status) {
   };
 }
 
+function turnId(index) {
+  const value = TURN_IDS[index];
+  assert.equal(typeof value, "string");
+  return value;
+}
+
 function turn(index, role, text, version) {
   const assistant = role === "assistant";
   return {
-    schema_version: 1,
+    schema_version: 2,
     conversation_id: ID_ONE,
-    conversation_revision: 1,
-    turn_id: String(index).padStart(8, "0"),
+    branch_id: BRANCH_ID,
+    branch_revision: 1,
+    turn_id: turnId(index),
     index,
     version,
     role,
@@ -107,10 +125,14 @@ function conversationApi() {
       ? tail.turn_id
       : null;
     return {
-      schema_version: 1,
+      schema_version: 2,
       id: state.id,
       title: "New conversation",
+      branch_id: BRANCH_ID,
+      branch_revision: state.revision,
       revision: state.revision,
+      catalog_revision: 1,
+      default_branch_id: BRANCH_ID,
       created_at: "2026-10-04T00:00:00Z",
       updated_at: "2026-10-04T00:00:00Z",
       turn_count: state.turns.length,
@@ -135,13 +157,14 @@ function conversationApi() {
   }
 
   function append(body) {
-    assert.equal(body.expected_revision, state.revision);
+    assert.equal(body.branch_id, BRANCH_ID);
+    assert.equal(body.branch_revision, state.revision);
     const userIndex = state.turns.length + 1;
     const user = turn(userIndex, "user", body.text, 1);
     const assistant = turn(userIndex + 1, "assistant", "", 1);
     state.revision += 1;
-    user.conversation_revision = state.revision;
-    assistant.conversation_revision = state.revision;
+    user.branch_revision = state.revision;
+    assistant.branch_revision = state.revision;
     state.turns.push(user, assistant);
     return reply({
       conversation: manifest(),
@@ -151,11 +174,12 @@ function conversationApi() {
   }
 
   function update(body) {
-    assert.equal(body.expected_revision, state.revision);
+    assert.equal(body.branch_id, BRANCH_ID);
+    assert.equal(body.branch_revision, state.revision);
     const assistant = state.turns.at(-1);
     state.revision += 1;
     assistant.version += 1;
-    assistant.conversation_revision = state.revision;
+    assistant.branch_revision = state.revision;
     assistant.text = body.text;
     assistant.partial = body.partial;
     assistant.context_pack = body.context_pack;
@@ -176,11 +200,14 @@ function conversationApi() {
   }
 
   function link(body) {
-    assert.equal(body.expected_revision, state.revision);
+    assert.equal(body.branch_id, BRANCH_ID);
+    assert.equal(body.branch_revision, state.revision);
     const assistant = state.turns.at(-1);
+    assert.equal(body.assistant_turn_index, assistant.index);
+    assert.equal(body.assistant_turn_version, assistant.version);
     state.revision += 1;
     assistant.version += 1;
-    assistant.conversation_revision = state.revision;
+    assistant.branch_revision = state.revision;
     assistant.run_link = {
       run_id: body.run_id,
       revision: body.run_revision,
@@ -217,7 +244,7 @@ function conversationApi() {
     const assistant = state.turns.at(-1);
     state.revision += 1;
     assistant.version += 1;
-    assistant.conversation_revision = state.revision;
+    assistant.branch_revision = state.revision;
     assistant.text = text;
     assistant.partial = false;
     assistant.metadata = { status: "completed" };
@@ -259,11 +286,17 @@ function conversationApi() {
     }
     if (path.endsWith("/turns") && method === "GET") {
       return reply({
+        schema_version: 2,
         conversation_id: state.id,
+        branch_id: BRANCH_ID,
+        branch_revision: state.revision,
         revision: state.revision,
+        catalog_revision: 1,
+        default_branch_id: BRANCH_ID,
         turns: state.turns,
         next_before: null,
         has_more: false,
+        branch_points: [],
       });
     }
     if (path.endsWith("/turns") && method === "POST") {
@@ -376,6 +409,10 @@ test("boot restores the active conversation and latest page",
       .querySelector(".conversation-turn-text").textContent,
     "Restored answer"
   );
+  const persisted = JSON.parse(page.context.localStorage.getItem(
+    page.context.PERSIST_ACTIVE_CONVERSATION_KEY
+  ));
+  assert.equal(persisted.branch_id, BRANCH_ID);
   });
 
 test("Send reserves, generates, completes, then appends once",
@@ -396,8 +433,10 @@ test("Send reserves, generates, completes, then appends once",
   assert.equal(first.messages.length, 1);
   assert.equal(first.messages[0].content, "First question");
   assert.equal(first.conversation_id, ID_ONE);
-  assert.equal(first.conversation_revision, 2);
-  assert.equal(first.assistant_turn_id, "00000002");
+  assert.equal(first.branch_id, BRANCH_ID);
+  assert.equal(first.branch_revision, 2);
+  assert.equal(first.assistant_turn_id, turnId(2));
+  assert.equal(first.assistant_turn_index, 2);
   assert.equal(first.candidate_turn_offset, 0);
 
   run.context.handleFrame({
@@ -420,7 +459,7 @@ test("Send reserves, generates, completes, then appends once",
     provenance: {
       model_id: MODEL.id,
       context_pack: {
-        included_turn_ids: ["00000001"],
+        included_turn_ids: [turnId(1)],
         first_included_index: 0,
         omitted_turn_count: 0,
         prompt_token_count: 8,
@@ -469,8 +508,10 @@ test("Send reserves, generates, completes, then appends once",
   assert.equal(stateful.length, 4);
   for (const message of stateful) {
     assert.equal(message.conversation_id, ID_ONE);
-    assert.equal(message.conversation_revision, 3);
-    assert.equal(message.assistant_turn_id, "00000002");
+    assert.equal(message.branch_id, BRANCH_ID);
+    assert.equal(message.branch_revision, 3);
+    assert.equal(message.assistant_turn_id, turnId(2));
+    assert.equal(message.assistant_turn_index, 2);
   }
 
   prompt.value = "Second question";
@@ -480,7 +521,8 @@ test("Send reserves, generates, completes, then appends once",
     second.messages.map((message) => message.content),
     ["First question", "First answer", "Second question"]
   );
-  assert.equal(second.assistant_turn_id, "00000004");
+  assert.equal(second.assistant_turn_id, turnId(4));
+  assert.equal(second.assistant_turn_index, 4);
   assert.equal(
     api.state.turns.filter((item) =>
       item.text === "Second question"
@@ -527,6 +569,35 @@ test("a failed generation retries its reserved assistant",
   );
   });
 
+test("conversation navigation refuses without cancelling a run",
+  async () => {
+  const api = conversationApi();
+  const run = await pageWithApi(api);
+  run.page.registry.get("prompt-input").value = "Keep running";
+  assert.equal(await run.context.startGeneration(), true);
+  const sentBefore = run.socket.sent.length;
+
+  assert.equal(run.context.conversationCanNavigate(), false);
+  assert.equal(
+    await run.context.selectConversationBranch(BRANCH_ID),
+    false
+  );
+
+  assert.equal(run.socket.sent.length, sentBefore);
+  assert.equal(
+    run.socket.sent.some((raw) =>
+      JSON.parse(raw).type === "cancel"
+    ),
+    false
+  );
+  run.context.handleError({
+    type: "error",
+    scope: "run",
+    code: "generation_failed",
+    message: "test cleanup",
+  });
+  });
+
 test("Enter cannot bypass a pending conversation commit",
   async () => {
   const api = conversationApi();
@@ -567,6 +638,43 @@ test("Enter cannot bypass a pending conversation commit",
   await run.context.conversationClient.flush();
   });
 
+test("Save waits for completion and uses its exact version",
+  async () => {
+  const api = conversationApi();
+  api.state.holdUpdateReplies = true;
+  const run = await pageWithApi(api);
+  run.page.registry.get("prompt-input").value = "Wait to save";
+
+  assert.equal(await run.context.startGeneration(), true);
+  run.context.handleFrame(frame(0, "draft"));
+  run.context.handleFrame(frame(1, "durable"));
+  run.context.handleDone({
+    type: "done",
+    final_text: "durable",
+    run_token: "nonce:1",
+  });
+  const saving = run.context.saveRun();
+  await tick();
+  assert.equal(
+    api.state.calls.filter((call) =>
+      call.path === "/api/save"
+    ).length,
+    0
+  );
+
+  api.releaseUpdates();
+  assert.equal(await saving, true);
+  const save = api.state.calls.find((call) =>
+    call.path === "/api/save"
+  );
+  const link = api.state.calls.find((call) =>
+    call.path.endsWith("/run")
+  );
+  assert.equal(save.body.assistant_turn_version, 2);
+  assert.equal(link.body.assistant_turn_version, 2);
+  assert.equal(link.body.assistant_turn_index, 2);
+  });
+
 test("a lost completion reply reconciles before retry",
   async () => {
   const api = conversationApi();
@@ -601,6 +709,33 @@ test("a lost completion reply reconciles before retry",
     .filter((message) => message.type === "generate");
   assert.equal(generations.length, 2);
   assert.equal(generations[1].messages.at(-1).content, "Second");
+  });
+
+test("a lost cancelled response preserves its XAI workspace",
+  async () => {
+  const api = conversationApi();
+  api.state.dropNextUpdateReply = true;
+  const run = await pageWithApi(api);
+  run.page.registry.get("prompt-input").value = "Stop here";
+
+  assert.equal(await run.context.startGeneration(), true);
+  run.context.handleFrame(frame(0, "partial answer"));
+  run.context.handleDone({
+    type: "done",
+    final_text: "partial answer",
+    run_token: "nonce:cancelled",
+    cancelled: true,
+  });
+  await run.context.conversationClient.flush();
+  await run.context.conversationCompletion;
+
+  assert.equal(run.context.generatorRun.frameCount(), 1);
+  assert.equal(run.context.generatorRun.interrupted(), true);
+  assert.equal(api.state.turns.at(-1).partial, true);
+  assert.equal(
+    run.page.registry.get("active-assistant-card").hidden,
+    false
+  );
   });
 
 test("edit drafts publish only after Confirm", async () => {
@@ -663,8 +798,18 @@ test("edit drafts publish only after Confirm", async () => {
     final_text: "Confirmed answer",
     run_token: "nonce:1",
   });
+  api.state.holdUpdateReplies = true;
+  const confirmation = run.context.generatorEdit.confirm();
+  await tick();
+  assert.equal(run.context.generatorEdit.confirming(), true);
+  assert.equal(run.context.conversationCanNavigate(), false);
   assert.equal(
-    await run.context.generatorEdit.confirm(),
+    await run.context.selectConversationBranch(BRANCH_ID),
+    false
+  );
+  api.releaseUpdates();
+  assert.equal(
+    await confirmation,
     true
   );
 
@@ -785,6 +930,91 @@ test("a stale same-tail snapshot yields to durable text",
   assert.equal(run.context.activeRunCanEdit(), false);
   });
 
+test("a same-text external reload clears stale XAI",
+  async () => {
+  const api = conversationApi();
+  const run = await pageWithApi(api);
+  await finishRun(run, "Question", "Same answer");
+  run.context.saveSessionState();
+  const staleIdentity =
+    run.context.generatorRun.conversationIdentity();
+  assert.equal(run.context.generatorRun.frameCount(), 3);
+  assert.notEqual(
+    run.context.sessionStorage.getItem(run.context.SESSION_KEY),
+    null
+  );
+
+  api.reviseExternally("Same answer");
+  await run.context.conversationClient.restore(ID_ONE, BRANCH_ID);
+
+  assert.equal(run.context.generatorRun.frameCount(), 0);
+  assert.equal(
+    run.context.sessionStorage.getItem(run.context.SESSION_KEY),
+    null
+  );
+  assert.equal(
+    run.page.registry.get("active-assistant-card").hidden,
+    true
+  );
+  assert.equal(
+    run.page.registry.get("btn-save").disabled,
+    true
+  );
+  const linksBefore = api.state.calls.filter((call) =>
+    call.path.endsWith("/run") && call.method === "PUT"
+  ).length;
+  assert.equal(
+    await run.context.linkSavedRun({
+      conversationIdentity: staleIdentity,
+      runId: "stale-run",
+      revision: 1,
+    }),
+    false
+  );
+  const linksAfter = api.state.calls.filter((call) =>
+    call.path.endsWith("/run") && call.method === "PUT"
+  ).length;
+  assert.equal(linksAfter, linksBefore);
+  });
+
+test("rescue save waits for conversation completion",
+  async () => {
+  const api = conversationApi();
+  api.state.holdUpdateReplies = true;
+  const run = await pageWithApi(api);
+  run.page.registry.get("prompt-input").value = "Rescue";
+  assert.equal(await run.context.startGeneration(), true);
+  run.context.handleFrame(frame(0, "draft"));
+  run.context.handleFrame(frame(1, "answer"));
+  run.context.handleDone({
+    type: "done",
+    final_text: "answer",
+    run_token: "nonce:1",
+  });
+  let reloads = 0;
+  run.context.location.reload = () => {
+    reloads += 1;
+  };
+
+  run.context.rescueRunThenReload();
+  await tick();
+  assert.equal(reloads, 0);
+  assert.equal(
+    api.state.calls.some((call) => call.path === "/api/save"),
+    false
+  );
+
+  api.releaseUpdates();
+  await run.context.conversationClient.flush();
+  await tick();
+  await tick();
+  const save = api.state.calls.find((call) =>
+    call.path === "/api/save"
+  );
+  assert.equal(save.body.assistant_turn_version, 2);
+  assert.equal(reloads, 1);
+  });
+
 test("rescue reload waits for the durable run link",
   async () => {
   const api = conversationApi();
@@ -800,6 +1030,11 @@ test("rescue reload waits for the durable run link",
   await tick();
   await tick();
   assert.equal(reloads, 0);
+  assert.equal(run.context.conversationCanNavigate(), false);
+  assert.equal(
+    await run.context.selectConversationBranch(BRANCH_ID),
+    false
+  );
   run.page.registry.get("prompt-input").value = "Do not start";
   assert.equal(await run.context.startGeneration(), false);
 
@@ -823,7 +1058,17 @@ test("a lost run-link reply reconciles as saved", async () => {
   const link = run.context.conversationState.turns.at(-1).run_link;
   assert.equal(link.run_id, "run-one");
   assert.equal(link.revision, 1);
-  assert.equal(run.context.generatorRun.saved(), true);
+  assert.equal(
+    api.state.calls.filter((call) =>
+      call.path.endsWith("/run") && call.method === "PUT"
+    ).length,
+    1
+  );
+  assert.equal(run.context.generatorRun.frameCount(), 3);
+  assert.equal(
+    run.page.registry.get("active-assistant-card").hidden,
+    false
+  );
   });
 
 test("rescue reload discards an unconfirmed edit", async () => {
@@ -859,6 +1104,81 @@ test("rescue reload discards an unconfirmed edit", async () => {
   assert.equal("remask_edits" in save.body, false);
   assert.equal(api.state.turns.at(-1).text, "Original answer");
   assert.equal(reloads, 1);
+  });
+
+test("Edit Frames blocks destructive primary actions",
+  async () => {
+  const api = conversationApi();
+  const run = await pageWithApi(api);
+  await finishRun(run, "Question", "Original answer");
+  const savesBefore = api.state.calls.filter((call) =>
+    call.path === "/api/save"
+  ).length;
+
+  run.context.generatorEdit.enterFrames();
+  const phase = run.context.generatorEdit.phaseState().mode;
+  assert.equal(run.context.generatorEdit.editing(), true);
+  assert.equal(
+    run.page.registry.get("btn-generate").disabled,
+    true
+  );
+  assert.equal(
+    run.page.registry.get("btn-save").disabled,
+    true
+  );
+  assert.equal(
+    run.page.registry.get("btn-new-conversation").disabled,
+    true
+  );
+
+  assert.equal(await run.context.startGeneration(), false);
+  assert.equal(await run.context.startNewRun(), false);
+  assert.equal(
+    await run.context.selectConversationBranch(BRANCH_ID),
+    false
+  );
+  assert.equal(await run.context.saveRun(), false);
+  assert.equal(run.context.generatorEdit.editing(), true);
+  assert.equal(run.context.generatorEdit.phaseState().mode, phase);
+  assert.equal(
+    api.state.calls.filter((call) =>
+      call.path === "/api/save"
+    ).length,
+    savesBefore
+  );
+  assert.equal(run.context.generatorEdit.exit(), true);
+  });
+
+test("New Conversation may abandon a stable pending assistant",
+  async () => {
+  const api = conversationApi();
+  const run = await pageWithApi(api);
+  const prompt = run.page.registry.get("prompt-input");
+  prompt.value = "Pending question";
+  assert.equal(await run.context.startGeneration(), true);
+  run.context.handleError({
+    type: "error",
+    scope: "run",
+    code: "generation_failed",
+    message: "stopped before output",
+  });
+  assert.notEqual(
+    run.context.conversationState.conversation
+      .pending_assistant_id,
+    null
+  );
+  assert.equal(run.context.conversationCanNavigate(), false);
+  assert.equal(
+    run.page.registry.get("btn-new-conversation").disabled,
+    false
+  );
+
+  assert.equal(
+    await run.context.selectConversationBranch(BRANCH_ID),
+    false
+  );
+  assert.equal(await run.context.startNewRun(), true);
+  assert.equal(run.context.conversationState.conversation.id, ID_TWO);
   });
 
 test("failed New Conversation preserves the composer and run",

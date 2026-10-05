@@ -53,6 +53,7 @@ function generatorModelPanelCreate(options) {
 
   var PARAM_STATE_KEY = "diffusion_param_state";
   var MODEL_OPTION_ID_PREFIX = "model-select-option-";
+  var MODEL_SELECT_TAB_INDEX = 0;
   var DEVICE_LABELS = { cuda: "GPU", cpu: "CPU" };
   var PARAM_GROUP_LABELS = {
     general: "General",
@@ -521,6 +522,12 @@ function generatorModelPanelCreate(options) {
   function setDisabled(disabled) {
     modelSelectDisabled = disabled;
     modelSelect.classList.toggle("disabled", disabled);
+    modelSelect.setAttribute(
+      "aria-disabled", disabled ? "true" : "false"
+    );
+    modelSelect.tabIndex = disabled
+      ? -1
+      : MODEL_SELECT_TAB_INDEX;
     toggleExperimental.disabled = disabled;
     if (disabled) {
       closeModelList();
@@ -1535,6 +1542,51 @@ function generatorModelPanelCreate(options) {
     };
   }
 
+  function conversationConfigurationRead() {
+    if (!activeModel || !activeModelId) {
+      throw new Error(
+        "Conversation actions need an active model"
+      );
+    }
+    var capabilities = capabilitiesRead();
+    var inputMode = capabilities.input_mode;
+    if (inputMode !== "chat" && inputMode !== "completion") {
+      throw new Error(
+        "Conversation actions need the model input mode"
+      );
+    }
+    var parameters = Object.freeze(
+      Object.assign({}, parameterValuesRead())
+    );
+    return Object.freeze({
+      modelId: activeModelId,
+      modelDisplay: activeDisplayName(),
+      inputMode: inputMode,
+      settingsSummary: conversationSettingsSummary(),
+      parameters: parameters,
+      experimental: experimentalRead(),
+      valid: paramsValid,
+      validationMessage: validationHint.textContent,
+    });
+  }
+
+  function conversationSettingsSummary() {
+    var parts = [];
+    var specs = activeModel.param_specs || [];
+    for (var index = 0; index < specs.length; index++) {
+      var spec = specs[index];
+      var input = paramInputs[spec.name];
+      if (spec.prominence === "primary" && input) {
+        parts.push(
+          spec.label + " " + summaryParamValue(spec, input)
+        );
+      }
+    }
+    return parts.length > 0
+      ? parts.join(", ")
+      : "Model defaults";
+  }
+
   function readParamStateAll() {
     var raw = null;
     try {
@@ -1732,5 +1784,6 @@ function generatorModelPanelCreate(options) {
     thinking: thinkingRead,
     outputBudget: outputBudgetRead,
     validation: validationRead,
+    conversationConfiguration: conversationConfigurationRead,
   };
 }

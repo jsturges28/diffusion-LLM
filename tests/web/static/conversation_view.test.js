@@ -74,9 +74,22 @@ function harness() {
     ],
   });
   let olderLoads = 0;
+  const activeCalls = [];
   const view = page.context.conversationViewCreate({
     onLoadOlder() {
       olderLoads += 1;
+    },
+    decorateTurn() {},
+    decorateActive(turn, points, visible) {
+      activeCalls.push({ turn, points, visible });
+    },
+    deletionMarker(point) {
+      const marker = page.context.document.createElement("div");
+      marker.className = "conversation-deletion-marker";
+      marker.setAttribute(
+        "data-selected-branch", point.selected_branch_id
+      );
+      return marker;
     },
   });
   view.wire();
@@ -84,6 +97,7 @@ function harness() {
     page,
     view,
     olderLoads: () => olderLoads,
+    activeCalls,
   };
 }
 
@@ -227,5 +241,110 @@ test("a legacy workspace suppresses the empty prompt", () => {
   assert.equal(
     h.page.registry.get("conversation-empty").hidden,
     true
+  );
+});
+
+test("a selected deletion path renders a compact marker", () => {
+  const h = harness();
+  const current = state(h.page);
+  const source = current.selectedBranchId;
+  const deleted = "b_" + "e".repeat(32);
+  const selected = Object.assign({}, current, {
+    conversation: Object.assign({}, current.conversation, {
+      branch_id: deleted,
+      turn_count: 2,
+      tail_turn_id: "00000002",
+    }),
+    selectedBranchId: deleted,
+    turns: current.turns.slice(0, 2),
+    branchPoints: [{
+      turn_index: 3,
+      source_branch_id: source,
+      selected_branch_id: deleted,
+      branch_ids: [source, deleted],
+      deleted_branch_ids: [deleted],
+    }],
+  });
+
+  h.view.render(selected);
+
+  const nodes = h.page.registry.get("conversation-turns").children;
+  assert.equal(nodes.length, 3);
+  assert.equal(
+    nodes.at(-1).classes.has("conversation-deletion-marker"),
+    true
+  );
+  assert.equal(
+    nodes.at(-1).getAttribute("data-selected-branch"),
+    deleted
+  );
+});
+
+test("selected pages replace saved badges and Analytics links", () => {
+  const h = harness();
+  const saved = state(h.page);
+  h.view.render(saved);
+  assert.ok(
+    h.page.registry.get("conversation-turns")
+      .children[1].querySelector(".conversation-run-link")
+  );
+
+  const alternate = Object.assign({}, saved, {
+    turns: saved.turns.map((item) =>
+      item.index === 2
+        ? Object.assign({}, item, { run_link: null })
+        : item
+    ),
+  });
+  h.view.render(alternate);
+  const assistant = h.page.registry.get(
+    "conversation-turns"
+  ).children[1];
+
+  assert.equal(
+    assistant.querySelector(".conversation-run-link"),
+    null
+  );
+  assert.ok(
+    assistant.querySelector(".conversation-turn-badge-text-only")
+  );
+});
+
+test("the active decorator receives the workspace assistant", () => {
+  const h = harness();
+  h.view.render(state(h.page), {
+    workspaceVisible: true,
+    workspaceAssistantTurnId: "00000004",
+  });
+
+  const call = h.activeCalls.at(-1);
+  assert.equal(call.visible, true);
+  assert.equal(call.turn.turn_id, "00000004");
+  assert.equal(call.points.length, 0);
+});
+
+test("the transcript DOM stops at the state cache bound", () => {
+  const h = harness();
+  const current = state(h.page);
+  const turns = [];
+  for (let index = 1; index <= 200; index += 1) {
+    turns.push(turn(index));
+  }
+  const bounded = Object.assign({}, current, {
+    conversation: Object.assign({}, current.conversation, {
+      turn_count: 200,
+      tail_turn_id: "00000200",
+      tail_version: 2,
+      pending_assistant_id: null,
+    }),
+    turns,
+    branchPoints: [],
+  });
+
+  h.view.render(bounded);
+
+  assert.equal(
+    h.page.registry.get("conversation-turns").children.length,
+    200
   );
 });

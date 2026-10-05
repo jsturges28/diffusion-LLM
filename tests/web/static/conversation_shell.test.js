@@ -85,9 +85,11 @@ function tick() {
 function identity(overrides) {
   return Object.assign({
     conversation_id: "a".repeat(32),
-    conversation_revision: 3,
-    assistant_turn_id: "00000002",
-    turn_index: 2,
+    branch_id: "b_" + "b".repeat(32),
+    branch_revision: 3,
+    assistant_turn_id:
+      "t_" + "b".repeat(32) + "_00000002_0000000000000002",
+    assistant_turn_index: 2,
     assistant_turn_version: 2,
     assistant_text: "answer",
   }, overrides || {});
@@ -172,6 +174,13 @@ test("the workspace requires the exact active run", () => {
   renderShell(h, {
     conversationIdentity: identity({
       assistant_turn_id: "00000004",
+    }),
+  });
+  assert.equal(h.active.hidden, true);
+
+  renderShell(h, {
+    conversationIdentity: identity({
+      branch_id: "b_" + "c".repeat(32),
     }),
   });
   assert.equal(h.active.hidden, true);

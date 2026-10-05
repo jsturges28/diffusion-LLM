@@ -202,6 +202,8 @@ function createCustomSelect(options, current) {
   wrap.setAttribute("role", "combobox");
   wrap.setAttribute("aria-expanded", "false");
   wrap.setAttribute("aria-haspopup", "listbox");
+  wrap.setAttribute("aria-disabled", "false");
+  var enabledTabIndex = wrap.tabIndex;
   customSelectSeq += 1;
   var listId = "custom-select-list-" + customSelectSeq;
   var optionIdPrefix = "custom-select-option-" + customSelectSeq + "-";
@@ -479,8 +481,13 @@ function createCustomSelect(options, current) {
       return wrap.classList.contains("disabled");
     },
     set: function (d) {
-      wrap.classList.toggle("disabled", !!d);
-      if (d) {
+      var disabled = Boolean(d);
+      wrap.classList.toggle("disabled", disabled);
+      wrap.setAttribute(
+        "aria-disabled", disabled ? "true" : "false"
+      );
+      wrap.tabIndex = disabled ? -1 : enabledTabIndex;
+      if (disabled) {
         close();
       }
     },

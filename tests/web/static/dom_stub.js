@@ -54,6 +54,8 @@ const GENERATOR_SCRIPTS = [
   "conversation_state.js",
   "conversation_client.js",
   "conversation_view.js",
+  "conversation_action_view.js",
+  "conversation_actions.js",
   "conversation_shell.js",
   "generator_run.js",
   "generator_socket.js",
@@ -142,7 +144,7 @@ function permissive() {
   });
 }
 
-function makeElement(id) {
+function makeElement(id, focusState) {
   const element = {
     id,
     tag: null,
@@ -173,6 +175,7 @@ function makeElement(id) {
     offsetWidth: 0,
     clientWidth: 0,
     isConnected: true,
+    focused: false,
   };
 
   // Backed by the same set as `classList`, because the two are one
@@ -237,6 +240,9 @@ function makeElement(id) {
   };
 
   element.appendChild = (child) => {
+    if (child.parent) {
+      child.parent.removeChild(child);
+    }
     element.children.push(child);
     child.parent = element;
     return child;
@@ -245,6 +251,7 @@ function makeElement(id) {
     const at = element.children.indexOf(child);
     if (at !== -1) {
       element.children.splice(at, 1);
+      child.parent = null;
     }
     return child;
   };
@@ -254,7 +261,16 @@ function makeElement(id) {
     }
   };
   element.replaceChildren = (...kids) => {
+    for (const child of element.children) {
+      child.parent = null;
+    }
     element.children = kids.slice();
+    for (const child of element.children) {
+      if (child.parent) {
+        child.parent.removeChild(child);
+      }
+      child.parent = element;
+    }
   };
   element.insertBefore = (child, before) => {
     const at = element.children.indexOf(before);
@@ -331,8 +347,22 @@ function makeElement(id) {
     walk(element);
     return found;
   };
-  element.focus = () => {};
-  element.blur = () => {};
+  element.focus = () => {
+    if (focusState && focusState.activeElement) {
+      focusState.activeElement.focused = false;
+    }
+    element.focused = true;
+    if (focusState) {
+      focusState.activeElement = element;
+    }
+  };
+  element.blur = () => {
+    element.focused = false;
+    if (focusState && focusState.activeElement === element) {
+      focusState.activeElement = null;
+    }
+  };
+  element.select = () => {};
   element.setSelectionRange = () => {};
   element.scrollIntoView = () => {};
   element.click = () => { element.dispatch("click"); };
@@ -507,21 +537,30 @@ function makeDocument(registry, fontsReady) {
   // observable symptom is this count, so a stub that throws the
   // argument away cannot see the defect it is meant to catch.
   const documentListeners = {};
+  const focusState = { activeElement: null };
   const document = {
     getElementById(id) {
       if (!registry.has(id)) {
-        registry.set(id, makeElement(id));
+        registry.set(id, makeElement(id, focusState));
       }
       return registry.get(id);
     },
     createElement(tag) {
-      const element = makeElement(null);
+      const element = makeElement(null, focusState);
       element.tag = tag;
       return element;
     },
-    createDocumentFragment: () => makeElement(null),
+    createElementNS(namespace, tag) {
+      if (typeof namespace !== "string" || namespace === "") {
+        throw new TypeError("createElementNS needs a namespace");
+      }
+      const element = makeElement(null, focusState);
+      element.tag = tag;
+      return element;
+    },
+    createDocumentFragment: () => makeElement(null, focusState),
     createTextNode: (text) => {
-      const node = makeElement(null);
+      const node = makeElement(null, focusState);
       node.textContent = text;
       // Flagged rather than inferred from the absence of a tag, so
       // the innerHTML getter below can serialize text without having
@@ -532,7 +571,8 @@ function makeDocument(registry, fontsReady) {
     // A stub rather than null: page scripts wire listeners onto
     // whatever this returns at load, and null would abort the load
     // for a selector that has nothing to do with the test.
-    querySelector: (selector) => makeElement(selector),
+    querySelector: (selector) =>
+      makeElement(selector, focusState),
     querySelectorAll: () => [],
     contains: (node) => !!node && node.isConnected !== false,
     addEventListener: (type, fn) => {
@@ -565,9 +605,13 @@ function makeDocument(registry, fontsReady) {
   // before the font lands, which is a real state and the one that
   // mismeasures text.
   document.fonts = { ready: fontsReady };
-  document.body = makeElement("body");
-  document.documentElement = makeElement("html");
-  document.head = makeElement("head");
+  document.body = makeElement("body", focusState);
+  document.documentElement = makeElement("html", focusState);
+  document.head = makeElement("head", focusState);
+  focusState.activeElement = document.body;
+  Object.defineProperty(document, "activeElement", {
+    get: () => focusState.activeElement,
+  });
   return document;
 }
 
@@ -830,6 +874,29 @@ function loadPage(options) {
     announceFontsLoaded = resolve;
   });
   const document = makeDocument(registry, fontsReady);
+  const transcript = document.getElementById(
+    "conversation-transcript"
+  );
+  const turns = document.getElementById("conversation-turns");
+  const activeCard = document.getElementById(
+    "active-assistant-card"
+  );
+  const activeActions = document.getElementById(
+    "active-assistant-actions"
+  );
+  transcript.appendChild(turns);
+  activeCard.appendChild(activeActions);
+  transcript.appendChild(activeCard);
+  let randomByte = 0;
+  const deterministicCrypto = {
+    getRandomValues(array) {
+      for (let index = 0; index < array.length; index++) {
+        array[index] = randomByte;
+        randomByte = (randomByte + 1) % 256;
+      }
+      return array;
+    },
+  };
   const sandbox = {
     console,
     document,
@@ -841,6 +908,7 @@ function loadPage(options) {
     AbortController,
     TextEncoder,
     TextDecoder,
+    crypto: settings.crypto || deterministicCrypto,
     // Unreferenced, so a page's tickers and pollers do not hold the
     // test runner's event loop open after the assertions are done.
     // The page still gets working timers; they just stop counting

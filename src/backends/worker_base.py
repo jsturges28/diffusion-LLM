@@ -773,17 +773,38 @@ class Backend(ABC):
         if not isinstance(retained, dict):
             return
         expected_conversation = retained.get("conversation_id")
+        expected_branch = retained.get("branch_id")
         expected_assistant = retained.get("assistant_turn_id")
+        expected_assistant_index = retained.get(
+            "assistant_turn_index"
+        )
+        assert isinstance(expected_conversation, str)
+        assert isinstance(expected_branch, str)
+        assert isinstance(expected_assistant, str)
+        assert isinstance(expected_assistant_index, int)
+        assert not isinstance(expected_assistant_index, bool)
         claimed_conversation = data.get("conversation_id")
+        claimed_branch = data.get("branch_id")
         claimed_assistant = data.get("assistant_turn_id")
-        if claimed_conversation is None or claimed_assistant is None:
+        claimed_assistant_index = data.get(
+            "assistant_turn_index"
+        )
+        if (
+            claimed_conversation is None
+            or claimed_branch is None
+            or claimed_assistant is None
+            or claimed_assistant_index is None
+        ):
             raise StaleRunError(
                 "This request did not identify its conversation"
                 " response."
             )
         if (
             claimed_conversation != expected_conversation
+            or claimed_branch != expected_branch
             or claimed_assistant != expected_assistant
+            or claimed_assistant_index
+            != expected_assistant_index
         ):
             raise StaleRunError(
                 "That response is not the conversation turn this"

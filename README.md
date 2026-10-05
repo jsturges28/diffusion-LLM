@@ -164,6 +164,9 @@ browser. Inference packs the newest exact whole exchanges that fit,
 reports omitted earlier turns, and sends Mamba-3 the same chronology as
 raw completion text. Earlier responses retain text; only an explicitly
 saved response retains and links its XAI run.
+User cards offer Copy, Edit and Delete from this path, assistant cards
+offer Copy and Retry, and visible Path arrows browse every preserved
+alternate.
 
 Diffusion generation for both diffusion models, streamed frame by
 frame, with a scrubber over the full history. Autoregressive and

@@ -12,24 +12,27 @@
 //
 // The stored keys and their order are a format, not a detail. A
 // snapshot outlives the build that wrote it for as long as the app
-// stays open, so every default below is how an older snapshot is
-// read, and renaming a key would drop the run it carried.
+// stays open, so every default and legacy alias below states how an
+// older snapshot is read.
 
 "use strict";
 
 // Fewer frames than this leaves nothing to scrub between, so a run
 // that short is neither written nor restored.
 var RUN_SNAPSHOT_FRAMES_MIN = 2;
+var RUN_SNAPSHOT_CONVERSATION_INVALID = Object.freeze({});
 
-// The fields stored as the record holds them, in the order every
-// snapshot has written them.
+// The fields stored as the current record holds them, in their
+// serialized order. The decoder below also reads the superseded
+// numeric conversation identity fields.
 var RUN_SNAPSHOT_FIELDS = [
   "model",
   "device",
   "conversationId",
-  "conversationRevision",
+  "branchId",
+  "branchRevision",
   "assistantTurnId",
-  "conversationTurnIndex",
+  "assistantTurnIndex",
   "conversationTurnVersion",
   "conversationTailText",
   "prompt",
@@ -179,6 +182,10 @@ function runSnapshotDecode(text, resident) {
   if (!runSnapshotIsResident(source, resident)) {
     return null;
   }
+  var conversation = runSnapshotConversationFacts(source);
+  if (conversation === RUN_SNAPSHOT_CONVERSATION_INVALID) {
+    return null;
+  }
   // A snapshot that hit the storage quota carries only three of the
   // six, so the run comes back renderable but without its per-token
   // detail. That is allowed, and the first Edit-Frames truncate
@@ -187,7 +194,11 @@ function runSnapshotDecode(text, resident) {
   if (runFramesLength(frames) < RUN_SNAPSHOT_FRAMES_MIN) {
     return null;
   }
-  return runSnapshotState(source, frames);
+  return runSnapshotState({
+    source: source,
+    frames: frames,
+    conversation: conversation,
+  });
 }
 
 function runSnapshotParse(text) {
@@ -215,8 +226,10 @@ function runSnapshotIsResident(source, resident) {
 }
 
 // The run's frames and stores, over the facts runSnapshotFacts reads.
-function runSnapshotState(source, frames) {
-  var state = runSnapshotFacts(source);
+function runSnapshotState(options) {
+  var source = options.source;
+  var frames = options.frames;
+  var state = runSnapshotFacts(source, options.conversation);
   state.frames = frames;
   state.original = originalRunFromJson(
     source, runFramesLength(frames)
@@ -232,32 +245,16 @@ function runSnapshotState(source, frames) {
 // The stored fields, each read the way an older snapshot needs it:
 // a missing or malformed value reads as absent rather than as
 // whatever it happened to be.
-function runSnapshotFacts(source) {
+function runSnapshotFacts(source, conversation) {
   return {
-    conversationId:
-      typeof source.conversationId === "string"
-        ? source.conversationId
-        : null,
-    conversationRevision:
-      Number.isInteger(source.conversationRevision)
-        ? source.conversationRevision
-        : null,
-    assistantTurnId:
-      typeof source.assistantTurnId === "string"
-        ? source.assistantTurnId
-        : null,
-    conversationTurnIndex:
-      Number.isInteger(source.conversationTurnIndex)
-        ? source.conversationTurnIndex
-        : null,
+    conversationId: conversation.conversationId,
+    branchId: conversation.branchId,
+    branchRevision: conversation.branchRevision,
+    assistantTurnId: conversation.assistantTurnId,
+    assistantTurnIndex: conversation.assistantTurnIndex,
     conversationTurnVersion:
-      Number.isInteger(source.conversationTurnVersion)
-        ? source.conversationTurnVersion
-        : null,
-    conversationTailText:
-      typeof source.conversationTailText === "string"
-        ? source.conversationTailText
-        : null,
+      conversation.conversationTurnVersion,
+    conversationTailText: conversation.conversationTailText,
     finalText: source.finalText || "",
     runPrompt: runSnapshotRunPrompt(source),
     params: source.params || null,
@@ -297,6 +294,183 @@ function runSnapshotFacts(source) {
     statusElapsed: source.statusElapsed || "",
     statusMessage: source.statusMessage || "",
   };
+}
+
+function runSnapshotConversationFacts(source) {
+  var modernNames = [
+    "branchId", "branchRevision", "assistantTurnIndex",
+  ];
+  var legacyNames = [
+    "conversationRevision", "conversationTurnIndex",
+  ];
+  var sharedNames = [
+    "conversationId",
+    "assistantTurnId",
+    "conversationTurnVersion",
+    "conversationTailText",
+  ];
+  var hasModern = runSnapshotHasIdentityValue(
+    source, modernNames
+  );
+  var hasLegacy = runSnapshotHasIdentityValue(
+    source, legacyNames
+  );
+  var hasShared = runSnapshotHasIdentityValue(
+    source, sharedNames
+  );
+  if (!hasModern && !hasLegacy && !hasShared) {
+    return runSnapshotEmptyConversationFacts();
+  }
+  if (hasModern && !hasLegacy) {
+    return runSnapshotModernConversationFacts(source);
+  }
+  if (hasLegacy && !hasModern) {
+    return runSnapshotLegacyConversationFacts(source);
+  }
+  return RUN_SNAPSHOT_CONVERSATION_INVALID;
+}
+
+function runSnapshotModernConversationFacts(source) {
+  var facts = {
+    conversationId: runSnapshotConversationId(
+      source.conversationId
+    ),
+    branchId: runSnapshotBranchId(source.branchId),
+    branchRevision: runSnapshotPositive(source.branchRevision),
+    assistantTurnId: runSnapshotTurnId(source.assistantTurnId),
+    assistantTurnIndex: runSnapshotPositive(
+      source.assistantTurnIndex
+    ),
+    conversationTurnVersion: runSnapshotPositive(
+      source.conversationTurnVersion
+    ),
+    conversationTailText:
+      typeof source.conversationTailText === "string"
+        ? source.conversationTailText
+        : null,
+  };
+  if (!runSnapshotConversationFactsComplete(facts)) {
+    return RUN_SNAPSHOT_CONVERSATION_INVALID;
+  }
+  if (!runSnapshotTurnBelongsToBranch(facts)) {
+    return RUN_SNAPSHOT_CONVERSATION_INVALID;
+  }
+  return facts;
+}
+
+function runSnapshotLegacyConversationFacts(source) {
+  var conversationId = runSnapshotConversationId(
+    source.conversationId
+  );
+  var facts = {
+    conversationId: conversationId,
+    branchId: conversationId === null
+      ? null
+      : "b_" + conversationId,
+    branchRevision: runSnapshotPositive(
+      source.conversationRevision
+    ),
+    assistantTurnId: runSnapshotTurnId(source.assistantTurnId),
+    assistantTurnIndex: runSnapshotPositive(
+      source.conversationTurnIndex
+    ),
+    conversationTurnVersion: runSnapshotPositive(
+      source.conversationTurnVersion
+    ),
+    conversationTailText:
+      typeof source.conversationTailText === "string"
+        ? source.conversationTailText
+        : null,
+  };
+  if (!runSnapshotConversationFactsComplete(facts)) {
+    return RUN_SNAPSHOT_CONVERSATION_INVALID;
+  }
+  if (
+    !/^[0-9]{8}$/.test(facts.assistantTurnId)
+    || parseInt(facts.assistantTurnId, 10)
+      !== facts.assistantTurnIndex
+  ) {
+    return RUN_SNAPSHOT_CONVERSATION_INVALID;
+  }
+  return facts;
+}
+
+function runSnapshotEmptyConversationFacts() {
+  return {
+    conversationId: null,
+    branchId: null,
+    branchRevision: null,
+    assistantTurnId: null,
+    assistantTurnIndex: null,
+    conversationTurnVersion: null,
+    conversationTailText: null,
+  };
+}
+
+function runSnapshotHasIdentityValue(source, names) {
+  for (var index = 0; index < names.length; index++) {
+    var value = source[names[index]];
+    if (value !== undefined && value !== null) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function runSnapshotConversationFactsComplete(facts) {
+  return (
+    facts.conversationId !== null
+    && facts.branchId !== null
+    && facts.branchRevision !== null
+    && facts.assistantTurnId !== null
+    && facts.assistantTurnIndex !== null
+    && facts.conversationTurnVersion !== null
+    && facts.conversationTailText !== null
+  );
+}
+
+function runSnapshotTurnBelongsToBranch(facts) {
+  if (/^[0-9]{8}$/.test(facts.assistantTurnId)) {
+    return (
+      parseInt(facts.assistantTurnId, 10)
+        === facts.assistantTurnIndex
+      && facts.branchId === "b_" + facts.conversationId
+    );
+  }
+  var matched = /^t_([0-9a-f]{32})_[0-9]{8}_[0-9a-f]{16}$/
+    .exec(facts.assistantTurnId);
+  return matched !== null && facts.branchId === "b_" + matched[1];
+}
+
+function runSnapshotConversationId(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  return /^[0-9a-f]{32}$/.test(value) ? value : null;
+}
+
+function runSnapshotBranchId(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  return /^b_[0-9a-f]{32}$/.test(value) ? value : null;
+}
+
+function runSnapshotTurnId(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  var legacy = /^[0-9]{8}$/.test(value);
+  var opaque = /^t_[0-9a-f]{32}_[0-9]{8}_[0-9a-f]{16}$/
+    .test(value);
+  return legacy || opaque ? value : null;
+}
+
+function runSnapshotPositive(value) {
+  if (!Number.isInteger(value) || value < 1) {
+    return null;
+  }
+  return value;
 }
 
 // A snapshot written before the run carried its own prompt has only

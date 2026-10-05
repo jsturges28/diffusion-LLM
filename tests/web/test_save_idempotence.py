@@ -32,6 +32,7 @@ from typing import Any, Dict, List
 import pytest
 from starlette.testclient import TestClient
 
+from src import conversation_identity
 from src.web import run_store, server
 
 TOKEN = "a3f9c1:1"
@@ -62,6 +63,40 @@ def _save(client: TestClient, **overrides: Any) -> Dict[str, Any]:
     result = response.json()
     assert result["success"] is True
     return result
+
+
+def _conversation_provenance() -> Dict[str, Any]:
+    return {
+        "model_id": "llada",
+        "context_pack": {
+            "included_turn_ids": ["00000003"],
+            "first_included_index": 2,
+            "omitted_turn_count": 2,
+            "prompt_token_count": 12,
+            "output_reserve": 64,
+            "requested_total_budget": 4096,
+            "effective_total_budget": 4096,
+            "conversation": {
+                "conversation_id": "a" * 32,
+                "branch_id": "b_" + "b" * 32,
+                "branch_revision": 3,
+                "assistant_turn_id": "00000004",
+                "assistant_turn_index": 4,
+            },
+        },
+    }
+
+
+def _legacy_conversation_provenance() -> Dict[str, Any]:
+    provenance = _conversation_provenance()
+    context_pack = provenance["context_pack"]
+    assert isinstance(context_pack, dict)
+    context_pack["conversation"] = {
+        "conversation_id": "a" * 32,
+        "conversation_revision": 3,
+        "assistant_turn_id": "00000004",
+    }
+    return provenance
 
 
 def _run_ids(root: Path) -> List[str]:
@@ -105,8 +140,11 @@ def test_save_endpoint_records_conversation_location(
     result = _save(
         client,
         conversation_id="a" * 32,
+        branch_id="b_" + "b" * 32,
         assistant_turn_id="00000004",
         turn_index=4,
+        assistant_turn_version=2,
+        provenance=_conversation_provenance(),
     )
     metadata = json.loads(
         (tmp_path / result["run_id"] / "metadata.json").read_text(
@@ -115,8 +153,37 @@ def test_save_endpoint_records_conversation_location(
     )
 
     assert metadata["conversation_id"] == "a" * 32
+    assert metadata["branch_id"] == "b_" + "b" * 32
     assert metadata["assistant_turn_id"] == "00000004"
     assert metadata["turn_index"] == 4
+    assert metadata["assistant_turn_version"] == 2
+
+
+def test_save_endpoint_normalizes_a_conversation_snapshot(
+    tmp_path: Path,
+    client: TestClient,
+) -> None:
+    result = _save(
+        client,
+        conversation_id="a" * 32,
+        assistant_turn_id="00000004",
+        turn_index=4,
+        assistant_turn_version=2,
+        provenance=_legacy_conversation_provenance(),
+    )
+    metadata = json.loads(
+        (tmp_path / result["run_id"] / "metadata.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert metadata["branch_id"] == "b_" + "a" * 32
+    conversation = metadata["context"]["context_pack"][
+        "conversation"
+    ]
+    assert conversation["branch_revision"] == 3
+    assert conversation["assistant_turn_index"] == 4
+    assert "conversation_revision" not in conversation
 
 
 def test_save_endpoint_refuses_partial_conversation_location(
@@ -131,6 +198,40 @@ def test_save_endpoint_refuses_partial_conversation_location(
     )
 
     assert response.status_code == 422
+
+
+def test_save_boundary_refuses_a_forged_snapshot_turn_id(
+    client: TestClient,
+) -> None:
+    """A shape-valid snapshot cannot forge durable ownership."""
+    branch_id = "b_" + "b" * 32
+    valid = conversation_identity.opaque_turn_id(branch_id, 2)
+    replacement = "0" if valid[-1] != "0" else "1"
+    forged = valid[:-1] + replacement
+    provenance = _conversation_provenance()
+    context_pack = provenance["context_pack"]
+    assert isinstance(context_pack, dict)
+    context_pack["first_included_index"] = 0
+    context_pack["omitted_turn_count"] = 0
+    conversation = context_pack["conversation"]
+    assert isinstance(conversation, dict)
+    conversation["assistant_turn_id"] = forged
+    conversation["assistant_turn_index"] = 2
+
+    response = client.post(
+        "/api/save",
+        json=_payload(
+            conversation_id="a" * 32,
+            branch_id=branch_id,
+            assistant_turn_id=forged,
+            turn_index=2,
+            assistant_turn_version=2,
+            provenance=provenance,
+        ),
+    )
+
+    assert response.status_code == 422
+    assert "invalid turn id" in response.text
 
 
 def test_the_second_save_writes_rather_than_shortcutting(

@@ -26,6 +26,7 @@ from typing import Any, Dict, List
 
 import pytest
 
+from src import conversation_identity
 from src.backends.registry import LLADA
 from src.web import run_store, save_pipeline
 from src.web.save_pipeline import (
@@ -143,6 +144,32 @@ def _provenance(**overrides: Any) -> RunProvenance:
     return RunProvenance(**base)
 
 
+def _conversation_pack(
+    *,
+    conversation_id: str = "a" * 32,
+    branch_id: str = "b_" + "b" * 32,
+    assistant_turn_id: str = "00000004",
+    assistant_turn_index: int = 4,
+) -> Dict[str, Any]:
+    first_included_index = assistant_turn_index - 2
+    return {
+        "included_turn_ids": ["00000003"],
+        "first_included_index": first_included_index,
+        "omitted_turn_count": first_included_index,
+        "prompt_token_count": 12,
+        "output_reserve": 64,
+        "requested_total_budget": 4096,
+        "effective_total_budget": 4096,
+        "conversation": {
+            "conversation_id": conversation_id,
+            "branch_id": branch_id,
+            "branch_revision": 3,
+            "assistant_turn_id": assistant_turn_id,
+            "assistant_turn_index": assistant_turn_index,
+        },
+    }
+
+
 def _request(**overrides: Any) -> SaveRunRequest:
     base: Dict[str, Any] = {
         "model": "LLaDA-8B-Instruct",
@@ -153,6 +180,14 @@ def _request(**overrides: Any) -> SaveRunRequest:
         "prompt_len": 12,
         "provenance": _provenance(),
     }
+    identity_fields = {
+        "conversation_id",
+        "branch_id",
+        "assistant_turn_id",
+        "turn_index",
+    }
+    if identity_fields.intersection(overrides):
+        overrides.setdefault("assistant_turn_version", 2)
     base.update(overrides)
     return SaveRunRequest(**base)
 
@@ -506,16 +541,18 @@ def test_the_context_pack_round_trips_into_saved_metadata() -> None:
             "00000002",
             "00000003",
         ],
-        "first_included_index": 2,
-        "omitted_turn_count": 2,
+        "first_included_index": 0,
+        "omitted_turn_count": 0,
         "prompt_token_count": 120,
         "output_reserve": 64,
         "requested_total_budget": 4096,
         "effective_total_budget": 2048,
         "conversation": {
             "conversation_id": "a" * 32,
-            "conversation_revision": 4,
+            "branch_id": "b_" + "b" * 32,
+            "branch_revision": 4,
             "assistant_turn_id": "00000004",
+            "assistant_turn_index": 4,
         },
     }
     meta = _build_metadata(
@@ -535,18 +572,127 @@ def test_a_legacy_save_has_no_context_pack_metadata() -> None:
     assert "context_pack" not in meta["context"]
 
 
+def test_schema_v1_snapshot_identity_is_normalized_on_save() -> None:
+    packed = _conversation_pack()
+    packed["conversation"] = {
+        "conversation_id": "a" * 32,
+        "conversation_revision": 3,
+        "assistant_turn_id": "00000004",
+    }
+
+    body = _request(
+        conversation_id="a" * 32,
+        assistant_turn_id="00000004",
+        turn_index=4,
+        provenance=_provenance(context_pack=packed),
+    )
+    meta = _build_metadata(body)
+
+    assert body.branch_id == "b_" + "a" * 32
+    assert meta["branch_id"] == "b_" + "a" * 32
+    saved = meta["context"]["context_pack"]["conversation"]
+    assert saved == {
+        "conversation_id": "a" * 32,
+        "branch_id": "b_" + "a" * 32,
+        "branch_revision": 3,
+        "assistant_turn_id": "00000004",
+        "assistant_turn_index": 4,
+    }
+
+
+def test_mixed_v1_v2_attestation_is_not_normalized() -> None:
+    packed = _conversation_pack()
+    packed["conversation"] = {
+        "conversation_id": "a" * 32,
+        "conversation_revision": 3,
+        "branch_id": "b_" + "a" * 32,
+        "assistant_turn_id": "00000004",
+    }
+
+    with pytest.raises(ValueError):
+        _provenance(context_pack=packed)
+
+
+def test_context_pack_assistant_location_must_be_consistent() -> None:
+    packed = _conversation_pack()
+    packed["first_included_index"] = 0
+    packed["omitted_turn_count"] = 0
+
+    with pytest.raises(ValueError, match="reserved assistant"):
+        _provenance(context_pack=packed)
+
+
+@pytest.mark.parametrize("value", [True, "3"])
+def test_branch_revision_identity_is_strict(value: object) -> None:
+    packed = _conversation_pack()
+    conversation = packed["conversation"]
+    assert isinstance(conversation, dict)
+    conversation["branch_revision"] = value
+
+    with pytest.raises(ValueError):
+        _provenance(context_pack=packed)
+
+
+@pytest.mark.parametrize("value", [True, "4"])
+def test_assistant_turn_index_identity_is_strict(
+    value: object,
+) -> None:
+    packed = _conversation_pack()
+    conversation = packed["conversation"]
+    assert isinstance(conversation, dict)
+    conversation["assistant_turn_index"] = value
+
+    with pytest.raises(ValueError):
+        _provenance(context_pack=packed)
+
+
+@pytest.mark.parametrize("value", [True, "4"])
+def test_save_turn_index_identity_is_strict(value: object) -> None:
+    with pytest.raises(ValueError):
+        _request(
+            conversation_id="a" * 32,
+            branch_id="b_" + "b" * 32,
+            assistant_turn_id="00000004",
+            turn_index=value,
+            provenance=_provenance(
+                context_pack=_conversation_pack()
+            ),
+        )
+
+
+@pytest.mark.parametrize("value", [True, "2", 0])
+def test_save_turn_version_identity_is_strict(value: object) -> None:
+    with pytest.raises(ValueError):
+        _request(
+            conversation_id="a" * 32,
+            branch_id="b_" + "b" * 32,
+            assistant_turn_id="00000004",
+            turn_index=4,
+            assistant_turn_version=value,
+            provenance=_provenance(
+                context_pack=_conversation_pack()
+            ),
+        )
+
+
 def test_conversation_location_round_trips_into_metadata() -> None:
     meta = _build_metadata(
         _request(
             conversation_id="a" * 32,
+            branch_id="b_" + "b" * 32,
             assistant_turn_id="00000004",
             turn_index=4,
+            provenance=_provenance(
+                context_pack=_conversation_pack()
+            ),
         )
     )
 
     assert meta["conversation_id"] == "a" * 32
+    assert meta["branch_id"] == "b_" + "b" * 32
     assert meta["assistant_turn_id"] == "00000004"
     assert meta["turn_index"] == 4
+    assert meta["assistant_turn_version"] == 2
 
 
 def test_partial_conversation_location_is_refused() -> None:
@@ -555,14 +701,89 @@ def test_partial_conversation_location_is_refused() -> None:
             conversation_id="a" * 32,
             assistant_turn_id="00000004",
         )
-
-
-def test_conversation_turn_id_must_match_its_index() -> None:
-    with pytest.raises(ValueError, match="turn_index"):
+    with pytest.raises(ValueError, match="supplied together"):
         _request(
             conversation_id="a" * 32,
+            branch_id="b_" + "b" * 32,
+            assistant_turn_id="00000004",
+            turn_index=4,
+            assistant_turn_version=None,
+            provenance=_provenance(
+                context_pack=_conversation_pack()
+            ),
+        )
+
+
+def test_conversation_location_requires_worker_attestation() -> None:
+    with pytest.raises(ValueError, match="worker attestation"):
+        _request(
+            conversation_id="a" * 32,
+            branch_id="b_" + "b" * 32,
+            assistant_turn_id="00000004",
+            turn_index=4,
+        )
+
+
+def test_opaque_assistant_id_uses_attested_index() -> None:
+    branch_id = "b_" + "b" * 32
+    assistant_id = conversation_identity.opaque_turn_id(
+        branch_id, 2
+    )
+    metadata = _build_metadata(
+        _request(
+            conversation_id="a" * 32,
+            branch_id=branch_id,
+            assistant_turn_id=assistant_id,
+            turn_index=2,
+            provenance=_provenance(
+                context_pack=_conversation_pack(
+                    assistant_turn_id=assistant_id,
+                    assistant_turn_index=2,
+                )
+            ),
+        )
+    )
+
+    assert metadata["assistant_turn_id"] == assistant_id
+    assert metadata["turn_index"] == 2
+
+
+def test_forged_opaque_assistant_checksum_is_refused() -> None:
+    valid = conversation_identity.opaque_turn_id(
+        "b_" + "b" * 32, 2
+    )
+    replacement = "0" if valid[-1] != "0" else "1"
+    forged = valid[:-1] + replacement
+
+    with pytest.raises(ValueError, match="invalid turn id"):
+        _provenance(
+            context_pack=_conversation_pack(
+                assistant_turn_id=forged,
+                assistant_turn_index=2,
+            )
+        )
+
+
+def test_numeric_attested_id_must_equal_its_index() -> None:
+    with pytest.raises(ValueError, match="must equal"):
+        _provenance(
+            context_pack=_conversation_pack(
+                assistant_turn_id="00000006",
+                assistant_turn_index=4,
+            )
+        )
+
+
+def test_conversation_index_must_match_worker_attestation() -> None:
+    with pytest.raises(ValueError, match="must equal"):
+        _request(
+            conversation_id="a" * 32,
+            branch_id="b_" + "b" * 32,
             assistant_turn_id="00000004",
             turn_index=6,
+            provenance=_provenance(
+                context_pack=_conversation_pack()
+            ),
         )
 
 
@@ -577,17 +798,33 @@ def test_client_conversation_must_match_worker_attestation() -> None:
         "effective_total_budget": 4096,
         "conversation": {
             "conversation_id": "a" * 32,
-            "conversation_revision": 3,
+            "branch_id": "b_" + "b" * 32,
+            "branch_revision": 3,
             "assistant_turn_id": "00000004",
+            "assistant_turn_index": 4,
         },
     }
 
     with pytest.raises(ValueError, match="worker attestation"):
         _request(
             conversation_id="b" * 32,
+            branch_id="b_" + "b" * 32,
             assistant_turn_id="00000004",
             turn_index=4,
             provenance=_provenance(context_pack=packed),
+        )
+
+
+def test_client_branch_must_match_worker_attestation() -> None:
+    with pytest.raises(ValueError, match="worker attestation"):
+        _request(
+            conversation_id="a" * 32,
+            branch_id="b_" + "c" * 32,
+            assistant_turn_id="00000004",
+            turn_index=4,
+            provenance=_provenance(
+                context_pack=_conversation_pack()
+            ),
         )
 
 

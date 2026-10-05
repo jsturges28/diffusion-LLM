@@ -315,6 +315,16 @@ def test_the_projection_is_a_list_not_an_exclusion(
     assert "some_future_field" not in summary
 
 
+def test_branch_identity_reaches_the_analytics_projection() -> None:
+    branch_id = "b_" + "a" * 32
+
+    summary = run_summary(
+        {"run_id": "r", "branch_id": branch_id}
+    )
+
+    assert summary["branch_id"] == branch_id
+
+
 def test_every_named_field_survives_when_present(
 ) -> None:
     meta = {field: 1 for field in SUMMARY_FIELDS}

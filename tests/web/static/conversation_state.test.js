@@ -20,6 +20,8 @@ const SOURCE = path.join(
   "src", "web", "static", "conversation_state.js"
 );
 const CONVERSATION_ID = "a".repeat(32);
+const BRANCH_ID = "b_" + "b".repeat(32);
+const OTHER_BRANCH_ID = "b_" + "c".repeat(32);
 
 function load() {
   const context = vm.createContext({});
@@ -154,7 +156,9 @@ test("message packing keeps pending user and absolute offset", () => {
   assert.equal(packed.messages.at(-1).turn_id, "00000201");
   assert.equal(packed.candidate_turn_offset, 150);
   assert.equal(packed.assistant_turn_id, "00000202");
-  assert.equal(packed.conversation_revision, 203);
+  assert.equal(packed.branch_id, "b_" + CONVERSATION_ID);
+  assert.equal(packed.branch_revision, 203);
+  assert.equal(packed.assistant_turn_index, 202);
 });
 
 test("only the completed durable tail is editable", () => {
@@ -177,13 +181,22 @@ test("only the completed durable tail is editable", () => {
   const currentIdentity = api.conversationStateIdentity(complete);
   const oldIdentity = Object.assign({}, currentIdentity, {
     assistant_turn_id: "00000002",
-    turn_index: 2,
+    assistant_turn_index: 2,
   });
   assert.equal(
     api.conversationStateCanEdit(complete, currentIdentity), true
   );
   assert.equal(
     api.conversationStateCanEdit(complete, oldIdentity), false
+  );
+  assert.equal(
+    api.conversationStateCanEdit(
+      complete,
+      Object.assign({}, currentIdentity, {
+        branch_id: OTHER_BRANCH_ID,
+      })
+    ),
+    false
   );
   assert.equal(
     api.conversationStateCanEdit(
@@ -222,4 +235,219 @@ test("compact turns discard heavy arbitrary metadata", () => {
   assert.equal(state.turns[1].metadata.status, "completed");
   assert.equal("frames" in state.turns[1].metadata, false);
   assert.equal("candidates" in state.turns[1].metadata, false);
+});
+
+function opaqueTurn(index, role, branchId) {
+  const slot = String(index + 40).padStart(8, "0");
+  return {
+    turn_id: "t_" + branchId.slice(2) + "_" + slot
+      + "_" + String(index).padStart(16, "0"),
+    branch_id: branchId,
+    index,
+    version: role === "assistant" ? 2 : 1,
+    role,
+    text: role + " opaque",
+    partial: false,
+    model_id: role === "assistant" ? "llada" : null,
+    input_mode: role === "assistant" ? "chat" : null,
+    context_pack: {},
+    metadata: {},
+    run_link: null,
+  };
+}
+
+function branchManifest(branchId, revision) {
+  const assistant = opaqueTurn(2, "assistant", branchId);
+  return {
+    schema_version: 2,
+    id: CONVERSATION_ID,
+    title: "Branches",
+    branch_id: branchId,
+    branch_revision: revision,
+    revision,
+    catalog_revision: 4,
+    default_branch_id: OTHER_BRANCH_ID,
+    turn_count: 2,
+    tail_turn_id: assistant.turn_id,
+    tail_version: 2,
+    pending_assistant_id: null,
+  };
+}
+
+function branchPage(branchId, revision, withPoint) {
+  return {
+    schema_version: 2,
+    conversation_id: CONVERSATION_ID,
+    branch_id: branchId,
+    branch_revision: revision,
+    revision,
+    catalog_revision: 4,
+    default_branch_id: OTHER_BRANCH_ID,
+    turns: [
+      opaqueTurn(1, "user", branchId),
+      opaqueTurn(2, "assistant", branchId),
+    ],
+    next_before: null,
+    has_more: false,
+    branch_points: withPoint ? [{
+      turn_index: 1,
+      source_branch_id: BRANCH_ID,
+      selected_branch_id: branchId,
+      branch_ids: [BRANCH_ID, OTHER_BRANCH_ID],
+      deleted_branch_ids: [],
+    }] : [],
+  };
+}
+
+test("schema v2 keeps opaque identity separate from index", () => {
+  const api = load();
+  const state = api.conversationStateReduce(
+    api.conversationStateCreate(),
+    {
+      type: "loaded",
+      conversation: branchManifest(BRANCH_ID, 3),
+      page: branchPage(BRANCH_ID, 3, true),
+    }
+  );
+
+  assert.equal(state.selectedBranchId, BRANCH_ID);
+  assert.equal(state.turns[0].index, 1);
+  assert.notEqual(state.turns[0].turn_id, "00000001");
+  assert.equal(state.turns[0].branch_id, BRANCH_ID);
+  assert.equal(state.branchPoints.length, 1);
+  assert.equal(state.branchPoints[0].turn_index, 1);
+});
+
+test("loading another branch drops incompatible cached pages", () => {
+  const api = load();
+  let state = loaded(api, 1, 50, false);
+  assert.equal(state.turns.length, 50);
+
+  state = api.conversationStateReduce(state, {
+    type: "loaded",
+    conversation: branchManifest(OTHER_BRANCH_ID, 1),
+    page: branchPage(OTHER_BRANCH_ID, 1, false),
+  });
+
+  assert.equal(state.selectedBranchId, OTHER_BRANCH_ID);
+  assert.equal(state.turns.length, 2);
+  assert.equal(state.pagesLoaded, 1);
+  assert.equal(state.branchPoints.length, 0);
+});
+
+test("append removes the selected deletion marker", () => {
+  const api = load();
+  const manifest = branchManifest(BRANCH_ID, 3);
+  const page = branchPage(BRANCH_ID, 3, false);
+  page.branch_points = [{
+    turn_index: 3,
+    source_branch_id: OTHER_BRANCH_ID,
+    selected_branch_id: BRANCH_ID,
+    branch_ids: [OTHER_BRANCH_ID, BRANCH_ID],
+    deleted_branch_ids: [BRANCH_ID],
+  }];
+  let state = api.conversationStateReduce(
+    api.conversationStateCreate(),
+    { type: "loaded", conversation: manifest, page: page }
+  );
+  const user = opaqueTurn(3, "user", BRANCH_ID);
+  const assistant = Object.assign(
+    {}, opaqueTurn(4, "assistant", BRANCH_ID), {
+      version: 1,
+      text: "",
+      partial: true,
+    }
+  );
+  const appended = Object.assign(
+    {}, branchManifest(BRANCH_ID, 4), {
+      turn_count: 4,
+      tail_turn_id: assistant.turn_id,
+      tail_version: 1,
+      pending_assistant_id: assistant.turn_id,
+    }
+  );
+
+  state = api.conversationStateReduce(state, {
+    type: "appended",
+    conversation: appended,
+    userTurn: user,
+    assistantTurn: assistant,
+  });
+
+  assert.equal(state.branchPoints.length, 1);
+  assert.deepEqual(
+    Array.from(state.branchPoints[0].deleted_branch_ids),
+    []
+  );
+});
+
+test("catalog refresh preserves turns and their saved run link", () => {
+  const api = load();
+  const originalPage = branchPage(BRANCH_ID, 3, false);
+  originalPage.turns[1].run_link = {
+    run_id: "saved-run",
+    revision: 7,
+  };
+  let state = api.conversationStateReduce(
+    api.conversationStateCreate(),
+    {
+      type: "loaded",
+      conversation: branchManifest(BRANCH_ID, 3),
+      page: originalPage,
+    }
+  );
+  const turns = state.turns;
+  const refreshedManifest = Object.assign(
+    {}, branchManifest(BRANCH_ID, 3), {
+      catalog_revision: 5,
+      default_branch_id: BRANCH_ID,
+    }
+  );
+  const refreshedPage = Object.assign(
+    {}, branchPage(BRANCH_ID, 3, true), {
+      catalog_revision: 5,
+      default_branch_id: BRANCH_ID,
+    }
+  );
+
+  state = api.conversationStateReduce(state, {
+    type: "catalog_refreshed",
+    conversation: refreshedManifest,
+    pages: [refreshedPage],
+  });
+
+  assert.equal(state.turns, turns);
+  assert.deepEqual(
+    Object.assign({}, state.turns[1].run_link),
+    { run_id: "saved-run", revision: 7 }
+  );
+  assert.equal(state.conversation.catalog_revision, 5);
+  assert.equal(state.branchPoints.length, 1);
+});
+
+test("branch point payloads are bounded", () => {
+  const api = load();
+  const pagePayload = branchPage(BRANCH_ID, 3, false);
+  pagePayload.branch_points = Array.from(
+    { length: 257 },
+    (_, index) => ({
+      turn_index: index + 1,
+      source_branch_id: BRANCH_ID,
+      selected_branch_id: BRANCH_ID,
+      branch_ids: [BRANCH_ID],
+      deleted_branch_ids: [],
+    })
+  );
+
+  assert.throws(
+    () => api.conversationStateReduce(
+      api.conversationStateCreate(),
+      {
+        type: "loaded",
+        conversation: branchManifest(BRANCH_ID, 3),
+        page: pagePayload,
+      }
+    ),
+    /exceed 256/
+  );
 });

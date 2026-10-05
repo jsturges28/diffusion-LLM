@@ -1997,9 +1997,19 @@ function renderRunMeta(run) {
       "Conversation", String(run.conversation_id)
     );
   }
+  if (run.branch_id) {
+    html += metaRowHtml(
+      "Branch", String(run.branch_id)
+    );
+  }
+  if (run.assistant_turn_id) {
+    html += metaRowHtml(
+      "Assistant turn ID", String(run.assistant_turn_id)
+    );
+  }
   if (Number.isInteger(run.turn_index)) {
     html += metaRowHtml(
-      "Assistant turn", String(run.turn_index)
+      "Turn index", String(run.turn_index)
     );
   }
 

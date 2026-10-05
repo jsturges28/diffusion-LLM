@@ -875,6 +875,71 @@ predecessor Text only. A saved predecessor links to its existing Analytics
 row. There is no second conversation-shaped run catalog and no migration
 of legacy snapshots.
 
+**Conversation paths are a bounded shared-prefix DAG, not copies and
+not XAI run branches.** Recorded 2026-10-05, when message Edit, Delete
+and Retry shipped.
+
+The user-facing unit is a complete chronological path, but copying that
+path at every fork would make repeated edits quadratic in disk and recovery
+work. Schema v2 instead stores immutable turn versions in bounded branch
+segments. A child names its parent, the inherited prefix length and only
+its local suffix. Resolving a path walks those bounded segments and composes
+the shared prefix; selecting one never moves directories or duplicates old
+turns. The result is a path DAG over shared immutable records while the
+catalog remains a small ordered list of reachable branches.
+
+Message identity and chronology are deliberately separate. A turn's
+branch-local `index` says where it appears, which role belongs there, how
+paging works and what context packing may omit. Its opaque id says which
+logical message a mutation, worker request or saved run owns. Sibling paths
+can put different messages at the same chronological index, so using the
+index as identity would let a stale request target the wrong alternate.
+
+Ordinary append, completion and run-link writes compare only the selected
+branch revision. Independent alternates can therefore advance concurrently.
+A fork compares both its source branch and the catalog revision, since
+catalog membership is the shared fact it changes. Path arrows perform
+explicit branch reads and keep the selection outside the catalog; browsing
+does not advance a revision or change the durable default. A successful
+fork may make its result the restart default because that is a mutation,
+not observation.
+
+Each Edit, Delete or Retry also carries a random operation id whose receipt
+binds it to a digest of the requested semantics. Publication writes the new
+branch and immutable receipt first, then publishes the catalog last as the
+commit point. If power fails before that last replace, recovery may discard
+the unpublished artifacts. If the catalog landed but the HTTP response did
+not, the receipt reconstructs and returns the exact committed result before
+stale CAS coordinates are considered. Reusing an operation id for different
+semantics is an error. This is the dropped-response idempotency boundary;
+blindly retrying arbitrary conversation mutations remains forbidden.
+
+The graph has fixed, defensive limits: 256 catalog branches, 16 child
+branches at one fork point and ancestry depth 32. Path and local-suffix
+turn counts, assistant versions, revisions, receipt scans and browser pages
+are bounded as well. These are corruption and resource ceilings, not
+creative controls. They keep every traversal, recovery scan and client cache
+finite, and a limit refusal leaves already published paths readable.
+
+Schema v1 is adapted lazily. An old linear conversation reads as one virtual
+branch without changing a byte. Its first valid fork materializes that root
+and the v2 catalog while continuing to read the old numeric turn ids from
+their original directory; only new turns receive opaque ids. An invalid
+fork does not upgrade anything. Older run snapshots likewise synthesize the
+legacy branch identity when they have a complete numeric conversation
+identity, rather than triggering an eager data migration.
+
+Conversation paths remain distinct from the generator's XAI run branches.
+Message Edit, Delete and Retry change which durable messages form the model
+input, and Edit or Retry starts a fresh response using a named snapshot of
+the current model and Run settings. **Edit Frames** and **What If?** instead
+intervene inside the exact active tail's retained run, revise that same
+assistant node and preserve an Original / Edited run comparison. Conversation
+paths can remain useful forever as text plus optional Analytics links; XAI
+interventions need live worker state or explicitly saved run artifacts.
+Browsing an old path must therefore never rehydrate its frames or make its
+tail eligible for run editing.
+
 **The Analytics table wants roving tabindex, and has not got it.**
 Recorded 2026-09-02, after the keyboard work made everything else on
 the page reachable and left this as the conspicuous gap.

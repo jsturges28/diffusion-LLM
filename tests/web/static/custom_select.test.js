@@ -284,14 +284,24 @@ test("Tab closes the list rather than leaving it over the page", () => {
   assert.equal(isOpen(wrap), false);
 });
 
-test("a disabled control ignores the keyboard", () => {
+test("a disabled control leaves and restores the tab order", () => {
   const page = widgetPage();
   const wrap = build(page);
+  assert.equal(wrap.getAttribute("aria-disabled"), "false");
+  assert.equal(wrap.tabIndex, 0);
   wrap.disabled = true;
 
   key(wrap, "ArrowDown");
 
   assert.equal(isOpen(wrap), false);
+  assert.equal(wrap.getAttribute("aria-disabled"), "true");
+  assert.equal(wrap.tabIndex, -1);
+
+  wrap.disabled = false;
+  assert.equal(wrap.getAttribute("aria-disabled"), "false");
+  assert.equal(wrap.tabIndex, 0);
+  key(wrap, "ArrowDown");
+  assert.equal(isOpen(wrap), true);
 });
 
 test("reopening forgets where the last browse got to", () => {

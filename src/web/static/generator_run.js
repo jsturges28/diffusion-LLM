@@ -86,11 +86,13 @@ function generatorRunCreate(options) {
   var savedRevision = null;
   var saving = false;
   var savePending = null;
+  var runEpoch = 0;
 
   var frameOffset = 0;
   var elapsedOffset = 0;
 
   function reset() {
+    advanceRunEpoch();
     runFramesClear(frames);
     originalRunClear(original);
     positionAlts = [];
@@ -127,6 +129,7 @@ function generatorRunCreate(options) {
         "generatorRun.begin needs parameter values"
       );
     }
+    advanceRunEpoch();
     runPrompt = prompt;
     runParams = copyObject(params);
     runConversation = conversationState();
@@ -616,8 +619,11 @@ function generatorRunCreate(options) {
       return;
     }
     payload.conversation_id = identity.conversationId;
+    payload.branch_id = identity.branchId;
     payload.assistant_turn_id = identity.assistantTurnId;
-    payload.turn_index = identity.turnIndex;
+    payload.turn_index = identity.assistantTurnIndex;
+    payload.assistant_turn_version =
+      identity.assistantTurnVersion;
   }
 
   function addCandidatesFields(payload) {
@@ -809,6 +815,14 @@ function generatorRunCreate(options) {
       edited: wasEdited,
       label: label,
     });
+    var savedConversation = conversationIdentity();
+    var saveContext = {
+      wasEdited: wasEdited,
+      label: label,
+      status: status,
+      conversationIdentity: savedConversation,
+      runEpoch: runEpoch,
+    };
     var payload = buildSavePayload();
     var request = Promise.resolve().then(function () {
       return requestSave("/api/save", {
@@ -819,24 +833,37 @@ function generatorRunCreate(options) {
     }).then(function (response) {
       return response.json();
     }).then(function (result) {
-      return saveResult(result, wasEdited, label, status);
+      return saveResult(result, saveContext);
     }).catch(function (error) {
-      return saveFailed(error.message, label, status);
+      return saveFailed(error.message, saveContext);
     });
-    savePending = request.then(
+    var pending = request.then(
       function (result) {
+        if (
+          saveContext.runEpoch !== runEpoch
+          || savePending !== pending
+        ) {
+          return result;
+        }
         saving = false;
         savePending = null;
         onSaveSettled();
         return result;
       },
       function (error) {
+        if (
+          saveContext.runEpoch !== runEpoch
+          || savePending !== pending
+        ) {
+          throw error;
+        }
         saving = false;
         savePending = null;
         onSaveSettled();
         throw error;
       }
     );
+    savePending = pending;
     return savePending;
   }
 
@@ -845,39 +872,49 @@ function generatorRunCreate(options) {
     return Promise.resolve(false);
   }
 
-  function saveResult(result, wasEdited, label, status) {
+  function saveResult(result, context) {
+    if (context.runEpoch !== runEpoch) {
+      return false;
+    }
     if (!result.success) {
       onSaveFailure({
-        label: label,
+        label: context.label,
         message: result.message || "unknown",
-        status: status,
+        status: context.status,
       });
       return false;
     }
     saved = true;
-    if (wasEdited) {
+    if (context.wasEdited) {
       editedSaved = true;
     }
     adoptSaveIdentity(result);
     var success = onSaveSuccess({
-      edited: wasEdited,
-      label: label,
+      edited: context.wasEdited,
+      label: context.label,
       result: result,
       runId: savedRunId,
       revision: savedRevision,
-      status: status,
+      status: context.status,
+      conversationIdentity: context.conversationIdentity,
     });
     return Promise.resolve(success).then(function (followup) {
+      if (context.runEpoch !== runEpoch) {
+        return false;
+      }
       saveSession();
       return followup !== false;
     });
   }
 
-  function saveFailed(message, label, status) {
+  function saveFailed(message, context) {
+    if (context.runEpoch !== runEpoch) {
+      return false;
+    }
     onSaveFailure({
-      label: label,
+      label: context.label,
       message: message,
-      status: status,
+      status: context.status,
     });
     return false;
   }
@@ -896,6 +933,15 @@ function generatorRunCreate(options) {
       typeof result.revision === "number"
         ? result.revision
         : null;
+  }
+
+  function advanceRunEpoch() {
+    if (runEpoch >= Number.MAX_SAFE_INTEGER) {
+      throw new RangeError("generator run epoch is exhausted");
+    }
+    runEpoch += 1;
+    saving = false;
+    savePending = null;
   }
 
   function saveSession() {
@@ -925,15 +971,18 @@ function generatorRunCreate(options) {
       conversationId: conversation === null
         ? null
         : conversation.conversationId,
-      conversationRevision: conversation === null
+      branchId: conversation === null
         ? null
-        : conversation.conversationRevision,
+        : conversation.branchId,
+      branchRevision: conversation === null
+        ? null
+        : conversation.branchRevision,
       assistantTurnId: conversation === null
         ? null
         : conversation.assistantTurnId,
-      conversationTurnIndex: conversation === null
+      assistantTurnIndex: conversation === null
         ? null
-        : conversation.turnIndex,
+        : conversation.assistantTurnIndex,
       conversationTurnVersion: conversation === null
         ? null
         : conversation.assistantTurnVersion,
@@ -1006,10 +1055,11 @@ function generatorRunCreate(options) {
     }
     return (
       restored.conversationId === current.conversationId
+      && restored.branchId === current.branchId
       && restored.assistantTurnId === current.assistantTurnId
-      && restored.conversationRevision
-        === current.conversationRevision
-      && restored.conversationTurnIndex === current.turnIndex
+      && restored.branchRevision === current.branchRevision
+      && restored.assistantTurnIndex
+        === current.assistantTurnIndex
       && restored.conversationTurnVersion
         === current.assistantTurnVersion
       && restored.conversationTailText === current.assistantText
@@ -1019,9 +1069,10 @@ function generatorRunCreate(options) {
   function restoredConversation(restored) {
     if (
       !restored.conversationId
+      || !restored.branchId
       || !restored.assistantTurnId
-      || !Number.isInteger(restored.conversationRevision)
-      || !Number.isInteger(restored.conversationTurnIndex)
+      || !Number.isInteger(restored.branchRevision)
+      || !Number.isInteger(restored.assistantTurnIndex)
       || !Number.isInteger(restored.conversationTurnVersion)
       || typeof restored.conversationTailText !== "string"
     ) {
@@ -1029,15 +1080,17 @@ function generatorRunCreate(options) {
     }
     return {
       conversationId: restored.conversationId,
-      conversationRevision: restored.conversationRevision,
+      branchId: restored.branchId,
+      branchRevision: restored.branchRevision,
       assistantTurnId: restored.assistantTurnId,
-      turnIndex: restored.conversationTurnIndex,
+      assistantTurnIndex: restored.assistantTurnIndex,
       assistantTurnVersion: restored.conversationTurnVersion,
       assistantText: restored.conversationTailText,
     };
   }
 
   function applyRestored(restored) {
+    advanceRunEpoch();
     runFramesRestore(frames, restored.frames);
     originalRunAssign(original, restored.original);
     sealRunTokens();
@@ -1158,16 +1211,18 @@ function generatorRunCreate(options) {
       );
     }
     var conversationId = state.conversation_id;
+    var branchId = state.branch_id;
     var assistantTurnId = state.assistant_turn_id;
-    var revision = state.conversation_revision;
-    var turnIndex = state.turn_index;
+    var branchRevision = state.branch_revision;
+    var assistantTurnIndex = state.assistant_turn_index;
     var turnVersion = state.assistant_turn_version;
     var assistantText = state.assistant_text;
     if (
       typeof conversationId !== "string"
+      || typeof branchId !== "string"
       || typeof assistantTurnId !== "string"
-      || !Number.isInteger(revision)
-      || !Number.isInteger(turnIndex)
+      || !Number.isInteger(branchRevision)
+      || !Number.isInteger(assistantTurnIndex)
       || !Number.isInteger(turnVersion)
       || typeof assistantText !== "string"
     ) {
@@ -1177,15 +1232,16 @@ function generatorRunCreate(options) {
     }
     return {
       conversationId: conversationId,
-      conversationRevision: revision,
+      branchId: branchId,
+      branchRevision: branchRevision,
       assistantTurnId: assistantTurnId,
-      turnIndex: turnIndex,
+      assistantTurnIndex: assistantTurnIndex,
       assistantTurnVersion: turnVersion,
       assistantText: assistantText,
     };
   }
 
-  function refreshConversation() {
+  function refreshConversation(action) {
     if (runConversation === null) {
       return false;
     }
@@ -1193,20 +1249,117 @@ function generatorRunCreate(options) {
     if (current === null) {
       return false;
     }
-    if (
-      current.conversationId !== runConversation.conversationId
-      || current.assistantTurnId !== runConversation.assistantTurnId
-    ) {
+    if (!conversationOwnerMatches(current)) {
       return false;
     }
-    if (
-      current.assistantText !== runConversation.assistantText
-      && current.assistantText !== finalText
-    ) {
+    if (conversationIdentityMatches(current)) {
+      return true;
+    }
+    if (!conversationAdvanceMatches(current, action)) {
       return false;
     }
     runConversation = current;
     return true;
+  }
+
+  function conversationOwnerMatches(current) {
+    return (
+      current.conversationId === runConversation.conversationId
+      && current.branchId === runConversation.branchId
+      && current.assistantTurnId === runConversation.assistantTurnId
+      && current.assistantTurnIndex
+        === runConversation.assistantTurnIndex
+    );
+  }
+
+  function conversationIdentityMatches(current) {
+    return (
+      current.branchRevision === runConversation.branchRevision
+      && current.assistantTurnVersion
+        === runConversation.assistantTurnVersion
+      && current.assistantText === runConversation.assistantText
+    );
+  }
+
+  function conversationAdvanceMatches(current, action) {
+    if (!action || typeof action !== "object") {
+      return false;
+    }
+    if (
+      current.branchRevision !== runConversation.branchRevision + 1
+      || current.assistantTurnVersion
+        !== runConversation.assistantTurnVersion + 1
+    ) {
+      return false;
+    }
+    if (!conversationActionTurnMatches(current, action.turn)) {
+      if (action.type !== "loaded") {
+        return false;
+      }
+      return conversationLoadedAdvanceMatches(current, action);
+    }
+    if (action.type === "assistant_updated") {
+      return (
+        current.assistantText === finalText
+        && action.turn.partial === interrupted
+      );
+    }
+    if (action.type === "run_linked") {
+      return conversationActionRunLinkMatches(action.turn);
+    }
+    return false;
+  }
+
+  function conversationLoadedAdvanceMatches(current, action) {
+    var turn = conversationLoadedTurn(current, action);
+    if (turn === null) {
+      return false;
+    }
+    if (conversationActionRunLinkMatches(turn)) {
+      return true;
+    }
+    return (
+      current.assistantText === finalText
+      && current.assistantText !== runConversation.assistantText
+      && turn.partial === interrupted
+    );
+  }
+
+  function conversationLoadedTurn(current, action) {
+    var page = action.page;
+    if (!page || !Array.isArray(page.turns)) {
+      return null;
+    }
+    for (var index = page.turns.length - 1; index >= 0; index--) {
+      var turn = page.turns[index];
+      if (conversationActionTurnMatches(current, turn)) {
+        return turn;
+      }
+    }
+    return null;
+  }
+
+  function conversationActionTurnMatches(current, turn) {
+    return Boolean(
+      turn
+      && typeof turn === "object"
+      && turn.turn_id === current.assistantTurnId
+      && turn.index === current.assistantTurnIndex
+      && turn.version === current.assistantTurnVersion
+      && turn.text === current.assistantText
+    );
+  }
+
+  function conversationActionRunLinkMatches(turn) {
+    var link = turn.run_link;
+    return Boolean(
+      savedRunId !== null
+      && savedRevision !== null
+      && link
+      && link.run_id === savedRunId
+      && link.revision === savedRevision
+      && turn.text === runConversation.assistantText
+    );
   }
 
   function conversationIdentity() {
@@ -1215,9 +1368,10 @@ function generatorRunCreate(options) {
     }
     return {
       conversation_id: runConversation.conversationId,
-      conversation_revision: runConversation.conversationRevision,
+      branch_id: runConversation.branchId,
+      branch_revision: runConversation.branchRevision,
       assistant_turn_id: runConversation.assistantTurnId,
-      turn_index: runConversation.turnIndex,
+      assistant_turn_index: runConversation.assistantTurnIndex,
       assistant_turn_version:
         runConversation.assistantTurnVersion,
       assistant_text: runConversation.assistantText,

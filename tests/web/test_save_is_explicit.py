@@ -72,12 +72,19 @@ def _run_region(anchor: str, chars: int) -> str:
 
 
 def test_only_three_places_start_a_save() -> None:
-    """The page adapter, Confirm and the rescue. The adapter is the
-    function the Save button receives by reference."""
+    """The button, Confirm and rescue share one waiting adapter."""
     source = _app()
-    calls = re.findall(r"generatorRun\.save\(\)", source)
+    adapter_calls = re.findall(
+        r"(?<!function )saveRun\(\)", source
+    )
+    confirmation_calls = re.findall(
+        r"saveRun\(\{ editConfirmation: true \}\)", source
+    )
+    run_calls = re.findall(r"generatorRun\.save\(\)", source)
 
-    assert len(calls) == 3
+    assert len(adapter_calls) == 1
+    assert len(confirmation_calls) == 1
+    assert len(run_calls) == 1
 
 
 def test_the_save_button_is_one_of_them() -> None:
@@ -97,7 +104,7 @@ def test_the_rescue_is_the_third() -> None:
     run cannot survive it, and the alternative is losing it."""
     region = _region("function rescueRunThenReload()", 700)
 
-    assert "generatorRun.save()" in region
+    assert "saveRun()" in region
 
 
 # -- and who may not --
