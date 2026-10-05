@@ -27,6 +27,7 @@ INDEX = STATIC / "index.html"
 GUIDE = REPO_ROOT / "docs" / "GUIDE.md"
 STYLE_CSS = STATIC / "style.css"
 CONVERSATION_CSS = STATIC / "conversation.css"
+RUN_SETTINGS_CSS = STATIC / "run_settings.css"
 
 OTHER_PAGES = (
     "menu.html",
@@ -201,6 +202,21 @@ def test_run_settings_uses_native_disclosure_semantics() -> None:
     assert 'aria-controls="run-settings-body"' in summary.group(0)
     assert "tabindex" not in summary.group(0)
     assert 'role="button"' not in summary.group(0)
+
+
+def test_signal_tooltips_open_inside_scrollport() -> None:
+    """Right-edge watermark help must not create clipped overflow."""
+    styles = RUN_SETTINGS_CSS.read_text(encoding="utf-8")
+    body = _rule(styles, "#run-settings-body {", 260)
+    tooltip = _rule(
+        styles,
+        '#run-settings [data-param-group="signals"] .tooltip {',
+        180,
+    )
+
+    assert "overflow-x: hidden" in body
+    assert "right: 24px" in tooltip
+    assert "left: auto" in tooltip
 
 
 def test_new_actions_are_native_buttons_with_names() -> None:

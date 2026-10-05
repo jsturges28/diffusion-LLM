@@ -93,6 +93,7 @@
 
 #run-settings-body {
   max-height: min(42vh, 360px);
+  overflow-x: hidden;
   overflow-y: auto;
   padding: 9px;
   border-top: 1px solid var(--border);
@@ -157,6 +158,18 @@
   flex-wrap: wrap;
   align-items: flex-end;
   gap: 9px;
+}
+
+#run-settings .tooltip {
+  width: min(280px, calc(100vw - 80px));
+}
+
+/* The Signals column sits against the disclosure's right edge. Open
+   its help inward so watermark copy stays inside the scrollport
+   instead of creating a clipped horizontal overflow. */
+#run-settings [data-param-group="signals"] .tooltip {
+  right: 24px;
+  left: auto;
 }
 
 #run-settings #param-row {
