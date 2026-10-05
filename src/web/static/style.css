@@ -636,6 +636,7 @@ body {
   color: var(--danger);
 }
 
+.run-settings-param-row,
 #param-row {
   display: flex;
   flex-wrap: wrap;
@@ -748,6 +749,7 @@ body {
 
 /* ---- Mode toggle row ---- */
 
+.run-settings-mode-row,
 #mode-row {
   display: flex;
   align-items: center;
@@ -758,6 +760,7 @@ body {
 /* Restores every hyperparameter plus Experimental. Quiet by default
    and disabled while they already match, so it reads as an escape
    hatch rather than a fifth control competing for attention. */
+.run-settings-reset,
 #btn-param-defaults {
   display: inline-flex;
   align-items: center;
@@ -776,11 +779,13 @@ body {
   transition: color 0.15s, border-color 0.15s;
 }
 
+.run-settings-reset:hover:not(:disabled),
 #btn-param-defaults:hover:not(:disabled) {
   color: var(--text-primary);
   border-color: var(--text-dim);
 }
 
+.run-settings-reset:disabled,
 #btn-param-defaults:disabled {
   opacity: 0.35;
   cursor: default;
@@ -897,6 +902,7 @@ body {
 
 /* ---- Validation hint ---- */
 
+.run-settings-validation-hint,
 #validation-hint {
   margin-top: 6px;
   font-size: 11px;
@@ -3041,6 +3047,7 @@ input[type="checkbox"].app-checkbox:checked::after {
     padding: 10px 12px;
   }
 
+  .run-settings-param-row,
   #param-row {
     gap: 6px;
   }
@@ -3117,6 +3124,7 @@ input[type="checkbox"].app-checkbox:checked::after {
 /* Base layout for the dynamic hyperparameters. The generator's
    page-local run_settings.css groups these controls and removes this
    fallback cap inside the disclosure. */
+.run-settings-param-fields,
 #param-fields {
   display: flex;
   flex-wrap: wrap;
@@ -3544,6 +3552,7 @@ input[type="checkbox"].app-checkbox:checked::after {
 
 /* Extra mode toggles (e.g. Thinking) shown next to Experimental
    for models that support them. */
+.run-settings-mode-extra,
 #mode-extra {
   display: inline-flex;
   align-items: center;

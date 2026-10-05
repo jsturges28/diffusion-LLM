@@ -1,16 +1,18 @@
-/* Generator-only run settings disclosure.
+/* Reusable Run settings disclosure.
 
    Native details owns disclosure semantics and keyboard behavior. The
    controller only mirrors its state for explicit accessibility
    inspection and opens it when validation has something to show. */
 
+.run-settings,
 #run-settings {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: rgba(255, 255, 255, 0.018);
 }
 
-#run-settings-summary {
+#run-settings-summary,
+.run-settings-summary {
   display: flex;
   min-height: 34px;
   align-items: center;
@@ -22,10 +24,12 @@
   user-select: none;
 }
 
+.run-settings-summary::-webkit-details-marker,
 #run-settings-summary::-webkit-details-marker {
   display: none;
 }
 
+.run-settings-summary:focus-visible,
 #run-settings-summary:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -38,6 +42,7 @@
   text-transform: uppercase;
 }
 
+.run-settings-summary-chips,
 #run-settings-summary-chips {
   display: flex;
   flex: 1 1 auto;
@@ -87,10 +92,12 @@
   transition: transform 0.15s ease;
 }
 
+.run-settings[open] .run-settings-chevron,
 #run-settings[open] .run-settings-chevron {
   transform: rotate(180deg);
 }
 
+.run-settings-body,
 #run-settings-body {
   max-height: min(42vh, 360px);
   overflow-x: hidden;
@@ -101,23 +108,28 @@
   scrollbar-width: thin;
 }
 
+.run-settings-body::-webkit-scrollbar,
 #run-settings-body::-webkit-scrollbar {
   width: 6px;
 }
 
+.run-settings-body::-webkit-scrollbar-thumb,
 #run-settings-body::-webkit-scrollbar-thumb {
   border-radius: 3px;
   background: var(--border);
 }
 
+.run-settings .run-settings-mode-row,
 #run-settings #mode-row {
   margin-bottom: 8px;
 }
 
+.run-settings .run-settings-reset,
 #run-settings #btn-param-defaults {
   margin-left: auto;
 }
 
+.run-settings-mode-extra,
 #mode-extra {
   display: flex;
   flex-wrap: wrap;
@@ -125,6 +137,7 @@
   margin-bottom: 9px;
 }
 
+.run-settings-mode-extra:empty,
 #mode-extra:empty {
   display: none;
 }
@@ -160,6 +173,7 @@
   gap: 9px;
 }
 
+.run-settings .tooltip,
 #run-settings .tooltip {
   width: min(280px, calc(100vw - 80px));
 }
@@ -167,15 +181,18 @@
 /* The Signals column sits against the disclosure's right edge. Open
    its help inward so watermark copy stays inside the scrollport
    instead of creating a clipped horizontal overflow. */
+.run-settings [data-param-group="signals"] .tooltip,
 #run-settings [data-param-group="signals"] .tooltip {
   right: 24px;
   left: auto;
 }
 
+.run-settings .run-settings-param-row,
 #run-settings #param-row {
   display: block;
 }
 
+.run-settings .run-settings-param-fields,
 #run-settings #param-fields {
   display: grid;
   max-width: none;
@@ -185,6 +202,7 @@
     repeat(auto-fit, minmax(min(100%, 250px), 1fr));
 }
 
+.run-settings .run-settings-group,
 #run-settings .run-settings-group {
   padding: 8px;
   border: 1px solid rgba(255, 255, 255, 0.06);
@@ -192,17 +210,20 @@
   background: rgba(0, 0, 0, 0.12);
 }
 
+.run-settings .mode-toggle,
 #run-settings .mode-toggle {
   display: inline-flex;
   align-items: center;
   gap: 6px;
 }
 
+.run-settings .run-settings-validation-hint,
 #run-settings #validation-hint {
   min-height: 1.3em;
   margin-top: 7px;
 }
 
+.run-settings .run-settings-validation-hint[hidden],
 #run-settings #validation-hint[hidden] {
   display: block;
   visibility: hidden;
@@ -215,6 +236,7 @@
 }
 
 @media (max-width: 700px) {
+  .run-settings-summary-chips,
   #run-settings-summary-chips {
     gap: 4px;
   }

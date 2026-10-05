@@ -28,6 +28,8 @@ const { loadPage } = require("./dom_stub.js");
 const SCRIPTS = [
   "custom_select.js",
   "model_client.js",
+  "run_settings_core.js",
+  "run_settings_panel.js",
   "generator_model_panel.js",
 ];
 

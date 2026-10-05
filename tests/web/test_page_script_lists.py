@@ -113,3 +113,24 @@ def test_action_view_exports_only_its_factory() -> None:
     )
 
     assert globals_found == ["conversationActionViewCreate"]
+
+
+@pytest.mark.parametrize(
+    ("script", "factory"),
+    (
+        ("run_settings_core.js", "runSettingsCoreCreate"),
+        ("run_settings_panel.js", "runSettingsPanelCreate"),
+    ),
+)
+def test_run_settings_scripts_export_one_factory(
+    script: str, factory: str
+) -> None:
+    source = (STATIC / script).read_text(encoding="utf-8")
+    globals_found = re.findall(
+        r"^(?:var|function) ([A-Za-z0-9_$]+)",
+        source,
+        re.MULTILINE,
+    )
+
+    assert globals_found == [factory]
+    assert "module.exports" not in source

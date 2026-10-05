@@ -20,6 +20,8 @@ const { loadPage } = require("./dom_stub.js");
 const SCRIPTS = [
   "custom_select.js",
   "model_client.js",
+  "run_settings_core.js",
+  "run_settings_panel.js",
   "generator_model_panel.js",
 ];
 const COMPOSED_FILES = [
@@ -27,6 +29,8 @@ const COMPOSED_FILES = [
   "persist.js",
   "model_client.js",
   "generator_composer.js",
+  "run_settings_core.js",
+  "run_settings_panel.js",
   "generator_model_panel.js",
 ];
 const DRAFT_KEY = "diffusion_param_state";
@@ -345,93 +349,23 @@ test("validation keeps the divisibility messages", () => {
   );
 });
 
-test("controls render in schema groups without model checks", () => {
+test("Draft parameter changes still reach recount and validation",
+  () => {
   const h = loadPanel({});
-  const fields = h.page.registry.get("param-fields");
-  const groups = fields.children.map(
-    (child) => child.getAttribute("data-param-group")
-  );
+  const changes = h.state.parameterChanges;
+  const validations = h.state.validations.length;
+  const temperature = input(h, "temperature");
 
-  assert.deepEqual(groups, ["output", "sampling", "signals"]);
-  assert.equal(
-    fields.children[0]
-      .querySelector(".run-settings-group-label").textContent,
-    "Output"
-  );
-  const modeExtra = h.page.registry.get("mode-extra");
-  assert.equal(modeExtra.children.length, 2);
-  assert.equal(
-    modeExtra.children[0].getAttribute("data-param-group"),
-    "features"
-  );
-  assert.equal(fields.children[2].hidden, true);
-  assert.equal(modeExtra.children[1].hidden, true);
-});
+  temperature.value = "0.6";
+  temperature.dispatch("input");
+  assert.equal(h.state.parameterChanges, changes + 1);
+  assert.ok(h.state.validations.length > validations);
+  assert.equal(h.panel.validation().valid, true);
 
-test("experimental-only controls stay hidden until enabled", () => {
-  const h = loadPanel({});
-  const experimental =
-    h.page.registry.get("toggle-experimental");
-  const fields = h.page.registry.get("param-fields");
-  const modes = h.page.registry.get("mode-extra");
-
-  assert.equal(input(h, "watermark").closest(
-    ".mode-toggle"
-  ).hidden, true);
-  assert.equal(input(h, "watermark_delta").closest(
-    ".param-group"
-  ).hidden, true);
-  assert.equal(modes.children[1].hidden, true);
-  assert.equal(fields.children[2].hidden, true);
-  assert.equal(
-    "watermark" in host(h.panel.parameterValues()), false
-  );
-  assert.equal(
-    "watermark_delta" in host(h.panel.parameterValues()), false
-  );
-
-  experimental.checked = true;
-  experimental.dispatch("change");
-
-  assert.equal(modes.children[1].hidden, false);
-  assert.equal(fields.children[2].hidden, false);
-  assert.equal(input(h, "watermark").closest(
-    ".mode-toggle"
-  ).hidden, false);
-  assert.equal(
-    h.panel.parameterValues().watermark, false
-  );
-  assert.equal(h.panel.parameterValues().watermark_delta, 2);
-});
-
-test("collapsed summary chips follow primary parameter values", () => {
-  const h = loadPanel({});
-  const chips =
-    h.page.registry.get("run-settings-summary-chips");
-
-  assert.equal(chips.children.length, 3);
-  const temperature = chips.children.find(
-    (chip) =>
-      chip.getAttribute("data-param-name") === "temperature"
-  );
-  assert.ok(temperature);
-  assert.equal(
-    temperature.querySelector(
-      ".run-settings-chip-value"
-    ).textContent,
-    "0.7"
-  );
-
-  input(h, "temperature").value = "0.9";
-  input(h, "temperature").dispatch("input");
-  const changed = chips.children.find(
-    (chip) =>
-      chip.getAttribute("data-param-name") === "temperature"
-  );
-  assert.equal(
-    changed.querySelector(".run-settings-chip-value").textContent,
-    "0.9"
-  );
+  temperature.value = "";
+  temperature.dispatch("input");
+  assert.equal(h.state.parameterChanges, changes + 2);
+  assert.equal(h.panel.validation().valid, false);
 });
 
 test("conversation actions read current model and summary", () => {
@@ -468,59 +402,6 @@ test("conversation actions read current model and summary", () => {
     h.panel.conversationConfiguration().settingsSummary,
     /Temperature 0.9/
   );
-});
-
-test("native settings disclosure mirrors its expanded state", () => {
-  const h = loadPanel({});
-  const details = h.page.registry.get("run-settings");
-  const summary = h.page.registry.get("run-settings-summary");
-
-  assert.equal(summary.getAttribute("aria-expanded"), "false");
-  details.open = true;
-  details.dispatch("toggle");
-  assert.equal(summary.getAttribute("aria-expanded"), "true");
-  details.open = false;
-  details.dispatch("toggle");
-  assert.equal(summary.getAttribute("aria-expanded"), "false");
-});
-
-test("invalid collapsed settings open and focus the first error",
-  () => {
-    const h = loadPanel({});
-    const details = h.page.registry.get("run-settings");
-    const summary = h.page.registry.get("run-settings-summary");
-    const length = input(h, "gen_length");
-    let focused = false;
-    length.focus = () => { focused = true; };
-
-    details.open = false;
-    length.value = "6";
-    length.dispatch("input");
-
-    assert.equal(details.open, true);
-    assert.equal(summary.getAttribute("aria-expanded"), "true");
-    assert.equal(focused, true);
-  }
-);
-
-test("Experimental and Defaults use device-aware bounds", () => {
-  const h = loadPanel({});
-  const experimental =
-    h.page.registry.get("toggle-experimental");
-  const defaults = h.page.registry.get("btn-param-defaults");
-
-  assert.equal(input(h, "gen_length").value, "4");
-  input(h, "gen_length").value = "12";
-  experimental.checked = true;
-  experimental.dispatch("change");
-  assert.equal(input(h, "gen_length").max, 16);
-  assert.equal(defaults.disabled, false);
-
-  defaults.click();
-
-  assert.equal(experimental.checked, false);
-  assert.equal(input(h, "gen_length").value, "4");
-  assert.equal(defaults.disabled, true);
 });
 
 test("switch confirmation calls only the execution callback", () => {

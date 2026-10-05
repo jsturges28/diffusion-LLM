@@ -219,6 +219,23 @@ def test_signal_tooltips_open_inside_scrollport() -> None:
     assert "left: auto" in tooltip
 
 
+def test_run_settings_styles_support_mounted_instances() -> None:
+    html = _html()
+    styles = RUN_SETTINGS_CSS.read_text(encoding="utf-8")
+    details = re.search(
+        r'<details id="run-settings"[^>]*>', html
+    )
+
+    assert details is not None
+    assert 'class="run-settings"' in details.group(0)
+    assert ".run-settings," in styles
+    assert ".run-settings-body," in styles
+    assert (
+        '.run-settings [data-param-group="signals"] .tooltip,'
+        in styles
+    )
+
+
 def test_new_actions_are_native_buttons_with_names() -> None:
     html = _html()
     for element_id in (

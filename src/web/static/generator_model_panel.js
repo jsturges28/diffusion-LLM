@@ -2,9 +2,9 @@
 //
 // Loaded as a classic script before app.js. Registry data, picker
 // traversal, switch confirmation, parameter DOM references and form
-// drafts stay private to the returned controller. The page owns the
-// activation policy and generation semantics through callbacks and
-// narrow reads.
+// drafts stay private to the returned controllers. The reusable Run
+// settings panel owns schema controls; this controller owns model
+// selection and exposes narrow reads to the page.
 
 "use strict";
 
@@ -36,32 +36,23 @@ function generatorModelPanelCreate(options) {
     return element;
   }
 
-  var validationHint = requiredElement("validation-hint");
-  var runSettings = requiredElement("run-settings");
-  var runSettingsSummary =
-    requiredElement("run-settings-summary");
-  var runSettingsSummaryChips =
-    requiredElement("run-settings-summary-chips");
-  var toggleExperimental =
-    requiredElement("toggle-experimental");
-  var btnParamDefaults = requiredElement("btn-param-defaults");
   var modelSelect = requiredElement("model-select");
   var modelSelectValue = requiredElement("model-select-value");
   var modelSelectList = requiredElement("model-select-list");
-  var paramFields = requiredElement("param-fields");
-  var modeExtra = requiredElement("mode-extra");
 
   var PARAM_STATE_KEY = "diffusion_param_state";
   var MODEL_OPTION_ID_PREFIX = "model-select-option-";
   var MODEL_SELECT_TAB_INDEX = 0;
   var DEVICE_LABELS = { cuda: "GPU", cpu: "CPU" };
-  var PARAM_GROUP_LABELS = {
-    general: "General",
-    output: "Output",
-    sampling: "Sampling",
-    features: "Features",
-    signals: "Signals",
-  };
+  var runSettingsPanel = runSettingsPanelCreate({
+    idPrefix: "",
+    root: requiredElement("run-settings"),
+    widthTarget: document.documentElement,
+    onValidationChanged: onValidationChanged,
+    onParametersChanged: onParametersChanged,
+    readPersistedState: readPersistedParamState,
+    writePersistedState: writePersistedParamState,
+  });
 
   var models = {};
   var modelList = [];
@@ -72,16 +63,11 @@ function generatorModelPanelCreate(options) {
   var activeContextLength = null;
   var gpuPresent = false;
 
-  var paramInputs = {};
-  var paramTooltips = {};
-  var paramControls = {};
-  var paramGroupMounts = {};
-  var modeGroupMounts = {};
-  var paramsValid = true;
   var modelSelectDisabled = false;
   var modelActiveRow = -1;
   var switchConfirmEl = null;
   var collapsedTickerTimer = null;
+  var modelFontReadyPending = false;
   var wired = false;
 
   function wire() {
@@ -89,28 +75,8 @@ function generatorModelPanelCreate(options) {
       return;
     }
     wired = true;
-    toggleExperimental.addEventListener(
-      "change", experimentalChanged
-    );
-    btnParamDefaults.addEventListener(
-      "click", resetParamsToDefaults
-    );
-    runSettings.addEventListener(
-      "toggle", syncRunSettingsExpanded
-    );
-    syncRunSettingsExpanded();
+    runSettingsPanel.wire();
     wireModelPicker();
-  }
-
-  function syncRunSettingsExpanded() {
-    runSettingsSummary.setAttribute(
-      "aria-expanded", runSettings.open ? "true" : "false"
-    );
-  }
-
-  function experimentalChanged() {
-    applyLimits();
-    paramFormChanged();
   }
 
   function wireModelPicker() {
@@ -245,23 +211,18 @@ function generatorModelPanelCreate(options) {
   }
 
   function buildActiveParamPanel() {
-    if (!activeModel) {
-      paramInputs = {};
-      paramTooltips = {};
-      paramControls = {};
-      paramGroupMounts = {};
-      modeGroupMounts = {};
-      paramFields.innerHTML = "";
-      modeExtra.innerHTML = "";
-      runSettingsSummaryChips.innerHTML = "";
-      updateParamDefaultsButton();
-      return;
-    }
-    buildParamPanel(activeModel);
-    applyUniformParamWidth(modelList);
-    remeasureWhenFontReady();
-    restoreParamState();
-    updateParamDefaultsButton();
+    var capabilities = activeModel
+      ? activeModel.capabilities || {}
+      : {};
+    runSettingsPanel.configure({
+      model: activeModel,
+      models: modelList,
+      modelId: activeModelId,
+      modelDisplay: activeDisplayName(),
+      device: activeDevice,
+      inputMode: capabilities.input_mode || null,
+    });
+    remeasureModelSelectWhenFontReady();
   }
 
   function refresh(info) {
@@ -528,15 +489,10 @@ function generatorModelPanelCreate(options) {
     modelSelect.tabIndex = disabled
       ? -1
       : MODEL_SELECT_TAB_INDEX;
-    toggleExperimental.disabled = disabled;
+    runSettingsPanel.setDisabled(disabled);
     if (disabled) {
       closeModelList();
     }
-    var names = Object.keys(paramInputs);
-    for (var index = 0; index < names.length; index++) {
-      paramInputs[names[index]].disabled = disabled;
-    }
-    updateParamDefaultsButton();
   }
 
   function modelRows() {
@@ -856,735 +812,48 @@ function generatorModelPanelCreate(options) {
       Math.ceil(width) + 48 + "px";
   }
 
-  function numericSpecs() {
-    var result = [];
-    if (!activeModel) {
-      return result;
-    }
-    var specs = activeModel.param_specs;
-    for (var index = 0; index < specs.length; index++) {
-      if (
-        specs[index].experimental_only
-        && !toggleExperimental.checked
-      ) {
-        continue;
-      }
-      if (
-        specs[index].type === "int"
-        || specs[index].type === "float"
-      ) {
-        result.push(specs[index]);
-      }
-    }
-    return result;
-  }
-
-  function specOverride(spec) {
-    if (
-      spec.overrides
-      && activeDevice
-      && spec.overrides[activeDevice]
-    ) {
-      return spec.overrides[activeDevice];
-    }
-    return null;
-  }
-
-  function specBounds(spec, experimental) {
-    var override = specOverride(spec);
-    if (override) {
-      var bounds = experimental
-        ? override.experimental
-        : override.recommended;
-      if (bounds) {
-        return bounds;
-      }
-    }
-    return experimental ? spec.experimental : spec.recommended;
-  }
-
-  function specDefault(spec) {
-    var override = specOverride(spec);
-    if (
-      override
-      && override.default !== null
-      && override.default !== undefined
-    ) {
-      return override.default;
-    }
-    return spec.default;
-  }
-
-  function activeLimits() {
-    var result = {};
-    if (!activeModel) {
-      return result;
-    }
-    var specs = activeModel.param_specs;
-    for (var index = 0; index < specs.length; index++) {
-      var bounds = specBounds(
-        specs[index], toggleExperimental.checked
-      );
-      if (bounds) {
-        result[specs[index].name] = {
-          min: bounds[0],
-          max: bounds[1],
-        };
-      }
-    }
-    return result;
-  }
-
-  function buildInfoIcon(spec) {
-    var info = document.createElement("span");
-    info.className = "info-icon info-icon-sm";
-    info.textContent = "?";
-    info.setAttribute("aria-label", spec.label + " info");
-    var tip = document.createElement("span");
-    tip.className = "tooltip";
-    info.appendChild(tip);
-    info.addEventListener("click", function (event) {
-      event.preventDefault();
-      event.stopPropagation();
-    });
-    paramTooltips[spec.name] = tip;
-    return info;
-  }
-
-  function buildParamField(spec, input, mount) {
-    var group = document.createElement("div");
-    group.className = "param-group";
-    var label = document.createElement("label");
-    label.setAttribute("for", "param-" + spec.name);
-    label.appendChild(document.createTextNode(spec.label));
-    label.appendChild(buildInfoIcon(spec));
-    group.appendChild(label);
-    group.appendChild(input);
-    mount.appendChild(group);
-    return group;
-  }
-
-  function buildModeToggle(spec, checkbox, mount) {
-    var wrap = document.createElement("span");
-    wrap.className = "mode-toggle";
-    var toggle = document.createElement("label");
-    toggle.className = "toggle-switch";
-    var slider = document.createElement("span");
-    slider.className = "toggle-slider";
-    toggle.appendChild(checkbox);
-    toggle.appendChild(slider);
-    var name = document.createElement("span");
-    name.className = "toggle-label";
-    name.textContent = spec.label;
-    wrap.appendChild(toggle);
-    wrap.appendChild(name);
-    wrap.appendChild(buildInfoIcon(spec));
-    mount.appendChild(wrap);
-    return wrap;
-  }
-
-  function buildParamPanel(model) {
-    paramInputs = {};
-    paramTooltips = {};
-    paramControls = {};
-    paramGroupMounts = {};
-    modeGroupMounts = {};
-    paramFields.innerHTML = "";
-    modeExtra.innerHTML = "";
-    var specs = model.param_specs;
-    for (var index = 0; index < specs.length; index++) {
-      appendParam(specs[index]);
-    }
-    applyLimits();
-  }
-
-  function appendParam(spec) {
-    var input = buildParamInput(spec);
-    paramInputs[spec.name] = input;
-    var control;
-    if (spec.type === "bool") {
-      control = buildModeToggle(
-        spec, input, modeGroupMount(spec)
-      );
-    } else {
-      control = buildParamField(
-        spec, input, paramGroupMount(spec)
-      );
-    }
-    control.setAttribute(
-      "data-experimental-only",
-      spec.experimental_only ? "true" : "false"
-    );
-    paramControls[spec.name] = control;
-    var eventName = (
-      spec.type === "int" || spec.type === "float"
-    ) ? "input" : "change";
-    input.addEventListener(eventName, function () {
-      validateAllParams();
-      paramFormChanged();
-    });
-  }
-
-  function specGroup(spec) {
-    var group = typeof spec.group === "string"
-      ? spec.group
-      : "general";
-    return PARAM_GROUP_LABELS[group] ? group : "general";
-  }
-
-  function paramGroupMount(spec) {
-    var group = specGroup(spec);
-    if (!paramGroupMounts[group]) {
-      paramGroupMounts[group] = buildControlGroup(
-        paramFields, group, "run-settings-group"
-      );
-    }
-    return paramGroupMounts[group];
-  }
-
-  function modeGroupMount(spec) {
-    var group = specGroup(spec);
-    if (!modeGroupMounts[group]) {
-      modeGroupMounts[group] = buildControlGroup(
-        modeExtra, group, "run-settings-mode-group"
-      );
-    }
-    return modeGroupMounts[group];
-  }
-
-  function buildControlGroup(host, group, className) {
-    var section = document.createElement("section");
-    section.className = className;
-    section.setAttribute("data-param-group", group);
-    var heading = document.createElement("h3");
-    heading.className = "run-settings-group-label";
-    heading.textContent = PARAM_GROUP_LABELS[group];
-    var controls = document.createElement("div");
-    controls.className = "run-settings-group-controls";
-    section.appendChild(heading);
-    section.appendChild(controls);
-    host.appendChild(section);
-    controls._section = section;
-    return controls;
-  }
-
-  function buildParamInput(spec) {
-    var input;
-    if (spec.type === "select") {
-      var options = (spec.options || []).map(function (value) {
-        return { value: value, label: prettifyOption(value) };
-      });
-      input = createCustomSelect(options, spec.default);
-    } else if (spec.type === "bool") {
-      input = document.createElement("input");
-      input.type = "checkbox";
-      input.checked = Boolean(specDefault(spec));
-    } else {
-      input = document.createElement("input");
-      input.type = "number";
-      if (spec.step !== null && spec.step !== undefined) {
-        input.step = String(spec.step);
-      }
-      input.value = String(specDefault(spec));
-    }
-    input.id = "param-" + spec.name;
-    input.disabled = modelSelectDisabled;
-    return input;
-  }
-
-  function paramRangeText(spec, limits) {
-    if (spec.type === "select") {
-      return (spec.options || []).map(prettifyOption).join(" / ");
-    }
-    if (spec.type === "bool") {
-      return "on / off";
-    }
-    var bounds = limits[spec.name];
-    if (bounds) {
-      return "(" + bounds.min + "\u2013" + bounds.max + ")";
-    }
-    return "";
-  }
-
-  function updateRangeLabels() {
-    if (!activeModel) {
-      return;
-    }
-    var limits = activeLimits();
-    var specs = activeModel.param_specs;
-    for (var index = 0; index < specs.length; index++) {
-      updateRangeLabel(specs[index], limits);
-    }
-  }
-
-  function updateRangeLabel(spec, limits) {
-    var tip = paramTooltips[spec.name];
-    if (!tip) {
-      return;
-    }
-    tip.innerHTML = "";
-    var rangeLine = document.createElement("div");
-    var emphasis = document.createElement("em");
-    emphasis.textContent = "Range:";
-    rangeLine.appendChild(emphasis);
-    rangeLine.appendChild(document.createTextNode(
-      " " + paramRangeText(spec, limits)
-    ));
-    tip.appendChild(rangeLine);
-    if (spec.help) {
-      var description = document.createElement("div");
-      description.className = "tooltip-desc";
-      description.textContent = spec.help;
-      tip.appendChild(description);
-    }
-  }
-
-  function remeasureWhenFontReady() {
+  function remeasureModelSelectWhenFontReady() {
     var fonts = document.fonts;
     if (!fonts || !fonts.ready || !fonts.ready.then) {
       return;
     }
+    if (modelFontReadyPending) {
+      return;
+    }
+    modelFontReadyPending = true;
     function remeasure() {
-      applyUniformParamWidth(modelList);
+      modelFontReadyPending = false;
       sizeModelSelect(modelList);
     }
     fonts.ready.then(remeasure).catch(remeasure);
   }
 
-  function applyUniformParamWidth(allModels) {
-    var refLabel = paramFields.querySelector("label");
-    if (!refLabel) {
-      return;
-    }
-    var refControl =
-      paramFields.querySelector("input, .custom-select")
-      || refLabel;
-    var maxWidth = widestParamWidth({
-      models: allModels,
-      label: refLabel,
-      control: refControl,
-    });
-    document.documentElement.style.setProperty(
-      "--param-width", Math.ceil(maxWidth) + "px"
-    );
-  }
-
-  function widestParamWidth(settings) {
-    var letterSpacing = 0.8;
-    var maxWidth = 90;
-    for (var modelIndex = 0;
-      modelIndex < settings.models.length;
-      modelIndex++
-    ) {
-      var specs =
-        settings.models[modelIndex].param_specs || [];
-      for (var specIndex = 0;
-        specIndex < specs.length;
-        specIndex++
-      ) {
-        maxWidth = Math.max(
-          maxWidth,
-          paramWidth({
-            spec: specs[specIndex],
-            label: settings.label,
-            control: settings.control,
-            letterSpacing: letterSpacing,
-          })
-        );
-      }
-    }
-    return maxWidth;
-  }
-
-  function paramWidth(settings) {
-    if (settings.spec.type === "bool") {
-      return 0;
-    }
-    var upper = String(settings.spec.label).toUpperCase();
-    var labelWidth =
-      measureTextWidth([upper], settings.label)
-      + settings.letterSpacing
-        * Math.max(0, upper.length - 1)
-      + 26;
-    if (settings.spec.type !== "select") {
-      return labelWidth;
-    }
-    var options =
-      (settings.spec.options || []).map(prettifyOption);
-    var optionWidth =
-      measureTextWidth(options, settings.control) + 40;
-    return Math.max(labelWidth, optionWidth);
-  }
-
-  function applyLimits() {
-    updateExperimentalVisibility();
-    var limits = activeLimits();
-    var names = Object.keys(limits);
-    for (var index = 0; index < names.length; index++) {
-      applyInputLimit(
-        paramInputs[names[index]], limits[names[index]]
-      );
-    }
-    updateRangeLabels();
-    validateAllParams();
-  }
-
-  function updateExperimentalVisibility() {
-    if (!activeModel) {
-      return;
-    }
-    var specs = activeModel.param_specs || [];
-    for (var index = 0; index < specs.length; index++) {
-      var control = paramControls[specs[index].name];
-      if (control) {
-        control.hidden = !!specs[index].experimental_only
-          && !toggleExperimental.checked;
-      }
-    }
-    updateControlGroupVisibility(paramGroupMounts);
-    updateControlGroupVisibility(modeGroupMounts);
-  }
-
-  function updateControlGroupVisibility(mounts) {
-    var names = Object.keys(mounts);
-    for (var index = 0; index < names.length; index++) {
-      var mount = mounts[names[index]];
-      var visible = false;
-      for (var child = 0; child < mount.children.length; child++) {
-        if (!mount.children[child].hidden) {
-          visible = true;
-          break;
-        }
-      }
-      if (mount._section) {
-        mount._section.hidden = !visible;
-      }
-    }
-  }
-
-  function applyInputLimit(input, bounds) {
-    if (!input || input.type !== "number") {
-      return;
-    }
-    input.min = bounds.min;
-    input.max = bounds.max;
-    var value = parseFloat(input.value);
-    if (isNaN(value)) {
-      return;
-    }
-    if (value < bounds.min) {
-      input.value = bounds.min;
-    } else if (value > bounds.max) {
-      input.value = bounds.max;
-    }
-  }
-
-  function validateAllParams() {
-    var limits = activeLimits();
-    var errors = [];
-    var specs = numericSpecs();
-    for (var index = 0; index < specs.length; index++) {
-      var input = paramInputs[specs[index].name];
-      if (input) {
-        input.classList.remove("input-warn");
-      }
-    }
-    for (var check = 0; check < specs.length; check++) {
-      validateNumericParam({
-        spec: specs[check],
-        bounds: limits[specs[check].name],
-        errors: errors,
-      });
-    }
-    validateDivisibility(errors);
-    setValidation(errors);
-    updateSummaryChips();
-  }
-
-  function validateNumericParam(settings) {
-    var input = paramInputs[settings.spec.name];
-    if (!input) {
-      return;
-    }
-    var raw = input.value.trim();
-    var value = parseFloat(raw);
-    if (raw === "" || isNaN(value)) {
-      input.classList.add("input-warn");
-      settings.errors.push(
-        settings.spec.label + " is empty or invalid."
-      );
-      return;
-    }
-    if (settings.bounds && value < settings.bounds.min) {
-      input.classList.add("input-warn");
-      settings.errors.push(
-        value < 0
-          ? settings.spec.label + " cannot be negative."
-          : settings.spec.label + " must be at least "
-            + settings.bounds.min + "."
-      );
-      return;
-    }
-    if (settings.bounds && value > settings.bounds.max) {
-      input.classList.add("input-warn");
-      settings.errors.push(
-        settings.spec.label + " must be at most "
-        + settings.bounds.max + "."
-      );
-    }
-  }
-
-  function setValidation(errors) {
-    paramsValid = errors.length === 0;
-    validationHint.hidden = paramsValid;
-    validationHint.textContent = paramsValid ? "" : errors[0];
-    if (!paramsValid && !runSettings.open) {
-      revealFirstInvalidControl();
-    }
-    onValidationChanged(validationRead());
-  }
-
-  function revealFirstInvalidControl() {
-    runSettings.open = true;
-    syncRunSettingsExpanded();
-    var first = paramFields.querySelector(".input-warn");
-    if (!first) {
-      first = modeExtra.querySelector(".input-warn");
-    }
-    if (first && typeof first.focus === "function") {
-      first.focus();
-    }
-  }
-
-  function updateSummaryChips() {
-    runSettingsSummaryChips.innerHTML = "";
-    if (!activeModel) {
-      return;
-    }
-    var specs = activeModel.param_specs || [];
-    for (var index = 0; index < specs.length; index++) {
-      if (specs[index].prominence === "primary") {
-        appendSummaryChip(specs[index]);
-      }
-    }
-  }
-
-  function appendSummaryChip(spec) {
-    var input = paramInputs[spec.name];
-    if (!input) {
-      return;
-    }
-    var chip = document.createElement("span");
-    chip.className = "run-settings-chip";
-    chip.setAttribute("data-param-name", spec.name);
-    if (input.classList.contains("input-warn")) {
-      chip.classList.add("is-invalid");
-    }
-    var label = document.createElement("span");
-    label.className = "run-settings-chip-label";
-    label.textContent = spec.label;
-    var value = document.createElement("span");
-    value.className = "run-settings-chip-value";
-    value.textContent = summaryParamValue(spec, input);
-    chip.appendChild(label);
-    chip.appendChild(value);
-    runSettingsSummaryChips.appendChild(chip);
-  }
-
-  function summaryParamValue(spec, input) {
-    if (spec.type === "bool") {
-      return input.checked ? "On" : "Off";
-    }
-    if (spec.type === "select") {
-      return prettifyOption(input.value);
-    }
-    return input.value;
-  }
-
-  function validateDivisibility(errors) {
-    var genInput = paramInputs.gen_length;
-    var blockInput = paramInputs.block_length;
-    var stepsInput = paramInputs.steps;
-    if (!genInput || !blockInput || !stepsInput) {
-      return;
-    }
-    var genLength = parseInt(genInput.value, 10);
-    var blockLength = parseInt(blockInput.value, 10);
-    var steps = parseInt(stepsInput.value, 10);
-    var genOkay =
-      !genInput.classList.contains("input-warn");
-    var blockOkay =
-      !blockInput.classList.contains("input-warn");
-    var stepsOkay =
-      !stepsInput.classList.contains("input-warn");
-    if (
-      genOkay
-      && blockOkay
-      && blockLength > 0
-      && genLength % blockLength !== 0
-    ) {
-      addBlockLengthError({
-        errors: errors,
-        genInput: genInput,
-        blockInput: blockInput,
-        genLength: genLength,
-        blockLength: blockLength,
-      });
-      return;
-    }
-    addStepsDivisibilityError({
-      errors: errors,
-      input: stepsInput,
-      genLength: genLength,
-      blockLength: blockLength,
-      valuesOkay: genOkay && blockOkay && stepsOkay,
-    });
-  }
-
-  function addBlockLengthError(settings) {
-    settings.genInput.classList.add("input-warn");
-    settings.blockInput.classList.add("input-warn");
-    settings.errors.push(
-      "Gen Length (" + settings.genLength
-      + ") must be divisible by Block Length ("
-      + settings.blockLength + ")."
-    );
-  }
-
-  function addStepsDivisibilityError(settings) {
-    if (!settings.valuesOkay || settings.blockLength <= 0) {
-      return;
-    }
-    if (settings.genLength % settings.blockLength !== 0) {
-      return;
-    }
-    var numBlocks =
-      settings.genLength / settings.blockLength;
-    var steps = parseInt(settings.input.value, 10);
-    if (numBlocks > 0 && steps % numBlocks !== 0) {
-      settings.input.classList.add("input-warn");
-      settings.errors.push(
-        "Steps (" + steps
-        + ") must be divisible by num_blocks ("
-        + numBlocks + ")."
-      );
-    }
-  }
-
   function parameterValuesRead() {
-    var result = {};
-    if (!activeModel) {
-      return result;
-    }
-    var specs = activeModel.param_specs;
-    for (var index = 0; index < specs.length; index++) {
-      var spec = specs[index];
-      if (spec.experimental_only && !toggleExperimental.checked) {
-        continue;
-      }
-      var input = paramInputs[spec.name];
-      if (input) {
-        result[spec.name] = parsedParamValue(spec, input);
-      }
-    }
-    return result;
-  }
-
-  function parsedParamValue(spec, input) {
-    if (spec.type === "int") {
-      return parseInt(input.value, 10);
-    }
-    if (spec.type === "float") {
-      return parseFloat(input.value);
-    }
-    if (spec.type === "bool") {
-      return input.checked;
-    }
-    return input.value;
+    return runSettingsPanel.parameterValues();
   }
 
   function parameterDefaultsRead() {
-    var defaults = {};
-    if (!activeModel) {
-      return defaults;
-    }
-    var specs = activeModel.param_specs || [];
-    for (var index = 0; index < specs.length; index++) {
-      defaults[specs[index].name] = specDefault(specs[index]);
-    }
-    return defaults;
+    return runSettingsPanel.parameterDefaults();
   }
 
   function experimentalRead() {
-    return toggleExperimental.checked;
+    return runSettingsPanel.experimental();
   }
 
   function thinkingRead() {
-    return Boolean(parameterValuesRead().thinking);
+    return runSettingsPanel.thinking();
   }
 
   function outputBudgetRead() {
-    var values = parameterValuesRead();
-    var budget = values.gen_length;
-    if (typeof budget !== "number" || !isFinite(budget)) {
-      budget = values.max_new_tokens;
-    }
-    if (typeof budget !== "number" || !isFinite(budget)) {
-      return 0;
-    }
-    return Math.max(0, Math.round(budget));
+    return runSettingsPanel.outputBudget();
   }
 
   function validationRead() {
-    return {
-      valid: paramsValid,
-      message: validationHint.textContent,
-    };
+    return runSettingsPanel.validation();
   }
 
   function conversationConfigurationRead() {
-    if (!activeModel || !activeModelId) {
-      throw new Error(
-        "Conversation actions need an active model"
-      );
-    }
-    var capabilities = capabilitiesRead();
-    var inputMode = capabilities.input_mode;
-    if (inputMode !== "chat" && inputMode !== "completion") {
-      throw new Error(
-        "Conversation actions need the model input mode"
-      );
-    }
-    var parameters = Object.freeze(
-      Object.assign({}, parameterValuesRead())
-    );
-    return Object.freeze({
-      modelId: activeModelId,
-      modelDisplay: activeDisplayName(),
-      inputMode: inputMode,
-      settingsSummary: conversationSettingsSummary(),
-      parameters: parameters,
-      experimental: experimentalRead(),
-      valid: paramsValid,
-      validationMessage: validationHint.textContent,
-    });
-  }
-
-  function conversationSettingsSummary() {
-    var parts = [];
-    var specs = activeModel.param_specs || [];
-    for (var index = 0; index < specs.length; index++) {
-      var spec = specs[index];
-      var input = paramInputs[spec.name];
-      if (spec.prominence === "primary" && input) {
-        parts.push(
-          spec.label + " " + summaryParamValue(spec, input)
-        );
-      }
-    }
-    return parts.length > 0
-      ? parts.join(", ")
-      : "Model defaults";
+    return runSettingsPanel.snapshot();
   }
 
   function readParamStateAll() {
@@ -1612,24 +881,16 @@ function generatorModelPanelCreate(options) {
     return {};
   }
 
-  function currentParamRawValues() {
-    var result = {};
-    var names = Object.keys(paramInputs);
-    for (var index = 0; index < names.length; index++) {
-      var input = paramInputs[names[index]];
-      result[names[index]] = input.type === "checkbox"
-        ? input.checked
-        : input.value;
+  function readPersistedParamState(id) {
+    if (id === null) {
+      return null;
     }
-    return result;
+    return readParamStateAll()[id] || null;
   }
 
-  function saveParamState() {
-    if (activeModelId === null) {
-      return;
-    }
+  function writePersistedParamState(id, panelState) {
     var all = readParamStateAll();
-    var state = all[activeModelId];
+    var state = all[id];
     if (
       !state
       || typeof state !== "object"
@@ -1637,9 +898,9 @@ function generatorModelPanelCreate(options) {
     ) {
       state = {};
     }
-    state.experimental = toggleExperimental.checked;
-    state.params = currentParamRawValues();
-    all[activeModelId] = state;
+    state.experimental = panelState.experimental;
+    state.params = Object.assign({}, panelState.params);
+    all[id] = state;
     try {
       sessionStorage.setItem(
         PARAM_STATE_KEY, JSON.stringify(all)
@@ -1649,114 +910,8 @@ function generatorModelPanelCreate(options) {
     }
   }
 
-  function paramFormChanged() {
-    saveParamState();
-    updateParamDefaultsButton();
-    onParametersChanged();
-  }
-
-  function restoreParamState() {
-    if (activeModelId === null) {
-      return;
-    }
-    var state = readParamStateAll()[activeModelId];
-    if (!state) {
-      return;
-    }
-    toggleExperimental.checked = !!state.experimental;
-    applyParamRawValues(state.params);
-    applyLimits();
-  }
-
-  function applyParamRawValues(values) {
-    if (!values || !activeModel) {
-      return;
-    }
-    var specs = activeModel.param_specs;
-    for (var index = 0; index < specs.length; index++) {
-      var stored = values[specs[index].name];
-      if (stored !== undefined) {
-        applyParamRawValue(specs[index], stored);
-      }
-    }
-  }
-
-  function applyParamRawValue(spec, stored) {
-    var input = paramInputs[spec.name];
-    if (!input) {
-      return;
-    }
-    if (spec.type === "bool") {
-      input.checked = !!stored;
-    } else if (spec.type === "select") {
-      if ((spec.options || []).indexOf(stored) >= 0) {
-        input.value = stored;
-      }
-    } else {
-      input.value = String(stored);
-    }
-  }
-
-  function paramsAtDefaults() {
-    if (toggleExperimental.checked) {
-      return false;
-    }
-    if (!activeModel) {
-      return true;
-    }
-    var specs = activeModel.param_specs;
-    for (var index = 0; index < specs.length; index++) {
-      if (!paramAtDefault(specs[index])) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  function paramAtDefault(spec) {
-    var input = paramInputs[spec.name];
-    if (!input) {
-      return true;
-    }
-    if (spec.type === "bool") {
-      return input.checked === Boolean(specDefault(spec));
-    }
-    if (spec.type === "select") {
-      return input.value === spec.default;
-    }
-    return input.value === String(specDefault(spec));
-  }
-
-  function resetParamsToDefaults() {
-    if (!activeModel || modelSelectDisabled) {
-      return;
-    }
-    toggleExperimental.checked = false;
-    var specs = activeModel.param_specs;
-    for (var index = 0; index < specs.length; index++) {
-      resetParamToDefault(specs[index]);
-    }
-    applyLimits();
-    paramFormChanged();
-  }
-
-  function resetParamToDefault(spec) {
-    var input = paramInputs[spec.name];
-    if (!input) {
-      return;
-    }
-    if (spec.type === "bool") {
-      input.checked = Boolean(specDefault(spec));
-    } else if (spec.type === "select") {
-      input.value = spec.default;
-    } else {
-      input.value = String(specDefault(spec));
-    }
-  }
-
-  function updateParamDefaultsButton() {
-    btnParamDefaults.disabled =
-      modelSelectDisabled || paramsAtDefaults();
+  function saveParamState() {
+    runSettingsPanel.persist();
   }
 
   function refreshSelector() {

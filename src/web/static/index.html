@@ -329,30 +329,36 @@
           <span class="conversation-turn-badge
             conversation-draft-badge">Draft</span>
         </header>
-        <details id="run-settings">
+        <details id="run-settings" class="run-settings">
           <summary id="run-settings-summary"
+            class="run-settings-summary"
             aria-controls="run-settings-body"
             aria-expanded="false">
             <span class="run-settings-title">Run settings</span>
-            <span id="run-settings-summary-chips"></span>
+            <span id="run-settings-summary-chips"
+              class="run-settings-summary-chips"></span>
             <span class="run-settings-chevron"
               aria-hidden="true">&#9662;</span>
           </summary>
-          <div id="run-settings-body">
-            <div id="mode-row">
+          <div id="run-settings-body"
+            class="run-settings-body">
+            <div id="mode-row"
+              class="run-settings-mode-row">
               <label class="toggle-switch">
                 <input type="checkbox"
                   id="toggle-experimental" />
                 <span class="toggle-slider"></span>
               </label>
-              <span class="toggle-label">Experimental</span>
+              <label class="toggle-label"
+                for="toggle-experimental">Experimental</label>
               <span class="info-icon info-icon-sm"
                 aria-label="Experimental mode info">?
                 <span class="tooltip">Reveals experimental controls
                   and removes recommended parameter bounds. Extreme
                   values may produce unstable results.</span>
               </span>
-              <button id="btn-param-defaults" type="button"
+              <button id="btn-param-defaults"
+                class="run-settings-reset" type="button"
                 disabled
                 title="Reset hyperparameters to their defaults"
                 aria-label="Reset hyperparameters to their defaults">
@@ -361,11 +367,16 @@
               </button>
             </div>
 
-            <div id="mode-extra"></div>
-            <div id="param-row">
-              <div id="param-fields" class="param-fields"></div>
+            <div id="mode-extra"
+              class="run-settings-mode-extra"></div>
+            <div id="param-row"
+              class="run-settings-param-row">
+              <div id="param-fields"
+                class="param-fields
+                  run-settings-param-fields"></div>
             </div>
             <div id="validation-hint" role="status"
+              class="run-settings-validation-hint"
               aria-live="polite" hidden></div>
           </div>
         </details>
@@ -1073,6 +1084,8 @@
   <script src="/download_client.js"></script>
   <script src="/download_toast.js"></script>
   <script src="/generator_composer.js"></script>
+  <script src="/run_settings_core.js"></script>
+  <script src="/run_settings_panel.js"></script>
   <script src="/generator_model_panel.js"></script>
   <script src="/generator_chrome.js"></script>
   <script src="/generator_canvas.js"></script>
