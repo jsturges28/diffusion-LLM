@@ -2289,14 +2289,11 @@ button {
   border-bottom: 1px solid var(--border);
 }
 
-/* No run yet, so nothing to scrub. Invisible but still occupying its
-   height, which is the point: this row sits between the output
-   canvas and the controls in a flex column, so removing it from the
-   layout resizes the canvas every time a run appears or goes away.
-   `visibility` also takes its children out of the tab order, so
-   there is nothing to reach by keyboard either. */
+/* No run yet, so there is neither a scrub target nor reserved space.
+   The rich assistant card gives the output its stable minimum height,
+   so this row can enter only when it has real controls to show. */
 #scrubber-section.is-idle {
-  visibility: hidden;
+  display: none;
 }
 
 #scrubber-controls {

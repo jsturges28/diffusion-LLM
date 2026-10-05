@@ -1,10 +1,11 @@
-// The conversation shell owns durable New Conversation behavior.
+// The conversation shell owns geometry, scrolling, and durable New
+// Conversation behavior.
 //
-// Strategy: load the complete generator page, seed an active run
-// through its public controller, and press the shipped toolbar action.
-// Passing proves New Conversation reaches the established fresh-run
-// reset, Generate keeps only its Generate/Stop roles, and an in-flight
-// run cannot be discarded from the toolbar.
+// Strategy: drive the focused classic controller in a VM, then load
+// the complete generator page and press its shipped toolbar action.
+// Passing proves only append/fork follow the tail, older pages keep
+// their anchor, workspace ownership is exact, and New Conversation
+// still reaches the established fresh-run reset.
 
 "use strict";
 
@@ -81,7 +82,126 @@ function tick() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-test("New Conversation clears only after durable creation", async () => {
+function identity(overrides) {
+  return Object.assign({
+    conversation_id: "a".repeat(32),
+    conversation_revision: 3,
+    assistant_turn_id: "00000002",
+    turn_index: 2,
+    assistant_turn_version: 2,
+    assistant_text: "answer",
+  }, overrides || {});
+}
+
+function shellHarness() {
+  const page = loadPage({
+    scripts: ["conversation_shell.js"],
+  });
+  return {
+    page,
+    shell: page.context.conversationShellCreate(),
+    transcript: page.registry.get("conversation-transcript"),
+    active: page.registry.get("active-assistant-card"),
+  };
+}
+
+function renderShell(harness, overrides) {
+  const current = identity();
+  harness.shell.render(Object.assign({
+    action: null,
+    runIdentity: current,
+    conversationIdentity: current,
+    runFrameCount: 0,
+    renderTranscript() {},
+  }, overrides || {}));
+}
+
+test("only append and fork events follow the tail", async () => {
+  const h = shellHarness();
+  for (const type of ["appended", "forked"]) {
+    h.transcript.scrollTop = 31;
+    h.transcript.scrollHeight = 400;
+    renderShell(h, {
+      action: { type },
+      renderTranscript() {
+        h.transcript.scrollHeight = 900;
+      },
+    });
+    await tick();
+    assert.equal(h.transcript.scrollTop, 900);
+  }
+});
+
+test("assistant updates preserve transcript position", async () => {
+  const h = shellHarness();
+  h.transcript.scrollTop = 73;
+  h.transcript.scrollHeight = 400;
+
+  renderShell(h, {
+    action: { type: "assistant_updated" },
+    renderTranscript() {
+      h.transcript.scrollHeight = 900;
+    },
+  });
+  await tick();
+
+  assert.equal(h.transcript.scrollTop, 73);
+});
+
+test("loading older turns preserves the visible anchor", () => {
+  const h = shellHarness();
+  h.transcript.scrollTop = 120;
+  h.transcript.scrollHeight = 500;
+
+  renderShell(h, {
+    action: { type: "older_loaded" },
+    renderTranscript() {
+      h.transcript.scrollHeight = 760;
+    },
+  });
+
+  assert.equal(h.transcript.scrollTop, 380);
+});
+
+test("the workspace requires the exact active run", () => {
+  const h = shellHarness();
+
+  renderShell(h);
+  assert.equal(h.active.hidden, false);
+
+  renderShell(h, {
+    conversationIdentity: identity({
+      assistant_turn_id: "00000004",
+    }),
+  });
+  assert.equal(h.active.hidden, true);
+});
+
+test("legacy framed runs retain their workspace", () => {
+  const h = shellHarness();
+
+  renderShell(h, {
+    runIdentity: null,
+    conversationIdentity: null,
+    runFrameCount: 2,
+  });
+
+  assert.equal(h.active.hidden, false);
+});
+
+test("an idle shell hides the rich assistant card", () => {
+  const h = shellHarness();
+
+  renderShell(h, {
+    runIdentity: null,
+    conversationIdentity: null,
+    runFrameCount: 0,
+  });
+
+  assert.equal(h.active.hidden, true);
+});
+
+test("New Conversation clears after durable creation", async () => {
   const page = pageWithModel();
   const run = page.context.generatorRun;
   const prompt = page.registry.get("prompt-input");

@@ -186,10 +186,8 @@ def test_a_failed_switch_lowers_it() -> None:
 # -- and nothing moves underneath it --
 
 
-def test_the_scrubber_holds_its_place_when_idle() -> None:
-    """It is a sibling of the output canvas in a flex column, so
-    taking it out of the layout resizes the canvas every time a run
-    appears. Reserved rather than removed."""
+def test_idle_scrubber_starts_with_visibility_class() -> None:
+    """One class owns initial and controller-driven visibility."""
     html = INDEX_HTML.read_text(encoding="utf-8")
 
     match = re.search(r'<section id="scrubber-section"[^>]*>', html)
@@ -198,16 +196,15 @@ def test_the_scrubber_holds_its_place_when_idle() -> None:
     assert "hidden" not in match.group(0)
 
 
-def test_idle_means_invisible_not_absent() -> None:
-    """`display: none` would reserve nothing and put the reflow
-    straight back."""
+def test_idle_scrubber_reserves_no_layout_space() -> None:
+    """The rich assistant card now owns the stable output minimum."""
     css = (STATIC / "style.css").read_text(encoding="utf-8")
     start = css.find("#scrubber-section.is-idle")
 
     assert start != -1
     rule = css[start : start + 120]
-    assert "visibility: hidden" in rule
-    assert "display: none" not in rule
+    assert "display: none" in rule
+    assert "visibility: hidden" not in rule
 
 
 def test_one_helper_owns_the_scrubber_s_visibility() -> None:

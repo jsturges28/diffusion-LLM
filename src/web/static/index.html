@@ -86,10 +86,19 @@
           aria-live="polite" hidden></p>
         <div id="conversation-turns" role="log"
           aria-live="polite" aria-relevant="additions text"></div>
-      </section>
 
-      <section id="active-turn-workspace"
-        aria-label="Active turn explainability workspace">
+        <article id="active-assistant-card"
+          class="conversation-turn conversation-turn-assistant
+            conversation-active-assistant"
+          aria-label="Assistant active response" hidden>
+          <header class="conversation-turn-header">
+            <span class="conversation-turn-speaker">Assistant</span>
+            <span class="conversation-turn-badge
+              conversation-turn-badge-active">Active response</span>
+          </header>
+
+        <section id="active-turn-workspace"
+          aria-label="Active turn explainability workspace">
         <div id="active-turn-toolbar">
           <span class="active-turn-label">Active turn</span>
           <button id="btn-save" class="btn-save" type="button"
@@ -171,14 +180,7 @@
       </div>
     </section>
 
-    <!-- Frame scrubber (revealed after generation completes).
-
-         Reserved rather than removed: `is-idle` makes it invisible
-         but keeps its height, because it is a sibling of the output
-         canvas in a flex column and taking it out of the layout
-         means every restore shoves the canvas around. Returning
-         from Analytics used to show the placeholder sliding as this
-         row appeared underneath it. -->
+    <!-- Frame scrubber, revealed after generation produces frames. -->
     <section id="scrubber-section" class="is-idle">
       <div id="scrubber-controls">
         <button id="btn-scrub-start" class="scrub-btn" title="First frame">&laquo;</button>
@@ -309,10 +311,17 @@
         <span id="status-message"></span>
       </div>
     </footer>
-      </section>
+        </section>
+        </article>
 
       <section id="controls" class="conversation-composer"
-        aria-label="Prompt composer">
+        aria-label="Draft user message">
+        <header class="conversation-turn-header
+          conversation-draft-header">
+          <span class="conversation-turn-speaker">You</span>
+          <span class="conversation-turn-badge
+            conversation-draft-badge">Draft</span>
+        </header>
         <details id="run-settings">
           <summary id="run-settings-summary"
             aria-controls="run-settings-body"
@@ -457,6 +466,7 @@
             </button>
           </div>
         </div>
+      </section>
       </section>
     </main>
   </div>
@@ -986,6 +996,7 @@
   <script src="/conversation_state.js"></script>
   <script src="/conversation_client.js"></script>
   <script src="/conversation_view.js"></script>
+  <script src="/conversation_shell.js"></script>
   <script src="/generator_run.js"></script>
   <script src="/generator_socket.js"></script>
   <script src="/candidate_flicker.js"></script>

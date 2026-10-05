@@ -386,6 +386,10 @@ test("Send reserves, generates, completes, then appends once",
   prompt.value = "First question";
 
   assert.equal(await run.context.startGeneration(), true);
+  assert.equal(
+    run.page.registry.get("active-assistant-card").hidden,
+    false
+  );
   const first = JSON.parse(run.socket.sent.at(-1));
   assert.equal(first.type, "generate");
   assert.equal(first.prompt, undefined);
@@ -484,6 +488,14 @@ test("Send reserves, generates, completes, then appends once",
     1
   );
   assert.equal(run.context.generatorRun.frameCount(), 0);
+  assert.equal(
+    run.page.registry.get("active-assistant-card").hidden,
+    false
+  );
+  assert.equal(
+    run.page.registry.get("conversation-turns").children.length,
+    3
+  );
   });
 
 test("a failed generation retries its reserved assistant",

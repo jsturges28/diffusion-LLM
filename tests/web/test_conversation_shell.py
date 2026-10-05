@@ -6,9 +6,9 @@ the behavior; these checks cover what their synthetic DOM cannot see:
 containment, source order, native disclosure semantics, and asset
 wiring.
 
-Passing proves transcript, active XAI workspace, and composer have
-separate owners, keep reading and keyboard order, and expose every
-static controller id.
+Passing proves the fixed toolbar and one transcript scroller contain
+the compact turns, rich active assistant, and Draft composer in
+chronological and keyboard order, with every static controller id.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 STATIC = REPO_ROOT / "src" / "web" / "static"
 INDEX = STATIC / "index.html"
 GUIDE = REPO_ROOT / "docs" / "GUIDE.md"
+CONVERSATION_CSS = STATIC / "conversation.css"
 
 OTHER_PAGES = (
     "menu.html",
@@ -57,6 +58,12 @@ def _block(html: str, element_id: str, tag: str) -> str:
 
 def _ids(markup: str) -> Set[str]:
     return set(re.findall(r'\bid="([^"]+)"', markup))
+
+
+def _rule(styles: str, selector: str, chars: int = 500) -> str:
+    start = styles.find(selector)
+    assert start != -1, selector
+    return styles[start : start + chars]
 
 
 def _page_scripts() -> List[Path]:
@@ -98,6 +105,12 @@ def test_shell_regions_are_in_conversation_order() -> None:
     ]
 
     assert positions == sorted(positions)
+    transcript = _block(
+        html, "conversation-transcript", "section"
+    )
+    assert "active-assistant-card" in _ids(transcript)
+    assert "active-turn-workspace" in _ids(transcript)
+    assert "controls" in _ids(transcript)
 
 
 def test_the_transcript_mount_has_bounded_native_controls() -> None:
@@ -109,6 +122,9 @@ def test_the_transcript_mount_has_bounded_native_controls() -> None:
         "conversation-empty",
         "conversation-status",
         "conversation-turns",
+        "active-assistant-card",
+        "active-turn-workspace",
+        "controls",
     }
 
     assert required <= _ids(block)
@@ -135,6 +151,19 @@ def test_the_active_workspace_owns_every_xai_surface() -> None:
     assert "Save Run" in block
 
 
+def test_the_rich_assistant_card_starts_hidden() -> None:
+    html = _html()
+    tag = re.search(
+        r'<article id="active-assistant-card"[^>]*>',
+        html,
+    )
+
+    assert tag is not None
+    assert "conversation-active-assistant" in tag.group(0)
+    assert " hidden" in tag.group(0)
+    assert "Active response" in html
+
+
 def test_composer_owns_prompt_settings_and_action() -> None:
     block = _block(_html(), "controls", "section")
     required = {
@@ -148,6 +177,8 @@ def test_composer_owns_prompt_settings_and_action() -> None:
 
     assert required <= _ids(block), required - _ids(block)
     assert "btn-save" not in _ids(block)
+    assert "Draft" in block
+    assert 'aria-label="Draft user message"' in block
 
 
 def test_run_settings_uses_native_disclosure_semantics() -> None:
@@ -197,6 +228,65 @@ def test_every_literal_controller_id_exists_once() -> None:
     ]
 
     assert missing == []
+
+
+def test_shell_controller_precedes_the_composition_root() -> None:
+    html = _html()
+    positions = [
+        html.index(f'src="/{script}"')
+        for script in (
+            "conversation_view.js",
+            "conversation_shell.js",
+            "app.js",
+        )
+    ]
+
+    assert positions == sorted(positions)
+
+
+def test_toolbar_is_fixed_over_one_transcript_scroller() -> None:
+    styles = CONVERSATION_CSS.read_text(encoding="utf-8")
+    shell = _rule(styles, "#conversation-shell {", 220)
+    transcript = _rule(
+        styles, "#conversation-transcript {", 350
+    )
+
+    assert "overflow: hidden" in shell
+    assert "overflow-y: auto" in transcript
+    assert "flex: 1 1 auto" in transcript
+
+
+def test_rich_output_has_a_real_second_turn_minimum() -> None:
+    styles = CONVERSATION_CSS.read_text(encoding="utf-8")
+    card = _rule(
+        styles, "#active-assistant-card {", 500
+    )
+    output = _rule(
+        styles,
+        "#active-turn-workspace > #output-section {",
+        180,
+    )
+    canvas = _rule(
+        styles, "#active-turn-workspace #output-area {", 100
+    )
+
+    assert "min-height: 410px" in card
+    assert "flex: 0 0 auto" in card
+    assert "flex: 1 0 auto" in output
+    assert "min-height: 220px" in output
+    assert "min-height: 190px" in canvas
+
+
+def test_draft_and_sent_user_cards_remain_distinct() -> None:
+    styles = CONVERSATION_CSS.read_text(encoding="utf-8")
+    sent = _rule(styles, ".conversation-turn-user {", 220)
+    draft = _rule(
+        styles, "#controls.conversation-composer {", 420
+    )
+
+    assert "79, 195, 247" in sent
+    assert "0, 255, 65" in draft
+    assert "margin-top: auto" not in draft
 
 
 def test_generator_stylesheets_follow_the_shared_sheet() -> None:

@@ -17,6 +17,7 @@ var conversationBusy = false;
 var conversationView = conversationViewCreate({
   onLoadOlder: loadOlderConversation,
 });
+var conversationShell = conversationShellCreate();
 var conversationClient = conversationClientCreate({
   request: function (url, init) {
     return fetch(url, init);
@@ -1110,18 +1111,23 @@ function renderConversation(action) {
   var identity = generatorRun
     ? generatorRun.conversationIdentity()
     : null;
-  var workspaceAssistantTurnId = null;
-  if (
-    identity
-    && conversationStateCanEdit(conversationState, identity)
-  ) {
-    workspaceAssistantTurnId = identity.assistant_turn_id;
-  }
-  conversationView.render(conversationState, {
-    preserveScroll: Boolean(
-      action && action.type === "older_loaded"
-    ),
-    workspaceAssistantTurnId: workspaceAssistantTurnId,
+  conversationShell.render({
+    action: action,
+    runIdentity: identity,
+    conversationIdentity:
+      conversationStateIdentity(conversationState),
+    runFrameCount: generatorRun
+      ? generatorRun.frameCount()
+      : 0,
+    renderTranscript: function (workspaceVisible) {
+      conversationView.render(conversationState, {
+        workspaceVisible: workspaceVisible,
+        workspaceAssistantTurnId:
+          workspaceVisible && identity
+            ? identity.assistant_turn_id
+            : null,
+      });
+    },
   });
 }
 
@@ -1684,6 +1690,7 @@ function launchReservedGeneration(prompt) {
   resetRunState();
   var params = generatorModelPanel.parameterValues();
   generatorRun.begin(prompt, params);
+  renderConversation(null);
   generatorComposer.clear();
   generatorComposer.saveDraft();
 

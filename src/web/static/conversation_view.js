@@ -1,9 +1,10 @@
 // Bounded transcript DOM for the generator.
 //
 // The active tail assistant is deliberately absent. Its frames,
-// overlays, and edit tools already occupy the workspace below this
-// mount. Frozen assistants are compact text records with honest
-// saved or text-only badges and an Analytics link when one exists.
+// overlays, and edit tools occupy the shell's static rich card after
+// the compact-turn mount. Frozen assistants are text records with
+// honest saved or text-only badges and an Analytics link when one
+// exists.
 
 "use strict";
 
@@ -12,7 +13,6 @@ function conversationViewCreate(options) {
     options, "onLoadOlder"
   );
   var root = conversationViewElement("conversation-transcript");
-  var scrollRoot = conversationViewElement("conversation-shell");
   var empty = conversationViewElement("conversation-empty");
   var status = conversationViewElement("conversation-status");
   var loadOlder = conversationViewElement("btn-load-older");
@@ -33,14 +33,14 @@ function conversationViewCreate(options) {
 
   function render(state, options) {
     conversationStateAssert(state);
-    var preserve = Boolean(options && options.preserveScroll);
+    var workspaceVisible = Boolean(
+      options && options.workspaceVisible
+    );
     var workspaceAssistantTurnId =
       options
       && typeof options.workspaceAssistantTurnId === "string"
         ? options.workspaceAssistantTurnId
         : null;
-    var oldHeight = scrollRoot.scrollHeight;
-    var oldTop = scrollRoot.scrollTop;
     var visible = conversationViewTurns(
       state, workspaceAssistantTurnId
     );
@@ -51,17 +51,15 @@ function conversationViewCreate(options) {
       );
     }
     turnsRoot.replaceChildren.apply(turnsRoot, nodes);
-    conversationViewEmpty(empty, state, visible.length);
+    conversationViewEmpty(
+      empty, state, visible.length, workspaceVisible
+    );
     conversationViewLoadButton(loadOlder, state);
     status.textContent = state.error;
     status.hidden = state.error === "";
-    root.classList.toggle("has-turns", visible.length > 0);
-    if (preserve) {
-      scrollRoot.scrollTop =
-        oldTop + (scrollRoot.scrollHeight - oldHeight);
-    } else {
-      scrollRoot.scrollTop = scrollRoot.scrollHeight;
-    }
+    root.classList.toggle(
+      "has-turns", visible.length > 0 || workspaceVisible
+    );
     if (visible.length > CONVERSATION_TURNS_MAX) {
       throw new Error("Transcript DOM exceeded its turn bound");
     }
@@ -175,8 +173,10 @@ function conversationViewAnalyticsLink(runLink) {
   return link;
 }
 
-function conversationViewEmpty(empty, state, visibleCount) {
-  if (visibleCount > 0) {
+function conversationViewEmpty(
+  empty, state, visibleCount, workspaceVisible
+) {
+  if (visibleCount > 0 || workspaceVisible) {
     empty.hidden = true;
     empty.textContent = "";
     return;

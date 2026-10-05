@@ -54,6 +54,7 @@ const GENERATOR_SCRIPTS = [
   "conversation_state.js",
   "conversation_client.js",
   "conversation_view.js",
+  "conversation_shell.js",
   "generator_run.js",
   "generator_socket.js",
   "candidate_flicker.js",

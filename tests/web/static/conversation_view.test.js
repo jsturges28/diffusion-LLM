@@ -5,6 +5,7 @@
 // Passing proves the workspace's tail assistant is not duplicated,
 // frozen text reports whether XAI was saved, Analytics links target
 // their run, and older-page loading remains keyboard accessible.
+// Shell geometry and scroll policy stay outside this renderer.
 
 "use strict";
 
@@ -89,6 +90,7 @@ function harness() {
 test("the workspace alone owns the active tail assistant", () => {
   const h = harness();
   h.view.render(state(h.page), {
+    workspaceVisible: true,
     workspaceAssistantTurnId: "00000004",
   });
   const turns = h.page.registry.get("conversation-turns");
@@ -199,5 +201,31 @@ test("no active conversation has an honest empty state", () => {
   assert.equal(
     h.page.registry.get("conversation-turns").children.length,
     0
+  );
+});
+
+test("rendering never moves the transcript scroller", () => {
+  const h = harness();
+  const transcript = h.page.registry.get(
+    "conversation-transcript"
+  );
+  transcript.scrollTop = 73;
+  transcript.scrollHeight = 900;
+
+  h.view.render(state(h.page));
+
+  assert.equal(transcript.scrollTop, 73);
+});
+
+test("a legacy workspace suppresses the empty prompt", () => {
+  const h = harness();
+
+  h.view.render(h.page.context.conversationStateCreate(), {
+    workspaceVisible: true,
+  });
+
+  assert.equal(
+    h.page.registry.get("conversation-empty").hidden,
+    true
   );
 });

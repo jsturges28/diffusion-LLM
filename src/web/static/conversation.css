@@ -5,9 +5,7 @@
   flex: 1;
   flex-direction: column;
   min-height: 0;
-  overflow-y: auto;
-  scrollbar-color: var(--border) transparent;
-  scrollbar-width: thin;
+  overflow: hidden;
 }
 
 #conversation-toolbar {
@@ -58,9 +56,14 @@
 }
 
 #conversation-transcript {
-  flex: 0 0 auto;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
   min-height: 0;
-  padding: 10px 0 4px;
+  overflow-y: auto;
+  padding: 10px 4px 16px 0;
+  scrollbar-color: var(--border) transparent;
+  scrollbar-width: thin;
 }
 
 #conversation-empty,
@@ -116,8 +119,8 @@
 
 .conversation-turn-user {
   align-self: flex-end;
-  border-color: rgba(79, 195, 247, 0.25);
-  background: rgba(79, 195, 247, 0.07);
+  border-color: rgba(79, 195, 247, 0.42);
+  background: rgba(79, 195, 247, 0.12);
 }
 
 .conversation-turn-assistant {
@@ -189,18 +192,44 @@
   text-decoration: underline;
 }
 
+#active-assistant-card {
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 100%;
+  min-height: 410px;
+  margin-top: 12px;
+  padding: 11px 14px 0;
+  border-color: rgba(0, 255, 65, 0.28);
+  background:
+    linear-gradient(
+      180deg,
+      rgba(0, 255, 65, 0.055),
+      rgba(7, 14, 20, 0.86) 74px
+    );
+}
+
+#active-assistant-card[hidden] {
+  display: none;
+}
+
+.conversation-turn-badge-active,
+.conversation-draft-badge {
+  border-color: rgba(0, 255, 65, 0.3);
+  color: var(--accent);
+}
+
 #active-turn-workspace {
   display: flex;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   flex-direction: column;
-  min-height: 220px;
+  min-height: 370px;
 }
 
 /* KGW adds one compact run-level line below the token strip. Give it
    room by borrowing from the transcript instead of reducing the
    output canvas to one line of tokens. */
 #active-turn-workspace:has(.watermark-readout:not([hidden])) {
-  min-height: 255px;
+  min-height: 405px;
 }
 
 #active-turn-toolbar {
@@ -247,7 +276,13 @@
 }
 
 #active-turn-workspace > #output-section {
+  flex: 1 0 auto;
+  min-height: 220px;
   padding: 8px 0;
+}
+
+#active-turn-workspace #output-area {
+  min-height: 190px;
 }
 
 #active-turn-workspace > #scrubber-section {
@@ -260,9 +295,17 @@
 
 #controls.conversation-composer {
   flex: 0 0 auto;
-  padding: 8px 0 0;
-  border-top: 1px solid var(--border);
-  border-bottom: 0;
+  align-self: flex-end;
+  width: min(94%, 900px);
+  margin: 12px 0 4px;
+  padding: 11px 13px 12px;
+  border: 1px solid rgba(0, 255, 65, 0.25);
+  border-radius: var(--radius);
+  background: rgba(0, 255, 65, 0.035);
+}
+
+.conversation-draft-header {
+  margin-bottom: 0;
 }
 
 #composer-row {
@@ -296,6 +339,28 @@
 
   .conversation-toolbar-mode {
     display: none;
+  }
+
+  #active-assistant-card {
+    min-height: 360px;
+    padding-right: 10px;
+    padding-left: 10px;
+  }
+
+  #active-turn-workspace {
+    min-height: 325px;
+  }
+
+  #active-turn-workspace > #output-section {
+    min-height: 180px;
+  }
+
+  #active-turn-workspace #output-area {
+    min-height: 150px;
+  }
+
+  #controls.conversation-composer {
+    width: 100%;
   }
 
   #composer-row {
