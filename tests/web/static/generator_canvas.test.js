@@ -421,6 +421,152 @@ test("snapshot and append frames render through one API", () => {
   );
 });
 
+test("completed canvas holds its tallest segment while scrubbing",
+  () => {
+  const { page, state, canvas } = harness();
+  const output = page.registry.get("output-area");
+  page.context.innerHeight = 800;
+  page.context.innerWidth = 1000;
+  let height = 210;
+  output.getBoundingClientRect = () => ({ height });
+
+  canvas.startRunSegment({ preserveCurrentHeight: false });
+  canvas.renderLiveFrame(state.frames[0], [], null);
+  height = 360;
+  canvas.renderLiveFrame(state.frames[1], [], null);
+  height = 240;
+  canvas.renderLiveFrame(state.frames[2], [], null);
+  assert.equal(canvas.finishRunSegment(), true);
+
+  assert.equal(
+    output.classList.contains("is-height-locked"), true
+  );
+  assert.equal(
+    output.style.getPropertyValue(
+      "--output-area-locked-height"
+    ),
+    "360px"
+  );
+
+  height = 170;
+  canvas.renderFrame(0);
+  assert.equal(
+    output.style.getPropertyValue(
+      "--output-area-locked-height"
+    ),
+    "360px"
+  );
+
+  canvas.startRunSegment({ preserveCurrentHeight: false });
+  assert.equal(
+    output.classList.contains("is-height-locked"), false
+  );
+  assert.equal(
+    output.style.getPropertyValue(
+      "--output-area-locked-height"
+    ),
+    ""
+  );
+  height = 225;
+  canvas.renderLiveFrame(state.frames[2], [], null);
+  canvas.finishRunSegment();
+  assert.equal(
+    output.style.getPropertyValue(
+      "--output-area-locked-height"
+    ),
+    "225px"
+  );
+});
+
+test("canvas height uses explicit desktop and mobile bounds", () => {
+  const { page, state, canvas } = harness();
+  const output = page.registry.get("output-area");
+  page.context.innerHeight = 800;
+  page.context.innerWidth = 1000;
+  let height = 80;
+  output.getBoundingClientRect = () => ({ height });
+
+  canvas.startRunSegment({ preserveCurrentHeight: false });
+  canvas.renderLiveFrame(state.frames[0], [], null);
+  assert.equal(canvas.finishRunSegment(), true);
+  assert.equal(
+    output.style.getPropertyValue(
+      "--output-area-locked-height"
+    ),
+    "190px"
+  );
+
+  page.context.innerWidth = 600;
+  page.context.matchMedia = (query) => ({
+    matches: query === "(max-width: 700px)",
+    addEventListener() {},
+  });
+  canvas.startRunSegment({ preserveCurrentHeight: false });
+  height = 900;
+  canvas.renderLiveFrame(state.frames[1], [], null);
+  canvas.finishRunSegment();
+  assert.equal(
+    output.style.getPropertyValue(
+      "--output-area-locked-height"
+    ),
+    "368px"
+  );
+});
+
+test("live candidate width reservation precedes height measurement",
+  () => {
+  const page = loadPage({ scripts: SCRIPTS });
+  const state = defaultState();
+  state.settings.unsettledShows = "candidates";
+  let height = 210;
+  const options = completeOptions(state);
+  options.startCandidates = () => {
+    height = 330;
+  };
+  const canvas = page.context.generatorCanvasCreate(options);
+  canvas.wire();
+  const output = page.registry.get("output-area");
+  output.getBoundingClientRect = () => ({ height });
+
+  canvas.startRunSegment({ preserveCurrentHeight: false });
+  canvas.renderLiveFrame(state.frames[0], [], {
+    positions: [0],
+    sets: [[{ t: " much wider candidate" }]],
+  });
+  canvas.finishRunSegment();
+
+  assert.equal(
+    output.style.getPropertyValue(
+      "--output-area-locked-height"
+    ),
+    "330px"
+  );
+});
+
+test("an empty resumed segment relocks its prior height", () => {
+  const { page, canvas } = harness();
+  const output = page.registry.get("output-area");
+  page.context.innerHeight = 800;
+  page.context.innerWidth = 1000;
+  let height = 334;
+  output.getBoundingClientRect = () => ({ height });
+
+  assert.equal(canvas.restoreRunHeight(), true);
+  canvas.startRunSegment({ preserveCurrentHeight: true });
+  assert.equal(
+    output.classList.contains("is-height-locked"), false
+  );
+  height = 120;
+  assert.equal(canvas.finishRunSegment(), true);
+
+  assert.equal(
+    output.style.getPropertyValue(
+      "--output-area-locked-height"
+    ),
+    "334px"
+  );
+});
+
 test("watermark overlay follows records and exclusions", () => {
   const { page, canvas } = harness((state) => {
     state.append = true;

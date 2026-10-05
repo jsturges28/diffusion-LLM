@@ -140,6 +140,22 @@
   background: rgba(79, 195, 247, 0.12);
 }
 
+.conversation-turn-user.is-editing {
+  border-color: rgba(99, 205, 255, 0.82);
+  background:
+    linear-gradient(
+      135deg,
+      rgba(79, 195, 247, 0.2),
+      rgba(24, 100, 160, 0.13)
+    );
+}
+
+.conversation-turn-user.is-editing:focus-within {
+  box-shadow:
+    0 0 0 1px rgba(112, 211, 255, 0.34),
+    0 0 18px rgba(42, 169, 255, 0.2);
+}
+
 .conversation-turn-assistant {
   align-self: flex-start;
 }
@@ -187,6 +203,11 @@
 
 .conversation-turn-badge-text-only {
   border-color: rgba(160, 170, 180, 0.24);
+}
+
+.conversation-turn-badge-editing {
+  border-color: rgba(112, 211, 255, 0.58);
+  color: #9bddff;
 }
 
 .conversation-turn-text {
@@ -253,9 +274,18 @@
   width: 100%;
   min-height: 78px;
   max-height: 260px;
+  border-color: rgba(79, 195, 247, 0.5);
+  background: rgba(3, 22, 36, 0.78);
   resize: vertical;
   font: inherit;
   line-height: inherit;
+}
+
+.conversation-inline-edit-input:focus-visible {
+  border-color: #78cfff;
+  outline: 2px solid rgba(79, 195, 247, 0.82);
+  outline-offset: 2px;
+  box-shadow: 0 0 12px rgba(42, 169, 255, 0.2);
 }
 
 .conversation-inline-edit-status {
@@ -548,6 +578,16 @@
   min-height: 190px;
 }
 
+#active-turn-workspace #output-area.is-height-locked {
+  min-height: min(190px, 62vh);
+}
+
+@supports (height: 1dvh) {
+  #active-turn-workspace #output-area.is-height-locked {
+    min-height: min(190px, 62dvh);
+  }
+}
+
 #active-turn-workspace > #scrubber-section {
   padding-top: 7px;
 }
@@ -620,6 +660,34 @@
 
   #active-turn-workspace #output-area {
     min-height: 150px;
+  }
+
+  #active-turn-workspace #output-area.is-height-locked {
+    flex-basis: min(
+      var(--output-area-locked-height, 150px),
+      46vh
+    );
+    height: min(
+      var(--output-area-locked-height, 150px),
+      46vh
+    );
+    min-height: min(150px, 46vh);
+    max-height: 46vh;
+  }
+
+  @supports (height: 1dvh) {
+    #active-turn-workspace #output-area.is-height-locked {
+      flex-basis: min(
+        var(--output-area-locked-height, 150px),
+        46dvh
+      );
+      height: min(
+        var(--output-area-locked-height, 150px),
+        46dvh
+      );
+      min-height: min(150px, 46dvh);
+      max-height: 46dvh;
+    }
   }
 
   #controls.conversation-composer {

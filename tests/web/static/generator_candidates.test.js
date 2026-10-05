@@ -406,6 +406,28 @@ test("an edited run without its baseline has one page", () => {
   assert.deepEqual(rowIds(popover), [101, 7]);
 });
 
+test("session restore locks the rendered canvas height", () => {
+  const { context, registry } = finishedRun();
+  const output = registry.get("output-area");
+  context.innerHeight = 800;
+  context.innerWidth = 1000;
+  output.getBoundingClientRect = () => ({ height: 312 });
+  context.saveSessionState();
+  context.generatorRun.reset();
+  context.generatorCanvas.reset();
+
+  assert.equal(context.restoreSessionState(), true);
+  assert.equal(
+    output.classList.contains("is-height-locked"), true
+  );
+  assert.equal(
+    output.style.getPropertyValue(
+      "--output-area-locked-height"
+    ),
+    "312px"
+  );
+});
+
 test("a page with nothing to turn to has no pager", () => {
   const { context, registry } = editedRun({ captured: null });
   context.generatorCanvas.setBlend(0.2);

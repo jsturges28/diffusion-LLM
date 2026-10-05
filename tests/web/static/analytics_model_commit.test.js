@@ -148,6 +148,23 @@ test("conversation location reaches the detail metadata", () => {
   assert.ok(html.indexOf(">4<") >= 0);
 });
 
+test("opaque assistant ids remain complete metadata values", () => {
+  const { context } = page();
+  const opaqueId = "turn_" + "7f".repeat(96);
+
+  const html = context.renderRunMeta({
+    run_id: "r1",
+    backend: "smollm3",
+    assistant_turn_id: opaqueId,
+  });
+
+  assert.ok(html.includes(opaqueId));
+  assert.ok(html.includes(
+    '<span class="meta-value">' + opaqueId + "</span>"
+  ));
+  assert.equal(html.includes("..."), false);
+});
+
 test("an Analytics run link opens that run", async () => {
   const fetchImpl = (url) => {
     const text = String(url);

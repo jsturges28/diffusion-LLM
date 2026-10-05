@@ -86,6 +86,15 @@ function generatorCanvasCreate(options) {
   var TOKEN_BIRTH_CONCURRENT_MAX = 192;
   var TOKEN_BIRTH_ANIMATION = "token-birth";
   var TOKEN_REVISION_ANIMATION = "token-revision";
+  var OUTPUT_HEIGHT_MIN_PX = 190;
+  var OUTPUT_HEIGHT_MOBILE_MIN_PX = 150;
+  var OUTPUT_HEIGHT_VIEWPORT_RATIO = 0.62;
+  var OUTPUT_HEIGHT_MOBILE_RATIO = 0.46;
+  var OUTPUT_HEIGHT_MOBILE_WIDTH_PX = 700;
+  var OUTPUT_HEIGHT_VIEWPORT_FALLBACK_PX = 900;
+  var OUTPUT_HEIGHT_LOCK_CLASS = "is-height-locked";
+  var OUTPUT_HEIGHT_PROPERTY =
+    "--output-area-locked-height";
 
   var overlayMode = "none";
   var overlaySelect = null;
@@ -120,6 +129,9 @@ function generatorCanvasCreate(options) {
   var liveRevisionFrames = 0;
   var viewMode = "none";
   var drawnFrame = -1;
+  var outputHeightMaximum = null;
+  var outputHeightFallback = null;
+  var outputHeightTracking = false;
   var wired = false;
 
   var liveTokenOptions = {
@@ -342,6 +354,176 @@ function generatorCanvasCreate(options) {
     return expected;
   }
 
+  function startRunSegment(settings) {
+    var preserveCurrent = Boolean(
+      settings && settings.preserveCurrentHeight === true
+    );
+    var currentHeight = preserveCurrent
+      ? readOutputHeight()
+      : null;
+    clearOutputHeight();
+    outputHeightFallback = currentHeight;
+    outputHeightTracking = true;
+  }
+
+  function finishRunSegment() {
+    var height = outputHeightMaximum;
+    if (height === null) {
+      height = outputHeightFallback;
+    }
+    if (height === null) {
+      height = readOutputHeight();
+    }
+    outputHeightTracking = false;
+    outputHeightFallback = null;
+    outputHeightMaximum = height;
+    if (height === null) {
+      return false;
+    }
+    lockOutputHeight(height);
+    return true;
+  }
+
+  function restoreRunHeight() {
+    var height = readOutputHeight();
+    clearOutputHeight();
+    if (height === null) {
+      return false;
+    }
+    outputHeightMaximum = height;
+    lockOutputHeight(height);
+    return true;
+  }
+
+  function renderedOutput() {
+    onRender();
+    measureOutputHeight();
+  }
+
+  function measureOutputHeight() {
+    if (!outputHeightTracking) {
+      return;
+    }
+    var height = readOutputHeight();
+    if (height === null) {
+      return;
+    }
+    if (
+      outputHeightMaximum === null
+      || height > outputHeightMaximum
+    ) {
+      outputHeightMaximum = height;
+    }
+  }
+
+  function readOutputHeight() {
+    var height = null;
+    if (typeof outputArea.getBoundingClientRect === "function") {
+      var rectangle = outputArea.getBoundingClientRect();
+      if (
+        rectangle
+        && typeof rectangle.height === "number"
+        && isFinite(rectangle.height)
+        && rectangle.height > 0
+      ) {
+        height = rectangle.height;
+      }
+    }
+    if (
+      height === null
+      && typeof outputArea.clientHeight === "number"
+      && outputArea.clientHeight > 0
+    ) {
+      height = outputArea.clientHeight;
+    }
+    return height === null ? null : boundOutputHeight(height);
+  }
+
+  function boundOutputHeight(height) {
+    var minimum = outputHeightMinimum();
+    var maximum = Math.max(
+      minimum,
+      Math.floor(
+        outputViewportHeight() * outputViewportRatio()
+      )
+    );
+    return Math.min(
+      maximum,
+      Math.max(minimum, Math.ceil(height))
+    );
+  }
+
+  function outputViewportHeight() {
+    var viewport = window.visualViewport;
+    if (
+      viewport
+      && typeof viewport.height === "number"
+      && isFinite(viewport.height)
+      && viewport.height > 0
+    ) {
+      return viewport.height;
+    }
+    if (
+      typeof window.innerHeight === "number"
+      && isFinite(window.innerHeight)
+      && window.innerHeight > 0
+    ) {
+      return window.innerHeight;
+    }
+    var root = document.documentElement;
+    if (
+      root
+      && typeof root.clientHeight === "number"
+      && root.clientHeight > 0
+    ) {
+      return root.clientHeight;
+    }
+    return OUTPUT_HEIGHT_VIEWPORT_FALLBACK_PX;
+  }
+
+  function outputViewportRatio() {
+    return outputViewportIsMobile()
+      ? OUTPUT_HEIGHT_MOBILE_RATIO
+      : OUTPUT_HEIGHT_VIEWPORT_RATIO;
+  }
+
+  function outputHeightMinimum() {
+    return outputViewportIsMobile()
+      ? OUTPUT_HEIGHT_MOBILE_MIN_PX
+      : OUTPUT_HEIGHT_MIN_PX;
+  }
+
+  function outputViewportIsMobile() {
+    if (typeof window.matchMedia === "function") {
+      return window.matchMedia(
+        "(max-width: " + OUTPUT_HEIGHT_MOBILE_WIDTH_PX + "px)"
+      ).matches;
+    }
+    var width = window.innerWidth;
+    return (
+      typeof width === "number"
+      && isFinite(width)
+      && width > 0
+      && width <= OUTPUT_HEIGHT_MOBILE_WIDTH_PX
+    );
+  }
+
+  function lockOutputHeight(height) {
+    var bounded = boundOutputHeight(height);
+    outputArea.style.setProperty(
+      OUTPUT_HEIGHT_PROPERTY, bounded + "px"
+    );
+    outputArea.classList.add(OUTPUT_HEIGHT_LOCK_CLASS);
+  }
+
+  function clearOutputHeight() {
+    outputHeightTracking = false;
+    outputHeightMaximum = null;
+    outputHeightFallback = null;
+    outputArea.classList.remove(OUTPUT_HEIGHT_LOCK_CLASS);
+    outputArea.style.removeProperty(OUTPUT_HEIGHT_PROPERTY);
+  }
+
   function renderLiveFrame(tokens, revealed, live) {
     stopCandidates();
     viewMode = "live";
@@ -363,8 +545,8 @@ function generatorCanvasCreate(options) {
         liveRevisionsAt(drawnFrame, tokens)
       );
     }
-    onRender();
     startLiveCycling(tokens, live);
+    renderedOutput();
   }
 
   function syncLiveTokens(tokens) {
@@ -507,7 +689,7 @@ function generatorCanvasCreate(options) {
     viewMode = "live";
     drawnFrame = run.frameCount() - 1;
     drawText(text);
-    onRender();
+    renderedOutput();
   }
 
   function drawText(text) {
@@ -555,7 +737,7 @@ function generatorCanvasCreate(options) {
     outputArea.appendChild(
       textSpan("char-resolved", text)
     );
-    onRender();
+    renderedOutput();
   }
 
   function invalidate() {
@@ -1658,6 +1840,7 @@ function generatorCanvasCreate(options) {
 
   function releaseOutput() {
     stopCandidates();
+    clearOutputHeight();
     liveTokenSpans = [];
     tokenGlowQueue = [];
     viewMode = "none";
@@ -1786,6 +1969,10 @@ function generatorCanvasCreate(options) {
     renderFinalText: renderFinalText,
     renderFrame: renderFrame,
     renderTargetPlaceholder: renderTargetPlaceholder,
+    startRunSegment: startRunSegment,
+    finishRunSegment: finishRunSegment,
+    restoreRunHeight: restoreRunHeight,
+    clearOutputHeight: clearOutputHeight,
     invalidate: invalidate,
     rebuildOverlaySelect: rebuildOverlaySelect,
     refreshControls: updateOverlayChrome,

@@ -314,6 +314,7 @@ function switchModel(id, device) {
       // stale run would return. But clearing it up front meant a
       // switch that was refused, for a missing venv or a model that
       // could not fit, threw away the run on screen for nothing.
+      generatorCanvas.clearOutputHeight();
       clearSessionState();
       generatorChrome.finishLoadingProgress(function () {
         location.reload();
@@ -486,6 +487,7 @@ function handleResident(data) {
     adoptResidentWorker(data.worker);
     return;
   }
+  generatorCanvas.clearOutputHeight();
   // Nothing here may be generated against, and the reconnect loop
   // must not race the reload by pulling the page back onto the new
   // worker as though it belonged here.
@@ -847,6 +849,7 @@ function enterInterruptedState() {
       generatorRun.saveSession();
     }
   }
+  generatorCanvas.finishRunSegment();
 }
 
 function handleDone(data) {
@@ -857,6 +860,7 @@ function handleDone(data) {
   // rest of this is skipped on purpose: the thinking panel is what
   // Save reads, and this frame's empty thinking would clear it.
   if (generatorEdit.finishStream(data)) {
+    generatorCanvas.finishRunSegment();
     return;
   }
   // A stopped run is still a run: it keeps its frames, its scrubber
@@ -889,6 +893,7 @@ function handleDone(data) {
   setSaveAvailable(true);
 
   generatorEdit.completeStream();
+  generatorCanvas.finishRunSegment();
 
   // Persist the completed run so it survives navigating to
   // Analytics and back (skip while mid guided-edit).
@@ -910,6 +915,7 @@ function handleError(data) {
     setGenerating(false);
     generatorChrome.endRunStatus();
     generatorEdit.unwindRunError();
+    generatorCanvas.finishRunSegment();
   }
   generatorChrome.setMessage(
     "Error: " + routed.message,
@@ -1138,6 +1144,12 @@ function updateGenerateIdleEffect() {
 // ---- UI state helpers ----
 
 function setGenerating(active) {
+  if (active) {
+    generatorCanvas.startRunSegment({
+      preserveCurrentHeight:
+        generatorEdit !== null && generatorEdit.resuming(),
+    });
+  }
   isGenerating = active;
   // Generate stays visible; it just greys out while the model runs
   // (and whenever the model is not ready, params are invalid, or a
@@ -2355,6 +2367,7 @@ function generatorRunSessionRestored() {
   updateGenerateButton();
   setSaveAvailable(!generatorRun.saved());
   generatorEdit.activate();
+  generatorCanvas.restoreRunHeight();
 }
 
 function generatorRunSaveStart(info) {

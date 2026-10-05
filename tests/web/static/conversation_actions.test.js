@@ -115,9 +115,17 @@ function harness(overrides) {
     const cards = state.turns.map((item) => {
       const article = page.document.createElement("article");
       article.setAttribute("data-turn-id", item.turn_id);
+      const header = page.document.createElement("header");
+      header.className = "conversation-turn-header";
+      const speaker = page.document.createElement("span");
+      speaker.className = "conversation-turn-speaker";
+      speaker.textContent =
+        item.role === "user" ? "You" : "Assistant";
+      header.appendChild(speaker);
       const text = page.document.createElement("div");
       text.className = "conversation-turn-text";
       text.textContent = item.text;
+      article.appendChild(header);
       article.appendChild(text);
       const points = state.branchPoints.filter(
         (point) => point.turn_index === item.index
@@ -341,6 +349,87 @@ test("clipboard success reports Copied", async () => {
   );
 });
 
+test("native copy bypasses Clipboard inside the click gesture",
+  () => {
+  const h = harness();
+  h.page.context.pywebview = {};
+  let clipboardCalls = 0;
+  let dispatchReturned = false;
+  let copiedBeforeReturn = false;
+  h.page.context.navigator.clipboard.writeText = () => {
+    clipboardCalls += 1;
+    return Promise.resolve();
+  };
+  h.page.document.execCommand = (command) => {
+    copiedBeforeReturn = command === "copy" && !dispatchReturned;
+    return true;
+  };
+  const copy = action(card(h, "turn-1"), "copy");
+  copy.focus();
+
+  dispatch(h, copy);
+  dispatchReturned = true;
+
+  assert.equal(clipboardCalls, 0);
+  assert.equal(copiedBeforeReturn, true);
+  assert.equal(h.page.document.activeElement, copy);
+  assert.equal(
+    h.page.registry.get("conversation-action-status").textContent,
+    "Copied"
+  );
+});
+
+test("QtWebEngine user agent selects synchronous copy", () => {
+  const h = harness();
+  h.page.context.navigator.userAgent =
+    "Mozilla/5.0 QtWebEngine/6.8.2 Chrome/122.0";
+  let clipboardCalls = 0;
+  let commands = 0;
+  h.page.context.navigator.clipboard.writeText = () => {
+    clipboardCalls += 1;
+    return Promise.resolve();
+  };
+  h.page.document.execCommand = () => {
+    commands += 1;
+    return true;
+  };
+
+  dispatch(h, action(card(h, "turn-3"), "copy"));
+
+  assert.equal(clipboardCalls, 0);
+  assert.equal(commands, 1);
+});
+
+test("native copy refusal reports failure without state mutation",
+  () => {
+  const h = harness();
+  h.page.context.pywebview = {};
+  let clipboardCalls = 0;
+  h.page.context.navigator.clipboard.writeText = () => {
+    clipboardCalls += 1;
+    return Promise.resolve();
+  };
+  h.page.document.execCommand = () => false;
+  const bodyCount = h.page.document.body.children.length;
+  const copy = action(card(h, "turn-1"), "copy");
+  copy.focus();
+
+  dispatch(h, copy);
+
+  const status = h.page.registry.get(
+    "conversation-action-status"
+  );
+  assert.equal(clipboardCalls, 0);
+  assert.match(status.textContent, /Copy failed/);
+  assert.equal(status.classes.has("is-error"), true);
+  assert.equal(h.page.document.body.children.length, bodyCount);
+  assert.equal(h.page.document.activeElement, copy);
+  assert.deepEqual(h.calls.edit, []);
+  assert.deepEqual(h.calls.delete, []);
+  assert.deepEqual(h.calls.retry, []);
+  assert.deepEqual(h.calls.state, []);
+});
+
 test("clipboard rejection uses one bounded fallback", async () => {
   const h = harness();
   const commands = [];
@@ -445,6 +534,19 @@ test("inline edit Cancel restores exact text and focus", () => {
   const editing = card(h, "turn-1");
   const input = editing.querySelector(
     '[data-conversation-edit-input="turn-1"]'
+  );
+  assert.equal(editing.classes.has("is-editing"), true);
+  assert.equal(
+    editing.getAttribute("data-conversation-editing"), "true"
+  );
+  assert.equal(
+    editing.getAttribute("aria-label"), "You, editing message"
+  );
+  assert.equal(
+    editing.querySelector(
+      ".conversation-turn-badge-editing"
+    ).textContent,
+    "Editing"
   );
   assert.equal(input.value, "question 1");
   assert.match(

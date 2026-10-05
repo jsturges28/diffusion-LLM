@@ -776,6 +776,23 @@ function conversationActionsCopy(owner, turnId, button) {
   var isCurrent = function () {
     return epoch === owner.copyEpoch;
   };
+  if (conversationActionsNeedsSynchronousCopy()) {
+    try {
+      conversationActionsClipboardFallbackSync(
+        turn.text, button, isCurrent
+      );
+      if (epoch === owner.copyEpoch) {
+        conversationActionsReport(owner, "Copied", false);
+      }
+    } catch (error) {
+      if (epoch === owner.copyEpoch) {
+        conversationActionsReportError(
+          owner, "Copy failed", error
+        );
+      }
+    }
+    return;
+  }
   conversationActionsWriteClipboard(
     turn.text, button, isCurrent
   )
@@ -791,6 +808,27 @@ function conversationActionsCopy(owner, turnId, button) {
         );
       }
     });
+}
+
+// QtWebEngine's Clipboard permission path is the likely native-only
+// hazard, not a proven crash cause. Keep its fallback inside the
+// original click gesture and never enter that asynchronous API.
+function conversationActionsNeedsSynchronousCopy() {
+  if (
+    typeof window === "object"
+    && window !== null
+    && "pywebview" in window
+  ) {
+    return true;
+  }
+  var userAgent = (
+    typeof navigator === "object"
+    && navigator !== null
+    && typeof navigator.userAgent === "string"
+  )
+    ? navigator.userAgent
+    : "";
+  return /\bQtWebEngine\b/i.test(userAgent);
 }
 
 function conversationActionsWriteClipboard(
@@ -822,47 +860,54 @@ function conversationActionsWriteClipboard(
 function conversationActionsClipboardFallback(
   text, restoreFocus, isCurrent
 ) {
-  if (text.length > CONVERSATION_CLIPBOARD_FALLBACK_MAX) {
-    return Promise.reject(
-      new Error("message exceeds the fallback copy bound")
-    );
-  }
   return Promise.resolve().then(function () {
-    if (
-      typeof isCurrent === "function"
-      && !isCurrent()
-    ) {
-      return false;
-    }
-    var activeElement = document.activeElement;
-    var focusTarget = restoreFocus || activeElement;
-    if (typeof document.execCommand !== "function") {
-      throw new Error("clipboard access is unavailable");
-    }
-    var input = document.createElement("textarea");
-    input.className = "conversation-clipboard-fallback";
-    input.value = text;
-    input.readOnly = true;
-    input.tabIndex = -1;
-    input.setAttribute("aria-hidden", "true");
-    document.body.appendChild(input);
-    try {
-      input.select();
-      input.setSelectionRange(0, text.length);
-      if (!document.execCommand("copy")) {
-        throw new Error("the browser refused the fallback copy");
-      }
-    } finally {
-      input.remove();
-      if (
-        focusTarget
-        && focusTarget.isConnected
-        && typeof focusTarget.focus === "function"
-      ) {
-        focusTarget.focus();
-      }
-    }
+    return conversationActionsClipboardFallbackSync(
+      text, restoreFocus, isCurrent
+    );
   });
+}
+
+function conversationActionsClipboardFallbackSync(
+  text, restoreFocus, isCurrent
+) {
+  if (text.length > CONVERSATION_CLIPBOARD_FALLBACK_MAX) {
+    throw new Error("message exceeds the fallback copy bound");
+  }
+  if (
+    typeof isCurrent === "function"
+    && !isCurrent()
+  ) {
+    return false;
+  }
+  var activeElement = document.activeElement;
+  var focusTarget = restoreFocus || activeElement;
+  if (typeof document.execCommand !== "function") {
+    throw new Error("clipboard access is unavailable");
+  }
+  var input = document.createElement("textarea");
+  input.className = "conversation-clipboard-fallback";
+  input.value = text;
+  input.readOnly = true;
+  input.tabIndex = -1;
+  input.setAttribute("aria-hidden", "true");
+  document.body.appendChild(input);
+  try {
+    input.select();
+    input.setSelectionRange(0, text.length);
+    if (!document.execCommand("copy")) {
+      throw new Error("the browser refused the fallback copy");
+    }
+  } finally {
+    input.remove();
+    if (
+      focusTarget
+      && focusTarget.isConnected
+      && typeof focusTarget.focus === "function"
+    ) {
+      focusTarget.focus();
+    }
+  }
+  return true;
 }
 
 function conversationActionsMutationBlocked(owner) {

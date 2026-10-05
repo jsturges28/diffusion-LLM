@@ -347,6 +347,8 @@ kept when these were written:
   paths, all-model regeneration, path-local saved links, concurrency
   and dropped replies, branch bounds and paging, transition guards,
   restart and legacy behavior, and an optional real power-loss check.
+- **449 to 450**: **not yet validated.** These cover native desktop
+  message copy and stable completed-canvas height while scrubbing.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -5346,3 +5348,29 @@ models and target devices before anyone raises or lowers them.
     No outcome may expose a half-written path, duplicate a branch, lose
     the original path or make the conversation unreadable. Record the
     filesystem and mount options with the result.
+
+449. **Native desktop message Copy stays inside the click gesture.**
+    Launch the Qt/QtWebEngine desktop app, create user and assistant
+    messages containing punctuation, Unicode, and several newlines, and
+    Copy each from its card. Paste into a plain-text editor and compare
+    the text byte for byte. The action must report **Copied**, restore
+    keyboard focus to its button, and leave the renderer, transcript,
+    selected path, and active run intact. Repeat Copy quickly across
+    several cards. If the platform refuses synchronous copy, the live
+    status must report **Copy failed** without trying the asynchronous
+    Clipboard API, blanking the window, or changing conversation state.
+    Repeat one user and one assistant Copy in a normal Chromium browser
+    to cover its modern Clipboard path and bounded fallback.
+
+450. **Completed canvas height stays stable while scrubbing.** On a
+    real display, complete, Stop, and error runs whose frames have
+    visibly different wrapped heights. Hold the pointer over the frame
+    scrubber and move between the tallest and shortest frames. The
+    output card and scrubber must stay fixed while overflow scrolls
+    inside the output area. Check a narrow mobile-sized viewport, where
+    the canvas must remain capped rather than consume the screen. A
+    fresh Send or conversation Retry and an Edit Frames or What If
+    branch must unlock and size from its own frames. Navigate to
+    Analytics and back to verify session restore relocks the visible
+    height. Finally Stop an Edit Frames resume before its first frame;
+    the restored original canvas must relock at its prior height.

@@ -1341,6 +1341,37 @@ button {
   scrollbar-color: var(--border) transparent;
 }
 
+/* A completed run holds the tallest canvas viewport rendered during
+   its latest generation segment. The fixed flex basis keeps the
+   scrubber under the pointer while the canvas itself remains the
+   scrolling surface. The viewport cap is also a resize backstop. */
+#output-area.is-height-locked {
+  box-sizing: border-box;
+  flex: 0 0 min(
+    var(--output-area-locked-height, 190px),
+    62vh
+  );
+  height: min(
+    var(--output-area-locked-height, 190px),
+    62vh
+  );
+  max-height: 62vh;
+}
+
+@supports (height: 1dvh) {
+  #output-area.is-height-locked {
+    flex-basis: min(
+      var(--output-area-locked-height, 190px),
+      62dvh
+    );
+    height: min(
+      var(--output-area-locked-height, 190px),
+      62dvh
+    );
+    max-height: 62dvh;
+  }
+}
+
 #output-area::-webkit-scrollbar {
   width: 6px;
 }

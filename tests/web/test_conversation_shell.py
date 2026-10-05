@@ -25,6 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 STATIC = REPO_ROOT / "src" / "web" / "static"
 INDEX = STATIC / "index.html"
 GUIDE = REPO_ROOT / "docs" / "GUIDE.md"
+STYLE_CSS = STATIC / "style.css"
 CONVERSATION_CSS = STATIC / "conversation.css"
 
 OTHER_PAGES = (
@@ -351,6 +352,55 @@ def test_draft_and_sent_user_cards_remain_distinct() -> None:
     assert "79, 195, 247" in sent
     assert "0, 255, 65" in draft
     assert "margin-top: auto" not in draft
+
+
+def test_inline_user_edit_has_distinct_blue_focus_treatment() -> None:
+    """Editing is marked by structure, border, badge and focus."""
+    styles = CONVERSATION_CSS.read_text(encoding="utf-8")
+    card = _rule(
+        styles, ".conversation-turn-user.is-editing {", 420
+    )
+    focus = _rule(
+        styles,
+        ".conversation-turn-user.is-editing:focus-within {",
+        260,
+    )
+    input_focus = _rule(
+        styles,
+        ".conversation-inline-edit-input:focus-visible {",
+        300,
+    )
+    badge = _rule(
+        styles, ".conversation-turn-badge-editing {", 180
+    )
+
+    assert "99, 205, 255" in card
+    assert "linear-gradient" in card
+    assert "box-shadow" in focus
+    assert "outline: 2px solid" in input_focus
+    assert "#9bddff" in badge
+
+
+def test_completed_canvas_height_is_bounded_and_scrollable() -> None:
+    """The lock fixes geometry without clipping long output."""
+    base_styles = STYLE_CSS.read_text(encoding="utf-8")
+    page_styles = CONVERSATION_CSS.read_text(encoding="utf-8")
+    output = _rule(base_styles, "#output-area {", 450)
+    locked = _rule(
+        base_styles, "#output-area.is-height-locked {", 700
+    )
+    mobile_start = page_styles.find("@media (max-width: 700px)")
+    assert mobile_start != -1
+    mobile = page_styles[mobile_start:]
+
+    assert "overflow-y: auto" in output
+    assert "--output-area-locked-height" in locked
+    assert "flex: 0 0 min(" in locked
+    assert "62vh" in locked
+    assert "62dvh" in locked
+    assert "#output-area.is-height-locked" in mobile
+    assert "46vh" in mobile
+    assert "46dvh" in mobile
 
 
 def test_message_actions_keep_keyboard_and_coarse_pointer_reach(

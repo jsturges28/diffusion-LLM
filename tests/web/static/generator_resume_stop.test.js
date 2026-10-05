@@ -202,6 +202,35 @@ test("a stopped Resume to End puts the run back", async () => {
   assert.equal(statusLine(run), UNCHANGED);
 });
 
+test("a zero-frame resume relocks the existing canvas height",
+  async () => {
+  const run = await finishedRun();
+  const output = run.registry.get("output-area");
+  run.context.innerHeight = 800;
+  run.context.innerWidth = 1000;
+  let height = 334;
+  output.getBoundingClientRect = () => ({ height });
+  run.context.generatorCanvas.restoreRunHeight();
+  lockedEditAt(run, 2);
+
+  press(run, "btn-resume-end");
+  assert.equal(
+    output.classList.contains("is-height-locked"), false
+  );
+  height = 120;
+  stoppedBeforeAFrame(run);
+
+  assert.equal(
+    output.classList.contains("is-height-locked"), true
+  );
+  assert.equal(
+    output.style.getPropertyValue(
+      "--output-area-locked-height"
+    ),
+    "334px"
+  );
+});
+
 test("and goes back to the choice it was sent from", async () => {
   const run = await finishedRun();
   lockedEditAt(run, 2);

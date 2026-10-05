@@ -300,8 +300,30 @@ var conversationActionViewCreate = (function () {
     if (!text) {
       throw new Error("Editable conversation card has no text");
     }
+    settings.article.classList.add("is-editing");
+    settings.article.setAttribute(
+      "data-conversation-editing", "true"
+    );
+    settings.article.setAttribute(
+      "aria-label", "You, editing message"
+    );
+    appendEditBadge(settings.article);
     text.classList.add("is-editing");
     text.replaceChildren(editForm(settings));
+  }
+
+  function appendEditBadge(article) {
+    var header = article.querySelector(
+      ".conversation-turn-header"
+    );
+    if (!header) {
+      return;
+    }
+    var badge = document.createElement("span");
+    badge.className =
+      "conversation-turn-badge conversation-turn-badge-editing";
+    badge.textContent = "Editing";
+    header.appendChild(badge);
   }
 
   function editForm(settings) {
