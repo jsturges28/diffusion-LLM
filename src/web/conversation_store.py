@@ -8,10 +8,13 @@ API -> conversation_store -> _conversation_branch_store
 from __future__ import annotations
 
 import contextlib
+import errno
+import os
 import shutil
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from src.web import _conversation_branch_store as branches
 from src.web import _conversation_store_core as core
@@ -54,6 +57,7 @@ PAGE_SIZE_MAX = core.PAGE_SIZE_MAX
 LIST_SIZE_DEFAULT = core.LIST_SIZE_DEFAULT
 LIST_SIZE_MAX = core.LIST_SIZE_MAX
 CONVERSATION_SCAN_MAX = core.CONVERSATION_SCAN_MAX
+SNAPSHOT_TURN_COPY_BYTES_MAX = 256 * 1024 * 1024
 
 Role = core.Role
 InputMode = core.InputMode
@@ -103,11 +107,38 @@ EditUserForkResult = core.EditUserForkResult
 DeletePathForkResult = core.DeletePathForkResult
 RetryAssistantForkResult = core.RetryAssistantForkResult
 
+
+@dataclass(frozen=True)
+class SnapshotTurnSource:
+    """One exact path turn copied into private snapshot staging."""
+
+    turn: TurnRecord
+    path: Path
+    linked: bool
+
+
+@dataclass(frozen=True)
+class SnapshotSource:
+    """One stable selected path and its private staged turn files."""
+
+    conversation_id: str
+    title: str
+    branch_id: str
+    branch_revision: int
+    catalog_revision: int
+    turn_count: int
+    tail_turn_id: str
+    tail_version: int
+    turns: Tuple[SnapshotTurnSource, ...]
+
 resolve_conversation_dir = core.resolve_conversation_dir
 validate_conversation_id = core.validate_conversation_id
 validate_branch_id = core.validate_branch_id
+validate_operation_id = core.validate_operation_id
+validate_title = core.validate_title
 manifest_to_payload = core.manifest_to_payload
 turn_to_payload = core.turn_to_payload
+parse_turn = core.parse_turn
 legacy_branch_id = branches.legacy_branch_id
 
 
@@ -488,6 +519,255 @@ def get_turns(
             before=before,
             limit=limit,
         )
+
+
+def capture_snapshot_source(
+    results_dir: Path,
+    conversation_id: str,
+    *,
+    branch_id: str,
+    branch_revision: int,
+    turn_count: int,
+    tail_turn_id: str,
+    tail_version: int,
+    turns_dir: Path,
+) -> SnapshotSource:
+    """Stage one exact path while its source stays locked."""
+    core.require_results_dir(results_dir)
+    core.validate_conversation_id(conversation_id)
+    core.validate_branch_id(branch_id)
+    core.validate_expected_revision(branch_revision)
+    if not 1 <= turn_count <= TURN_COUNT_MAX:
+        raise ValueError("snapshot turn_count is outside its limit")
+    if turn_count % 2 != 0:
+        raise ValueError("snapshot path must end on an assistant")
+    branches.validate_any_turn_id(tail_turn_id)
+    if not 1 <= tail_version <= TAIL_VERSIONS_MAX:
+        raise ValueError("snapshot tail_version is outside its limit")
+    if turns_dir.exists():
+        raise ValueError("snapshot turns staging already exists")
+    turns_dir.mkdir(parents=True)
+    with core.STORE_LOCK.held(results_dir):
+        conversation_dir = core.resolve_conversation_dir(
+            results_dir, conversation_id
+        )
+        state = branches.read_root_state(conversation_dir)
+        if isinstance(state, core.ConversationManifest):
+            return _capture_legacy_snapshot(
+                conversation_dir=conversation_dir,
+                manifest=state,
+                branch_id=branch_id,
+                branch_revision=branch_revision,
+                turn_count=turn_count,
+                tail_turn_id=tail_turn_id,
+                tail_version=tail_version,
+                turns_dir=turns_dir,
+            )
+        return _capture_v2_snapshot(
+            conversation_dir=conversation_dir,
+            catalog=state,
+            branch_id=branch_id,
+            branch_revision=branch_revision,
+            turn_count=turn_count,
+            tail_turn_id=tail_turn_id,
+            tail_version=tail_version,
+            turns_dir=turns_dir,
+        )
+
+
+def _capture_legacy_snapshot(
+    *,
+    conversation_dir: Path,
+    manifest: ConversationManifest,
+    branch_id: str,
+    branch_revision: int,
+    turn_count: int,
+    tail_turn_id: str,
+    tail_version: int,
+    turns_dir: Path,
+) -> SnapshotSource:
+    branches.require_legacy_branch_selection(manifest, branch_id)
+    _require_snapshot_head(
+        conversation_id=manifest.id,
+        actual_revision=manifest.revision,
+        expected_revision=branch_revision,
+        actual_count=manifest.turn_count,
+        expected_count=turn_count,
+        actual_tail_id=manifest.tail_turn_id,
+        expected_tail_id=tail_turn_id,
+        actual_tail_version=manifest.tail_version,
+        expected_tail_version=tail_version,
+        pending_id=manifest.pending_assistant_id,
+        branch_id=branch_id,
+    )
+    sources: List[Tuple[TurnRecord, Path]] = []
+    for index in range(1, turn_count + 1):
+        version = core._legacy_current_version(  # noqa: SLF001
+            conversation_dir, manifest, index
+        )
+        sources.append(
+            core.read_legacy_turn_source(
+                conversation_dir=conversation_dir,
+                manifest=manifest,
+                index=index,
+                version=version,
+            )
+        )
+    staged = _stage_snapshot_turns(sources, turns_dir)
+    return SnapshotSource(
+        conversation_id=manifest.id,
+        title=manifest.title,
+        branch_id=branch_id,
+        branch_revision=manifest.revision,
+        catalog_revision=0,
+        turn_count=manifest.turn_count,
+        tail_turn_id=tail_turn_id,
+        tail_version=tail_version,
+        turns=staged,
+    )
+
+
+def _capture_v2_snapshot(
+    *,
+    conversation_dir: Path,
+    catalog: ConversationCatalog,
+    branch_id: str,
+    branch_revision: int,
+    turn_count: int,
+    tail_turn_id: str,
+    tail_version: int,
+    turns_dir: Path,
+) -> SnapshotSource:
+    selected = branches.read_catalog_branch(
+        conversation_dir, catalog, branch_id
+    )
+    record = selected.record
+    _require_snapshot_head(
+        conversation_id=record.conversation_id,
+        actual_revision=record.revision,
+        expected_revision=branch_revision,
+        actual_count=record.turn_count,
+        expected_count=turn_count,
+        actual_tail_id=record.tail_turn_id,
+        expected_tail_id=tail_turn_id,
+        actual_tail_version=record.tail_version,
+        expected_tail_version=tail_version,
+        pending_id=record.pending_assistant_id,
+        branch_id=branch_id,
+    )
+    segments = branches.validate_selected_tail(
+        conversation_dir, catalog, selected
+    )
+    sources: List[Tuple[TurnRecord, Path]] = []
+    for index in range(1, turn_count + 1):
+        owner = branches.turn_owner_for_index(segments, index)
+        sources.append(
+            branches.read_owned_turn_source(
+                conversation_dir=conversation_dir,
+                branch=owner,
+                index=index,
+            )
+        )
+    staged = _stage_snapshot_turns(sources, turns_dir)
+    return SnapshotSource(
+        conversation_id=record.conversation_id,
+        title=catalog.title,
+        branch_id=branch_id,
+        branch_revision=record.revision,
+        catalog_revision=catalog.revision,
+        turn_count=record.turn_count,
+        tail_turn_id=tail_turn_id,
+        tail_version=tail_version,
+        turns=staged,
+    )
+
+
+def _require_snapshot_head(
+    *,
+    conversation_id: str,
+    actual_revision: int,
+    expected_revision: int,
+    actual_count: int,
+    expected_count: int,
+    actual_tail_id: Optional[str],
+    expected_tail_id: str,
+    actual_tail_version: Optional[int],
+    expected_tail_version: int,
+    pending_id: Optional[str],
+    branch_id: str,
+) -> None:
+    if actual_revision != expected_revision:
+        raise ConversationRevisionConflictError(
+            conversation_id,
+            expected_revision,
+            actual_revision,
+            branch_id,
+        )
+    if pending_id is not None:
+        raise ConversationStateError(
+            "finish the pending assistant before saving"
+            " the conversation"
+        )
+    if (
+        actual_count != expected_count
+        or actual_tail_id != expected_tail_id
+        or actual_tail_version != expected_tail_version
+    ):
+        raise ConversationStateError(
+            "the selected conversation head changed before"
+            " it was saved"
+        )
+
+
+def _stage_snapshot_turns(
+    sources: List[Tuple[TurnRecord, Path]],
+    turns_dir: Path,
+) -> Tuple[SnapshotTurnSource, ...]:
+    staged: List[SnapshotTurnSource] = []
+    copied_bytes = 0
+    for turn, source in sources:
+        target = turns_dir / f"{turn.index:08d}.json"
+        linked, copied = _clone_snapshot_turn(
+            source=source,
+            target=target,
+            copied_bytes=copied_bytes,
+        )
+        copied_bytes += copied
+        staged.append(SnapshotTurnSource(turn, target, linked))
+    assert len(staged) == len(sources)
+    return tuple(staged)
+
+
+def _clone_snapshot_turn(
+    *,
+    source: Path,
+    target: Path,
+    copied_bytes: int,
+) -> Tuple[bool, int]:
+    if not source.is_file() or source.is_symlink():
+        raise ConversationCorruptError(
+            f"snapshot turn source is unsafe: {source}"
+        )
+    try:
+        os.link(source, target, follow_symlinks=False)
+        return True, 0
+    except OSError as exc:
+        fallback_errors = {
+            errno.EXDEV,
+            errno.EPERM,
+            errno.EACCES,
+            errno.EOPNOTSUPP,
+            getattr(errno, "ENOTSUP", errno.EOPNOTSUPP),
+        }
+        if exc.errno not in fallback_errors:
+            raise
+    size = source.stat().st_size
+    if copied_bytes + size > SNAPSHOT_TURN_COPY_BYTES_MAX:
+        raise ConversationLimitError(
+            "snapshot turn-copy fallback exceeds its byte limit"
+        )
+    shutil.copy2(source, target, follow_symlinks=False)
+    return False, size
 
 
 def fork_edit_user(

@@ -327,6 +327,13 @@ def _compute_run_metrics(
 ) -> Dict[str, Any]:
     """Build the metrics payload for one guarded run."""
     run_dir = run_store.resolve_run_dir(results_dir, run_id)
+    return run_metrics_from_dir(run_dir, run_id)
+
+
+def run_metrics_from_dir(
+    run_dir: Path, run_id: str
+) -> Dict[str, Any]:
+    """Build metrics for an already guarded run directory."""
     metadata = load_run_metadata(run_dir)
     frames = read_frame_texts(run_dir, metadata)
     convergence, basis, produced_from = _run_convergence(
@@ -450,6 +457,11 @@ def _unsupported_version_response(
 def _run_metadata(results_dir: Path, run_id: str) -> Dict[str, Any]:
     """Build one guarded run's complete metadata payload."""
     run_dir = run_store.resolve_run_dir(results_dir, run_id)
+    return run_metadata_from_dir(run_dir)
+
+
+def run_metadata_from_dir(run_dir: Path) -> Dict[str, Any]:
+    """Build metadata for an already guarded run directory."""
     metadata = load_run_metadata(run_dir)
     run_schema_version(metadata)
     metadata["has_diff"] = (
@@ -468,6 +480,13 @@ def _compute_run_frames(
 ) -> Dict[str, Any]:
     """Build the durable token-stream payload for one run."""
     run_dir = run_store.resolve_run_dir(results_dir, run_id)
+    return run_frames_from_dir(run_dir, run_id)
+
+
+def run_frames_from_dir(
+    run_dir: Path, run_id: str
+) -> Dict[str, Any]:
+    """Build token frames for an already guarded run directory."""
     metadata = load_run_metadata(run_dir)
     data = load_run_frames(run_dir)
     positions = data["positions"]

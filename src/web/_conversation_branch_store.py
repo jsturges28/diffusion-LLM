@@ -1636,6 +1636,22 @@ def read_owned_turn(
     branch: StoredBranch,
     index: int,
 ) -> c.TurnRecord:
+    """Read one turn owned by a resolved branch segment."""
+    turn, _path = read_owned_turn_source(
+        conversation_dir=conversation_dir,
+        branch=branch,
+        index=index,
+    )
+    return turn
+
+
+def read_owned_turn_source(
+    *,
+    conversation_dir: Path,
+    branch: StoredBranch,
+    index: int,
+) -> Tuple[c.TurnRecord, Path]:
+    """Read one owned turn and name its immutable version file."""
     turn_id, schema = _owned_turn_identity(branch, index)
     turn_dir = _owned_turn_dir(
         conversation_dir,
@@ -1650,8 +1666,9 @@ def read_owned_turn(
         turn_id=turn_id,
         schema=schema,
     )
+    path = c.version_path(turn_dir, version)
     raw = c.read_json_object(
-        c.version_path(turn_dir, version),
+        path,
         "turn version",
     )
     turn = replace(
@@ -1666,7 +1683,7 @@ def read_owned_turn(
         version=version,
         schema=schema,
     )
-    return turn
+    return turn, path
 
 
 def _validate_owned_turn(

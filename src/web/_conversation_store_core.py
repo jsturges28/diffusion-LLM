@@ -2176,10 +2176,29 @@ def read_legacy_turn(
     index: int,
     version: int,
 ) -> TurnRecord:
+    """Read one immutable turn version from a legacy conversation."""
+    turn, _path = read_legacy_turn_source(
+        conversation_dir=conversation_dir,
+        manifest=manifest,
+        index=index,
+        version=version,
+    )
+    return turn
+
+
+def read_legacy_turn_source(
+    *,
+    conversation_dir: Path,
+    manifest: ConversationManifest,
+    index: int,
+    version: int,
+) -> Tuple[TurnRecord, Path]:
+    """Read a legacy turn and name its immutable version file."""
     turn_id = legacy_turn_id(index)
     turn_dir = require_turns_root(conversation_dir) / turn_id
+    path = version_path(turn_dir, version)
     raw = read_json_object(
-        version_path(turn_dir, version),
+        path,
         "turn version",
     )
     turn = parse_turn(raw)
@@ -2217,4 +2236,4 @@ def read_legacy_turn(
         )
     if turn.turn_id == manifest.pending_assistant_id:
         validate_pending_turn(turn)
-    return turn
+    return turn, path

@@ -88,6 +88,7 @@ from src.web import conversation_api
 from src.web import model_manager
 from src.web import run_store
 from src.web import save_pipeline
+from src.web import saved_conversation_api
 from src.web.save_limits import BodyLimit
 from src.web.data_root import (
     RESULTS_DIR_ENV,
@@ -192,6 +193,13 @@ app.include_router(
 app.include_router(
     conversation_api.create_conversation_router(
         conversation_api.ConversationApiDependencies(
+            results_dir=_current_results_dir,
+        )
+    )
+)
+app.include_router(
+    saved_conversation_api.create_saved_conversation_router(
+        saved_conversation_api.SavedConversationApiDependencies(
             results_dir=_current_results_dir,
         )
     )
