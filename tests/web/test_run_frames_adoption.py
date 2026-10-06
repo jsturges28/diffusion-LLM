@@ -222,7 +222,12 @@ def test_the_baseline_is_frozen_through_the_module() -> None:
     sit around this at the call site is gone."""
     region = _region(RUN_JS, "function finish(data)", 1400)
 
-    assert "originalRunCapture(original, frames" in region
+    assert re.search(
+        r"originalRunCapture\(\s*"
+        r"original,\s*frames,\s*positionAlts,\s*"
+        r"positionSamplerAlts\s*\)",
+        region,
+    )
 
 
 def test_the_baseline_is_cleared_and_stored_through_it() -> None:
