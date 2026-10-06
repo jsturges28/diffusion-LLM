@@ -29,6 +29,7 @@ STATIC = (
 )
 ANALYTICS_JS = STATIC / "analytics.js"
 ANALYTICS_HTML = STATIC / "analytics.html"
+RUN_DETAIL_JS = STATIC / "analytics_run_detail.js"
 
 
 def _js() -> str:
@@ -51,9 +52,10 @@ def _region(anchor: str, chars: int) -> str:
 def test_compare_has_a_fence_of_its_own() -> None:
     """Sharing the detail panel's would have each cancel the other."""
     source = _js()
+    detail = RUN_DETAIL_JS.read_text(encoding="utf-8")
 
     assert "var compareRequests = detailRequestsCreate();" in source
-    assert "var detailRequests = detailRequestsCreate();" in source
+    assert "requests: detailRequestsCreate()" in detail
 
 
 def test_a_comparison_begins_an_attempt() -> None:

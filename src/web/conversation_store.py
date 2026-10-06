@@ -531,6 +531,7 @@ def capture_snapshot_source(
     tail_turn_id: str,
     tail_version: int,
     turns_dir: Path,
+    durable: bool = True,
 ) -> SnapshotSource:
     """Stage one exact path while its source stays locked."""
     core.require_results_dir(results_dir)
@@ -544,9 +545,14 @@ def capture_snapshot_source(
     branches.validate_any_turn_id(tail_turn_id)
     if not 1 <= tail_version <= TAIL_VERSIONS_MAX:
         raise ValueError("snapshot tail_version is outside its limit")
+    if not isinstance(durable, bool):
+        raise TypeError("durable must be a boolean")
     if turns_dir.exists():
         raise ValueError("snapshot turns staging already exists")
-    turns_dir.mkdir(parents=True)
+    if durable:
+        core.make_directory_durable(turns_dir)
+    else:
+        turns_dir.mkdir(parents=True)
     with core.STORE_LOCK.held(results_dir):
         conversation_dir = core.resolve_conversation_dir(
             results_dir, conversation_id
@@ -562,6 +568,7 @@ def capture_snapshot_source(
                 tail_turn_id=tail_turn_id,
                 tail_version=tail_version,
                 turns_dir=turns_dir,
+                durable=durable,
             )
         return _capture_v2_snapshot(
             conversation_dir=conversation_dir,
@@ -572,6 +579,7 @@ def capture_snapshot_source(
             tail_turn_id=tail_turn_id,
             tail_version=tail_version,
             turns_dir=turns_dir,
+            durable=durable,
         )
 
 
@@ -585,6 +593,7 @@ def _capture_legacy_snapshot(
     tail_turn_id: str,
     tail_version: int,
     turns_dir: Path,
+    durable: bool,
 ) -> SnapshotSource:
     branches.require_legacy_branch_selection(manifest, branch_id)
     _require_snapshot_head(
@@ -613,7 +622,9 @@ def _capture_legacy_snapshot(
                 version=version,
             )
         )
-    staged = _stage_snapshot_turns(sources, turns_dir)
+    staged = _stage_snapshot_turns(
+        sources, turns_dir, durable=durable
+    )
     return SnapshotSource(
         conversation_id=manifest.id,
         title=manifest.title,
@@ -637,6 +648,7 @@ def _capture_v2_snapshot(
     tail_turn_id: str,
     tail_version: int,
     turns_dir: Path,
+    durable: bool,
 ) -> SnapshotSource:
     selected = branches.read_catalog_branch(
         conversation_dir, catalog, branch_id
@@ -668,7 +680,9 @@ def _capture_v2_snapshot(
                 index=index,
             )
         )
-    staged = _stage_snapshot_turns(sources, turns_dir)
+    staged = _stage_snapshot_turns(
+        sources, turns_dir, durable=durable
+    )
     return SnapshotSource(
         conversation_id=record.conversation_id,
         title=catalog.title,
@@ -722,6 +736,8 @@ def _require_snapshot_head(
 def _stage_snapshot_turns(
     sources: List[Tuple[TurnRecord, Path]],
     turns_dir: Path,
+    *,
+    durable: bool,
 ) -> Tuple[SnapshotTurnSource, ...]:
     staged: List[SnapshotTurnSource] = []
     copied_bytes = 0
@@ -731,10 +747,13 @@ def _stage_snapshot_turns(
             source=source,
             target=target,
             copied_bytes=copied_bytes,
+            durable=durable,
         )
         copied_bytes += copied
         staged.append(SnapshotTurnSource(turn, target, linked))
     assert len(staged) == len(sources)
+    if durable:
+        core.fsync_directory(turns_dir)
     return tuple(staged)
 
 
@@ -743,6 +762,7 @@ def _clone_snapshot_turn(
     source: Path,
     target: Path,
     copied_bytes: int,
+    durable: bool,
 ) -> Tuple[bool, int]:
     if not source.is_file() or source.is_symlink():
         raise ConversationCorruptError(
@@ -767,6 +787,9 @@ def _clone_snapshot_turn(
             "snapshot turn-copy fallback exceeds its byte limit"
         )
     shutil.copy2(source, target, follow_symlinks=False)
+    if durable:
+        with target.open("rb") as copied:
+            os.fsync(copied.fileno())
     return False, size
 
 

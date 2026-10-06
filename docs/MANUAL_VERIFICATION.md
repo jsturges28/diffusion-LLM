@@ -356,6 +356,10 @@ kept when these were written:
 - **452 to 454**: **not yet validated.** These cover KGW pressure
   correctness and exclusions, Generator/Analytics candidate parity and
   accessibility, plus paired CPU/GPU throughput and memory acceptance.
+- **455 to 458**: **not yet validated.** These cover selected-path
+  conversation snapshots, active-tail auto-save and immutable XAI,
+  concurrent/idempotent publication, Analytics paging and accessibility,
+  and exact visible-output token counts on real models.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -5474,3 +5478,64 @@ models and target devices before anyone raises or lowers them.
     every retained token, pressure tuple and candidate position must have
     the same bounded length, with no full-vocabulary distribution on the
     wire or disk.
+
+455. **Save Conversation preserves exactly the selected path.** Build a
+    conversation with at least four exchanges, two alternate paths, one
+    older explicitly saved response, one older Text only response and an
+    unsaved rich active tail. Select one alternate and open **Save
+    Conversation**. Its exchange, XAI, Text only and unavailable counts
+    must cover the full server path, including turns older than the
+    browser cache. Confirm: the active run must save and link first, then
+    exactly that path and head must appear in Analytics. The sibling path
+    and every future turn must be absent.
+
+    Repeat while generation, an Edit/Retry/Delete action, Save Run, Edit
+    Frames and What If are active; snapshot creation must remain disabled
+    or name what must finish. Change paths in another window while the
+    dialog is open: confirmation must refuse the stale head. Force the
+    active Save Run to fail and confirm no snapshot appears. Then let the
+    run save but fail snapshot publication; the status must say the run
+    was preserved while the conversation snapshot was not.
+
+456. **Pinned text and XAI outlive every source.** Save a mixed snapshot,
+    then replace one top-level run with an edited revision, delete a
+    different linked run, and delete the live conversation. The snapshot
+    text and each XAI revision that was available at save time must remain
+    byte-for-byte unchanged and open through its exchange. A link already
+    missing before Save must say **XAI unavailable when saved**; a Text
+    only response must never acquire a View XAI action. Deleting the
+    snapshot must remove neither any live conversation nor any top-level
+    run.
+
+    Inspect disk usage and inode/link identity on the normal filesystem:
+    linked turn and run files should share blocks with their sources.
+    Exercise the documented copy fallback on a filesystem or test mount
+    without hard-link support, checking its byte ceiling and disk-space
+    refusal before large data is copied.
+
+457. **Analytics treats conversations as their own artifact.** Open the
+    Runs and Conversations tabs by mouse, touch and keyboard. Run-only
+    grouping, collections, compare and bulk actions must disappear in
+    Conversations and return unchanged in Runs. Open a long snapshot,
+    load older exchanges repeatedly, and verify chronology, the 200-turn
+    browser bound, Partial/Text only/unavailable wording and preserved
+    newlines. Rename with valid, blank and stale-title revisions, then
+    deep-link directly to the snapshot after restart.
+
+    Open **View XAI** on diffusion, autoregressive and edited responses.
+    The ordinary run detail modal must show the pinned token view, charts,
+    candidates and Original/Edited data; closing it must return focus to
+    the exchange button and leave the conversation viewer open. Check
+    200% zoom, reduced motion, keyboard-only navigation and a viewport
+    below 700 px. Delete from both the row and open detail, reading the
+    confirmation that only the snapshot is removed.
+
+458. **Visible output token counts are worker-attested.** On LLaDA,
+    DiffusionGemma, SmolLM3 and Mamba-3, complete, Stop and produce an
+    empty response where possible. Encode the exact visible final text
+    with that worker's raw tokenizer and `add_special_tokens=False`; the
+    durable assistant metadata's `generated_token_count` must match.
+    Reasoning/control text removed from the visible answer must not count.
+    A dropped connection with no terminal frame must omit the field rather
+    than estimate it. Old turns remain readable with no count, and no
+    cumulative-usage total should appear yet.

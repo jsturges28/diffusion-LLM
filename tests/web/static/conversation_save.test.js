@@ -100,6 +100,7 @@ function harness(settings = {}) {
     busy: [],
     saved: [],
     blockedMessages: [],
+    tailPinned: false,
   };
   const client = {
     preview(value) {
@@ -110,6 +111,9 @@ function harness(settings = {}) {
         xai_count: 0,
         text_only_count: 1,
         unavailable_count: 0,
+        tail_xai_status: state.tailPinned
+          ? "pinned"
+          : "text_only",
       });
     },
     create(value) {
@@ -128,13 +132,16 @@ function harness(settings = {}) {
     view,
     readHead: () => state.head,
     readBlockReason: () => state.blocked,
-    shouldSaveActiveTail: () => state.needsSave,
+    shouldSaveActiveTail: () => (
+      state.needsSave ? "save" : false
+    ),
     saveActiveTail() {
       state.saveCalls += 1;
       if (settings.saveFails) {
         return Promise.resolve(false);
       }
       state.head = head(5, 3);
+      state.tailPinned = true;
       return Promise.resolve(true);
     },
     createOperationId: () => "e".repeat(32),

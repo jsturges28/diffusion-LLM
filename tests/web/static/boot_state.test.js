@@ -491,6 +491,33 @@ test("collections arrive with the table, not after it", () => {
   assert.equal(page.sandbox.collections[0].id, "favorites");
 });
 
+test("Analytics artifact tabs wrap with arrow keys", () => {
+  const page = analyticsPage({
+    bootState: analyticsBoot(),
+    fetchImpl: analyticsFetch([]),
+  });
+  const tabs = page.registry.get("analytics-view-tabs");
+  const runs = page.registry.get("tab-runs");
+  const conversations = page.registry.get("tab-conversations");
+
+  tabs.dispatch("keydown", {
+    key: "ArrowLeft",
+    target: runs,
+    preventDefault() {},
+  });
+  assert.equal(
+    conversations.getAttribute("aria-selected"),
+    "true"
+  );
+
+  tabs.dispatch("keydown", {
+    key: "ArrowRight",
+    target: conversations,
+    preventDefault() {},
+  });
+  assert.equal(runs.getAttribute("aria-selected"), "true");
+});
+
 test("Analytics still fetches when served without the state", async () => {
   const urls = [];
   const page = analyticsPage({ fetchImpl: analyticsFetch(urls) });

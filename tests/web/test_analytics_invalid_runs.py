@@ -31,6 +31,7 @@ ANALYTICS_JS = (
     / "static"
     / "analytics.js"
 )
+RUN_DETAIL_JS = ANALYTICS_JS.with_name("analytics_run_detail.js")
 
 
 def _source() -> str:
@@ -44,6 +45,13 @@ def _region(anchor: str, chars: int) -> str:
         f"anchor {anchor!r} is gone; update this test rather than"
         " deleting it"
     )
+    return source[start : start + chars]
+
+
+def _detail_region(anchor: str, chars: int) -> str:
+    source = RUN_DETAIL_JS.read_text(encoding="utf-8")
+    start = source.find(anchor)
+    assert start != -1, anchor
     return source[start : start + chars]
 
 
@@ -82,18 +90,17 @@ def test_the_spanning_cell_replaces_the_data_cells() -> None:
 
 
 def test_opening_a_broken_run_escapes_the_reason() -> None:
-    region = _region("function showInvalidDetail", 900)
+    region = _region("function analyticsDetailInvalid", 900)
 
     assert "escHtml(reason)" in region
 
 
 def test_opening_a_broken_run_fetches_nothing() -> None:
-    """The early return has to come before the request token is
-    taken, or the panel waits on two requests that cannot succeed."""
-    region = _region("function showDetail(runId)", 700)
+    """The early return precedes every network loader."""
+    region = _detail_region("function analyticsRunDetailShow", 650)
 
-    early_return = region.find("showInvalidDetail(listed)")
-    begins_fetch = region.find("detailRequests.begin")
+    early_return = region.find("input.invalid === true")
+    begins_fetch = region.find("analyticsRunDetailLoadMeta")
 
     assert early_return != -1
     assert begins_fetch != -1
@@ -103,10 +110,11 @@ def test_opening_a_broken_run_fetches_nothing() -> None:
 def test_opening_a_broken_run_clears_the_previous_one() -> None:
     """Otherwise the last run's charts sit under this run's title,
     which reads as this run's data."""
-    region = _region("function showInvalidDetail", 1400)
+    start = _region("function analyticsDetailStart", 500)
+    invalid = _region("function analyticsDetailInvalid", 900)
 
-    assert "clearRunCharts()" in region
-    assert "tokenViewer.clear()" in region
+    assert "clearRunCharts()" in start
+    assert "tokenViewer.clear()" in invalid
 
 
 def test_opening_a_broken_run_hides_the_chart_frames() -> None:
@@ -117,7 +125,7 @@ def test_opening_a_broken_run_hides_the_chart_frames() -> None:
     reasons and restoring them on the next valid run is where a
     chart goes missing.
     """
-    region = _region("function showInvalidDetail", 1400)
+    region = _region("function analyticsDetailInvalid", 900)
 
     assert 'classList.add("detail-unreadable")' in region
 
@@ -125,7 +133,7 @@ def test_opening_a_broken_run_hides_the_chart_frames() -> None:
 def test_a_valid_run_gets_its_charts_back() -> None:
     """The other half. Opening a readable run after a broken one
     must not inherit the broken one's empty panel."""
-    region = _region("function showDetail(runId)", 900)
+    region = _region("function analyticsDetailStart", 500)
 
     assert 'classList.remove("detail-unreadable")' in region
 
@@ -133,6 +141,6 @@ def test_a_valid_run_gets_its_charts_back() -> None:
 def test_the_panel_says_the_folder_is_still_there() -> None:
     """The one useful action is deleting it, and that is only an
     obvious choice if the user knows nothing was lost yet."""
-    region = _region("function showInvalidDetail", 1400)
+    region = _region("function analyticsDetailInvalid", 900)
 
     assert "still on disk" in region

@@ -183,15 +183,16 @@ predate the campaign and have never been validated.
 
 ## Where to pick up
 
-**Experimental KGW views and detection** are the newest surface. SmolLM3
-and Mamba-3 emit keyed membership and evidence flags, share an accessible
-Watermark overlay and exact null rate plus normal-z readout with Analytics,
-and expose a tokenizer-only detector while resident. The display threshold
-is not an authorship verdict. Conversations still live under
-the shared data root, use CAS revisions across windows, restore their
-newest 50-turn page, and keep at most 200 compact turns in browser memory.
-Only the active tail owns frames and edit tools; older responses keep text
-and link a run only when it was explicitly saved. Exact context packing
-drops oldest whole exchanges and attests absolute omitted-turn counts.
-Hardware and display checks start at manual item 425. The next feature
-comes from the backlog in `docs/ROADMAP.md`.
+**Saved Conversations** are the newest surface. The generator can publish
+one exact selected path and head as an immutable Analytics artifact, saving
+the active tail's XAI first and pinning every available linked run revision.
+The separate Conversations catalog pages compact exchanges and opens pinned
+responses through the ordinary request-fenced run detail; deleting live
+sources cannot rewrite it. Bookmarks, notes, collections and cumulative
+usage are deliberately not part of this slice.
+
+Experimental KGW views and detection remain the newest XAI surface. Exact
+context packing still drops oldest whole exchanges and attests absolute
+omitted-turn counts. Hardware and display checks start at manual item 425;
+Saved Conversation checks are 455 to 458. The next feature comes from the
+backlog in `docs/ROADMAP.md`.

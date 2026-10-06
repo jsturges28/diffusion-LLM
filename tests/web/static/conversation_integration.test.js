@@ -114,6 +114,7 @@ function conversationApi() {
     failCreate: false,
     dropNextUpdateReply: false,
     dropNextLinkReply: false,
+    failNextLink: false,
     holdUpdateReplies: false,
     holdLinkReplies: false,
     failNextSave: false,
@@ -121,6 +122,7 @@ function conversationApi() {
     linkWaiters: [],
     saveRevision: 0,
     snapshotCount: 0,
+    snapshotTailStatusOverride: null,
     calls: [],
   };
 
@@ -227,6 +229,10 @@ function conversationApi() {
     const assistant = state.turns.at(-1);
     assert.equal(body.assistant_turn_index, assistant.index);
     assert.equal(body.assistant_turn_version, assistant.version);
+    if (state.failNextLink) {
+      state.failNextLink = false;
+      return reply({ error: "link failed" }, 500);
+    }
     state.revision += 1;
     assistant.version += 1;
     assistant.branch_revision = state.revision;
@@ -234,6 +240,7 @@ function conversationApi() {
       run_id: body.run_id,
       revision: body.run_revision,
     };
+    state.snapshotTailStatusOverride = null;
     const result = {
       conversation: manifest(),
       turn: assistant,
@@ -315,6 +322,15 @@ function conversationApi() {
           item.role === "assistant" && !item.run_link
         ).length,
         unavailable_count: 0,
+        tail_xai_status: (
+          state.snapshotTailStatusOverride
+          || (
+            state.turns.at(-1)
+            && state.turns.at(-1).run_link
+              ? "pinned"
+              : "text_only"
+          )
+        ),
       });
     }
     if (
@@ -632,6 +648,104 @@ test("Save Conversation preserves the active run before snapshot",
   );
   assert.equal(api.state.turns.at(-1).run_link.run_id, "run-one");
   assert.equal(dialog.open, false);
+});
+
+test("Save Conversation relinks an already-saved active run",
+  async () => {
+  const api = conversationApi();
+  const run = await pageWithApi(api);
+  run.page.registry.get("prompt-input").value = "First question";
+  assert.equal(await run.context.startGeneration(), true);
+  run.context.handleFrame(frame(0, "First answer"));
+  run.context.handleDone({
+    type: "done",
+    final_text: "First answer",
+    run_token: "nonce:1",
+  });
+  await run.context.conversationCompletion;
+  await run.context.conversationClient.flush();
+  api.state.failNextLink = true;
+  assert.equal(await run.context.saveRun(), false);
+  assert.equal(run.context.generatorRun.saved(), true);
+  assert.equal(api.state.turns.at(-1).run_link, null);
+  run.context.generatorRunSessionRestored();
+  assert.equal(
+    run.page.registry.get("btn-save-conversation").disabled,
+    false
+  );
+
+  run.page.registry.get("btn-save-conversation")
+    .dispatch("click");
+  await tick();
+  await tick();
+  run.page.registry.get("btn-conversation-save-confirm")
+    .dispatch("click");
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if (api.state.snapshotCount === 1) {
+      break;
+    }
+    await tick();
+  }
+
+  const saves = api.state.calls.filter((call) =>
+    call.path === "/api/save"
+  );
+  assert.equal(saves.length, 1);
+  assert.equal(api.state.snapshotCount, 1);
+  assert.equal(api.state.turns.at(-1).run_link.run_id, "run-one");
+});
+
+test("Save Conversation recovers externally unavailable active XAI",
+  async () => {
+  const api = conversationApi();
+  const run = await pageWithApi(api);
+  run.page.registry.get("prompt-input").value = "First question";
+  assert.equal(await run.context.startGeneration(), true);
+  run.context.handleFrame(frame(0, "First answer"));
+  run.context.handleDone({
+    type: "done",
+    final_text: "First answer",
+    run_token: "nonce:1",
+  });
+  await run.context.conversationCompletion;
+  await run.context.conversationClient.flush();
+  assert.equal(await run.context.saveRun(), true);
+  api.state.snapshotTailStatusOverride = "unavailable";
+
+  run.page.registry.get("btn-save-conversation")
+    .dispatch("click");
+  const dialog = run.page.registry.get("conversation-save-dialog");
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (dialog.open) {
+      break;
+    }
+    await tick();
+  }
+  assert.equal(dialog.open, true);
+  assert.equal(
+    run.page.registry.get("conversation-save-active").hidden,
+    false
+  );
+  run.page.registry.get("btn-conversation-save-confirm")
+    .dispatch("click");
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if (api.state.snapshotCount === 1) {
+      break;
+    }
+    await tick();
+  }
+
+  const saves = api.state.calls.filter((call) =>
+    call.path === "/api/save"
+  );
+  assert.equal(saves.length, 2);
+  assert.equal("run_id" in saves[1].body, false);
+  assert.equal("expected_revision" in saves[1].body, false);
+  assert.match(
+    saves[1].body.run_token,
+    /^snapshot:[0-9a-f]{32}$/
+  );
+  assert.equal(api.state.snapshotCount, 1);
 });
 
 test("a zero-token completion remains visible and explicit",

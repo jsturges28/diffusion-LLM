@@ -10,6 +10,9 @@ function analyticsConversationsCreate(options) {
     client: analyticsConversationsRequired(options, "client"),
     openXai: analyticsConversationsCallback(options, "openXai"),
     showToast: analyticsConversationsCallback(options, "showToast"),
+    focusFallback: analyticsConversationsRequired(
+      options, "focusFallback"
+    ),
     panel: analyticsConversationsElement("conversations-panel"),
     tbody: analyticsConversationsElement("conversations-tbody"),
     empty: analyticsConversationsElement("conversations-empty"),
@@ -65,6 +68,10 @@ function analyticsConversationsCreate(options) {
     hasMore: false,
     opener: null,
     loaded: false,
+    requestEpoch: 0,
+    listEpoch: 0,
+    deleteEpoch: 0,
+    pendingDeleteId: null,
     wired: false,
   };
   return Object.freeze({
@@ -87,6 +94,7 @@ function analyticsConversationsCreate(options) {
       return analyticsConversationsRefresh(owner);
     },
     adopt: function (rows) {
+      analyticsConversationsAdvanceListEpoch(owner);
       owner.rows = Array.isArray(rows) ? rows : [];
       owner.loaded = true;
       analyticsConversationsRenderTable(owner);
@@ -116,7 +124,9 @@ function analyticsConversationsWire(owner) {
     if (row) {
       event.preventDefault();
       analyticsConversationsOpen(
-        owner, row.getAttribute("data-snapshot-id"), row
+        owner,
+        row.getAttribute("data-snapshot-id"),
+        row.querySelector(".snapshot-open-button")
       );
     }
   });
@@ -160,16 +170,27 @@ function analyticsConversationsWire(owner) {
       analyticsConversationsCloseDelete(owner);
     }
   });
+  owner.deleteDialog.addEventListener("cancel", function (event) {
+    event.preventDefault();
+    analyticsConversationsCloseDelete(owner);
+  });
 }
 
 function analyticsConversationsRefresh(owner) {
+  var epoch = analyticsConversationsAdvanceListEpoch(owner);
   owner.status.textContent = "";
   return owner.client.list().then(function (rows) {
+    if (owner.listEpoch !== epoch) {
+      return owner.rows;
+    }
     owner.rows = Array.isArray(rows) ? rows : [];
     owner.loaded = true;
     analyticsConversationsRenderTable(owner);
     return owner.rows;
   }).catch(function (error) {
+    if (owner.listEpoch !== epoch) {
+      return owner.rows;
+    }
     owner.rows = [];
     analyticsConversationsRenderTable(owner);
     owner.showToast(
@@ -194,7 +215,6 @@ function analyticsConversationsRenderTable(owner) {
 function analyticsConversationsRow(snapshot) {
   var row = document.createElement("tr");
   row.setAttribute("data-snapshot-id", snapshot.snapshot_id);
-  row.tabIndex = 0;
   if (snapshot.invalid) {
     row.classList.add("run-invalid");
   }
@@ -203,13 +223,7 @@ function analyticsConversationsRow(snapshot) {
       analyticsConversationsDate(snapshot.created_at)
     )
   );
-  row.appendChild(
-    analyticsConversationsCell(
-      snapshot.invalid
-        ? "Unreadable snapshot"
-        : String(snapshot.title || "Untitled")
-    )
-  );
+  row.appendChild(analyticsConversationsTitleCell(snapshot));
   row.appendChild(
     analyticsConversationsCell(snapshot.exchange_count || 0)
   );
@@ -233,6 +247,21 @@ function analyticsConversationsRow(snapshot) {
   actions.appendChild(remove);
   row.appendChild(actions);
   return row;
+}
+
+function analyticsConversationsTitleCell(snapshot) {
+  var cell = document.createElement("td");
+  var button = document.createElement("button");
+  button.type = "button";
+  button.className = "snapshot-open-button";
+  button.textContent = snapshot.invalid
+    ? "Unreadable snapshot"
+    : String(snapshot.title || "Untitled");
+  button.setAttribute(
+    "aria-label", "Open saved conversation " + button.textContent
+  );
+  cell.appendChild(button);
+  return cell;
 }
 
 function analyticsConversationsCell(value) {
@@ -268,7 +297,7 @@ function analyticsConversationsTableClick(owner, event) {
   analyticsConversationsOpen(
     owner,
     row.getAttribute("data-snapshot-id"),
-    row
+    row.querySelector(".snapshot-open-button")
   );
 }
 
@@ -281,11 +310,15 @@ function analyticsConversationsOpen(owner, snapshotId, opener) {
     owner.showToast(summary.error || "Snapshot is unreadable.");
     return Promise.resolve(false);
   }
+  var epoch = analyticsConversationsAdvanceEpoch(owner);
   analyticsConversationsSetCurrent(owner, summary, opener);
+  owner.rename.disabled = false;
   owner.status.textContent = "Loading exchanges...";
   owner.turns = [];
   owner.nextBefore = null;
   owner.hasMore = false;
+  owner.older.disabled = false;
+  owner.older.hidden = true;
   if (!owner.detail.open) {
     owner.detail.showModal();
   }
@@ -295,13 +328,20 @@ function analyticsConversationsOpen(owner, snapshotId, opener) {
       snapshotId, null, ANALYTICS_CONVERSATION_PAGE_LIMIT
     ),
   ]).then(function (values) {
-    if (!owner.current || owner.current.snapshot_id !== snapshotId) {
+    if (!analyticsConversationsAccepts(
+      owner, epoch, snapshotId
+    )) {
       return false;
     }
     analyticsConversationsAdoptMetadata(owner, values[0]);
     analyticsConversationsAdoptPage(owner, values[1], false);
     return true;
   }).catch(function (error) {
+    if (!analyticsConversationsAccepts(
+      owner, epoch, snapshotId
+    )) {
+      return false;
+    }
     owner.status.textContent = error instanceof Error
       ? error.message
       : "Saved conversation could not be opened.";
@@ -479,15 +519,27 @@ function analyticsConversationsLoadOlder(owner) {
   if (!owner.current || !owner.hasMore || !owner.nextBefore) {
     return;
   }
+  var snapshotId = owner.current.snapshot_id;
+  var epoch = owner.requestEpoch;
   owner.older.disabled = true;
   owner.client.turns(
-    owner.current.snapshot_id,
+    snapshotId,
     owner.nextBefore,
     ANALYTICS_CONVERSATION_PAGE_LIMIT
   ).then(function (page) {
+    if (!analyticsConversationsAccepts(
+      owner, epoch, snapshotId
+    )) {
+      return;
+    }
     analyticsConversationsAdoptPage(owner, page, true);
     owner.older.disabled = false;
   }).catch(function (error) {
+    if (!analyticsConversationsAccepts(
+      owner, epoch, snapshotId
+    )) {
+      return;
+    }
     owner.older.disabled = false;
     owner.status.textContent = error instanceof Error
       ? error.message
@@ -505,18 +557,31 @@ function analyticsConversationsRename(owner) {
       "Enter a title between 1 and 200 characters.";
     return;
   }
+  var snapshotId = owner.current.snapshot_id;
+  var revision = owner.current.title_revision;
+  var epoch = owner.requestEpoch;
   owner.rename.disabled = true;
   owner.client.rename(
-    owner.current.snapshot_id,
+    snapshotId,
     title,
-    owner.current.title_revision
+    revision
   ).then(function (metadata) {
-    owner.rename.disabled = false;
-    analyticsConversationsAdoptMetadata(owner, metadata);
+    analyticsConversationsAdvanceListEpoch(owner);
     analyticsConversationsReplaceRow(owner, metadata);
     analyticsConversationsRenderTable(owner);
-    owner.showToast("Saved conversation renamed.");
+    if (analyticsConversationsAccepts(
+      owner, epoch, snapshotId
+    )) {
+      analyticsConversationsAdoptMetadata(owner, metadata);
+      owner.rename.disabled = false;
+      owner.showToast("Saved conversation renamed.");
+    }
   }).catch(function (error) {
+    if (!analyticsConversationsAccepts(
+      owner, epoch, snapshotId
+    )) {
+      return;
+    }
     owner.rename.disabled = false;
     owner.status.textContent = error instanceof Error
       ? error.message
@@ -527,6 +592,15 @@ function analyticsConversationsRename(owner) {
 function analyticsConversationsReplaceRow(owner, metadata) {
   for (var index = 0; index < owner.rows.length; index++) {
     if (owner.rows[index].snapshot_id === metadata.snapshot_id) {
+      var currentRevision = Number(
+        owner.rows[index].title_revision || 0
+      );
+      var receivedRevision = Number(
+        metadata.title_revision || 0
+      );
+      if (receivedRevision < currentRevision) {
+        return;
+      }
       owner.rows[index] = Object.assign(
         {}, owner.rows[index], metadata
       );
@@ -539,6 +613,8 @@ function analyticsConversationsAskDelete(owner) {
   if (!owner.current) {
     return;
   }
+  owner.deleteEpoch += 1;
+  owner.pendingDeleteId = owner.current.snapshot_id;
   owner.deleteLabel.textContent = owner.current.title;
   owner.deleteDialog.showModal();
 }
@@ -547,24 +623,39 @@ function analyticsConversationsCloseDelete(owner) {
   if (owner.deleteDialog.open) {
     owner.deleteDialog.close();
   }
+  owner.deleteEpoch += 1;
+  owner.pendingDeleteId = null;
+  owner.deleteConfirm.disabled = false;
 }
 
 function analyticsConversationsDelete(owner) {
-  if (!owner.current) {
+  if (!owner.pendingDeleteId) {
     return;
   }
-  var snapshotId = owner.current.snapshot_id;
+  var snapshotId = owner.pendingDeleteId;
+  var deleteEpoch = owner.deleteEpoch;
   owner.deleteConfirm.disabled = true;
   owner.client.delete(snapshotId).then(function () {
-    owner.deleteConfirm.disabled = false;
-    analyticsConversationsCloseDelete(owner);
-    analyticsConversationsClose(owner);
+    if (owner.deleteEpoch === deleteEpoch) {
+      owner.deleteConfirm.disabled = false;
+      analyticsConversationsCloseDelete(owner);
+    }
+    analyticsConversationsAdvanceListEpoch(owner);
     owner.rows = owner.rows.filter(function (row) {
       return row.snapshot_id !== snapshotId;
     });
     analyticsConversationsRenderTable(owner);
+    if (
+      owner.current
+      && owner.current.snapshot_id === snapshotId
+    ) {
+      analyticsConversationsClose(owner);
+    }
     owner.showToast("Saved conversation deleted.");
   }).catch(function (error) {
+    if (owner.deleteEpoch !== deleteEpoch) {
+      return;
+    }
     owner.deleteConfirm.disabled = false;
     analyticsConversationsCloseDelete(owner);
     owner.status.textContent = error instanceof Error
@@ -574,20 +665,62 @@ function analyticsConversationsDelete(owner) {
 }
 
 function analyticsConversationsClose(owner) {
+  analyticsConversationsAdvanceEpoch(owner);
   if (owner.detail.open) {
     owner.detail.close();
   }
+  var snapshotId = owner.current
+    ? owner.current.snapshot_id
+    : null;
   owner.current = null;
   owner.turns = [];
   owner.nextBefore = null;
   owner.hasMore = false;
+  owner.older.disabled = false;
+  owner.older.hidden = true;
   owner.exchanges.replaceChildren();
   owner.status.textContent = "";
   var opener = owner.opener;
   owner.opener = null;
+  if ((!opener || opener.isConnected === false) && snapshotId) {
+    var row = owner.tbody.querySelector(
+      'tr[data-snapshot-id="' + snapshotId + '"]'
+    );
+    opener = row
+      ? row.querySelector(".snapshot-open-button")
+      : null;
+  }
   if (opener && opener.isConnected !== false) {
     opener.focus();
+  } else {
+    owner.focusFallback.focus();
   }
+}
+
+function analyticsConversationsAdvanceEpoch(owner) {
+  owner.requestEpoch += 1;
+  if (owner.requestEpoch > Number.MAX_SAFE_INTEGER) {
+    owner.requestEpoch = 1;
+  }
+  return owner.requestEpoch;
+}
+
+function analyticsConversationsAdvanceListEpoch(owner) {
+  owner.listEpoch += 1;
+  if (owner.listEpoch > Number.MAX_SAFE_INTEGER) {
+    owner.listEpoch = 1;
+  }
+  return owner.listEpoch;
+}
+
+function analyticsConversationsAccepts(
+  owner, epoch, snapshotId
+) {
+  return Boolean(
+    owner.requestEpoch === epoch
+    && owner.current
+    && owner.current.snapshot_id === snapshotId
+  );
 }
 
 function analyticsConversationsFind(owner, snapshotId) {

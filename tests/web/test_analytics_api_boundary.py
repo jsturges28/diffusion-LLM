@@ -21,7 +21,12 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
-from src.web import analytics_api, model_manager, server
+from src.web import (
+    analytics_api,
+    model_manager,
+    saved_conversation_api,
+    server,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -44,6 +49,34 @@ ANALYTICS_ROUTES = {
     ("GET", "/api/analytics/compare"),
     ("GET", "/api/analytics/system"),
     ("DELETE", "/api/analytics/runs/{run_id}"),
+}
+
+SAVED_CONVERSATION_ROUTES = {
+    ("POST", "/api/analytics/conversations/preview"),
+    ("POST", "/api/analytics/conversations"),
+    ("GET", "/api/analytics/conversations"),
+    (
+        "GET",
+        "/api/analytics/conversations/{snapshot_id}/metadata",
+    ),
+    ("GET", "/api/analytics/conversations/{snapshot_id}/turns"),
+    ("PATCH", "/api/analytics/conversations/{snapshot_id}"),
+    ("DELETE", "/api/analytics/conversations/{snapshot_id}"),
+    (
+        "GET",
+        "/api/analytics/conversations/{snapshot_id}/turns/"
+        "{turn_id}/run/metadata",
+    ),
+    (
+        "GET",
+        "/api/analytics/conversations/{snapshot_id}/turns/"
+        "{turn_id}/run/metrics",
+    ),
+    (
+        "GET",
+        "/api/analytics/conversations/{snapshot_id}/turns/"
+        "{turn_id}/run/frames",
+    ),
 }
 
 MOVED_SERVER_NAMES = (
@@ -90,8 +123,13 @@ def test_analytics_routes_are_owned_by_the_api_module() -> None:
         for method in methods:
             actual[(method, path)] = endpoint.__module__
 
-    assert set(actual) == ANALYTICS_ROUTES
-    assert set(actual.values()) == {analytics_api.__name__}
+    assert set(actual) == (
+        ANALYTICS_ROUTES | SAVED_CONVERSATION_ROUTES
+    )
+    for key in ANALYTICS_ROUTES:
+        assert actual[key] == analytics_api.__name__
+    for key in SAVED_CONVERSATION_ROUTES:
+        assert actual[key] == saved_conversation_api.__name__
 
 
 def test_server_does_not_reexport_moved_analytics_names() -> None:

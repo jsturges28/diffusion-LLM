@@ -42,6 +42,7 @@ var RUN_SNAPSHOT_FIELDS = [
   "promptLen",
   "provenance",
   "runToken",
+  "saveRunToken",
   "worker",
   "thinking",
   "remaskEdits",
@@ -272,6 +273,9 @@ function runSnapshotFacts(source, conversation) {
     runToken: typeof source.runToken === "string"
       ? source.runToken
       : "",
+    saveRunToken: typeof source.saveRunToken === "string"
+      ? source.saveRunToken
+      : null,
     // Absent in snapshots older than worker names, which reads as
     // unknown and keeps the run editable, as such runs always were.
     worker: typeof source.worker === "string" ? source.worker : "",

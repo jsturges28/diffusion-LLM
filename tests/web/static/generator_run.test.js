@@ -378,6 +378,50 @@ test("the save payload preserves the run record shape", () => {
   assert.equal("partial" in payload, false);
 });
 
+test("forceNew omits every mutable saved-run identity", async () => {
+  const replies = [
+    {
+      success: true,
+      path: "results/first",
+      run_id: "first",
+      revision: 1,
+    },
+    {
+      success: true,
+      path: "results/second",
+      run_id: "second",
+      revision: 1,
+    },
+    {
+      success: true,
+      path: "results/second",
+      run_id: "second",
+      revision: 2,
+    },
+  ];
+  const { run, external } = harness(replies);
+  run.begin("what ran", { steps: 2 });
+  run.appendFrame(snapshotFrame(0, "a"));
+  run.appendFrame(snapshotFrame(1, "b"));
+  finish(run, "finished");
+  await run.save();
+
+  await run.save({
+    forceNew: true,
+    saveRunToken: "snapshot:test",
+  });
+  await run.save();
+
+  const body = external.requests[1].body;
+  assert.equal("run_id" in body, false);
+  assert.equal("expected_revision" in body, false);
+  assert.equal(body.run_token, "snapshot:test");
+  assert.equal(external.requests[2].body.run_token, "snapshot:test");
+  run.reset();
+  assert.equal(run.restoreSession(), true);
+  assert.equal(run.saveRunToken(), "snapshot:test");
+});
+
 test("watermark token flags survive save and session codecs", () => {
   const { run } = harness();
   const first = appendFrame(1, "a");

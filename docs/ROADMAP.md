@@ -1003,9 +1003,10 @@ interventions need live worker state or explicitly saved run artifacts.
 Browsing an old path must therefore never rehydrate its frames or make its
 tail eligible for run editing.
 
-**A saved conversation should be an immutable selected-path snapshot,
-not one giant run and not the whole branch DAG.** Raised on 2026-10-05
-after durable paths made the missing Analytics unit clear.
+**A saved conversation is an immutable selected-path snapshot, not
+one giant run and not the whole branch DAG.** Raised on 2026-10-05
+after durable paths made the missing Analytics unit clear, and shipped
+on 2026-10-06.
 
 Conversation text is already durable. What a new Save Conversation action
 would add is a named, inspectable research object in Analytics: one selected
@@ -1044,6 +1045,31 @@ share one CAS-protected annotation store instead of becoming three unrelated
 flat fields. Collections still answer which artifacts belong together;
 annotations answer what the user concluded.
 
+The shipped store materializes the exact selected branch revision and head,
+without comparing the catalog revision: a sibling path appearing does not
+change the path being saved. Compact immutable turn versions and every
+available saved-run revision are hard-linked into a snapshot-local namespace,
+with a bounded, disk-preflighted copy fallback. This is what makes
+immutability real. Replacing or deleting a top-level run later cannot change
+the snapshot's XAI, and deleting the live conversation cannot remove its
+text. A link already missing or stale at save time is recorded as unavailable
+rather than guessed or allowed to block the remaining text.
+
+Publication uses a stable operation id, private staging and metadata last.
+The same request after a lost response returns the first snapshot; reuse of
+that id for other semantics conflicts. The title has its own CAS revision,
+while turns and pinned runs never mutate. **Save Conversation** previews the
+full server-side path, and if the exact active tail still owns unsaved XAI,
+the existing Save Run and durable link complete before snapshot publication.
+Earlier Text only responses stay Text only.
+
+Analytics keeps **Runs** and **Conversations** as separate artifact types.
+Conversation exchange pages are bounded, and **View XAI** feeds a
+snapshot-local run into the same request-fenced detail controller as an
+ordinary run. Collections remain run-only. Bookmarks, notes, a shared typed
+annotation store, whole-DAG export, Record future turns and
+conversation-level watermark aggregation remain later slices.
+
 **Conversation context pressure has an exact model-specific meter;
 cumulative usage remains separate.** Raised and shipped on 2026-10-05 after
 cross-model follow-ups confirmed that the selected path was already packed
@@ -1064,10 +1090,13 @@ differently under LLaDA, DiffusionGemma and SmolLM3, while Mamba-3 packs raw
 chronological text rather than a chat template. The ordinary footer is
 status-only; exact numbers live in the wheel and dialog.
 
-Cumulative totals remain historical accounting. They need durable generated
-token counts per assistant turn and a decision about whether repeated input
-context counts again on every inference. They must not be substituted for
-the exact next-inference figure just because they are cheaper to display.
+Cumulative totals remain historical accounting. New terminal assistant turns
+now retain the worker's exact raw-tokenizer count of visible final text, added
+with Saved Conversations so Text only history does not lose that fact. Old
+turns honestly have none. A total still needs the policy decision about
+whether repeated input context counts again on every inference. It must not
+be substituted for the exact next-inference figure just because it is cheaper
+to display.
 
 **The Analytics table wants roving tabindex, and has not got it.**
 Recorded 2026-09-02, after the keyboard work made everything else on

@@ -1651,6 +1651,18 @@ html, body {
   background: rgba(255, 255, 255, 0.035);
 }
 
+.snapshot-open-button {
+  padding: 0;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.snapshot-open-button:hover,
+.snapshot-open-button:focus-visible {
+  color: var(--accent);
+}
+
 .snapshot-row-delete {
   padding: 2px 6px;
   background: transparent;

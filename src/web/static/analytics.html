@@ -49,7 +49,7 @@
       <button id="tab-runs" type="button" role="tab"
         aria-selected="true" aria-controls="runs-panel">Runs</button>
       <button id="tab-conversations" type="button" role="tab"
-        aria-selected="false"
+        aria-selected="false" tabindex="-1"
         aria-controls="conversations-panel">Conversations</button>
     </div>
 
@@ -82,7 +82,8 @@
     <!-- Main content: table + detail -->
     <div id="main-split">
       <!-- Runs table -->
-      <section id="runs-panel">
+      <section id="runs-panel" role="tabpanel"
+        aria-labelledby="tab-runs">
         <div id="runs-table-wrap">
           <table id="runs-table">
             <thead>
@@ -178,7 +179,8 @@
         </p>
       </section>
 
-      <section id="conversations-panel" hidden>
+      <section id="conversations-panel" role="tabpanel"
+        aria-labelledby="tab-conversations" hidden>
         <div class="conversations-panel-header">
           <div>
             <h2>Saved Conversations</h2>
@@ -667,12 +669,16 @@
         <div id="token-alts-popover" hidden></div>
       </dialog>
 
-      <dialog id="conversation-detail-modal" class="modal-overlay">
+      <dialog id="conversation-detail-modal" class="modal-overlay"
+        aria-labelledby="saved-conversation-detail-title">
         <div class="modal-box modal-box-lg saved-conversation-detail"
           tabindex="-1" autofocus>
           <button class="modal-close"
             id="btn-close-conversation-detail"
             aria-label="Close">&times;</button>
+          <h2 id="saved-conversation-detail-title">
+            Saved Conversation
+          </h2>
           <div class="saved-conversation-title-row">
             <input id="saved-conversation-title" type="text"
               maxlength="200" aria-label="Saved conversation title" />
@@ -698,13 +704,16 @@
         </div>
       </dialog>
 
-      <dialog id="modal-delete-conversation" class="modal-overlay">
+      <dialog id="modal-delete-conversation" class="modal-overlay"
+        aria-labelledby="delete-conversation-title">
         <div class="modal-box modal-box-confirm"
           tabindex="-1" autofocus>
           <button class="modal-close"
             id="btn-delete-conversation-close"
             aria-label="Close">&times;</button>
-          <h2>Delete this saved conversation?</h2>
+          <h2 id="delete-conversation-title">
+            Delete this saved conversation?
+          </h2>
           <div class="modal-body">
             <p id="delete-conversation-label"></p>
             <p>This removes only the immutable snapshot. The live

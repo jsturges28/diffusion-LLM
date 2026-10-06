@@ -97,6 +97,7 @@ test("create adds title and stable operation identity", async () => {
   assert.equal(body.operation_id, "e".repeat(32));
   assert.equal(body.title, "Investigation");
   assert.equal(body.branch_revision, 4);
+  assert.equal(body.require_tail_xai, false);
 });
 
 test("HTTP conflicts retain their status", async () => {

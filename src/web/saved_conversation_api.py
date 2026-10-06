@@ -72,6 +72,7 @@ class CreateSnapshotRequest(SnapshotHeadRequest):
         min_length=1,
         max_length=conversation_store.TITLE_CHARS_MAX,
     )
+    require_tail_xai: bool = False
 
 
 class RenameSnapshotRequest(BaseModel):
@@ -116,6 +117,7 @@ class SavedConversationApi:
                 "xai_count": preview.xai_count,
                 "text_only_count": preview.text_only_count,
                 "unavailable_count": preview.unavailable_count,
+                "tail_xai_status": preview.tail_xai_status,
             }
         )
 

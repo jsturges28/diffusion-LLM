@@ -33,6 +33,7 @@ STATIC = (
     Path(__file__).resolve().parents[2] / "src" / "web" / "static"
 )
 ANALYTICS_JS = STATIC / "analytics.js"
+RUN_DETAIL_JS = STATIC / "analytics_run_detail.js"
 
 
 def _js() -> str:
@@ -49,6 +50,13 @@ def _region(anchor: str, chars: int) -> str:
     return source[start : start + chars]
 
 
+def _detail_region(anchor: str, chars: int) -> str:
+    source = RUN_DETAIL_JS.read_text(encoding="utf-8")
+    start = source.find(anchor)
+    assert start != -1, anchor
+    return source[start : start + chars]
+
+
 # -- the detail panel fetches its own metadata --
 
 
@@ -61,36 +69,46 @@ def test_the_panel_fetches_the_full_record() -> None:
 
 def test_the_fetch_is_behind_the_detail_epoch() -> None:
     """A slow answer must not land on a run already closed."""
-    body = _region("function loadRunMeta(", 900)
+    body = _detail_region(
+        "function analyticsRunDetailLoadMeta", 900
+    )
 
-    assert "detailRequests.accepts(token)" in body
+    assert "owner.requests.accepts(token)" in body
     assert "token.signal" in body
 
 
 def test_it_is_started_with_the_charts_and_overlays() -> None:
     # One token for all three, taken before any of them start, so
     # the panel paints as one run or not at all.
-    body = _region("function showDetail(runId)", 1600)
+    body = _detail_region("function analyticsRunDetailShow", 900)
 
-    assert "loadRunMeta(runId, run, token)" in body
-    assert "loadRunCharts(runId, run, token)" in body
-    assert "loadRunOverlays(runId, run, token)" in body
+    assert "analyticsRunDetailLoadMeta(owner, input, token)" in body
+    assert (
+        "analyticsRunDetailLoadMetrics(owner, input, token)"
+        in body
+    )
+    assert "analyticsRunDetailLoadFrames(owner, input, token)" in body
 
 
 def test_the_summary_is_shown_before_the_fetch_lands() -> None:
     # Otherwise the panel is blank for a round trip on every open.
-    body = _region("function showDetail(runId)", 1600)
+    body = _region("function analyticsDetailStart", 500)
 
-    assert "renderRunMeta(run)" in body
+    assert "renderRunMeta(input.summary)" in body
 
 
 def test_a_failed_metadata_fetch_costs_only_the_extra_rows(
 ) -> None:
-    body = _region("function loadRunMeta(", 900)
+    body = _detail_region(
+        "function analyticsRunDetailLoadMeta", 900
+    )
+    fallback = _region(
+        "function analyticsDetailMetaFailure", 250
+    )
 
     assert ".catch(" in body
-    assert "AbortError" in body
-    assert "renderRunMeta(summary)" in body
+    assert "analyticsRunDetailIgnore" in body
+    assert "renderRunMeta(input.summary)" in fallback
 
 
 def test_a_cut_prompt_is_marked_as_cut() -> None:

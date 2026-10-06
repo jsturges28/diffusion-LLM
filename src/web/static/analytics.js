@@ -27,6 +27,8 @@ var tabRuns =
   document.getElementById("tab-runs");
 var tabConversations =
   document.getElementById("tab-conversations");
+var analyticsViewTabs =
+  document.getElementById("analytics-view-tabs");
 
 var detailPanel =
   document.getElementById("detail-modal");
@@ -427,6 +429,7 @@ var conversationsView = analyticsConversationsCreate({
   client: savedConversationsApi,
   openXai: showPinnedDetail,
   showToast: showToast,
+  focusFallback: tabConversations,
 });
 
 var chartCompareConv = null;
@@ -2897,6 +2900,8 @@ function setAnalyticsView(view) {
   tabConversations.setAttribute(
     "aria-selected", conversations ? "true" : "false"
   );
+  tabRuns.tabIndex = conversations ? -1 : 0;
+  tabConversations.tabIndex = conversations ? 0 : -1;
   if (conversations) {
     hideComparison();
     runDetail.close();
@@ -2929,6 +2934,27 @@ function refreshAnalyticsView() {
     return;
   }
   loadAndRender();
+}
+
+function analyticsViewTabKeyDown(event) {
+  var next = null;
+  if (event.key === "Home") {
+    next = "runs";
+  } else if (event.key === "End") {
+    next = "conversations";
+  } else if (event.key === "ArrowLeft") {
+    next = event.target === tabRuns ? "conversations" : "runs";
+  } else if (event.key === "ArrowRight") {
+    next = event.target === tabConversations
+      ? "runs"
+      : "conversations";
+  }
+  if (next === null) {
+    return;
+  }
+  event.preventDefault();
+  setAnalyticsView(next);
+  (next === "runs" ? tabRuns : tabConversations).focus();
 }
 
 // ---- Delete a run ----
@@ -3229,6 +3255,9 @@ tabRuns.addEventListener("click", function () {
 tabConversations.addEventListener("click", function () {
   setAnalyticsView("conversations");
 });
+analyticsViewTabs.addEventListener(
+  "keydown", analyticsViewTabKeyDown
+);
 
 btnCloseDetail.addEventListener(
   "click", hideDetail

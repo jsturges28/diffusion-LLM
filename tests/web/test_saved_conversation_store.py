@@ -11,6 +11,11 @@ from __future__ import annotations
 
 import errno
 import json
+import shutil
+import subprocess
+import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from uuid import uuid4
 
@@ -19,6 +24,25 @@ import pytest
 from src.web import conversation_store
 from src.web import run_store
 from src.web import saved_conversation_store as snapshots
+
+
+IMPORT_PROBE = """
+import sys
+import src.web.saved_conversation_store
+forbidden = {"fastapi", "pydantic", "torch", "transformers"}
+print(",".join(sorted(set(sys.modules) & forbidden)))
+"""
+
+
+def test_store_imports_neither_framework_nor_models() -> None:
+    result = subprocess.run(
+        [sys.executable, "-c", IMPORT_PROBE],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout.strip() == ""
 
 
 def _run(
@@ -136,6 +160,7 @@ def test_preview_reads_the_full_exact_path(tmp_path: Path) -> None:
     assert preview.xai_count == 0
     assert preview.text_only_count == 1
     assert preview.unavailable_count == 0
+    assert preview.tail_xai_status == snapshots.STATUS_TEXT_ONLY
 
 
 def test_snapshot_survives_source_deletion(tmp_path: Path) -> None:
@@ -161,6 +186,45 @@ def test_snapshot_survives_source_deletion(tmp_path: Path) -> None:
     assert (pinned / run_store.FINAL_TEXT_NAME).read_text(
         encoding="utf-8"
     ) == "saved answer"
+
+
+def test_schema_one_link_map_remains_readable(tmp_path: Path) -> None:
+    _created, appended, linked, _run_id = _conversation(
+        tmp_path, linked=True
+    )
+    result = _create(tmp_path, linked)
+    snapshot_dir = (
+        tmp_path / snapshots.ROOT_NAME / result.snapshot_id
+    )
+    metadata_path = snapshot_dir / snapshots.METADATA_NAME
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["schema_version"] = 1
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    link_path = (
+        snapshot_dir
+        / snapshots.LINKS_DIR_NAME
+        / f"{appended.assistant_turn.turn_id}.json"
+    )
+    link = json.loads(link_path.read_text(encoding="utf-8"))
+    (snapshot_dir / snapshots.LEGACY_LINKS_NAME).write_text(
+        json.dumps({appended.assistant_turn.turn_id: link}),
+        encoding="utf-8",
+    )
+    shutil.rmtree(snapshot_dir / snapshots.LINKS_DIR_NAME)
+
+    page = snapshots.page_turns(tmp_path, result.snapshot_id)
+    pinned = snapshots.resolve_pinned_run_dir(
+        tmp_path, result.snapshot_id, appended.assistant_turn.turn_id
+    )
+    replay = _create(
+        tmp_path,
+        linked,
+        operation_id=result.snapshot_id,
+    )
+
+    assert page["turns"][1]["xai"]["status"] == "pinned"
+    assert pinned.is_dir()
+    assert replay.replayed is True
 
 
 def test_pinned_revision_survives_run_replacement(
@@ -216,6 +280,18 @@ def test_missing_link_is_preserved_as_unavailable(
     assert page["turns"][1]["xai"]["status"] == (
         snapshots.STATUS_UNAVAILABLE
     )
+
+    with pytest.raises(
+        snapshots.SnapshotOperationConflictError,
+        match="active tail XAI changed",
+    ):
+        snapshots.create_snapshot(
+            tmp_path,
+            operation_id=uuid4().hex,
+            title="Requires XAI",
+            require_tail_xai=True,
+            **_head(missing),
+        )
 
 
 def test_operation_replay_is_idempotent(tmp_path: Path) -> None:
@@ -301,6 +377,28 @@ def test_deleted_operation_does_not_resurrect_snapshot(
         snapshots.SnapshotOperationConflictError,
         match="deleted",
     ):
+        _create(tmp_path, completed, operation_id=operation_id)
+
+
+def test_receipt_failure_cannot_resurrect_after_delete(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _created, _appended, completed, _run_id = _conversation(tmp_path)
+    operation_id = uuid4().hex
+    real_receipt = snapshots._write_receipt  # noqa: SLF001
+
+    def fail_receipt(*_args: object, **_kwargs: object) -> None:
+        raise OSError("receipt unavailable")
+
+    monkeypatch.setattr(snapshots, "_write_receipt", fail_receipt)
+    result = _create(
+        tmp_path, completed, operation_id=operation_id
+    )
+    monkeypatch.setattr(snapshots, "_write_receipt", real_receipt)
+    snapshots.delete_snapshot(tmp_path, result.snapshot_id)
+
+    with pytest.raises(snapshots.SnapshotOperationConflictError):
         _create(tmp_path, completed, operation_id=operation_id)
 
 
@@ -406,4 +504,76 @@ def test_metadata_is_the_visibility_marker(tmp_path: Path) -> None:
         json.dumps({"partial": True}), encoding="utf-8"
     )
 
+    assert snapshots.list_snapshots(tmp_path) == []
+
+
+def test_racing_replays_publish_one_snapshot(tmp_path: Path) -> None:
+    _created, _appended, completed, _run_id = _conversation(tmp_path)
+    operation_id = uuid4().hex
+    start = threading.Barrier(2)
+
+    def worker(_index: int) -> snapshots.SnapshotResult:
+        start.wait()
+        return _create(
+            tmp_path,
+            completed,
+            operation_id=operation_id,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(worker, range(2)))
+
+    assert {result.snapshot_id for result in results} == {
+        operation_id
+    }
+    replayed = sorted(result.replayed for result in results)
+    assert replayed == [False, True]
+    assert len(snapshots.list_snapshots(tmp_path)) == 1
+
+
+def test_unrelated_catalog_fork_does_not_stale_selected_head(
+    tmp_path: Path,
+) -> None:
+    created, appended, completed, _run_id = _conversation(tmp_path)
+    conversation_store.fork_delete_from_path(
+        tmp_path,
+        created.id,
+        appended.user_turn.turn_id,
+        operation_id=uuid4().hex,
+        branch_id=completed.manifest.branch_id,
+        expected_revision=completed.manifest.revision,
+        expected_catalog_revision=(
+            completed.manifest.catalog_revision
+        ),
+    )
+
+    result = _create(tmp_path, completed)
+
+    source = snapshots.read_metadata(
+        tmp_path, result.snapshot_id
+    )["source"]
+    assert source["catalog_revision"] == 2
+    assert source["branch_revision"] == completed.manifest.revision
+
+
+def test_failure_before_metadata_keeps_snapshot_invisible(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _created, _appended, completed, _run_id = _conversation(tmp_path)
+    real_replace = snapshots.conversation_core.replace_durable
+
+    def fail_metadata(source: Path, target: Path) -> None:
+        if target.name == snapshots.METADATA_NAME:
+            raise OSError("metadata publish failed")
+        real_replace(source, target)
+
+    monkeypatch.setattr(
+        snapshots.conversation_core,
+        "replace_durable",
+        fail_metadata,
+    )
+
+    with pytest.raises(OSError, match="metadata publish failed"):
+        _create(tmp_path, completed)
     assert snapshots.list_snapshots(tmp_path) == []

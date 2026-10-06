@@ -236,9 +236,7 @@ var conversationSave = conversationSaveCreate({
   readHead: conversationSnapshotHead,
   readBlockReason: conversationSnapshotBlockReason,
   shouldSaveActiveTail: conversationSnapshotNeedsTailSave,
-  saveActiveTail: function () {
-    return saveRun();
-  },
+  saveActiveTail: saveConversationActiveTail,
   createOperationId: createConversationOperationId,
   onSaved: conversationSnapshotSaved,
   onBlocked: function (message) {
@@ -1839,21 +1837,59 @@ function conversationSnapshotBlockReason() {
   return "";
 }
 
-function conversationSnapshotNeedsTailSave(head) {
+function conversationSnapshotNeedsTailSave(head, preview) {
   var identity = generatorRun.conversationIdentity();
   if (
     identity === null
-    || !saveAvailable
-    || generatorRun.saved()
     || !generatorRun.finalText()
   ) {
     return false;
   }
-  return (
+  var matches = (
     identity.conversation_id === head.conversation_id
     && identity.branch_id === head.branch_id
     && identity.assistant_turn_id === head.tail_turn_id
   );
+  if (!matches) {
+    return false;
+  }
+  if (saveAvailable) {
+    return generatorRun.saved() ? "link" : "save";
+  }
+  if (preview && preview.tail_xai_status !== "pinned") {
+    return "resave";
+  }
+  return "pinned";
+}
+
+function saveConversationActiveTail(mode, operationId) {
+  if (mode !== "link" || !generatorRun.saved()) {
+    var publicationToken = generatorRun.saveRunToken()
+      || "snapshot:" + operationId;
+    return saveRun({
+      forceNew: mode === "resave",
+      saveRunToken: mode === "resave"
+        ? publicationToken
+        : null,
+    });
+  }
+  var identity = generatorRun.conversationIdentity();
+  var runId = generatorRun.savedRunId();
+  var revision = generatorRun.savedRevision();
+  if (identity === null || !runId || !Number.isInteger(revision)) {
+    return Promise.resolve(false);
+  }
+  return linkSavedRun({
+    conversationIdentity: identity,
+    runId: runId,
+    revision: revision,
+  }).then(function (linked) {
+    if (linked) {
+      saveAvailable = false;
+      updateSaveButton();
+    }
+    return linked;
+  });
 }
 
 function conversationSnapshotSaved(result) {
@@ -2244,6 +2280,10 @@ function saveRun(options) {
   var editConfirmation = Boolean(
     options && options.editConfirmation === true
   );
+  var forceNew = Boolean(options && options.forceNew === true);
+  var saveRunToken = options && typeof options.saveRunToken === "string"
+    ? options.saveRunToken
+    : null;
   var blocked = conversationSaveBlockReason(editConfirmation);
   if (blocked !== "") {
     generatorRunSaveRefused(blocked);
@@ -2266,6 +2306,12 @@ function saveRun(options) {
         "The durable response changed, so this run was not saved."
       );
       return false;
+    }
+    if (forceNew) {
+      return generatorRun.save({
+        forceNew: true,
+        saveRunToken: saveRunToken,
+      });
     }
     return generatorRun.save();
   });
@@ -2501,7 +2547,20 @@ function generatorRunRestoreEditArtifacts(state) {
 function generatorRunSessionRestored() {
   renderConversation(null);
   updateGenerateButton();
-  setSaveAvailable(!generatorRun.saved());
+  var linked = false;
+  var identity = generatorRun.conversationIdentity();
+  if (
+    generatorRun.saved()
+    && identity !== null
+    && generatorRun.savedRunId()
+    && Number.isInteger(generatorRun.savedRevision())
+  ) {
+    linked = conversationRunLinkMatches(identity, {
+      runId: generatorRun.savedRunId(),
+      revision: generatorRun.savedRevision(),
+    });
+  }
+  setSaveAvailable(!generatorRun.saved() || !linked);
   generatorEdit.activate();
   generatorCanvas.restoreRunHeight();
 }

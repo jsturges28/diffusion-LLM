@@ -13,9 +13,11 @@ from __future__ import annotations
 import errno
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -27,11 +29,13 @@ from src.web import run_store
 from src.web.data_root_lock import DataRootLock
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+SUPPORTED_SCHEMA_VERSIONS = (1, SCHEMA_VERSION)
 ROOT_NAME = "saved_conversations"
 METADATA_NAME = "metadata.json"
 PATH_NAME = "path.json"
-LINKS_NAME = "links.json"
+LINKS_DIR_NAME = "links"
+LEGACY_LINKS_NAME = "links.json"
 TURNS_DIR_NAME = "turns"
 RUNS_DIR_NAME = "runs"
 STAGING_DIR_NAME = ".staging"
@@ -43,6 +47,7 @@ SNAPSHOT_SCAN_MAX = 10_000
 PIN_FILE_COUNT_MAX = 32
 PIN_COPY_BYTES_MAX = 512 * 1024 * 1024
 PIN_FREE_MARGIN_BYTES = 16 * 1024 * 1024
+JSON_FILE_BYTES_MAX = conversation_store.JSON_FILE_BYTES_MAX
 TRASH_ATTEMPTS_MAX = 16
 
 STATUS_PINNED = "pinned"
@@ -52,8 +57,12 @@ STATUSES = (STATUS_PINNED, STATUS_TEXT_ONLY, STATUS_UNAVAILABLE)
 
 _SNAPSHOT_ID = re.compile(SNAPSHOT_ID_PATTERN)
 _LOCK = DataRootLock("saved_conversations.lock")
+logger = logging.getLogger("diffusion_supervisor")
 
 assert len(set(STATUSES)) == len(STATUSES)
+assert len(set(SUPPORTED_SCHEMA_VERSIONS)) == len(
+    SUPPORTED_SCHEMA_VERSIONS
+)
 assert len(run_store.SIDECAR_NAMES) + 4 <= PIN_FILE_COUNT_MAX
 assert PIN_COPY_BYTES_MAX > 0
 
@@ -99,6 +108,7 @@ class SnapshotPreview:
     xai_count: int
     text_only_count: int
     unavailable_count: int
+    tail_xai_status: str
 
 
 @dataclass(frozen=True)
@@ -132,6 +142,7 @@ def preview_snapshot(
             tail_turn_id=tail_turn_id,
             tail_version=tail_version,
             turns_dir=staging / TURNS_DIR_NAME,
+            durable=False,
         )
         links = _inspect_run_links(results_dir, source)
         counts = _link_counts(links)
@@ -142,6 +153,7 @@ def preview_snapshot(
             xai_count=counts[STATUS_PINNED],
             text_only_count=counts[STATUS_TEXT_ONLY],
             unavailable_count=counts[STATUS_UNAVAILABLE],
+            tail_xai_status=_tail_xai_status(source, links),
         )
     finally:
         shutil.rmtree(staging, ignore_errors=True)
@@ -158,10 +170,13 @@ def create_snapshot(
     turn_count: int,
     tail_turn_id: str,
     tail_version: int,
+    require_tail_xai: bool = False,
 ) -> SnapshotResult:
     """Publish one exact selected path, idempotent by operation id."""
     conversation_store.validate_operation_id(operation_id)
     clean_title = conversation_store.validate_title(title)
+    if not isinstance(require_tail_xai, bool):
+        raise TypeError("require_tail_xai must be a boolean")
     digest = _request_digest(
         title=clean_title,
         conversation_id=conversation_id,
@@ -170,6 +185,7 @@ def create_snapshot(
         turn_count=turn_count,
         tail_turn_id=tail_turn_id,
         tail_version=tail_version,
+        require_tail_xai=require_tail_xai,
     )
     replay = _replay_result(results_dir, operation_id, digest)
     if replay is not None:
@@ -189,6 +205,14 @@ def create_snapshot(
         links = _pin_run_links(
             results_dir, source, staging / RUNS_DIR_NAME
         )
+        if (
+            require_tail_xai
+            and _tail_xai_status(source, links) != STATUS_PINNED
+        ):
+            raise SnapshotOperationConflictError(
+                "the active tail XAI changed before snapshot"
+                " publication"
+            )
         metadata = _write_staged_snapshot(
             staging=staging,
             snapshot_id=operation_id,
@@ -215,14 +239,17 @@ def list_snapshots(results_dir: Path) -> List[Dict[str, object]]:
     if root is None:
         return []
     rows: List[Dict[str, object]] = []
-    scanned = 0
-    for child in sorted(root.iterdir(), reverse=True):
+    children = _bounded_children(
+        root,
+        limit=SNAPSHOT_SCAN_MAX + 3,
+        label="saved conversation root",
+    )
+    for child in sorted(children, reverse=True):
         if child.name.startswith(".") or not child.is_dir():
             continue
         if child.name == OPERATIONS_DIR_NAME:
             continue
-        scanned += 1
-        if scanned > SNAPSHOT_SCAN_MAX:
+        if len(rows) >= SNAPSHOT_SCAN_MAX:
             raise SnapshotCorruptError(
                 "saved conversation scan exceeds its limit"
             )
@@ -271,12 +298,15 @@ def page_turns(
     finish_before = _before_index(before, turn_count)
     finish = finish_before - 1
     start = max(1, finish - limit + 1)
-    links = _read_links(snapshot_dir, turn_count)
     turns: List[Dict[str, object]] = []
     for index in range(start, finish + 1):
         turn = _read_snapshot_turn(snapshot_dir, index)
         payload = conversation_store.turn_to_payload(turn)
-        payload["xai"] = links.get(turn.turn_id)
+        payload["xai"] = (
+            _read_link(snapshot_dir, turn.turn_id)
+            if turn.role == "assistant"
+            else None
+        )
         turns.append(payload)
     has_more = start > 1
     return {
@@ -326,6 +356,13 @@ def delete_snapshot(results_dir: Path, snapshot_id: str) -> None:
         snapshot_dir = resolve_snapshot_dir(results_dir, snapshot_id)
         root = _root(results_dir, create=True)
         assert root is not None
+        metadata = read_metadata(results_dir, snapshot_id)
+        _write_receipt(
+            root,
+            operation_id=snapshot_id,
+            digest=str(metadata["request_digest"]),
+            title_revision=int(metadata["title_revision"]),
+        )
         trash = root / TRASH_DIR_NAME
         conversation_core.make_directory_durable(
             trash, exist_ok=True
@@ -364,16 +401,7 @@ def resolve_pinned_run_dir(
 ) -> Path:
     """Resolve the run revision pinned for one assistant turn."""
     snapshot_dir = resolve_snapshot_dir(results_dir, snapshot_id)
-    metadata = read_metadata(results_dir, snapshot_id)
-    count = _stored_int(
-        metadata.get("turn_count"), "turn_count", minimum=1
-    )
-    links = _read_links(snapshot_dir, count)
-    link = links.get(assistant_turn_id)
-    if not isinstance(link, dict):
-        raise SnapshotNotFoundError(
-            "This saved response has no pinned XAI run."
-        )
+    link = _read_link(snapshot_dir, assistant_turn_id)
     if link.get("status") != STATUS_PINNED:
         raise SnapshotNotFoundError(
             "This saved response's XAI run was unavailable."
@@ -499,7 +527,7 @@ def _pin_run_links(
     source: conversation_store.SnapshotSource,
     runs_dir: Path,
 ) -> Dict[str, Dict[str, object]]:
-    runs_dir.mkdir(parents=True)
+    conversation_core.make_directory_durable(runs_dir)
     links: Dict[str, Dict[str, object]] = {}
     copied_bytes = 0
     with run_store.publication_lock(results_dir):
@@ -512,7 +540,7 @@ def _pin_run_links(
                 links[turn.turn_id] = inspected
                 continue
             target = runs_dir / turn.turn_id
-            target.mkdir()
+            conversation_core.make_directory_durable(target)
             copied = _pin_one_run(
                 results_dir=results_dir,
                 turn=turn,
@@ -525,6 +553,7 @@ def _pin_run_links(
                 "copy" if copied > 0 else "link"
             )
             links[turn.turn_id] = inspected
+        conversation_core.fsync_directory(runs_dir)
     return links
 
 
@@ -543,11 +572,12 @@ def _pin_one_run(
         raise SnapshotOperationConflictError(
             "run changed while its snapshot was being pinned"
         )
-    files = sorted(source.iterdir(), key=lambda path: path.name)
-    if len(files) > PIN_FILE_COUNT_MAX:
-        raise SnapshotCorruptError(
-            "saved run exceeds the pin file-count limit"
-        )
+    files = _bounded_children(
+        source,
+        limit=PIN_FILE_COUNT_MAX,
+        label="saved run",
+    )
+    files.sort(key=lambda path: path.name)
     if any(not path.is_file() or path.is_symlink() for path in files):
         raise SnapshotCorruptError(
             "saved run contains an unsafe pin entry"
@@ -559,6 +589,7 @@ def _pin_one_run(
             target=target / path.name,
             copied_bytes=copied_bytes + copied,
         )
+    conversation_core.fsync_directory(target)
     assert (target / run_store.METADATA_NAME).is_file()
     return copied
 
@@ -571,6 +602,8 @@ def _pin_file(
 ) -> int:
     try:
         os.link(source, target, follow_symlinks=False)
+        with target.open("rb") as linked:
+            os.fsync(linked.fileno())
         return 0
     except OSError as exc:
         fallback = {
@@ -592,6 +625,8 @@ def _pin_file(
     if free < size + PIN_FREE_MARGIN_BYTES:
         raise OSError("not enough disk space to copy a pinned run")
     shutil.copy2(source, target, follow_symlinks=False)
+    with target.open("rb") as copied:
+        os.fsync(copied.fileno())
     return size
 
 
@@ -605,6 +640,21 @@ def _link_counts(
             raise SnapshotCorruptError("unknown XAI link status")
         counts[str(status)] += 1
     return counts
+
+
+def _tail_xai_status(
+    source: conversation_store.SnapshotSource,
+    links: Dict[str, Dict[str, object]],
+) -> str:
+    tail = source.turns[-1].turn
+    assert tail.role == "assistant"
+    link = links.get(tail.turn_id)
+    if not isinstance(link, dict):
+        raise SnapshotCorruptError("tail XAI status is missing")
+    status = link.get("status")
+    if status not in STATUSES:
+        raise SnapshotCorruptError("tail XAI status is invalid")
+    return str(status)
 
 
 def _write_staged_snapshot(
@@ -646,7 +696,12 @@ def _write_staged_snapshot(
     conversation_core.write_json_atomic(
         staging / PATH_NAME, source_payload
     )
-    conversation_core.write_json_atomic(staging / LINKS_NAME, links)
+    links_dir = staging / LINKS_DIR_NAME
+    conversation_core.make_directory_durable(links_dir)
+    for turn_id, link in links.items():
+        conversation_core.write_json_atomic(
+            links_dir / f"{turn_id}.json", link
+        )
     conversation_core.write_json_atomic(
         staging / METADATA_NAME, metadata
     )
@@ -676,16 +731,22 @@ def _publish_snapshot(
         conversation_core.make_directory_durable(target)
         try:
             _move_staged_snapshot(staging, target)
+        except Exception:
+            if not (target / METADATA_NAME).exists():
+                shutil.rmtree(target, ignore_errors=True)
+            raise
+        try:
             _write_receipt(
                 root,
                 operation_id=operation_id,
                 digest=digest,
                 title_revision=int(metadata["title_revision"]),
             )
-        except Exception:
-            if not (target / METADATA_NAME).exists():
-                shutil.rmtree(target, ignore_errors=True)
-            raise
+        except OSError:
+            logger.warning(
+                "could not write saved conversation receipt",
+                exc_info=True,
+            )
     return SnapshotResult(operation_id, 1, False)
 
 
@@ -787,6 +848,7 @@ def _request_digest(
     turn_count: int,
     tail_turn_id: str,
     tail_version: int,
+    require_tail_xai: bool,
 ) -> str:
     payload = {
         "title": title,
@@ -797,6 +859,8 @@ def _request_digest(
         "tail_turn_id": tail_turn_id,
         "tail_version": tail_version,
     }
+    if require_tail_xai:
+        payload["require_tail_xai"] = True
     encoded = json.dumps(
         payload,
         sort_keys=True,
@@ -860,7 +924,7 @@ def _validate_metadata(
         raise SnapshotCorruptError(
             "metadata fields do not match schema"
         )
-    if raw["schema_version"] != SCHEMA_VERSION:
+    if raw["schema_version"] not in SUPPORTED_SCHEMA_VERSIONS:
         raise SnapshotCorruptError(
             "unsupported saved conversation schema"
         )
@@ -932,21 +996,35 @@ def _validate_metadata_timestamps(raw: Dict[str, object]) -> None:
             raise SnapshotCorruptError(f"{key} is invalid")
 
 
-def _read_links(
-    snapshot_dir: Path, turn_count: int
-) -> Dict[str, Dict[str, object]]:
-    raw = _read_object(snapshot_dir / LINKS_NAME, "links")
-    if len(raw) != turn_count // 2:
-        raise SnapshotCorruptError("XAI link count disagrees")
-    links: Dict[str, Dict[str, object]] = {}
-    for turn_id, value in raw.items():
-        if not isinstance(value, dict):
-            raise SnapshotCorruptError("XAI link must be an object")
-        status = value.get("status")
-        if status not in STATUSES:
-            raise SnapshotCorruptError("XAI link status is invalid")
-        links[turn_id] = value
-    return links
+def _read_link(
+    snapshot_dir: Path, turn_id: str
+) -> Dict[str, object]:
+    links_dir = (snapshot_dir / LINKS_DIR_NAME).resolve()
+    path = (links_dir / f"{turn_id}.json").resolve()
+    if path.parent != links_dir:
+        raise SnapshotCorruptError("XAI link leaves its snapshot")
+    if path.is_file():
+        raw = _read_object(path, "XAI link")
+    else:
+        raw = _read_legacy_link(snapshot_dir, turn_id)
+    status = raw.get("status")
+    if status not in STATUSES:
+        raise SnapshotCorruptError("XAI link status is invalid")
+    return raw
+
+
+def _read_legacy_link(
+    snapshot_dir: Path, turn_id: str
+) -> Dict[str, object]:
+    """Read the one-file link map written by snapshot schema 1."""
+    links = _read_object(
+        snapshot_dir / LEGACY_LINKS_NAME,
+        "legacy XAI links",
+    )
+    value = links.get(turn_id)
+    if not isinstance(value, dict):
+        raise SnapshotCorruptError("legacy XAI link is missing")
+    return value
 
 
 def _read_snapshot_turn(
@@ -978,15 +1056,45 @@ def _before_index(before: Optional[str], turn_count: int) -> int:
 
 
 def _read_object(path: Path, label: str) -> Dict[str, object]:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        descriptor = os.open(path, flags)
+        with os.fdopen(descriptor, "rb") as stored:
+            info = os.fstat(stored.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                raise SnapshotCorruptError(
+                    f"{label} is not a regular file"
+                )
+            encoded = stored.read(JSON_FILE_BYTES_MAX + 1)
+        if len(encoded) > JSON_FILE_BYTES_MAX:
+            raise SnapshotCorruptError(
+                f"{label} exceeds its byte limit"
+            )
+        raw = json.loads(encoded.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise SnapshotCorruptError(
             f"could not read {label}: {exc}"
         ) from exc
     if not isinstance(raw, dict):
         raise SnapshotCorruptError(f"{label} must be an object")
     return raw
+
+
+def _bounded_children(
+    path: Path, *, limit: int, label: str
+) -> List[Path]:
+    """Read no more directory entries than one operation permits."""
+    assert limit > 0
+    children: List[Path] = []
+    for child in path.iterdir():
+        if len(children) >= limit:
+            raise SnapshotCorruptError(
+                f"{label} exceeds its entry limit"
+            )
+        children.append(child)
+    return children
 
 
 def _stored_int(

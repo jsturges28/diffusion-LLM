@@ -104,6 +104,7 @@ function harness() {
     client,
     openXai: (input) => calls.xai.push(input),
     showToast: (message) => calls.toasts.push(message),
+    focusFallback: page.document.getElementById("tab-conversations"),
   });
   controller.wire();
   return { page, calls, controller };
@@ -113,6 +114,14 @@ async function settle() {
   await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 test("catalog row opens its exchange and pinned XAI", async () => {
@@ -165,4 +174,94 @@ test("rename and delete mutate only snapshot catalog state",
   }]);
   assert.deepEqual(run.calls.deleted, [SNAPSHOT_ID]);
   assert.equal(tbody.children.length, 0);
+});
+
+test("an older page cannot land in a newly opened snapshot",
+  async () => {
+  const page = loadPage({ scripts: SCRIPTS });
+  const secondId = "d".repeat(32);
+  const older = deferred();
+  const rows = [
+    summary(),
+    Object.assign({}, summary(), {
+      snapshot_id: secondId,
+      title: "Second",
+    }),
+  ];
+  const client = {
+    list: () => Promise.resolve(rows),
+    metadata: (id) => Promise.resolve(Object.assign(
+      {}, rows.find((row) => row.snapshot_id === id),
+      { source: { branch_id: "branch" } }
+    )),
+    turns(id, before) {
+      if (id === SNAPSHOT_ID && before) {
+        return older.promise;
+      }
+      const label = id === SNAPSHOT_ID ? "A new" : "B only";
+      return Promise.resolve({
+        turns: [
+          {
+            index: 1,
+            turn_id: "1",
+            role: "user",
+            text: label,
+            partial: false,
+          },
+          {
+            index: 2,
+            turn_id: id.slice(0, 8),
+            role: "assistant",
+            text: label,
+            partial: false,
+            xai: { status: "text_only" },
+          },
+        ],
+        next_before: id === SNAPSHOT_ID ? "1" : null,
+        has_more: id === SNAPSHOT_ID,
+      });
+    },
+    rename: () => Promise.reject(new Error("unused")),
+    delete: () => Promise.reject(new Error("unused")),
+    pinnedUrl: () => "",
+  };
+  const controller = page.context.analyticsConversationsCreate({
+    client,
+    openXai() {},
+    showToast() {},
+    focusFallback: page.document.getElementById("tab-conversations"),
+  });
+  controller.wire();
+  await controller.activate();
+  await controller.openLinked(SNAPSHOT_ID);
+  page.registry.get("btn-load-older-exchanges").dispatch("click");
+  await controller.openLinked(secondId);
+  older.resolve({
+    turns: [
+      {
+        index: 1,
+        turn_id: "old",
+        role: "user",
+        text: "A old",
+        partial: false,
+      },
+      {
+        index: 2,
+        turn_id: "old-answer",
+        role: "assistant",
+        text: "A old",
+        partial: false,
+        xai: { status: "text_only" },
+      },
+    ],
+    next_before: null,
+    has_more: false,
+  });
+  await settle();
+  const texts = descendants(
+    page.registry.get("saved-conversation-exchanges")
+  ).filter((element) => element.tag === "pre")
+    .map((element) => element.textContent);
+
+  assert.deepEqual(texts, ["B only", "B only"]);
 });

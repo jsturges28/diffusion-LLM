@@ -76,6 +76,7 @@ function generatorRunCreate(options) {
   var totalSteps = null;
 
   var runToken = "";
+  var saveRunToken = null;
   var residentWorker = "";
   var runWorker = "";
 
@@ -108,6 +109,7 @@ function generatorRunCreate(options) {
     provenance = null;
     totalSteps = null;
     runToken = "";
+    saveRunToken = null;
     runWorker = "";
     interrupted = false;
     lostConnection = false;
@@ -135,6 +137,7 @@ function generatorRunCreate(options) {
     runPrompt = prompt;
     runParams = copyObject(params);
     runConversation = conversationState();
+    saveRunToken = null;
   }
 
   function adoptProvenance(data) {
@@ -645,8 +648,9 @@ function generatorRunCreate(options) {
     if (provenance !== null) {
       payload.provenance = copyJson(provenance);
     }
-    if (runToken) {
-      payload.run_token = runToken;
+    var publicationToken = saveRunToken || runToken;
+    if (publicationToken) {
+      payload.run_token = publicationToken;
     }
   }
 
@@ -882,6 +886,7 @@ function generatorRunCreate(options) {
   }
 
   function save() {
+    var options = arguments.length > 0 ? arguments[0] : null;
     if (savePending !== null) {
       return savePending;
     }
@@ -896,6 +901,26 @@ function generatorRunCreate(options) {
         + " cannot be saved in full. Send it again to save"
         + " it."
       );
+    }
+    var forceNew = Boolean(options && options.forceNew === true);
+    if (
+      forceNew
+      && (
+        typeof options.saveRunToken !== "string"
+        || options.saveRunToken === ""
+      )
+    ) {
+      return refuseSave(
+        "A force-new save needs a stable publication token."
+      );
+    }
+    if (forceNew) {
+      saveRunToken = options.saveRunToken;
+      // Best effort for a reload after a lost response. A run too
+      // short for the session codec is not recoverable after reload
+      // anyway, while this in-memory token still fences retries in
+      // the open dialog.
+      saveSession();
     }
     var edit = editState();
     var wasEdited = edit.remaskEdits.length > 0;
@@ -912,8 +937,15 @@ function generatorRunCreate(options) {
       status: status,
       conversationIdentity: savedConversation,
       runEpoch: runEpoch,
+      forcedRunToken: null,
     };
     var payload = buildSavePayload();
+    if (forceNew) {
+      delete payload.run_id;
+      delete payload.expected_revision;
+      payload.run_token = options.saveRunToken;
+      saveContext.forcedRunToken = options.saveRunToken;
+    }
     var request = Promise.resolve().then(function () {
       return requestSave("/api/save", {
         method: "POST",
@@ -977,6 +1009,9 @@ function generatorRunCreate(options) {
     saved = true;
     if (context.wasEdited) {
       editedSaved = true;
+    }
+    if (context.forcedRunToken !== null) {
+      saveRunToken = context.forcedRunToken;
     }
     adoptSaveIdentity(result);
     var success = onSaveSuccess({
@@ -1086,6 +1121,7 @@ function generatorRunCreate(options) {
       promptLen: promptLength,
       provenance: provenance,
       runToken: runToken,
+      saveRunToken: saveRunToken,
       worker: runWorker,
       thinking: chrome.thinking,
       remaskEdits: edit.remaskEdits,
@@ -1197,6 +1233,7 @@ function generatorRunCreate(options) {
     provenance = restored.provenance;
     totalSteps = restored.lastRunTotalSteps;
     runToken = restored.runToken;
+    saveRunToken = restored.saveRunToken;
     runWorker = restored.worker;
     editedSaved = restored.editedRunSaved;
     interrupted = restored.runInterrupted;
@@ -1631,6 +1668,9 @@ function generatorRunCreate(options) {
     },
     runToken: function () {
       return runToken;
+    },
+    saveRunToken: function () {
+      return saveRunToken;
     },
     adoptResidentWorker: adoptResidentWorker,
     editIdentity: editIdentity,

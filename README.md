@@ -164,6 +164,10 @@ browser. Inference packs the newest exact whole exchanges that fit,
 reports omitted earlier turns, and sends Mamba-3 the same chronology as
 raw completion text. Earlier responses retain text; only an explicitly
 saved response retains and links its XAI run.
+Explicit **Save Conversation** snapshots preserve one selected path and
+its exact current head in Analytics. The active tail's XAI is saved first;
+older Text only responses stay honest, while available saved-run revisions
+are pinned against later source replacement or deletion.
 A Send-adjacent meter shows exact next-inference context pressure and
 opens the complete packed prompt, output reserve and omission details.
 User cards offer Copy, Edit and Delete from this path, assistant cards
@@ -199,11 +203,12 @@ left-to-right model is resident, without a model forward pass. Its
 configurable z threshold is a display aid, never an AI/human or
 authorship verdict.
 
-An **Analytics Suite** with a run browser, collections and favourites,
-a detail modal carrying the token canvas and four charts, run
-comparison, and GIF export. Runs are published whole or not at all,
-versioned, and carry the provenance the worker attested, including what
-each run cost in VRAM.
+An **Analytics Suite** with separate Runs and Conversations catalogs,
+collections and favourites for runs, paged saved exchanges, a shared
+XAI detail modal carrying the token canvas and four charts, run
+comparison, and GIF export. Runs and conversation snapshots are
+published whole or not at all; runs carry the provenance the worker
+attested, including what each one cost in VRAM.
 
 A **Vision** page comparing how two SmolVLM encoders rescale, tile and
 fuse the same image into tokens, read from each checkpoint's

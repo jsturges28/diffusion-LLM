@@ -29,6 +29,7 @@ function savedConversationClientCreate(options) {
         input.operationId
       );
       body.title = savedConversationClientTitle(input.title);
+      body.require_tail_xai = input.requireTailXai === true;
       return savedConversationClientJson(
         request,
         "/api/analytics/conversations",

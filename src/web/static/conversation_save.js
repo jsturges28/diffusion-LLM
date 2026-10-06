@@ -21,6 +21,7 @@ function conversationSaveCreate(options) {
     openedHead: null,
     operationId: null,
     savesActiveTail: false,
+    requireTailXai: false,
     activeTailSaved: false,
     pending: false,
   };
@@ -74,9 +75,15 @@ function conversationSaveOpen(owner) {
     owner.openedHead = head;
     owner.operationId = null;
     owner.activeTailSaved = false;
-    owner.savesActiveTail = owner.shouldSaveActiveTail(head);
+    var tailMode = owner.shouldSaveActiveTail(
+      head, preview
+    );
+    owner.requireTailXai = typeof tailMode === "string";
+    owner.savesActiveTail = tailMode === "pinned"
+      ? false
+      : tailMode;
     owner.pending = false;
-    owner.view.show(preview, owner.savesActiveTail);
+    owner.view.show(preview, Boolean(owner.savesActiveTail));
     conversationSaveRefresh(owner);
   }).catch(function (error) {
     owner.pending = false;
@@ -134,7 +141,11 @@ function conversationSaveMaybeTail(owner) {
   if (!owner.savesActiveTail) {
     return Promise.resolve();
   }
-  return Promise.resolve(owner.saveActiveTail()).then(function (saved) {
+  return Promise.resolve(
+    owner.saveActiveTail(
+      owner.savesActiveTail, owner.operationId
+    )
+  ).then(function (saved) {
     if (saved !== true) {
       throw new Error(
         "The active response could not be saved, so the conversation"
@@ -158,12 +169,49 @@ function conversationSavePublish(owner, title) {
   if (head === null) {
     throw new Error("The selected conversation is no longer available.");
   }
-  return owner.client.preview(head).then(function () {
-    return owner.client.create(Object.assign({}, head, {
-      operationId: owner.operationId,
-      title: title,
-    }));
+  return owner.client.preview(head).then(function (preview) {
+    if (
+      owner.requireTailXai
+      && preview.tail_xai_status !== "pinned"
+    ) {
+      return conversationSaveRecoverTail(owner).then(function () {
+        return conversationSaveCreateRequest(owner, title);
+      });
+    }
+    return conversationSaveCreateRequest(owner, title);
   });
+}
+
+function conversationSaveRecoverTail(owner) {
+  return Promise.resolve(
+    owner.saveActiveTail("resave", owner.operationId)
+  ).then(function (saved) {
+    if (saved !== true) {
+      throw new Error(
+        "The active response changed before its XAI could be pinned."
+      );
+    }
+    owner.activeTailSaved = true;
+    var head = owner.readHead();
+    if (!conversationSaveSamePath(owner.openedHead, head)) {
+      throw new Error(
+        "The selected path changed while its XAI was recovered."
+      );
+    }
+    owner.openedHead = head;
+  });
+}
+
+function conversationSaveCreateRequest(owner, title) {
+  var head = owner.readHead();
+  if (head === null) {
+    throw new Error("The selected conversation is no longer available.");
+  }
+  return owner.client.create(Object.assign({}, head, {
+    operationId: owner.operationId,
+    title: title,
+    requireTailXai: owner.requireTailXai,
+  }));
 }
 
 function conversationSaveCancel(owner) {
@@ -180,6 +228,7 @@ function conversationSaveReset(owner) {
   owner.openedHead = null;
   owner.operationId = null;
   owner.savesActiveTail = false;
+  owner.requireTailXai = false;
   owner.activeTailSaved = false;
 }
 
