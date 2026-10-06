@@ -26,6 +26,8 @@ function load() {
     Error,
     TypeError,
     JSON,
+    URLSearchParams,
+    encodeURIComponent,
   });
   vm.runInContext(
     fs.readFileSync(SOURCE, "utf8"),
@@ -133,4 +135,36 @@ test("malformed heads fail before a request", () => {
     { name: "TypeError" }
   );
   assert.equal(requested, false);
+});
+
+test("Analytics reads and pinned URLs stay under snapshot scope",
+  async () => {
+  const context = load();
+  const urls = [];
+  const client = context.savedConversationClientCreate({
+    request(url) {
+      urls.push(url);
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve([]),
+      });
+    },
+  });
+  const snapshotId = "f".repeat(32);
+
+  await client.list();
+  await client.turns(snapshotId, "51", 50);
+  const pinned = client.pinnedUrl(
+    snapshotId, "turn/id", "frames"
+  );
+
+  assert.equal(urls[0], "/api/analytics/conversations");
+  assert.match(urls[1], /before=51/);
+  assert.match(urls[1], /limit=50/);
+  assert.equal(
+    pinned,
+    "/api/analytics/conversations/" + snapshotId
+      + "/turns/turn%2Fid/run/frames"
+  );
 });

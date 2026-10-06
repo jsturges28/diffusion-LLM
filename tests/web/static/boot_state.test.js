@@ -368,6 +368,7 @@ function analyticsBoot() {
     ui_state: {},
     runs: [RUN_ROW],
     collections: [{ id: "favorites", name: "Favorites", runs: [] }],
+    saved_conversations: [],
     results_dir: "/tmp/isolated",
   };
 }
@@ -391,6 +392,8 @@ function analyticsFetch(urls) {
     let body = {};
     if (path === "/api/analytics/runs") {
       body = [RUN_ROW];
+    } else if (path === "/api/analytics/conversations") {
+      body = [];
     } else if (path === "/api/collections") {
       body = { success: true, collections: [] };
     }

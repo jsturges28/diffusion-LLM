@@ -44,6 +44,15 @@
       </nav>
     </header>
 
+    <div id="analytics-view-tabs" class="analytics-view-tabs"
+      role="tablist" aria-label="Analytics artifact type">
+      <button id="tab-runs" type="button" role="tab"
+        aria-selected="true" aria-controls="runs-panel">Runs</button>
+      <button id="tab-conversations" type="button" role="tab"
+        aria-selected="false"
+        aria-controls="conversations-panel">Conversations</button>
+    </div>
+
     <!-- Toolbar -->
     <section id="toolbar">
       <div id="toolbar-left">
@@ -166,6 +175,35 @@
           Nothing in this collection yet. Turn on
           <strong>Show all runs</strong>, tick the ones you want, then
           use the star to file them here.
+        </p>
+      </section>
+
+      <section id="conversations-panel" hidden>
+        <div class="conversations-panel-header">
+          <div>
+            <h2>Saved Conversations</h2>
+            <p>Immutable snapshots of one selected conversation path.</p>
+          </div>
+        </div>
+        <div class="conversations-table-wrap">
+          <table id="conversations-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Title</th>
+                <th>Exchanges</th>
+                <th>XAI</th>
+                <th>Text only</th>
+                <th>Unavailable</th>
+                <th aria-label="Actions"></th>
+              </tr>
+            </thead>
+            <tbody id="conversations-tbody"></tbody>
+          </table>
+        </div>
+        <p id="conversations-empty" class="empty-msg" hidden>
+          No saved conversations yet. Use <strong>Save Conversation</strong>
+          on the Generation page to create one.
         </p>
       </section>
 
@@ -629,6 +667,60 @@
         <div id="token-alts-popover" hidden></div>
       </dialog>
 
+      <dialog id="conversation-detail-modal" class="modal-overlay">
+        <div class="modal-box modal-box-lg saved-conversation-detail"
+          tabindex="-1" autofocus>
+          <button class="modal-close"
+            id="btn-close-conversation-detail"
+            aria-label="Close">&times;</button>
+          <div class="saved-conversation-title-row">
+            <input id="saved-conversation-title" type="text"
+              maxlength="200" aria-label="Saved conversation title" />
+            <button id="btn-rename-conversation" type="button"
+              class="btn-secondary">Rename</button>
+          </div>
+          <p id="saved-conversation-meta"
+            class="saved-conversation-meta"></p>
+          <p id="saved-conversation-status" role="status"
+            aria-live="polite"></p>
+          <button id="btn-load-older-exchanges" type="button"
+            class="btn-secondary" hidden>Load older exchanges</button>
+          <div id="saved-conversation-exchanges"
+            class="saved-conversation-exchanges"></div>
+          <div class="modal-footer">
+            <button id="btn-delete-conversation" type="button"
+              class="snapshot-delete-btn">
+              Delete snapshot
+            </button>
+            <button id="btn-done-conversation" type="button"
+              class="btn-accent">Done</button>
+          </div>
+        </div>
+      </dialog>
+
+      <dialog id="modal-delete-conversation" class="modal-overlay">
+        <div class="modal-box modal-box-confirm"
+          tabindex="-1" autofocus>
+          <button class="modal-close"
+            id="btn-delete-conversation-close"
+            aria-label="Close">&times;</button>
+          <h2>Delete this saved conversation?</h2>
+          <div class="modal-body">
+            <p id="delete-conversation-label"></p>
+            <p>This removes only the immutable snapshot. The live
+              conversation and its ordinary saved runs are unchanged.</p>
+          </div>
+          <div class="modal-footer">
+            <button id="btn-delete-conversation-cancel"
+              class="btn-secondary" type="button">Cancel</button>
+            <button id="btn-delete-conversation-confirm"
+              class="snapshot-delete-btn" type="button">
+              Delete snapshot
+            </button>
+          </div>
+        </div>
+      </dialog>
+
       <!-- Comparison panel (replaces detail) -->
       <section id="compare-panel" hidden>
         <div id="compare-header">
@@ -747,6 +839,9 @@
   <script src="/candidate_flicker.js"></script>
   <script src="/token_viewer.js"></script>
   <script src="/detail_requests.js"></script>
+  <script src="/saved_conversation_client.js"></script>
+  <script src="/analytics_run_detail.js"></script>
+  <script src="/analytics_conversations.js"></script>
   <script src="/collections_client.js"></script>
   <script src="/download_client.js"></script>
   <script src="/download_toast.js"></script>

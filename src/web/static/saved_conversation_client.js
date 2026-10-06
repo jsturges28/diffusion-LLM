@@ -39,7 +39,82 @@ function savedConversationClientCreate(options) {
         }
       );
     },
+    list: function () {
+      return savedConversationClientJson(
+        request,
+        "/api/analytics/conversations",
+        { method: "GET" }
+      );
+    },
+    metadata: function (snapshotId) {
+      return savedConversationClientGet(
+        request,
+        savedConversationClientBase(snapshotId) + "/metadata"
+      );
+    },
+    turns: function (snapshotId, before, limit) {
+      var url = savedConversationClientBase(snapshotId) + "/turns";
+      var query = new URLSearchParams();
+      if (before) {
+        query.set("before", before);
+      }
+      if (limit) {
+        query.set("limit", String(limit));
+      }
+      var suffix = query.toString();
+      return savedConversationClientGet(
+        request, suffix ? url + "?" + suffix : url
+      );
+    },
+    rename: function (snapshotId, title, revision) {
+      return savedConversationClientJson(
+        request,
+        savedConversationClientBase(snapshotId),
+        {
+          method: "PATCH",
+          headers: savedConversationClientHeaders(),
+          body: JSON.stringify({
+            title: savedConversationClientTitle(title),
+            expected_title_revision:
+              savedConversationClientPositive(
+                revision, "title revision"
+              ),
+          }),
+        }
+      );
+    },
+    delete: function (snapshotId) {
+      return savedConversationClientJson(
+        request,
+        savedConversationClientBase(snapshotId),
+        { method: "DELETE" }
+      );
+    },
+    pinnedUrl: function (snapshotId, turnId, resource) {
+      var allowed = ["metadata", "metrics", "frames"];
+      if (allowed.indexOf(resource) === -1) {
+        throw new TypeError("unknown pinned run resource");
+      }
+      return savedConversationClientBase(snapshotId)
+        + "/turns/" + encodeURIComponent(
+          savedConversationClientId(turnId, "turn id")
+        )
+        + "/run/" + resource;
+    },
   });
+}
+
+function savedConversationClientGet(request, url) {
+  return savedConversationClientJson(
+    request, url, { method: "GET" }
+  );
+}
+
+function savedConversationClientBase(snapshotId) {
+  return "/api/analytics/conversations/"
+    + encodeURIComponent(
+      savedConversationClientSnapshotId(snapshotId)
+    );
 }
 
 function savedConversationClientHead(input) {
@@ -105,6 +180,15 @@ function savedConversationClientPositive(value, name) {
 function savedConversationClientOperation(value) {
   if (typeof value !== "string" || !/^[0-9a-f]{32}$/.test(value)) {
     throw new TypeError("operation id must be 32 lowercase hex digits");
+  }
+  return value;
+}
+
+function savedConversationClientSnapshotId(value) {
+  if (typeof value !== "string" || !/^[0-9a-f]{32}$/.test(value)) {
+    throw new TypeError(
+      "saved conversation id must be 32 lowercase hex digits"
+    );
   }
   return value;
 }

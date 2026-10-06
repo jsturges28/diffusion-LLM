@@ -205,9 +205,13 @@ test("an autoregressive run is never offered it", async () => {
   const { context } = page;
   const run = { run_id: "run-ar", model_type: "autoregressive" };
 
-  context.loadRunOverlays(
-    run.run_id, run, context.detailRequests.begin(run.run_id)
-  );
+  context.runDetail.show({
+    key: "run:" + run.run_id,
+    runId: run.run_id,
+    title: "Run",
+    summary: run,
+    invalid: false,
+  });
   await settle();
 
   // Heatmap is offered for any run with records, so the run opened.

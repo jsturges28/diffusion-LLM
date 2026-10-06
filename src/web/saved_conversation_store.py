@@ -481,6 +481,15 @@ def _inspect_one_link(
             f" to {actual}"
         )
         return base
+    metadata_path = (
+        run_store.resolve_run_dir(results_dir, link.run_id)
+        / run_store.METADATA_NAME
+    )
+    metadata = _read_object(metadata_path, "source run metadata")
+    for name in ("backend", "model", "model_type", "processor"):
+        value = metadata.get(name)
+        if isinstance(value, str):
+            base[name] = value
     base["status"] = STATUS_PINNED
     return base
 

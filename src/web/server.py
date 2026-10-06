@@ -89,6 +89,7 @@ from src.web import model_manager
 from src.web import run_store
 from src.web import save_pipeline
 from src.web import saved_conversation_api
+from src.web import saved_conversation_store
 from src.web.save_limits import BodyLimit
 from src.web.data_root import (
     RESULTS_DIR_ENV,
@@ -1490,7 +1491,7 @@ async def serve_index_html() -> RedirectResponse:
 
 
 def _analytics_boot_state() -> Dict[str, Any]:
-    """The catalog, the collections and the data root, up front.
+    """Analytics catalogs, collections and the data root, up front.
 
     All three are cheap to produce: the catalog reads one metadata
     file per run, around 25ms for 240 of them, and the reconciliation
@@ -1509,6 +1510,9 @@ def _analytics_boot_state() -> Dict[str, Any]:
         # it puts a round trip in front of the table.
         "ui_state": ui_state,
         "runs": runs,
+        "saved_conversations": (
+            saved_conversation_store.list_snapshots(RESULTS_DIR)
+        ),
         "collections": collection_ops.decode(
             ui_state.get(COLLECTIONS_KEY)
         ),

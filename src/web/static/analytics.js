@@ -19,6 +19,14 @@ var runsEmptyCollection =
   document.getElementById("runs-empty-collection");
 var selectAllCb =
   document.getElementById("select-all");
+var runsPanel =
+  document.getElementById("runs-panel");
+var toolbarLeft =
+  document.getElementById("toolbar-left");
+var tabRuns =
+  document.getElementById("tab-runs");
+var tabConversations =
+  document.getElementById("tab-conversations");
 
 var detailPanel =
   document.getElementById("detail-modal");
@@ -363,11 +371,6 @@ var checkedIds = {};
 var activeRunId = null;
 var gpuName = null;
 
-// Fences the detail panel's two fetches against each other and
-// against the panel closing (see detail_requests.js). activeRunId
-// above says what is on screen; this says which attempt is allowed
-// to paint it, which is the part run id alone cannot answer.
-var detailRequests = detailRequestsCreate();
 // Compare gets its own counter rather than sharing the detail
 // panel's, which is why detailRequestsCreate is a factory. The two
 // surfaces open and close independently, and one epoch between them
@@ -398,9 +401,38 @@ var tokenViewer = tokenViewerCreate({
   onBlendPress: lineCharts.armScrub,
   onBlendRelease: lineCharts.endScrub,
 });
+var runDetail = analyticsRunDetailCreate({
+  panel: detailPanel,
+  openModal: openModal,
+  closeModal: closeModal,
+  onStart: analyticsDetailStart,
+  onInvalid: analyticsDetailInvalid,
+  fetchMeta: analyticsDetailFetchMeta,
+  fetchMetrics: analyticsDetailFetchMetrics,
+  fetchFrames: analyticsDetailFetchFrames,
+  onMeta: analyticsDetailMeta,
+  onMetaFailure: analyticsDetailMetaFailure,
+  onMetrics: analyticsDetailMetrics,
+  onMetricsFailure: analyticsDetailMetricsFailure,
+  onFrames: analyticsDetailFrames,
+  onFramesFailure: analyticsDetailFramesFailure,
+  onClose: analyticsDetailClosed,
+});
+var savedConversationsApi = savedConversationClientCreate({
+  request: function (url, init) {
+    return fetch(url, init);
+  },
+});
+var conversationsView = analyticsConversationsCreate({
+  client: savedConversationsApi,
+  openXai: showPinnedDetail,
+  showToast: showToast,
+});
 
 var chartCompareConv = null;
 var linkedRunOpened = false;
+var linkedConversationOpened = false;
+var analyticsView = "runs";
 
 var COMPARE_COLORS = [
   "#00ff41", "#00aaff", "#ff9f1c",
@@ -1874,15 +1906,67 @@ function findRun(runId) {
   return null;
 }
 
-function showInvalidDetail(run) {
-  // Any request already in flight for another run is dropped, so the
-  // panel cannot be repainted by a fetch the user has moved on from.
-  detailRequests.begin(run.run_id);
-  comparePanel.hidden = true;
-  openModal(detailPanel);
-  detailTitle.textContent = "Run: " + run.run_id;
+function showDetail(runId, returnFocus) {
+  compareRequests.cancel();
+  var run = findRun(runId);
+  if (!run) {
+    return;
+  }
+  runDetail.show({
+    key: "run:" + runId,
+    runId: runId,
+    title: "Run: " + runId,
+    summary: run,
+    invalid: run.invalid === true,
+    error: run.error || "",
+    returnFocus: returnFocus || null,
+  });
+}
 
-  var reason = run.error || "This run could not be read.";
+function showPinnedDetail(input) {
+  compareRequests.cancel();
+  runDetail.show({
+    key: (
+      "conversation:" + input.snapshotId
+      + ":" + input.turnId
+    ),
+    runId: null,
+    title: "Saved response XAI",
+    summary: input.summary,
+    urls: input.urls,
+    invalid: false,
+    returnFocus: input.returnFocus || null,
+  });
+}
+
+function analyticsDetailStart(input) {
+  activeRunId = input.runId;
+  comparePanel.hidden = true;
+  detailPanel.classList.remove("detail-unreadable");
+  detailTitle.textContent = input.title;
+  detailMeta.innerHTML = renderRunMeta(input.summary);
+  clearRunCharts();
+  tokenViewer.beginRun(runIsAutoregressive(input.summary));
+  lineCharts.clearStopping();
+  analyticsDetailClearNewRun(input);
+  renderTable();
+}
+
+function analyticsDetailClearNewRun(input) {
+  if (!input.runId || !persistIsNewRun(input.runId)) {
+    return;
+  }
+  persistClearNewRun(input.runId);
+  var openedRow = runsTbody.querySelector(
+    'tr[data-run-id="' + input.runId + '"] .run-new-slot'
+  );
+  if (openedRow) {
+    openedRow.textContent = "";
+  }
+}
+
+function analyticsDetailInvalid(input) {
+  var reason = input.error || "This run could not be read.";
   detailMeta.innerHTML =
     '<div class="run-unreadable">'
     + '<div class="run-unreadable-title">'
@@ -1893,87 +1977,78 @@ function showInvalidDetail(run) {
     + 'Its folder is still on disk. Delete it from the row if you '
     + 'no longer want it.</div>'
     + '</div>';
-
-  // Torn down for the same reason the loaders tear down before their
-  // fetch: otherwise the previous run's charts and tokens sit under
-  // this run's title, which reads as this run's data.
-  clearRunCharts();
   tokenViewer.clear();
-  // A class on the panel rather than hiding each section, because
-  // every section owns its own `hidden` flag for its own reasons
-  // (model type, the timing/rate pager, whether entropy was
-  // captured). Hiding them here would mean restoring them there,
-  // and getting that wrong loses a chart on the next valid run.
   detailPanel.classList.add("detail-unreadable");
-  renderTable();
 }
 
-function showDetail(runId) {
-  // Hiding the compare panel stops nothing; its late answer
-  // would paint behind the dialog.
-  compareRequests.cancel();
-  activeRunId = runId;
-  // A run the catalog could not read has nothing to fetch. Say why
-  // and stop, rather than firing two requests that can only fail and
-  // leaving the panel on a spinner.
-  var listed = findRun(runId);
-  if (listed && listed.invalid) {
-    showInvalidDetail(listed);
+function analyticsDetailFetchMeta(input, signal) {
+  if (input.urls) {
+    return fetchDetailJson(input.urls.metadata, signal);
+  }
+  return fetchRunMeta(input.runId, signal);
+}
+
+function analyticsDetailFetchMetrics(input, signal) {
+  if (input.urls) {
+    return fetchDetailJson(input.urls.metrics, signal);
+  }
+  return fetchMetrics(input.runId, signal);
+}
+
+function analyticsDetailFetchFrames(input, signal) {
+  if (input.urls) {
+    return fetchDetailJson(input.urls.frames, signal);
+  }
+  return fetchFrames(input.runId, signal);
+}
+
+function analyticsDetailMeta(metadata) {
+  detailMeta.innerHTML = renderRunMeta(metadata);
+}
+
+function analyticsDetailMetaFailure(_error, input) {
+  detailMeta.innerHTML = renderRunMeta(input.summary);
+}
+
+function analyticsDetailMetrics(data, input) {
+  if (!data || data.aborted) {
     return;
   }
-  // One token for both fetches, taken before either starts, so the
-  // pair either paints together or not at all.
-  var token = detailRequests.begin(runId);
-  comparePanel.hidden = true;
-  openModal(detailPanel);
-  detailPanel.classList.remove("detail-unreadable");
-
-  // Opening a run clears its "new" dot (and decrements the generator's
-  // count on the next visit). Remove just this row's dot in place.
-  if (persistIsNewRun(runId)) {
-    persistClearNewRun(runId);
-    var openedRow = runsTbody.querySelector(
-      'tr[data-run-id="' + runId + '"] .run-new-slot'
-    );
-    if (openedRow) {
-      openedRow.textContent = "";
-    }
+  if (data.error) {
+    showChartsUnavailable(data.error);
+    return;
   }
-
-  var run = findRun(runId);
-  if (!run) { return; }
-
-  detailTitle.textContent =
-    "Run: " + run.run_id;
-  // The catalog row is a summary now, so the panel's rows arrive
-  // separately. Shown from the summary first so the panel is never
-  // blank, then replaced when the full record lands.
-  detailMeta.innerHTML = renderRunMeta(run);
-
-  renderTable();
-  loadRunMeta(runId, run, token);
-  loadRunCharts(runId, run, token);
-  loadRunOverlays(runId, run, token);
+  renderRunCharts(data, {
+    model_type: data.model_type || input.summary.model_type,
+  });
 }
 
-// The catalog carries only what the table draws, so everything else
-// the panel shows (the whole prompt, the hyperparameters, the
-// tokenizer and context blocks) is fetched for the one run opened.
-// Behind the same epoch as the charts and overlays, so a slow answer
-// cannot land on a run the user has already moved on from.
-function loadRunMeta(runId, summary, token) {
-  fetchRunMeta(runId, token && token.signal).then(
-    function (meta) {
-      if (!detailRequests.accepts(token)) { return; }
-      detailMeta.innerHTML = renderRunMeta(meta);
-    }
-  ).catch(function (error) {
-    if (error && error.name === "AbortError") { return; }
-    if (!detailRequests.accepts(token)) { return; }
-    // The summary is still on screen from above, so a failure here
-    // costs the extra rows rather than the panel.
-    detailMeta.innerHTML = renderRunMeta(summary);
-  });
+function analyticsDetailMetricsFailure(error) {
+  showChartsUnavailable(
+    error instanceof Error ? error.message : "Metrics unavailable"
+  );
+}
+
+function analyticsDetailFrames(data) {
+  if (!data || data.aborted) {
+    return;
+  }
+  if (data.error) {
+    tokenViewer.showUnavailable();
+    return;
+  }
+  tokenViewer.show(data);
+}
+
+function analyticsDetailFramesFailure() {
+  tokenViewer.showUnavailable();
+}
+
+function analyticsDetailClosed() {
+  activeRunId = null;
+  hideChartsError();
+  tokenViewer.clear();
+  renderTable();
 }
 
 function renderRunMeta(run) {
@@ -2283,7 +2358,7 @@ function metaRowHtml(label, value) {
 }
 
 function hideDetail() {
-  closeModal(detailPanel);
+  runDetail.close();
 }
 
 // The tidying that used to live in hideDetail now rides the dialog's
@@ -2299,14 +2374,6 @@ function hideDetail() {
 // inline, so anything needing the panel retired before its next
 // statement has to do that itself. `showComparison` is the one such
 // caller and already does.
-detailPanel.addEventListener("close", function () {
-  activeRunId = null;
-  detailRequests.cancel();
-  hideChartsError();
-  tokenViewer.clear();
-  renderTable();
-});
-
 function escHtml(s) {
   var d = document.createElement("div");
   d.appendChild(document.createTextNode(s));
@@ -2357,27 +2424,6 @@ function runIsAutoregressive(run) {
   return !!(run && run.model_type === "autoregressive");
 }
 
-function loadRunCharts(runId, run, token) {
-  // Torn down before the fetch, not inside it, the way
-  // loadRunOverlays already did. Destroying on success only meant a
-  // slow or failed response left the previous run's charts sitting
-  // under the new run's title, which is the reading a user has no
-  // way to catch.
-  clearRunCharts();
-
-  fetchMetrics(runId, token && token.signal).then(
-    function (data) {
-      if (!detailRequests.accepts(token)) { return; }
-      if (data.aborted) { return; }
-      if (data.error) {
-        showChartsUnavailable(data.error);
-        return;
-      }
-      renderRunCharts(data, run);
-    }
-  );
-}
-
 // Every chart surface back to empty. Split out because it is now
 // called from two places: before a load, and when one fails.
 function clearRunCharts() {
@@ -2417,27 +2463,6 @@ function renderRunCharts(data, run) {
   lineCharts.renderMetrics(data, runIsAutoregressive(run));
 }
 
-function loadRunOverlays(runId, run, token) {
-  // Torn down before the fetch, not inside it, so switching runs can
-  // never leave the previous run's chart, tokens, or crossfade on
-  // screen while the new payload is in flight. The viewer's reset
-  // covers the rendered tokens, which used to survive the switch
-  // because only the globals behind them were reset here.
-  tokenViewer.beginRun(runIsAutoregressive(run));
-  lineCharts.clearStopping();
-  fetchFrames(runId, token && token.signal).then(
-    function (data) {
-      if (!detailRequests.accepts(token)) { return; }
-      if (!data || data.aborted) { return; }
-      if (data.error) {
-        tokenViewer.showUnavailable();
-        return;
-      }
-      tokenViewer.show(data);
-    }
-  );
-}
-
 // ---- Comparison mode ----
 
 function showComparison(ids) {
@@ -2446,7 +2471,7 @@ function showComparison(ids) {
   activeRunId = null;
   // Leaving the detail view by any route has to retire its
   // requests, and this route does not go through hideDetail.
-  detailRequests.cancel();
+  runDetail.cancel();
   renderTable();
 
   if (!chartSupportAvailable) {
@@ -2804,13 +2829,16 @@ function bootAnalyticsState() {
   if (!Array.isArray(boot.collections)) {
     return null;
   }
+  if (!Array.isArray(boot.saved_conversations)) {
+    return null;
+  }
   return boot;
 }
 
 // First render from state we already have. Refresh still refetches:
 // two windows can disagree about what is filed where, and this page
 // is the one that shows it.
-function renderFromState(runs, collections) {
+function renderFromState(runs, collections, savedConversations) {
   allRuns = runs;
   checkedIds = {};
   selectAllCb.checked = false;
@@ -2819,11 +2847,12 @@ function renderFromState(runs, collections) {
   updateBulkActions();
   renderCollectionTabs();
   renderTable();
+  conversationsView.adopt(savedConversations);
   openLinkedRun();
 }
 
 function loadAndRender() {
-  fetchRuns().then(function (runs) {
+  return fetchRuns().then(function (runs) {
     allRuns = runs;
     checkedIds = {};
     selectAllCb.checked = false;
@@ -2851,6 +2880,55 @@ function openLinkedRun() {
   }
   linkedRunOpened = true;
   showDetail(runId);
+}
+
+function setAnalyticsView(view) {
+  if (view !== "runs" && view !== "conversations") {
+    throw new Error("Unknown Analytics view: " + view);
+  }
+  analyticsView = view;
+  var conversations = view === "conversations";
+  runsPanel.hidden = conversations;
+  toolbarLeft.hidden = conversations;
+  btnCompare.hidden = conversations;
+  tabRuns.setAttribute(
+    "aria-selected", conversations ? "false" : "true"
+  );
+  tabConversations.setAttribute(
+    "aria-selected", conversations ? "true" : "false"
+  );
+  if (conversations) {
+    hideComparison();
+    runDetail.close();
+    return conversationsView.activate();
+  }
+  conversationsView.deactivate();
+  return Promise.resolve();
+}
+
+function activateInitialAnalyticsView() {
+  var snapshotId = new URLSearchParams(location.search)
+    .get("conversation");
+  if (!snapshotId) {
+    setAnalyticsView("runs");
+    openLinkedRun();
+    return;
+  }
+  setAnalyticsView("conversations").then(function () {
+    if (linkedConversationOpened) {
+      return;
+    }
+    linkedConversationOpened = true;
+    conversationsView.openLinked(snapshotId);
+  });
+}
+
+function refreshAnalyticsView() {
+  if (analyticsView === "conversations") {
+    conversationsView.refresh();
+    return;
+  }
+  loadAndRender();
 }
 
 // ---- Delete a run ----
@@ -3143,8 +3221,14 @@ if (groupByMount) {
 }
 
 btnRefresh.addEventListener(
-  "click", loadAndRender
+  "click", refreshAnalyticsView
 );
+tabRuns.addEventListener("click", function () {
+  setAnalyticsView("runs");
+});
+tabConversations.addEventListener("click", function () {
+  setAnalyticsView("conversations");
+});
 
 btnCloseDetail.addEventListener(
   "click", hideDetail
@@ -3271,6 +3355,8 @@ modalCollectionDelete.addEventListener("click", function (e) {
   }
 })();
 
+runDetail.wire();
+conversationsView.wire();
 tokenViewer.wire();
 lineCharts.wire();
 
@@ -3312,8 +3398,13 @@ persistHydrate(function () {
   tokenViewer.refreshHoverHighlight();
   var inlined = bootAnalyticsState();
   if (inlined !== null) {
-    renderFromState(inlined.runs, inlined.collections);
+    renderFromState(
+      inlined.runs,
+      inlined.collections,
+      inlined.saved_conversations
+    );
+    activateInitialAnalyticsView();
     return;
   }
-  loadAndRender();
+  loadAndRender().then(activateInitialAnalyticsView);
 });

@@ -1578,3 +1578,205 @@ html, body {
   min-width: 92px;
   text-align: right;
 }
+
+.analytics-view-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 4px 0 8px;
+}
+
+.analytics-view-tabs button {
+  padding: 5px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.analytics-view-tabs button[aria-selected="true"] {
+  border-color: rgba(0, 255, 65, 0.45);
+  background: rgba(0, 255, 65, 0.1);
+  color: var(--accent);
+}
+
+#conversations-panel {
+  min-width: 0;
+}
+
+.conversations-panel-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.conversations-panel-header h2 {
+  margin: 0 0 3px;
+  font-size: 14px;
+}
+
+.conversations-panel-header p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.conversations-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+#conversations-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+#conversations-table th,
+#conversations-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  font-size: 10px;
+}
+
+#conversations-table tbody tr {
+  cursor: pointer;
+}
+
+#conversations-table tbody tr:hover,
+#conversations-table tbody tr:focus-within {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.snapshot-row-delete {
+  padding: 2px 6px;
+  background: transparent;
+  color: var(--danger);
+  font-size: 16px;
+}
+
+.saved-conversation-detail {
+  display: flex;
+  flex-direction: column;
+  min-height: min(720px, 80vh);
+}
+
+.saved-conversation-title-row {
+  display: flex;
+  gap: 8px;
+  padding-right: 28px;
+}
+
+#saved-conversation-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 15px;
+}
+
+.saved-conversation-meta,
+#saved-conversation-status {
+  margin: 8px 0;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+#saved-conversation-status:empty {
+  display: none;
+}
+
+.saved-conversation-exchanges {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  margin-top: 10px;
+  overflow-y: auto;
+}
+
+.saved-conversation-exchange {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.saved-conversation-exchange h3 {
+  margin: 0 0 8px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.saved-conversation-message {
+  margin-top: 7px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--border);
+}
+
+.saved-conversation-message.is-user {
+  border-color: rgba(79, 195, 247, 0.7);
+}
+
+.saved-conversation-message.is-assistant {
+  border-color: rgba(0, 255, 65, 0.65);
+}
+
+.saved-conversation-message strong {
+  color: var(--text-secondary);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.saved-conversation-message pre {
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.saved-conversation-exchange-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 9px;
+  color: var(--text-dim);
+  font-size: 9px;
+}
+
+.saved-conversation-view-xai {
+  margin-left: auto;
+  padding: 4px 8px;
+  color: var(--accent);
+}
+
+.snapshot-delete-btn {
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 92, 92, 0.5);
+  background: rgba(255, 92, 92, 0.1);
+  color: var(--danger);
+}
+
+.snapshot-delete-btn:hover:not(:disabled) {
+  background: rgba(255, 92, 92, 0.2);
+}
+
+@media (max-width: 700px) {
+  .saved-conversation-title-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  #conversations-table th:nth-child(4),
+  #conversations-table td:nth-child(4),
+  #conversations-table th:nth-child(5),
+  #conversations-table td:nth-child(5),
+  #conversations-table th:nth-child(6),
+  #conversations-table td:nth-child(6) {
+    display: none;
+  }
+}
