@@ -135,6 +135,38 @@ _AUTOREGRESSIVE_SIGNALS: Tuple[SignalChannel, ...] = (
         key="we",
         capture="opt_in",
     ),
+    SignalChannel(
+        name="watermark_model_green_mass",
+        unit="probability",
+        axes=("position",),
+        location="token_record",
+        key="gb",
+        capture="opt_in",
+    ),
+    SignalChannel(
+        name="watermark_kgw_green_mass",
+        unit="probability",
+        axes=("position",),
+        location="token_record",
+        key="gk",
+        capture="opt_in",
+    ),
+    SignalChannel(
+        name="watermark_sampler_green_mass",
+        unit="probability",
+        axes=("position",),
+        location="token_record",
+        key="gs",
+        capture="opt_in",
+    ),
+    SignalChannel(
+        name="watermark_sampler_alternatives",
+        unit="probability",
+        axes=("position",),
+        location="sidecar",
+        key="sampler_alternatives",
+        capture="opt_in",
+    ),
 )
 
 DEFAULT_MODEL = "llada"

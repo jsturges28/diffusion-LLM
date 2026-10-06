@@ -454,6 +454,28 @@ def null_probability(
     return probability
 
 
+def biased_green_mass(*, base_mass: float, delta: float) -> float:
+    """Green mass after adding one constant logit bias at T=1."""
+    if not math.isfinite(base_mass):
+        raise ValueError("base green mass must be finite")
+    if not 0.0 <= base_mass <= 1.0:
+        raise ValueError("base green mass must be within [0,1]")
+    if not math.isfinite(delta):
+        raise ValueError("watermark delta must be finite")
+    if delta < 0.0:
+        raise ValueError("watermark delta must be non-negative")
+    if base_mass in (0.0, 1.0) or delta == 0.0:
+        return base_mass
+    log_odds = math.log(base_mass) - math.log1p(-base_mass) + delta
+    if log_odds >= 0.0:
+        tilted = 1.0 / (1.0 + math.exp(-log_odds))
+    else:
+        exp_odds = math.exp(log_odds)
+        tilted = exp_odds / (1.0 + exp_odds)
+    assert base_mass <= tilted <= 1.0
+    return tilted
+
+
 def detection_status(scored_count: int) -> str:
     """Whether a score has enough evidence to report."""
     if not isinstance(scored_count, int) or scored_count < 0:

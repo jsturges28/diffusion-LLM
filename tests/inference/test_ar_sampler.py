@@ -46,7 +46,11 @@ from src.inference.ar_sampler import (
     streaming_generate,
     streaming_substitute,
 )
-from src.inference.kgw_watermark import KgwConfig, KgwWatermark
+from src.inference.kgw_watermark import (
+    KgwConfig,
+    KgwWatermark,
+    biased_green_mass,
+)
 
 VOCAB_SIZE = 12
 EOS_ID = 11
@@ -605,9 +609,129 @@ def test_zero_delta_is_bit_identical_and_rng_identical() -> None:
     )
     marked_state = torch.random.get_rng_state()
 
-    assert marked[:4] == plain[:4]
+    assert marked[:3] == plain[:3]
+    assert marked.alternatives is not None
+    assert plain.alternatives is not None
+    stripped = [
+        {key: value for key, value in row.items() if key != "g"}
+        for row in marked.alternatives
+    ]
+    assert stripped == plain.alternatives
+    assert all(
+        isinstance(row["g"], bool) for row in marked.alternatives
+    )
+    assert marked.signals is not None
+    assert marked.signals["gk"] == pytest.approx(
+        marked.signals["gb"]
+    )
+    assert marked.sampler_alternatives is not None
     assert torch.equal(marked_state, plain_state)
-    assert watermark.cache.device_entry_count("cpu") == 0
+    assert watermark.cache.device_entry_count("cpu") == 1
+
+
+def test_watermark_pressure_matches_actual_sampling_pipeline(
+) -> None:
+    logits = torch.tensor(
+        [[
+            0.2, 0.5, 1.0, 0.1, 0.8, 0.7,
+            0.4, 0.3, 0.6, 0.9, 0.0, -1.0,
+        ]]
+    )
+    watermark = _watermark(delta=1.25)
+    previous = 3
+    torch.manual_seed(7)
+
+    pick = _sample_next(
+        logits,
+        temperature=0.8,
+        top_p=0.85,
+        top_k=7,
+        tokenizer=StubTokenizer(),
+        alternatives=True,
+        watermark=watermark,
+        previous_token=previous,
+        watermark_evidence=True,
+    )
+
+    base = torch.softmax(logits.float().squeeze(0), dim=-1)
+    green = torch.tensor(
+        watermark.green_ids(previous), dtype=torch.long
+    )
+    biased = logits.float().squeeze(0).clone()
+    biased[green] += watermark.config.delta
+    sampled = torch.softmax(biased / 0.8, dim=-1)
+    sampled = _top_k_filter(sampled, 7)
+    sampled = _top_p_filter(sampled, 0.85)
+    assert pick.signals is not None
+    assert pick.signals["gb"] == pytest.approx(
+        float(base[green].sum().item())
+    )
+    assert pick.signals["gk"] == pytest.approx(
+        biased_green_mass(
+            base_mass=pick.signals["gb"],
+            delta=watermark.config.delta,
+        )
+    )
+    assert pick.signals["gs"] == pytest.approx(
+        float(sampled[green].sum().item())
+    )
+    assert pick.sampler_alternatives is not None
+    assert pick.sampler_alternatives["support"] == int(
+        (sampled > 0).sum().item()
+    )
+    assert all(
+        isinstance(row["g"], bool)
+        for row in pick.sampler_alternatives["candidates"]
+    )
+
+
+def test_pressure_without_alternatives_keeps_only_mass_scalars(
+) -> None:
+    logits = torch.arange(
+        VOCAB_SIZE, dtype=torch.float32
+    )[None, :]
+    pick = _sample_next(
+        logits,
+        temperature=0.0,
+        top_p=1.0,
+        top_k=-1,
+        tokenizer=StubTokenizer(),
+        alternatives=False,
+        watermark=_watermark(),
+        previous_token=3,
+        watermark_evidence=True,
+    )
+
+    assert pick.signals is not None
+    assert set(pick.signals) == {"gb", "gk", "gs"}
+    assert pick.signals["gs"] in (0.0, 1.0)
+    assert pick.sampler_alternatives is None
+
+
+def test_greedy_sampler_candidates_are_one_deterministic_row(
+) -> None:
+    logits = torch.arange(
+        VOCAB_SIZE, dtype=torch.float32
+    )[None, :]
+    pick = _sample_next(
+        logits,
+        temperature=0.0,
+        top_p=1.0,
+        top_k=-1,
+        tokenizer=StubTokenizer(),
+        alternatives=True,
+        watermark=_watermark(),
+        previous_token=3,
+        watermark_evidence=True,
+    )
+
+    assert pick.sampler_alternatives is not None
+    assert pick.sampler_alternatives["support"] == 1
+    rows = pick.sampler_alternatives["candidates"]
+    assert len(rows) == 1
+    assert rows[0]["id"] == pick.token_id
+    assert rows[0]["p"] == 1.0
+    assert rows[0]["rank"] == 1
 
 
 def _traced(
@@ -842,6 +966,29 @@ def test_state_sink_traces_every_position() -> None:
     assert len(state["alternatives"]) == 6
 
 
+def test_watermarked_alternatives_capture_both_candidate_sets(
+) -> None:
+    out = _run_generate(
+        alternatives=True,
+        budget=4,
+        watermark=_watermark(),
+    )
+    frames = [
+        frame for frame in out["frames"]
+        if frame["type"] == "frame"
+    ]
+
+    for frame in frames:
+        assert frame["alts"]
+        assert frame["salts"]["support"] >= 1
+        assert frame["salts"]["candidates"]
+        assert all("g" in row for row in frame["alts"])
+        assert all(
+            "g" in row for row in frame["salts"]["candidates"]
+        )
+    assert len(out["state"]["sampler_alternatives"]) == 4
+
+
 def test_first_watermarked_token_is_biased_but_not_evidence() -> None:
     out = _run_generate(
         alternatives=False,
@@ -856,6 +1003,10 @@ def test_first_watermarked_token_is_biased_but_not_evidence() -> None:
 
     assert isinstance(frames[0]["token"]["g"], bool)
     assert frames[0]["token"]["we"] is False
+    assert all(
+        {"gb", "gk", "gs"} <= set(frame["token"])
+        for frame in frames
+    )
     assert all(frame["token"]["we"] for frame in frames[1:])
     assert state["watermark_evidence"] == [
         False,
@@ -891,6 +1042,11 @@ def test_watermark_off_omits_token_and_state_fields() -> None:
     assert all("we" not in frame["token"] for frame in frames)
     assert "watermark_memberships" not in out["state"]
     assert "watermark_evidence" not in out["state"]
+    assert "sampler_alternatives" not in out["state"]
+    assert all(
+        all(key not in frame["token"] for key in ("gb", "gk", "gs"))
+        for frame in frames
+    )
 
 
 def test_cancelled_generate_drops_every_unsent_trace_field() -> None:
@@ -916,6 +1072,7 @@ def test_cancelled_generate_drops_every_unsent_trace_field() -> None:
         "confidences",
         "entropies",
         "alternatives",
+        "sampler_alternatives",
         "signals",
         "watermark_memberships",
         "watermark_evidence",
@@ -982,6 +1139,12 @@ def _run_substitute(
             cancel_event=cancel_event,
             state_sink=branch,
             cache=cache,
+            prefix_signals=state.get("signals", [])[:position],
+            prefix_sampler_alternatives=(
+                state["sampler_alternatives"][:position]
+                if "sampler_alternatives" in state
+                else None
+            ),
             prefix_watermark_memberships=state.get(
                 "watermark_memberships", []
             )[:position],
@@ -1051,6 +1214,16 @@ def test_substitute_preserves_watermark_prefix() -> None:
         branch["watermark_evidence"][position + 1 :]
     )
     assert result["frames"][0]["token"]["we"] is False
+    assert branch["signals"][:position] == state["signals"][:position]
+    assert set(branch["signals"][position]) == {"gb", "gk"}
+    assert all(
+        {"gb", "gk", "gs"} <= set(signals)
+        for signals in branch["signals"][position + 1 :]
+    )
+    assert branch["sampler_alternatives"][:position] == (
+        state["sampler_alternatives"][:position]
+    )
+    assert branch["sampler_alternatives"][position] is None
 
 
 def test_cancelled_substitute_drops_unsent_continuation() -> None:

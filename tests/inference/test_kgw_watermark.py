@@ -28,6 +28,7 @@ from src.inference.kgw_watermark import (
     KgwConfig,
     KgwOnlineDetector,
     KgwWatermark,
+    biased_green_mass,
     detect_token_ids,
     detection_display_status,
 )
@@ -35,6 +36,38 @@ from src.inference.kgw_watermark import (
 KEY = bytes(range(32))
 OTHER_KEY = bytes(reversed(range(32)))
 FINGERPRINT = "ab" * 32
+
+
+def test_biased_green_mass_matches_partition_softmax() -> None:
+    base = 0.1
+    delta = 0.5
+    expected = math.exp(delta) * base
+    expected /= expected + 1.0 - base
+
+    assert biased_green_mass(
+        base_mass=base, delta=delta
+    ) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("base", [0.0, 0.1, 0.5, 0.99, 1.0])
+def test_biased_green_mass_is_bounded_and_monotonic(
+    base: float,
+) -> None:
+    tilted = biased_green_mass(base_mass=base, delta=10.0)
+
+    assert base <= tilted <= 1.0
+    assert biased_green_mass(base_mass=base, delta=0.0) == base
+
+
+@pytest.mark.parametrize(
+    ("base", "delta"),
+    [(float("nan"), 1.0), (-0.1, 1.0), (1.1, 1.0), (0.5, -1.0)],
+)
+def test_biased_green_mass_rejects_invalid_inputs(
+    base: float, delta: float
+) -> None:
+    with pytest.raises(ValueError):
+        biased_green_mass(base_mass=base, delta=delta)
 
 
 def _config(

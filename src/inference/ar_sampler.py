@@ -74,7 +74,10 @@ from src.inference.frame_queue import (
     frame_queue_drain_until_done,
     frame_queue_put,
 )
-from src.inference.kgw_watermark import KgwWatermark
+from src.inference.kgw_watermark import (
+    KgwWatermark,
+    biased_green_mass,
+)
 
 # Competing candidates captured per position when the opt-in
 # alternatives signal is on. Fixed rather than user-facing: five is
@@ -92,6 +95,8 @@ class _StepPick(NamedTuple):
     confidence: float
     entropy: float
     alternatives: Optional[List[Dict[str, Any]]]
+    signals: Optional[Dict[str, float]] = None
+    sampler_alternatives: Optional[Dict[str, Any]] = None
     green: Optional[bool] = None
     evidence: Optional[bool] = None
 
@@ -272,6 +277,63 @@ def _token_rank(probs: torch.Tensor, probability: float) -> int:
     return rank
 
 
+def _green_probability(
+    probs: torch.Tensor, green_indices: torch.Tensor
+) -> float:
+    """Probability mass on one exact green set."""
+    assert probs.dim() == 1, "probs must be 1-D"
+    assert green_indices.dim() == 1, "green indices must be 1-D"
+    mass = float(probs[green_indices].sum().item())
+    assert -1e-6 <= mass <= 1.0 + 1e-6
+    return min(1.0, max(0.0, mass))
+
+
+def _annotate_green_candidates(
+    candidates: List[Dict[str, Any]],
+    *,
+    watermark: KgwWatermark,
+    previous_token: int,
+) -> None:
+    """Name keyed membership on each bounded candidate row."""
+    for candidate in candidates:
+        candidate["g"] = watermark.is_green(
+            previous_token=previous_token,
+            token_id=int(candidate["id"]),
+        )
+
+
+def _sampler_candidate_set(
+    probs: torch.Tensor,
+    *,
+    tokenizer: Any,
+    next_id: int,
+    watermark: KgwWatermark,
+    previous_token: int,
+) -> Dict[str, Any]:
+    """Top sampler rows plus its exact nonzero support size."""
+    support = int((probs > 0).sum().item())
+    assert support > 0, "a sampling distribution has support"
+    candidates = _top_alternatives(
+        probs, tokenizer, min(TOP_K_ALTERNATIVES, support)
+    )
+    probability = float(probs[next_id].item())
+    if not _candidates_hold(candidates, next_id):
+        candidates.append(
+            _chosen_candidate(
+                token_id=next_id,
+                probability=probability,
+                rank=_token_rank(probs, probability),
+                tokenizer=tokenizer,
+            )
+        )
+    _annotate_green_candidates(
+        candidates,
+        watermark=watermark,
+        previous_token=previous_token,
+    )
+    return {"support": support, "candidates": candidates}
+
+
 def _sample_next(
     logits: torch.Tensor,
     *,
@@ -297,19 +359,37 @@ def _sample_next(
     logits = logits.float().squeeze(0)  # (vocab,)
     base_probs = torch.softmax(logits, dim=-1)
     sample_logits = logits
+    green_indices: Optional[torch.Tensor] = None
+    base_green_mass: Optional[float] = None
+    kgw_green_mass: Optional[float] = None
     if watermark is not None:
         if previous_token is None:
             raise ValueError(
                 "watermarking needs the previous token id"
             )
         green_ids = watermark.green_ids(previous_token)
+        green_indices = _watermark_indices(
+            logits=logits,
+            green_ids=green_ids,
+            watermark=watermark,
+            previous_token=previous_token,
+        )
+        base_green_mass = _green_probability(
+            base_probs, green_indices
+        )
+        kgw_green_mass = biased_green_mass(
+            base_mass=base_green_mass,
+            delta=watermark.config.delta,
+        )
         sample_logits = _watermark_bias(
             logits,
             green_ids=green_ids,
             delta=watermark.config.delta,
             watermark=watermark,
             previous_token=previous_token,
+            green_indices=green_indices,
         )
+    scaled: Optional[torch.Tensor] = None
     if temperature <= 0.0:
         # Greedy takes the argmax, which no truncation can move:
         # the highest token survives every top-k and every nucleus.
@@ -347,19 +427,68 @@ def _sample_next(
         )
     green: Optional[bool] = None
     evidence: Optional[bool] = None
+    signals: Optional[Dict[str, float]] = None
+    sampler_alternatives: Optional[Dict[str, Any]] = None
     if watermark is not None:
         assert previous_token is not None
+        assert green_indices is not None
+        assert base_green_mass is not None
+        assert kgw_green_mass is not None
         green = watermark.is_green(
             previous_token=previous_token,
             token_id=next_id,
         )
         evidence = watermark_evidence
         watermark.observe(green=green, evidence=evidence)
+        sampler_green_mass = (
+            float(green)
+            if scaled is None
+            else _green_probability(scaled, green_indices)
+        )
+        signals = {
+            "gb": base_green_mass,
+            "gk": kgw_green_mass,
+            "gs": sampler_green_mass,
+        }
+        if candidates is not None:
+            _annotate_green_candidates(
+                candidates,
+                watermark=watermark,
+                previous_token=previous_token,
+            )
+            if scaled is None:
+                sampler_rows = [
+                    _chosen_candidate(
+                        token_id=next_id,
+                        probability=1.0,
+                        rank=1,
+                        tokenizer=tokenizer,
+                    )
+                ]
+                _annotate_green_candidates(
+                    sampler_rows,
+                    watermark=watermark,
+                    previous_token=previous_token,
+                )
+                sampler_alternatives = {
+                    "support": 1,
+                    "candidates": sampler_rows,
+                }
+            else:
+                sampler_alternatives = _sampler_candidate_set(
+                    scaled,
+                    tokenizer=tokenizer,
+                    next_id=next_id,
+                    watermark=watermark,
+                    previous_token=previous_token,
+                )
     return _StepPick(
         token_id=next_id,
         confidence=confidence,
         entropy=_entropy_nats(base_probs),
         alternatives=candidates,
+        signals=signals,
+        sampler_alternatives=sampler_alternatives,
         green=green,
         evidence=evidence,
     )
@@ -372,17 +501,22 @@ def _watermark_bias(
     delta: float,
     watermark: Optional[KgwWatermark] = None,
     previous_token: Optional[int] = None,
+    green_indices: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     """Add KGW bias without touching the model-evidence logits."""
     assert logits.dim() == 1, "logits must be 1-D"
     if delta == 0.0:
         return logits
-    indices = _watermark_indices(
-        logits=logits,
-        green_ids=green_ids,
-        watermark=watermark,
-        previous_token=previous_token,
-    )
+    indices = green_indices
+    if indices is None:
+        indices = _watermark_indices(
+            logits=logits,
+            green_ids=green_ids,
+            watermark=watermark,
+            previous_token=previous_token,
+        )
+    assert indices.device == logits.device
+    assert indices.dtype == torch.long
     biased = logits.clone()
     biased[indices] += delta
     return biased
@@ -508,6 +642,9 @@ def _build_append_frame(
     alternatives = trace.alts[frame_index]
     if alternatives is not None:
         frame["alts"] = alternatives
+    sampler_alternatives = trace.sampler_alts[frame_index]
+    if sampler_alternatives is not None:
+        frame["salts"] = sampler_alternatives
     if watermark is not None:
         frame["watermark_stats"] = (
             watermark.accumulator.result().as_dict()
@@ -553,6 +690,7 @@ class _Trace:
         self.confs: List[float] = []
         self.entropies: List[float] = []
         self.alts: List[Optional[List[Dict[str, Any]]]] = []
+        self.sampler_alts: List[Optional[Dict[str, Any]]] = []
         self.greens: List[Optional[bool]] = []
         self.evidence: List[Optional[bool]] = []
         # Values the model reports as it reads a token, keyed by the
@@ -570,9 +708,10 @@ class _Trace:
         self.confs.append(pick.confidence)
         self.entropies.append(pick.entropy)
         self.alts.append(pick.alternatives)
+        self.sampler_alts.append(pick.sampler_alternatives)
         self.greens.append(pick.green)
         self.evidence.append(pick.evidence)
-        self.signals.append({})
+        self.signals.append(dict(pick.signals or {}))
         self.conf_sum += pick.confidence
 
     def seed(
@@ -587,6 +726,9 @@ class _Trace:
         ] = None,
         watermark_evidence: Optional[
             List[Optional[bool]]
+        ] = None,
+        sampler_alternatives: Optional[
+            List[Optional[Dict[str, Any]]]
         ] = None,
     ) -> None:
         """Start from a kept prefix rather than from nothing.
@@ -605,6 +747,8 @@ class _Trace:
             watermark_memberships = [None for _ in ids]
         if watermark_evidence is None:
             watermark_evidence = [None for _ in ids]
+        if sampler_alternatives is None:
+            sampler_alternatives = [None for _ in ids]
         assert len(ids) == len(signals), "seed signals misalign"
         assert len(ids) == len(watermark_memberships), (
             "seed watermark memberships misalign"
@@ -612,10 +756,14 @@ class _Trace:
         assert len(ids) == len(watermark_evidence), (
             "seed watermark evidence misalign"
         )
+        assert len(ids) == len(sampler_alternatives), (
+            "seed sampler alternatives misalign"
+        )
         self.ids = list(ids)
         self.confs = list(confs)
         self.entropies = list(entropies)
         self.alts = list(alts)
+        self.sampler_alts = list(sampler_alternatives)
         self.greens = list(watermark_memberships)
         self.evidence = list(watermark_evidence)
         self.signals = [dict(values) for values in signals]
@@ -626,7 +774,7 @@ class _Trace:
     ) -> None:
         """What the model reported on reading the token at `index`."""
         assert 0 <= index < len(self.ids), "signals off the trace"
-        self.signals[index] = dict(values)
+        self.signals[index].update(values)
 
     def truncate(self, length: int) -> None:
         """Keep the first `length` positions, the ones sent."""
@@ -635,6 +783,7 @@ class _Trace:
         del self.confs[length:]
         del self.entropies[length:]
         del self.alts[length:]
+        del self.sampler_alts[length:]
         del self.greens[length:]
         del self.evidence[length:]
         del self.signals[length:]
@@ -646,6 +795,9 @@ class _Trace:
             "entropy misalign"
         )
         assert len(self.ids) == len(self.alts), "alts misalign"
+        assert len(self.ids) == len(self.sampler_alts), (
+            "sampler alternatives misalign"
+        )
         assert len(self.ids) == len(self.greens), "green misalign"
         assert len(self.ids) == len(self.evidence), (
             "watermark evidence misalign"
@@ -964,6 +1116,7 @@ def _finalize(
     result["confidences"] = list(trace.confs)
     result["entropies"] = list(trace.entropies)
     result["alternatives"] = list(trace.alts)
+    result["sampler_alternatives"] = list(trace.sampler_alts)
     result["signals"] = list(trace.signals)
     if watermark is not None:
         watermark.restore(trace.greens, trace.evidence)
@@ -1052,6 +1205,9 @@ def _substitute_loop(
     result: Dict[str, Any],
     cache: Optional[Dict[str, Any]] = None,
     prefix_signals: Optional[List[Dict[str, float]]] = None,
+    prefix_sampler_alternatives: Optional[
+        List[Optional[Dict[str, Any]]]
+    ] = None,
     prefix_watermark_memberships: Optional[
         List[Optional[bool]]
     ] = None,
@@ -1084,6 +1240,11 @@ def _substitute_loop(
     _seed(seed)
 
     prompt_ids = inputs["input_ids"]
+    previous_token = (
+        prefix_ids[-1]
+        if prefix_ids
+        else int(prompt_ids[0, -1].item())
+    )
     probe = _probe_forced_position(
         model=model,
         prompt_ids=prompt_ids,
@@ -1091,8 +1252,16 @@ def _substitute_loop(
         prefix_ids=prefix_ids,
         forced_id=forced_id,
         cache=cache,
+        watermark=watermark,
+        previous_token=previous_token,
     )
-    true_conf, forced_rank, past, attention_mask = probe
+    (
+        true_conf,
+        forced_rank,
+        past,
+        attention_mask,
+        forced_pressure,
+    ) = probe
 
     trace = _forced_trace(
         prefix_ids=prefix_ids,
@@ -1107,12 +1276,12 @@ def _substitute_loop(
         forced_alts=forced_alts,
         tokenizer=tokenizer,
         prefix_signals=prefix_signals,
-        watermark=watermark,
-        previous_token=(
-            prefix_ids[-1]
-            if prefix_ids
-            else int(prompt_ids[0, -1].item())
+        forced_signals=forced_pressure,
+        prefix_sampler_alternatives=(
+            prefix_sampler_alternatives
         ),
+        watermark=watermark,
+        previous_token=previous_token,
         prefix_watermark_memberships=(
             prefix_watermark_memberships
         ),
@@ -1235,6 +1404,10 @@ def _forced_trace(
     forced_alts: Optional[List[Dict[str, Any]]],
     tokenizer: Any,
     prefix_signals: Optional[List[Dict[str, float]]] = None,
+    forced_signals: Optional[Dict[str, float]] = None,
+    prefix_sampler_alternatives: Optional[
+        List[Optional[Dict[str, Any]]]
+    ] = None,
     watermark: Optional[KgwWatermark] = None,
     previous_token: Optional[int] = None,
     prefix_watermark_memberships: Optional[
@@ -1270,6 +1443,7 @@ def _forced_trace(
         prefix_signals,
         prefix_watermark_memberships,
         prefix_watermark_evidence,
+        prefix_sampler_alternatives,
     )
     green: Optional[bool] = None
     evidence: Optional[bool] = None
@@ -1298,6 +1472,7 @@ def _forced_trace(
                 forced_rank=forced_rank,
                 tokenizer=tokenizer,
             ),
+            signals=forced_signals,
             green=green,
             evidence=evidence,
         )
@@ -1347,7 +1522,15 @@ def _probe_forced_position(
     prefix_ids: List[int],
     forced_id: int,
     cache: Optional[Dict[str, Any]] = None,
-) -> Tuple[float, int, Any, Optional[torch.Tensor]]:
+    watermark: Optional[KgwWatermark] = None,
+    previous_token: Optional[int] = None,
+) -> Tuple[
+    float,
+    int,
+    Any,
+    Optional[torch.Tensor],
+    Optional[Dict[str, float]],
+]:
     """Prefill up to the forced position and read its probability.
 
     Returns the forced token's true probability under the model at
@@ -1375,11 +1558,33 @@ def _probe_forced_position(
         "forced id out of vocabulary range"
     )
     probability = float(probs[forced_id].item())
+    pressure: Optional[Dict[str, float]] = None
+    if watermark is not None:
+        if previous_token is None:
+            raise ValueError(
+                "forced watermark pressure needs a predecessor"
+            )
+        green_ids = watermark.green_ids(previous_token)
+        green_indices = _watermark_indices(
+            logits=probs,
+            green_ids=green_ids,
+            watermark=watermark,
+            previous_token=previous_token,
+        )
+        base_mass = _green_probability(probs, green_indices)
+        pressure = {
+            "gb": base_mass,
+            "gk": biased_green_mass(
+                base_mass=base_mass,
+                delta=watermark.config.delta,
+            ),
+        }
     return (
         probability,
         _token_rank(probs, probability),
         past,
         attention_mask,
+        pressure,
     )
 
 
@@ -1782,6 +1987,9 @@ async def streaming_substitute(
     state_sink: Optional[Dict[str, Any]] = None,
     cache: Optional[Dict[str, Any]] = None,
     prefix_signals: Optional[List[Dict[str, float]]] = None,
+    prefix_sampler_alternatives: Optional[
+        List[Optional[Dict[str, Any]]]
+    ] = None,
     prefix_watermark_memberships: Optional[
         List[Optional[bool]]
     ] = None,
@@ -1852,6 +2060,9 @@ async def streaming_substitute(
                 result=result,
                 cache=cache,
                 prefix_signals=prefix_signals,
+                prefix_sampler_alternatives=(
+                    prefix_sampler_alternatives
+                ),
                 prefix_watermark_memberships=(
                     prefix_watermark_memberships
                 ),
@@ -1916,6 +2127,13 @@ async def _drain_frames(
         state_sink["alternatives"] = result.get(
             "alternatives", []
         )
+        sampler_alternatives = result.get(
+            "sampler_alternatives", []
+        )
+        if any(entry is not None for entry in sampler_alternatives):
+            state_sink["sampler_alternatives"] = (
+                sampler_alternatives
+            )
         # What the model reported on reading each token, so a later
         # substitution keeps the prefix's values instead of blanking
         # them.

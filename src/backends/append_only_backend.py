@@ -669,6 +669,9 @@ class AppendOnlyBackend(Backend):
                 prefix_entropies=state["entropies"][:position],
                 prefix_alts=state["alternatives"][:position],
                 prefix_signals=_prefix_signals(state, position),
+                prefix_sampler_alternatives=(
+                    _prefix_sampler_alternatives(state, position)
+                ),
                 max_new_tokens=state["max_new_tokens"],
                 # Greedy: the divergence after the forced token
                 # should be the intervention's effect, not fresh
@@ -828,6 +831,16 @@ def _prefix_signals(
     if signals is None:
         return None
     return list(signals[:position])
+
+
+def _prefix_sampler_alternatives(
+    state: Dict[str, Any], position: int
+) -> Optional[List[Optional[Dict[str, Any]]]]:
+    """The kept prefix's sampler candidate sets, when captured."""
+    alternatives = state.get("sampler_alternatives")
+    if alternatives is None:
+        return None
+    return list(alternatives[:position])
 
 
 def _watermark_branch(
