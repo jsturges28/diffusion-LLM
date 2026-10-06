@@ -101,6 +101,28 @@ def test_a_done_frame_carries_the_envelope() -> None:
     assert socket.sent[-1]["provenance"] == ENVELOPE
 
 
+def test_terminal_text_carries_worker_token_count() -> None:
+    """The optional count is taken from final visible text once."""
+    socket = _StubSocket()
+    calls: List[str] = []
+    stream = FrameStreamer(
+        socket,  # type: ignore[arg-type]
+        output_token_count=lambda text: (
+            calls.append(text) or len(text.split())
+        ),
+    )
+
+    asyncio.run(
+        stream.send_done(
+            {"type": "done", "final_text": "two tokens"},
+            0.0,
+        )
+    )
+
+    assert calls == ["two tokens"]
+    assert socket.sent[-1]["generated_token_count"] == 2
+
+
 def test_later_frames_carry_nothing() -> None:
     """Twice per run, never once per step. A diffusion run emits
     hundreds of frames and the envelope re-describes the same

@@ -222,6 +222,22 @@ function finish(run, finalText) {
   });
 }
 
+test("terminal output count is accepted only as a nonnegative integer",
+  () => {
+  const { run } = harness();
+  const counted = run.finish({
+    final_text: "counted",
+    generated_token_count: 3,
+  });
+  const missing = run.finish({
+    final_text: "missing",
+    generated_token_count: -1,
+  });
+
+  assert.equal(counted.generatedTokenCount, 3);
+  assert.equal(missing.generatedTokenCount, null);
+});
+
 test("mutable stores stay private behind copied reads", () => {
   const { run } = harness();
   run.appendFrame(snapshotFrame(0, "first"));

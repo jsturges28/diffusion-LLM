@@ -70,9 +70,14 @@
           <span>Conversation</span>
           <span class="conversation-toolbar-mode">Bounded history</span>
         </div>
-        <button id="btn-new-conversation" type="button">
-          New Conversation
-        </button>
+        <div class="conversation-toolbar-actions">
+          <button id="btn-save-conversation" type="button" disabled>
+            Save Conversation
+          </button>
+          <button id="btn-new-conversation" type="button">
+            New Conversation
+          </button>
+        </div>
       </section>
 
       <section id="conversation-transcript"
@@ -564,6 +569,48 @@
           data-conversation-confirmation="confirm-retry">
           Retry on a new path
         </button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="conversation-save-dialog"
+    class="modal-overlay conversation-confirmation-dialog"
+    aria-labelledby="conversation-save-title"
+    aria-describedby="conversation-save-intro
+      conversation-save-status">
+    <div class="modal-box modal-box-confirm">
+      <h2 id="conversation-save-title">Save Conversation</h2>
+      <div class="modal-body">
+        <p id="conversation-save-intro">Create an immutable Analytics
+          snapshot of the selected path at its current response.</p>
+        <label for="conversation-save-title-input">
+          Snapshot title
+        </label>
+        <input id="conversation-save-title-input" type="text"
+          maxlength="200" autocomplete="off" />
+        <dl class="conversation-save-summary">
+          <dt>Exchanges</dt>
+          <dd id="conversation-save-exchanges">0</dd>
+          <dt>XAI preserved</dt>
+          <dd id="conversation-save-xai">0</dd>
+          <dt>Text only</dt>
+          <dd id="conversation-save-text-only">0</dd>
+          <dt>Unavailable old XAI</dt>
+          <dd id="conversation-save-unavailable">0</dd>
+        </dl>
+        <p id="conversation-save-active" hidden>
+          The active response's run will be saved first.
+        </p>
+        <p id="conversation-save-status"
+          class="conversation-dialog-status" role="alert"
+          aria-live="assertive" aria-atomic="true"
+          tabindex="-1" hidden></p>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-conversation-save-cancel" type="button"
+          class="btn-secondary" autofocus>Cancel</button>
+        <button id="btn-conversation-save-confirm" type="button"
+          class="btn-accent">Save Conversation</button>
       </div>
     </div>
   </dialog>
@@ -1147,6 +1194,9 @@
   <script src="/conversation_action_view.js"></script>
   <script src="/conversation_actions.js"></script>
   <script src="/conversation_shell.js"></script>
+  <script src="/saved_conversation_client.js"></script>
+  <script src="/conversation_save_view.js"></script>
+  <script src="/conversation_save.js"></script>
   <script src="/generator_run.js"></script>
   <script src="/generator_socket.js"></script>
   <script src="/candidate_flicker.js"></script>

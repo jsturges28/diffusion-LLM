@@ -225,6 +225,29 @@ var saveAvailable = false;
 var modelReady = false;
 var conversationCompletion = Promise.resolve(true);
 var conversationTransitionBusy = false;
+var savedConversationClient = savedConversationClientCreate({
+  request: function (url, init) {
+    return fetch(url, init);
+  },
+});
+var conversationSave = conversationSaveCreate({
+  client: savedConversationClient,
+  view: conversationSaveViewCreate(),
+  readHead: conversationSnapshotHead,
+  readBlockReason: conversationSnapshotBlockReason,
+  shouldSaveActiveTail: conversationSnapshotNeedsTailSave,
+  saveActiveTail: function () {
+    return saveRun();
+  },
+  createOperationId: createConversationOperationId,
+  onSaved: conversationSnapshotSaved,
+  onBlocked: function (message) {
+    generatorChrome.setMessage(
+      message, { color: "var(--danger)" }
+    );
+  },
+  onBusy: setConversationBusy,
+});
 
 // Every controller keeps its mutable state in its factory closure.
 // This composition root retains only page-wide generation and boot
@@ -922,6 +945,7 @@ function handleDone(data) {
       text: responseText,
       partial: completed.interrupted,
       status: completed.interrupted ? "cancelled" : "completed",
+      generatedTokenCount: completed.generatedTokenCount,
     });
   }
   // The chip is still fading as the line fills in beneath it, so
@@ -1105,6 +1129,9 @@ function updateGenerateButton() {
   btnNewConversation.disabled =
     !conversationCanStartNew();
   updateSaveButton();
+  if (conversationSave) {
+    conversationSave.refresh();
+  }
   updateGenerateIdleEffect();
 }
 
@@ -1471,6 +1498,13 @@ function completeConversationAssistant(result) {
     provenance && provenance.context_pack
       ? provenance.context_pack
       : {};
+  var metadata = { status: result.status };
+  if (
+    Number.isInteger(result.generatedTokenCount)
+    && result.generatedTokenCount >= 0
+  ) {
+    metadata.generated_token_count = result.generatedTokenCount;
+  }
   return conversationClient.updateAssistant({
     branchId: identity.branch_id,
     branchRevision: identity.branch_revision,
@@ -1478,7 +1512,7 @@ function completeConversationAssistant(result) {
     text: result.text,
     partial: result.partial === true,
     contextPack: contextPack,
-    metadata: { status: result.status },
+    metadata: metadata,
   }).then(function () {
     setConversationBusy(false);
     return true;
@@ -1766,6 +1800,70 @@ function conversationActionBlockReason() {
 
 function conversationCanNavigate() {
   return conversationActionBlockReason() === "";
+}
+
+function conversationSnapshotHead() {
+  var conversation = conversationState.conversation;
+  if (
+    conversation === null
+    || conversation.turn_count === 0
+    || conversation.tail_turn_id === null
+    || conversation.tail_version === null
+  ) {
+    return null;
+  }
+  return {
+    conversation_id: conversation.id,
+    branch_id: conversation.branch_id,
+    branch_revision: conversation.branch_revision,
+    turn_count: conversation.turn_count,
+    tail_turn_id: conversation.tail_turn_id,
+    tail_version: conversation.tail_version,
+  };
+}
+
+function conversationSnapshotBlockReason() {
+  if (conversationActions.blocking() || conversationTransitionBusy) {
+    return "Finish the open conversation action before saving.";
+  }
+  var reason = conversationActionBlockReason();
+  if (reason !== "") {
+    return reason;
+  }
+  if (conversationState.conversation === null) {
+    return "Start a conversation before saving it.";
+  }
+  if (conversationState.conversation.turn_count === 0) {
+    return "Complete a response before saving this conversation.";
+  }
+  return "";
+}
+
+function conversationSnapshotNeedsTailSave(head) {
+  var identity = generatorRun.conversationIdentity();
+  if (
+    identity === null
+    || !saveAvailable
+    || generatorRun.saved()
+    || !generatorRun.finalText()
+  ) {
+    return false;
+  }
+  return (
+    identity.conversation_id === head.conversation_id
+    && identity.branch_id === head.branch_id
+    && identity.assistant_turn_id === head.tail_turn_id
+  );
+}
+
+function conversationSnapshotSaved(result) {
+  if (!result || typeof result.analytics_url !== "string") {
+    throw new Error("Saved conversation response is incomplete");
+  }
+  generatorChrome.setMessage(
+    "Conversation saved. Open it from Analytics.",
+    { color: "var(--accent)" }
+  );
 }
 
 function conversationCanStartNew() {
@@ -2551,6 +2649,7 @@ btnSave.addEventListener("click", saveRun);
 
 conversationActions.wire();
 conversationView.wire();
+conversationSave.wire();
 generatorComposer.wire();
 generatorModelPanel.wire();
 generatorChrome.wire();

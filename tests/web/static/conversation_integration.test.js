@@ -120,6 +120,7 @@ function conversationApi() {
     updateWaiters: [],
     linkWaiters: [],
     saveRevision: 0,
+    snapshotCount: 0,
     calls: [],
   };
 
@@ -299,6 +300,36 @@ function conversationApi() {
     if (path.startsWith("/api/ui-state/")) {
       return reply({ success: true });
     }
+    if (
+      path === "/api/analytics/conversations/preview"
+      && method === "POST"
+    ) {
+      return reply({
+        default_title: "First question",
+        turn_count: state.turns.length,
+        exchange_count: state.turns.length / 2,
+        xai_count: state.turns.filter((item) =>
+          item.role === "assistant" && item.run_link
+        ).length,
+        text_only_count: state.turns.filter((item) =>
+          item.role === "assistant" && !item.run_link
+        ).length,
+        unavailable_count: 0,
+      });
+    }
+    if (
+      path === "/api/analytics/conversations"
+      && method === "POST"
+    ) {
+      state.snapshotCount += 1;
+      return reply({
+        snapshot_id: "f".repeat(32),
+        title_revision: 1,
+        replayed: false,
+        analytics_url:
+          "/analytics.html?conversation=" + "f".repeat(32),
+      });
+    }
     if (path === "/api/conversations" && method === "POST") {
       return create();
     }
@@ -467,6 +498,7 @@ test("Send reserves, generates, completes, then appends once",
   run.context.handleDone({
     type: "done",
     final_text: "First answer",
+    generated_token_count: 2,
     provenance: {
       model_id: MODEL.id,
       context_pack: {
@@ -484,6 +516,10 @@ test("Send reserves, generates, completes, then appends once",
   await run.context.conversationClient.flush();
   assert.equal(api.state.turns.at(-1).text, "First answer");
   assert.equal(api.state.turns.at(-1).partial, false);
+  assert.equal(
+    api.state.turns.at(-1).metadata.generated_token_count,
+    2
+  );
   assert.equal(
     run.page.registry.get("conversation-turns").children.length,
     1
@@ -550,6 +586,53 @@ test("Send reserves, generates, completes, then appends once",
     3
   );
   });
+
+test("Save Conversation preserves the active run before snapshot",
+  async () => {
+  const api = conversationApi();
+  const run = await pageWithApi(api);
+  run.page.registry.get("prompt-input").value = "First question";
+  assert.equal(await run.context.startGeneration(), true);
+  run.context.handleFrame(frame(0, "First answer"));
+  run.context.handleDone({
+    type: "done",
+    final_text: "First answer",
+    run_token: "nonce:1",
+  });
+  await run.context.conversationCompletion;
+  await run.context.conversationClient.flush();
+
+  run.page.registry.get("btn-save-conversation")
+    .dispatch("click");
+  await tick();
+  await tick();
+  const dialog = run.page.registry.get(
+    "conversation-save-dialog"
+  );
+  assert.equal(dialog.open, true);
+  assert.equal(
+    run.page.registry.get("conversation-save-active").hidden,
+    false
+  );
+
+  run.page.registry.get("btn-conversation-save-confirm")
+    .dispatch("click");
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if (api.state.snapshotCount === 1) {
+      break;
+    }
+    await tick();
+  }
+
+  const paths = api.state.calls.map((call) => call.path);
+  assert.equal(api.state.snapshotCount, 1);
+  assert.ok(
+    paths.indexOf("/api/save")
+    < paths.lastIndexOf("/api/analytics/conversations")
+  );
+  assert.equal(api.state.turns.at(-1).run_link.run_id, "run-one");
+  assert.equal(dialog.open, false);
+});
 
 test("a zero-token completion remains visible and explicit",
   async () => {

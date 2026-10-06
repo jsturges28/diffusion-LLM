@@ -757,6 +757,12 @@ function conversationStateMetadata(raw, turn) {
       kept[names[index]] = value;
     }
   }
+  if (
+    Number.isInteger(raw.generated_token_count)
+    && raw.generated_token_count >= 0
+  ) {
+    kept.generated_token_count = raw.generated_token_count;
+  }
   return Object.freeze(kept);
 }
 

@@ -210,6 +210,9 @@ class FrameStreamer:
         provenance: Optional[Callable[[], Dict[str, Any]]] = None,
         run_token: Optional[Callable[[], str]] = None,
         opening: Optional[Callable[[], Dict[str, Any]]] = None,
+        output_token_count: Optional[
+            Callable[[str], Optional[int]]
+        ] = None,
     ) -> None:
         self._ws = ws
         # A callable rather than a dict because a worker's tokenizer
@@ -226,6 +229,9 @@ class FrameStreamer:
         # it is what lets a page edit a run, and a run that never
         # finished holds state its page may never have received.
         self._opening = opening
+        # Counts the visible terminal text with the loaded tokenizer.
+        # Optional accounting must never be guessed by the browser.
+        self._output_token_count = output_token_count
 
     async def run(
         self,
@@ -334,6 +340,15 @@ class FrameStreamer:
             frame["provenance"] = self._provenance()
         if self._run_token is not None:
             frame["run_token"] = self._run_token()
+        text = frame.get("final_text")
+        if (
+            self._output_token_count is not None
+            and isinstance(text, str)
+        ):
+            count = self._output_token_count(text)
+            if count is not None:
+                assert count >= 0
+                frame["generated_token_count"] = count
 
 
 def provenance_envelope(backend: Backend) -> Dict[str, Any]:
@@ -1071,6 +1086,36 @@ class Backend(ABC):
             prompt,
             thinking=thinking,
         )
+
+    def output_token_count(self, text: str) -> Optional[int]:
+        """Count visible final text with the loaded raw tokenizer.
+
+        This is historical output accounting, not sampler work:
+        control tokens removed from the visible answer are not
+        counted. Failure omits the optional fact instead of failing a
+        completed run.
+        """
+        assert isinstance(text, str)
+        tokenizer = getattr(self, "tokenizer", None)
+        if tokenizer is None:
+            return None
+        try:
+            ids = tokenizer.encode(
+                text,
+                add_special_tokens=False,
+            )
+        except (TypeError, ValueError, RuntimeError):
+            logger.warning(
+                "could not count final output tokens",
+                exc_info=True,
+            )
+            return None
+        if not isinstance(ids, list):
+            logger.warning("tokenizer returned a non-list encoding")
+            return None
+        count = len(ids)
+        assert count >= 0
+        return count
 
     def prepare_generation_prompt(
         self,

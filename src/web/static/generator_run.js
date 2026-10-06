@@ -265,7 +265,17 @@ function generatorRunCreate(options) {
     if (originalCandidates === null) {
       originalCandidates = candidates;
     }
-    return { interrupted: interrupted };
+    var generatedTokenCount = null;
+    if (
+      Number.isInteger(data.generated_token_count)
+      && data.generated_token_count >= 0
+    ) {
+      generatedTokenCount = data.generated_token_count;
+    }
+    return {
+      interrupted: interrupted,
+      generatedTokenCount: generatedTokenCount,
+    };
   }
 
   function interruptConnection() {

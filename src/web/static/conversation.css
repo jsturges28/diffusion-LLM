@@ -35,6 +35,13 @@
   letter-spacing: 0.08em;
 }
 
+.conversation-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+#btn-save-conversation,
 #btn-new-conversation {
   padding: 5px 11px;
   border: 1px solid rgba(79, 195, 247, 0.35);
@@ -45,11 +52,23 @@
   text-transform: uppercase;
 }
 
+#btn-save-conversation {
+  border-color: rgba(0, 255, 65, 0.3);
+  background: rgba(0, 255, 65, 0.08);
+  color: var(--accent);
+}
+
+#btn-save-conversation:hover:not(:disabled) {
+  border-color: rgba(0, 255, 65, 0.6);
+  background: rgba(0, 255, 65, 0.16);
+}
+
 #btn-new-conversation:hover:not(:disabled) {
   border-color: rgba(79, 195, 247, 0.65);
   background: rgba(79, 195, 247, 0.2);
 }
 
+#btn-save-conversation:disabled,
 #btn-new-conversation:disabled {
   cursor: not-allowed;
   opacity: 0.35;
@@ -524,6 +543,39 @@
 .conversation-dialog-status:focus-visible {
   outline: 2px solid var(--danger);
   outline-offset: 3px;
+}
+
+.conversation-save-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 18px;
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.025);
+  font-size: 10px;
+}
+
+.conversation-save-summary dt {
+  color: var(--text-secondary);
+}
+
+.conversation-save-summary dd {
+  margin: 0;
+  color: var(--text-primary);
+  text-align: right;
+}
+
+#conversation-save-title-input {
+  width: 100%;
+  margin-top: 5px;
+}
+
+#conversation-save-active {
+  margin: 10px 0 0;
+  color: var(--accent);
+  font-size: 10px;
 }
 
 .conversation-confirmation-dialog.is-pending {

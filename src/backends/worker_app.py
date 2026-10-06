@@ -498,6 +498,7 @@ def _open_session(ws: WebSocket, backend: Backend) -> _Session:
             provenance=lambda: provenance_envelope(backend),
             run_token=lambda: backend.run_token,
             opening=lambda: worker_envelope(backend),
+            output_token_count=backend.output_token_count,
         ),
         # The three that stream frames. Identical but for the method
         # they reach, so they share one path rather than three copies

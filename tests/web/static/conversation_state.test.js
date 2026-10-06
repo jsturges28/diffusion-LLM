@@ -276,6 +276,7 @@ test("compact turns discard heavy arbitrary metadata", () => {
           turn(2, {
             metadata: {
               status: "completed",
+              generated_token_count: 17,
               frames: ["large"],
               candidates: [{ large: true }],
             },
@@ -288,6 +289,10 @@ test("compact turns discard heavy arbitrary metadata", () => {
   );
 
   assert.equal(state.turns[1].metadata.status, "completed");
+  assert.equal(
+    state.turns[1].metadata.generated_token_count,
+    17
+  );
   assert.equal("frames" in state.turns[1].metadata, false);
   assert.equal("candidates" in state.turns[1].metadata, false);
 });
