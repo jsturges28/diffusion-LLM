@@ -1684,6 +1684,7 @@ function resetRunState() {
   }
   btnSave.classList.remove("is-saving", "is-saved");
   generatorWatermark.close();
+  generatorCandidates.reset();
   generatorEdit.reset();
   generatorEdit.setSavingControls(false);
   generatorRun.reset();

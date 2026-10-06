@@ -191,10 +191,13 @@ For DiffusionGemma, a **stopping readout** shows how far each canvas
 is from its adaptive stop, by two thresholds you can set.
 
 Experimental KGW runs carry per-token evidence, an exact null rate,
-and a normal-approximation z-score in the generator and Analytics. A tokenizer-only
-pasted-text detector works while either left-to-right model is
-resident, without a model forward pass. Its configurable z threshold
-is a display aid, never an AI/human or authorship verdict.
+and a normal-approximation z-score in the generator and Analytics.
+Per-token Model → KGW → Sampler readings and candidate pages show how
+green probability changed without replacing the model's original XAI
+signals. A tokenizer-only pasted-text detector works while either
+left-to-right model is resident, without a model forward pass. Its
+configurable z threshold is a display aid, never an AI/human or
+authorship verdict.
 
 An **Analytics Suite** with a run browser, collections and favourites,
 a detail modal carrying the token canvas and four charts, run

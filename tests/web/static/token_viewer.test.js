@@ -112,6 +112,9 @@ function payload(overrides) {
     alternatives: null,
     alternatives_available: false,
     original_alternatives: null,
+    sampler_alternatives: null,
+    sampler_alternatives_available: false,
+    original_sampler_alternatives: null,
     candidates: null,
     original_candidates: null,
     remask_edits: [],
@@ -168,6 +171,40 @@ function watermarked(overrides) {
   });
   watermarkTokens(data.frames, false);
   return Object.assign(data, overrides || {});
+}
+
+function pressureRun() {
+  const positions = WORDS.map((word, index) => ({
+    t: word,
+    m: false,
+    id: 100 + index,
+    c: 0.5,
+    e: 1.0,
+    g: index % 2 === 0,
+    we: index !== 0,
+    gb: 0.1 + index / 100,
+    gk: 0.2 + index / 100,
+    gs: 0.3 + index / 100,
+  }));
+  const model = positions.map((token) => [
+    { id: token.id, t: token.t, p: 0.5, g: token.g },
+    { id: token.id + 10, t: " other", p: 0.2, g: !token.g },
+  ]);
+  const sampler = positions.map((token) => ({
+    support: 3,
+    candidates: [
+      { id: token.id + 20, t: " sample", p: 0.7, rank: 1, g: true },
+      { id: token.id, t: token.t, p: 0.2, rank: 2, g: token.g },
+    ],
+  }));
+  return watermarked({
+    frames: null,
+    positions,
+    alternatives: model,
+    alternatives_available: true,
+    sampler_alternatives: sampler,
+    sampler_alternatives_available: true,
+  });
 }
 
 // The viewer as the page creates and boots it. Chart keeps what each
@@ -478,6 +515,50 @@ test("a token under the pointer reads in the strip", () => {
 
   assert.equal(strip(page).position.value.textContent, "2 / 4");
   assert.equal(strip(page).entropy.value.textContent, "3.100");
+});
+
+test("saved pressure toggles Model and Sampler independently", () => {
+  const page = load();
+  page.viewer.beginRun(true);
+  page.viewer.show(pressureRun());
+  const output = page.registry.get("overlay-output");
+  output.dispatch("click", { target: newestSpans(page)[1] });
+  const popover = page.registry.get("token-alts-popover");
+  const ids = () => popover.querySelectorAll(".alt-row").map(
+    (row) => Number(row.getAttribute("data-alt-id"))
+  );
+
+  assert.match(
+    strip(page).extra.textContent,
+    /Model 11.0%.*KGW 21.0%.*Sampler 31.0%/
+  );
+  assert.deepEqual(ids(), [101, 111]);
+  popover.querySelectorAll(".alt-row")[0].dispatch("mouseenter");
+  assert.equal(
+    strip(page).candidate.rank.textContent,
+    "#1 of 50"
+  );
+  popover.querySelector(
+    '[data-alt-distribution="sampler"]'
+  ).dispatch("click", {
+    preventDefault() {},
+    stopPropagation() {},
+  });
+  assert.deepEqual(ids(), [121, 101]);
+  popover.querySelectorAll(".alt-row")[0].dispatch("mouseenter");
+  assert.equal(
+    strip(page).candidate.rank.textContent,
+    "#1 of 3 retained"
+  );
+
+  popover.dispatch("mouseleave");
+  output.dispatch("mouseover", { target: newestSpans(page)[2] });
+  assert.deepEqual(ids(), [122, 102]);
+
+  page.viewer.beginRun(true);
+  page.viewer.show(pressureRun());
+  output.dispatch("mouseover", { target: newestSpans(page)[1] });
+  assert.deepEqual(ids(), [101, 111]);
 });
 
 test("a bar under the pointer lights its token", () => {

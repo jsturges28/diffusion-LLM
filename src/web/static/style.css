@@ -3909,6 +3909,34 @@ input[type="checkbox"].app-checkbox:checked::after {
   color: var(--text-secondary);
 }
 
+.alt-distribution-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 1px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+.alt-distribution-toggle button {
+  min-height: 24px;
+  padding: 3px 6px;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 9px;
+}
+
+.alt-distribution-toggle button[aria-pressed="true"] {
+  background: var(--accent-dim);
+  color: var(--text-primary);
+}
+
+.alt-distribution-toggle button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* Original/Edited pager, shown only where both runs captured
    candidates. Two arrows rather than a toggle so the direction
    matches the crossfade above: left is the pre-edit run. */
@@ -4000,6 +4028,25 @@ input[type="checkbox"].app-checkbox:checked::after {
   min-width: 42px;
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+.alt-watermark-tag {
+  flex: 0 0 auto;
+  min-width: 58px;
+  padding: 0 3px;
+  text-align: center;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.alt-watermark-tag.is-favored {
+  color: var(--watermark-favored, #35d07f);
+  border-bottom: 3px double currentColor;
+}
+
+.alt-watermark-tag.is-complement {
+  color: var(--watermark-complement, #ff6b6b);
+  border-bottom: 2px dotted currentColor;
 }
 
 .alt-row-chosen .alt-text {

@@ -353,6 +353,9 @@ kept when these were written:
 - **451**: **not yet validated.** This covers the exact next-inference
   context meter, its all-model recounts, omission signal, native dialog,
   and narrow keyboard/touch layout.
+- **452 to 454**: **not yet validated.** These cover KGW pressure
+  correctness and exclusions, Generator/Analytics candidate parity and
+  accessibility, plus paired CPU/GPU throughput and memory acceptance.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -5090,7 +5093,7 @@ models and target devices before anyone raises or lowers them.
     `python scripts/benchmark_kgw.py --repeats 50`, then repeat with
     `--cuda`. Record candidate construction, cache-miss bias and
     cache-hit bias medians and maxima beside the CPU reference in
-    `docs/ROADMAP.md` (about 1.1 ms, 0.18 ms and 0.10 ms median on
+    `docs/ROADMAP.md` (about 1.04 ms, 0.14 ms and 0.08 ms median on
     this CPU). Treat a median above 2 ms for selection, 1 ms for a
     CUDA miss, or 0.5 ms for a CUDA hit as a regression to
     investigate. Confirm the green-list size is exactly 32,064 for
@@ -5414,3 +5417,60 @@ models and target devices before anyone raises or lowers them.
     not repaint them, and the local error must remain readable. Ordinary
     valid counts must leave the reserved footer line invisible rather
     than moving the composer.
+
+452. **KGW pressure follows the exact sampling stages.** On SmolLM3 and
+    Mamba-3, use one fixed prompt, key and seed for watermark-off,
+    Delta 0 and positive-Delta runs. Watermark-off and Delta 0 must have
+    identical token ids and base confidence, entropy, rank and Model
+    Alternatives. At Delta 0, every token's Model and KGW green masses
+    must match; Sampler may differ from both because temperature, Top-k
+    and Top-p still apply. Spot-check a positive-Delta token against the
+    closed-form two-partition tilt, then confirm its Sampler mass matches
+    the final retained distribution.
+
+    The first generated token must carry Model, KGW and Sampler masses
+    while remaining excluded from detector evidence. Force a middle
+    What If token: it must carry Model and KGW, say **Sampler not
+    sampled**, have no sampler candidates and remain excluded; generated
+    tokens after it must regain all three values and score normally.
+    Repeat with Alternatives off. The masses must remain, but neither
+    Model nor Sampler candidate rows may be retained.
+
+453. **Pressure views survive edits, saves and every input method.**
+    With Alternatives and KGW enabled, hover tokens in the Generator
+    under Watermark and under another overlay. Both must show the same
+    **Model → KGW → Sampler** reading. Use mouse, keyboard and touch to
+    switch the popover between Model and Sampler. The choice must stay
+    across token hovers, temporarily fall back at the forced token, return
+    on a sampled token and reset to Model on a new output. Model ranks
+    must use the full output width. Sampler ranks must read
+    `#N of M retained`, every row must name favored or complement without
+    relying on color, and clicking a Sampler row must not start What If.
+
+    Create a What If branch and exercise all available combinations of
+    Original/Edited and Model/Sampler. The two controls must remain
+    independent and each page must mark the token its own run drew. Save
+    the result and repeat in Analytics, comparing every mass, candidate,
+    support count and rank with the Generator. Load a run saved before
+    pressure capture existed: it must remain readable with no invented
+    values or Sampler toggle. At 200% zoom, reduced motion, keyboard-only
+    use and a narrow touch viewport, controls, membership words, focus
+    rings and candidate rows must remain reachable and unclipped.
+
+454. **Pressure capture meets its hardware budget.** In `.venv-ar`, run
+    `scripts/benchmark_kgw.py --repeats 50` on CPU and with `--cuda`;
+    record `pressure_and_sampler_capture` median and maximum alongside the
+    existing green-list and bias measurements. Then run matched
+    watermark-off and Delta-0 2,048-token generations with Alternatives
+    enabled on SmolLM3 and Mamba-3, on CPU and GPU where supported. Token
+    ids must match. Median throughput regression must be at most 10%,
+    Mamba-3 CPU must remain above 3 tokens/s, and peak allocated/reserved
+    VRAM must show no material growth.
+
+    Save the unedited runs and one What If branch. The added pressure and
+    sampler-candidate payload for one 2,048-token layer must stay below
+    1 MiB, and both Original plus Edited layers below 2 MiB. Stop and
+    cancel long runs at several positions, then inspect saved alignment:
+    every retained token, pressure tuple and candidate position must have
+    the same bounded length, with no full-vocabulary distribution on the
+    wire or disk.

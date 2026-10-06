@@ -57,6 +57,8 @@ function generatorCandidatesCreate(options) {
 
   var popoverPosition = null;
   var popoverPage = null;
+  var distributionMode = "model";
+  var activeDistributionMode = "model";
 
   var typedPosition = null;
   var typedDraft = "";
@@ -110,6 +112,9 @@ function generatorCandidatesCreate(options) {
       "mouseover", outputPointerEntered
     );
     outputArea.addEventListener(
+      "click", outputTokenActivated
+    );
+    outputArea.addEventListener(
       "mouseleave", outputPointerLeft
     );
     popover.addEventListener(
@@ -139,6 +144,23 @@ function generatorCandidatesCreate(options) {
       return;
     }
     if (position === popoverPosition || pinned()) {
+      return;
+    }
+    showPopover(position, target);
+  }
+
+  function outputTokenActivated(event) {
+    var target = event.target;
+    var position = hoveredTokenPosition(target);
+    if (position === null) {
+      return;
+    }
+    readouts.setTokenHover(position, target);
+    var state = pageState();
+    if (!state.scrubberActive) {
+      return;
+    }
+    if (state.editing && !state.substituting) {
       return;
     }
     showPopover(position, target);
@@ -182,6 +204,9 @@ function generatorCandidatesCreate(options) {
     if (popoverPage === "original") {
       return;
     }
+    if (activeDistributionMode === "sampler") {
+      return;
+    }
     var row = event.target.closest(".alt-row");
     if (!row) {
       return;
@@ -216,6 +241,14 @@ function generatorCandidatesCreate(options) {
 
   function documentPointerDown(event) {
     if (!pinned()) {
+      if (
+        popoverPosition !== null
+        && !popover.contains(event.target)
+        && hoveredTokenPosition(event.target) === null
+      ) {
+        readouts.clearTokenHover();
+        hidePopover();
+      }
       return;
     }
     if (popover.contains(event.target)) {
@@ -258,6 +291,16 @@ function generatorCandidatesCreate(options) {
     clearTypedEntry();
   }
 
+  function outputReset() {
+    hidePopover();
+  }
+
+  function reset() {
+    distributionMode = "model";
+    activeDistributionMode = "model";
+    hidePopover();
+  }
+
   function clearTypedEntry() {
     typedPosition = null;
     typedDraft = "";
@@ -295,6 +338,20 @@ function generatorCandidatesCreate(options) {
     );
   }
 
+  function setDistributionMode(mode) {
+    if (mode !== "model" && mode !== "sampler") {
+      throw new Error("Unknown candidate distribution: " + mode);
+    }
+    if (popoverPosition === null) {
+      distributionMode = mode;
+      return;
+    }
+    distributionMode = mode;
+    renderPopover(
+      popoverPosition, null, pageState()
+    );
+  }
+
   function renderPopover(position, span, state) {
     if (!run.frameIsAppend()) {
       renderDiffusionPopover(position, span, state);
@@ -305,13 +362,35 @@ function generatorCandidatesCreate(options) {
 
   function renderAppendPopover(position, span, state) {
     var original = popoverPage === "original";
-    var alternatives = run.positionAlternatives(
+    var modelAlternatives = run.positionAlternatives(
       position, original
     );
-    if (!alternatives || alternatives.length === 0) {
+    if (!modelAlternatives || modelAlternatives.length === 0) {
       hidePopover();
       return;
     }
+    var sampler = typeof run.positionSamplerAlternatives === "function"
+      ? run.positionSamplerAlternatives(position, original)
+      : null;
+    var samplerAvailable = Boolean(
+      sampler
+      && Array.isArray(sampler.candidates)
+      && sampler.candidates.length > 0
+    );
+    var activeDistribution = (
+      distributionMode === "sampler"
+      && samplerAvailable
+    ) ? "sampler" : "model";
+    activeDistributionMode = activeDistribution;
+    var alternatives = activeDistribution === "sampler"
+      ? sampler.candidates
+      : modelAlternatives;
+    var rankTotal = activeDistribution === "sampler"
+      ? sampler.support
+      : state.vocabSize;
+    var rankLabel = activeDistribution === "sampler"
+      ? "retained"
+      : null;
     var tokens = original
       ? run.originalTokensLast()
       : run.frameTokens(state.frame);
@@ -321,19 +400,31 @@ function generatorCandidatesCreate(options) {
 
     clearCandidateReading();
     popover.replaceChildren();
+    var heading = overlaysBuildAltHeading(
+      position, popoverPage, setPage
+    );
+    if (samplerAvailable) {
+      heading.appendChild(
+        overlaysBuildDistributionToggle(
+          activeDistribution, setDistributionMode
+        )
+      );
+    }
+    popover.appendChild(heading);
     popover.appendChild(
-      overlaysBuildAltHeading(
-        position, popoverPage, setPage
+      buildRows(
+        alternatives, chosen, rankTotal, rankLabel
       )
     );
-    popover.appendChild(
-      buildRows(alternatives, chosen)
-    );
-    appendTypedInvitation(position, original, state);
+    if (activeDistribution === "model") {
+      appendTypedInvitation(position, original, state);
+    }
     appendTokenizer(state.tokenizer);
     popover.classList.toggle(
       "alt-pickable",
-      state.substituting && !original
+      state.substituting
+      && !original
+      && activeDistribution === "model"
     );
     placePopover(span);
     popoverPosition = position;
@@ -396,7 +487,9 @@ function generatorCandidatesCreate(options) {
     }
   }
 
-  function buildRows(alternatives, chosenId) {
+  function buildRows(
+    alternatives, chosenId, rankTotal, rankLabel
+  ) {
     var fragment = document.createDocumentFragment();
     for (
       var index = 0;
@@ -408,7 +501,9 @@ function generatorCandidatesCreate(options) {
           alternatives[index],
           chosenId,
           readouts.setCandidateHover,
-          index
+          index,
+          rankTotal,
+          rankLabel
         )
       );
     }
@@ -1005,7 +1100,8 @@ function generatorCandidatesCreate(options) {
     alternativesAvailable: alternativesAvailable,
     showPopover: showPopover,
     hidePopover: hidePopover,
-    outputReset: hidePopover,
+    outputReset: outputReset,
+    reset: reset,
     handleTokenizeResult: handleTokenizeResult,
     handleProbeResult: handleProbeResult,
     startFlicker: startFlicker,

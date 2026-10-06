@@ -125,6 +125,7 @@ function tokenViewerCreate(options) {
     document.getElementById("token-alts-popover");
   var altsPopoverPos = null;
   var altsPopoverPage = null;
+  var altsDistributionMode = "model";
 
   // Layered "Diff vs Original" controls (mirror the generator): two
   // opacity sliders plus a difference-blend toggle. State is kept
@@ -427,6 +428,23 @@ function tokenViewerCreate(options) {
     return overlayData.original_alternatives;
   }
 
+  function overlaySamplerAlternatives() {
+    if (!overlayData || !overlayData.sampler_alternatives) {
+      return [];
+    }
+    return overlayData.sampler_alternatives;
+  }
+
+  function overlayOriginalSamplerAlternatives() {
+    if (
+      !overlayData
+      || !overlayData.original_sampler_alternatives
+    ) {
+      return [];
+    }
+    return overlayData.original_sampler_alternatives;
+  }
+
   // Whether this position has a candidate set from each run to page
   // between. Both runs record the same set left of the divergence
   // point, where the branch copies its prefix verbatim, so a pager
@@ -452,7 +470,7 @@ function tokenViewerCreate(options) {
       return;
     }
     altsPopover.hidden = true;
-    altsPopover.textContent = "";
+    altsPopover.replaceChildren();
     altsPopoverPos = null;
     altsPopoverPage = null;
     // Same reason as in renderAltsPopover: the rows go without firing
@@ -494,6 +512,16 @@ function tokenViewerCreate(options) {
     renderAltsPopover(altsPopoverPos, null);
   }
 
+  function setAltsDistributionMode(mode) {
+    if (mode !== "model" && mode !== "sampler") {
+      throw new Error("Unknown candidate distribution: " + mode);
+    }
+    altsDistributionMode = mode;
+    if (altsPopoverPos !== null) {
+      renderAltsPopover(altsPopoverPos, null);
+    }
+  }
+
   // With an anchor span, placed above the token (or below when that
   // would overflow). Without one, left where it already sits.
   function renderAltsPopover(pos, span) {
@@ -505,13 +533,35 @@ function tokenViewerCreate(options) {
       return;
     }
     var original = altsPopoverPage === "original";
-    var alts = original
+    var modelAlternatives = original
       ? overlayOriginalAlternatives()[pos]
       : overlayAlternatives()[pos];
-    if (!alts || alts.length === 0) {
+    if (!modelAlternatives || modelAlternatives.length === 0) {
       hideAltsPopover();
       return;
     }
+    var sampler = original
+      ? overlayOriginalSamplerAlternatives()[pos]
+      : overlaySamplerAlternatives()[pos];
+    var samplerAvailable = Boolean(
+      sampler
+      && Array.isArray(sampler.candidates)
+      && sampler.candidates.length > 0
+    );
+    var activeDistribution = (
+      altsDistributionMode === "sampler"
+      && samplerAvailable
+    ) ? "sampler" : "model";
+    var alts = activeDistribution === "sampler"
+      ? sampler.candidates
+      : modelAlternatives;
+    var tokenizerFacts = readTokenizer() || {};
+    var rankTotal = activeDistribution === "sampler"
+      ? sampler.support
+      : tokenizerFacts.model_vocab_size;
+    var rankLabel = activeDistribution === "sampler"
+      ? "retained"
+      : null;
     // Each page marks the token its own run drew, so the Original
     // page does not mark the branch's substitution as chosen.
     var frame = overlayClampedFrame(
@@ -523,14 +573,27 @@ function tokenViewerCreate(options) {
     // removed node never fires one, so a readout for a row that no
     // longer exists would sit in the strip until the next hover.
     setCandidateMetricsHover(null);
-    altsPopover.textContent = "";
-    altsPopover.appendChild(
-      overlaysBuildAltHeading(pos, altsPopoverPage, setAltsPage)
+    altsPopover.replaceChildren();
+    var heading = overlaysBuildAltHeading(
+      pos, altsPopoverPage, setAltsPage
     );
+    if (samplerAvailable) {
+      heading.appendChild(
+        overlaysBuildDistributionToggle(
+          activeDistribution, setAltsDistributionMode
+        )
+      );
+    }
+    altsPopover.appendChild(heading);
     for (var i = 0; i < alts.length; i++) {
       altsPopover.appendChild(
         overlaysBuildAltRow(
-          alts[i], chosen, setCandidateMetricsHover, i
+          alts[i],
+          chosen,
+          setCandidateMetricsHover,
+          i,
+          rankTotal,
+          rankLabel
         )
       );
     }
@@ -560,7 +623,7 @@ function tokenViewerCreate(options) {
       ? null
       : candidatesReading(otherAltsPage(page), pos);
     setCandidateMetricsHover(null);
-    altsPopover.textContent = "";
+    altsPopover.replaceChildren();
     altsPopover.appendChild(
       overlaysBuildStepHeading(
         pos, reading.frame, reading.shown, page,
@@ -715,6 +778,7 @@ function tokenViewerCreate(options) {
       return;
     }
     overlayData = data;
+    altsDistributionMode = "model";
     // Built once here rather than at every read, so the shape the
     // server chose is resolved in one place and the rest of the page
     // only ever asks a series for a frame.
@@ -868,6 +932,7 @@ function tokenViewerCreate(options) {
   function clearOverlay() {
     flickerStop();
     overlayData = null;
+    altsDistributionMode = "model";
     overlayCommitSteps = null;
     overlayOriginalCommitSteps = null;
     overlayDiffData = null;
@@ -1526,7 +1591,8 @@ function tokenViewerCreate(options) {
       text: reading.t,
       probability: reading.p,
       rank: reading.rank || null,
-      vocabSize: metricsVocabSize(),
+      rankTotal: reading.rankTotal || metricsVocabSize(),
+      rankLabel: reading.rankLabel || null,
     };
     refreshTokenMetrics();
   }
@@ -1797,6 +1863,13 @@ function tokenViewerCreate(options) {
   // memoized state the coloring uses, so no per-token callback has to
   // be threaded through the render paths to carry it.
   function metricsExtra(index, tok) {
+    return overlaysJoinNotes(
+      metricsOverlayExtra(index, tok),
+      overlaysWatermarkPressureReading(tok)
+    );
+  }
+
+  function metricsOverlayExtra(index, tok) {
     if (overlayMode === "forgetting") {
       return overlaysForgettingReading(tok);
     }
@@ -1943,29 +2016,37 @@ function tokenViewerCreate(options) {
       });
     }
 
-    // Candidate popover on token hover, for runs saved with the
+    // Candidate popover on token hover or touch, for runs saved with the
     // Alternatives capture. Read-only here (substitution lives on the
     // generator, which still holds the worker's run state). The same
-    // hover lights the matching entropy bar.
+    // interaction lights the matching entropy bar.
     if (overlayOutput) {
+      var inspectToken = function (target, reopen) {
+        if (!target.classList.contains("token-span")) {
+          return;
+        }
+        var raw = target.getAttribute("data-pos");
+        if (raw === null) {
+          return;
+        }
+        var pos = parseInt(raw, 10);
+        setEntropyBarHighlight(pos);
+        setTokenMetricsHover(pos, target);
+        if (pos === altsPopoverPos && !reopen) {
+          return;
+        }
+        showAltsPopover(pos, target);
+      };
       overlayOutput.addEventListener(
         "mouseover",
         function (e) {
-          var target = e.target;
-          if (!target.classList.contains("token-span")) {
-            return;
-          }
-          var raw = target.getAttribute("data-pos");
-          if (raw === null) {
-            return;
-          }
-          var pos = parseInt(raw, 10);
-          setEntropyBarHighlight(pos);
-          setTokenMetricsHover(pos, target);
-          if (pos === altsPopoverPos) {
-            return;
-          }
-          showAltsPopover(pos, target);
+          inspectToken(e.target, false);
+        }
+      );
+      overlayOutput.addEventListener(
+        "click",
+        function (e) {
+          inspectToken(e.target, true);
         }
       );
       overlayOutput.addEventListener(
@@ -1990,6 +2071,23 @@ function tokenViewerCreate(options) {
         hideAltsPopover();
       });
     }
+    document.addEventListener("pointerdown", function (e) {
+      if (altsPopoverPos === null) {
+        return;
+      }
+      if (altsPopover && altsPopover.contains(e.target)) {
+        return;
+      }
+      if (
+        e.target.classList
+        && e.target.classList.contains("token-span")
+      ) {
+        return;
+      }
+      setEntropyBarHighlight(null);
+      clearTokenMetrics();
+      hideAltsPopover();
+    });
     window.addEventListener(
       "scroll",
       function () {

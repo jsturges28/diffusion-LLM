@@ -63,6 +63,23 @@ function defaultState() {
         candidate(13, " prior", 0.1),
       ],
     },
+    editedSamplerAlternatives: {
+      1: {
+        support: 3,
+        candidates: [
+          { id: 31, t: " sampled", p: 0.7, rank: 1, g: true },
+          { id: 32, t: " red", p: 0.2, rank: 2, g: false },
+        ],
+      },
+    },
+    originalSamplerAlternatives: {
+      1: {
+        support: 2,
+        candidates: [
+          { id: 14, t: " before", p: 0.8, rank: 1, g: true },
+        ],
+      },
+    },
     diffusionEdited: {
       frame: 2,
       set: {
@@ -106,6 +123,12 @@ function fakeRun(state) {
       const source = original
         ? state.originalAlternatives
         : state.editedAlternatives;
+      return source[position] || null;
+    },
+    positionSamplerAlternatives(position, original) {
+      const source = original
+        ? state.originalSamplerAlternatives
+        : state.editedSamplerAlternatives;
       return source[position] || null;
     },
     frameTokens() {
@@ -298,6 +321,52 @@ test("append paging follows the blend and tokenizer", () => {
   assert.deepEqual(rowIds(popover), [21, 22]);
 });
 
+test("Model and Sampler are independent from run paging", () => {
+  const state = defaultState();
+  state.favorsOriginal = false;
+  const { instance, popover } = controller(state);
+  instance.showPopover(1, null);
+  const sampler = descendants(popover).find((node) =>
+    node.getAttribute("data-alt-distribution") === "sampler"
+  );
+
+  sampler.dispatch("click", {
+    preventDefault() {},
+    stopPropagation() {},
+  });
+  assert.deepEqual(rowIds(popover), [31, 32]);
+  const activeSampler = descendants(popover).find((node) =>
+    node.getAttribute("data-alt-distribution") === "sampler"
+  );
+  assert.equal(
+    activeSampler.getAttribute("aria-pressed"),
+    "true"
+  );
+  popover.dispatch("click", {
+    target: withClass(popover, "alt-row")[0],
+  });
+  assert.deepEqual(state.substituteIntents, []);
+
+  const original = withClass(popover, "alt-pager-btn")
+    .find((button) =>
+      button.getAttribute("aria-label") === "Original run"
+    );
+  original.dispatch("click", { stopPropagation() {} });
+  assert.deepEqual(rowIds(popover), [14]);
+
+  instance.hidePopover();
+  instance.showPopover(1, null);
+  assert.deepEqual(rowIds(popover), [31, 32]);
+
+  instance.outputReset();
+  instance.showPopover(1, null);
+  assert.deepEqual(rowIds(popover), [31, 32]);
+
+  instance.reset();
+  instance.showPopover(1, null);
+  assert.deepEqual(rowIds(popover), [21, 22]);
+});
+
 test("diffusion candidates read the scrubbed frame", () => {
   const state = defaultState();
   state.append = false;
@@ -315,7 +384,7 @@ test("diffusion candidates read the scrubbed frame", () => {
   assert.deepEqual(rowIds(popover), [21]);
 });
 
-test("token hover owns the popover lifecycle", () => {
+test("token hover and touch own the popover lifecycle", () => {
   const { instance, state, popover, output, page } = controller();
   const span = page.document.createElement("span");
   span.className = "token-span";
@@ -332,6 +401,12 @@ test("token hover owns the popover lifecycle", () => {
 
   assert.equal(popover.hidden, true);
   assert.equal(state.clearTokenHovers, 1);
+
+  output.dispatch("click", { target: span });
+  assert.equal(popover.hidden, false);
+  page.document.dispatch("pointerdown");
+  assert.equal(popover.hidden, true);
+
   assert.equal(instance.alternativesAvailable(), true);
 });
 

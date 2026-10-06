@@ -416,17 +416,19 @@ function overlaysBuildAltPager(target, page, onPage) {
 // row is also drawn where nothing is listening. ``index`` is the
 // row's place in the list, which is also its rank; see
 // overlaysAltRank.
-function overlaysBuildAltRow(alt, chosenId, onHover, index) {
+function overlaysBuildAltRow(
+  alt, chosenId, onHover, index, rankTotal, rankLabel
+) {
   var row = document.createElement("div");
   row.className = "alt-row";
   if (alt.id === chosenId) {
     row.classList.add("alt-row-chosen");
   }
-  // An explicit rank means this is the appended entry: the token the
-  // position committed, from outside the captured set. Marked so it
-  // can read as an answer rather than an offer, since substituting
-  // the token already sitting there would re-run to the same place.
-  if (typeof alt.rank === "number") {
+  // A rank beyond the captured top five means this is the appended
+  // entry: the token the position committed, from outside the set.
+  // Sampler rows may carry an explicit in-set rank, including the
+  // one-row greedy support, and must not gain this separator.
+  if (typeof alt.rank === "number" && alt.rank > 5) {
     row.classList.add("alt-row-outside");
   }
   row.setAttribute("data-alt-id", String(alt.id));
@@ -450,6 +452,15 @@ function overlaysBuildAltRow(alt, chosenId, onHover, index) {
   prob.textContent = (clamped * 100).toFixed(1) + "%";
   row.appendChild(prob);
 
+  if (typeof alt.g === "boolean") {
+    var membership = document.createElement("span");
+    membership.className = alt.g
+      ? "alt-watermark-tag is-favored"
+      : "alt-watermark-tag is-complement";
+    membership.textContent = alt.g ? "favored" : "complement";
+    row.appendChild(membership);
+  }
+
   if (onHover) {
     overlaysBindAltHover(
       row,
@@ -457,11 +468,50 @@ function overlaysBuildAltRow(alt, chosenId, onHover, index) {
         t: alt.t,
         p: alt.p,
         rank: overlaysAltRank(alt, index),
+        rankTotal: rankTotal,
+        rankLabel: rankLabel,
       },
       onHover
     );
   }
   return row;
+}
+
+function overlaysBuildDistributionToggle(mode, onMode) {
+  var group = document.createElement("span");
+  group.className = "alt-distribution-toggle";
+  group.setAttribute("role", "group");
+  group.setAttribute(
+    "aria-label", "Candidate probability distribution"
+  );
+  for (var index = 0; index < 2; index++) {
+    var name = index === 0 ? "model" : "sampler";
+    group.appendChild(
+      overlaysDistributionButton(
+        name,
+        index === 0 ? "Model" : "Sampler",
+        mode,
+        onMode
+      )
+    );
+  }
+  return group;
+}
+
+function overlaysDistributionButton(name, label, mode, onMode) {
+  var button = document.createElement("button");
+  button.type = "button";
+  button.textContent = label;
+  button.setAttribute("data-alt-distribution", name);
+  button.setAttribute(
+    "aria-pressed", mode === name ? "true" : "false"
+  );
+  button.addEventListener("click", function (event) {
+    event.preventDefault();
+    event.stopPropagation();
+    onMode(name);
+  });
+  return button;
 }
 
 // A candidate's rank, which for the captured set is simply where it
@@ -760,11 +810,15 @@ function overlaysMetricRank(candidate) {
     return "";
   }
   var rank = "#" + Number(candidate.rank).toLocaleString();
-  if (!candidate.vocabSize) {
+  var total = candidate.rankTotal || candidate.vocabSize;
+  if (!total) {
     return rank;
   }
+  var label = candidate.rankLabel
+    ? " " + candidate.rankLabel
+    : "";
   return rank + " of "
-    + Number(candidate.vocabSize).toLocaleString();
+    + Number(total).toLocaleString() + label;
 }
 
 // A masked position has no text of its own to show, so it reports the
@@ -861,6 +915,45 @@ function overlaysWatermarkReading(tok) {
     return "Watermark: " + set + "; included in detector score";
   }
   return "Watermark: " + set + "; evidence flag unavailable";
+}
+
+function overlaysWatermarkPressureReading(tok) {
+  if (
+    !tok
+    || !overlaysProbability(tok.gb)
+    || !overlaysProbability(tok.gk)
+  ) {
+    return "";
+  }
+  var sampler = overlaysProbability(tok.gs)
+    ? overlaysPercent(tok.gs)
+    : "not sampled";
+  return "Green mass: Model " + overlaysPercent(tok.gb)
+    + " \u2192 KGW " + overlaysPercent(tok.gk)
+    + " \u2192 Sampler " + sampler;
+}
+
+function overlaysProbability(value) {
+  return (
+    typeof value === "number"
+    && isFinite(value)
+    && value >= 0
+    && value <= 1
+  );
+}
+
+function overlaysPercent(value) {
+  return (value * 100).toFixed(1) + "%";
+}
+
+function overlaysJoinNotes(first, second) {
+  if (!first) {
+    return second || "";
+  }
+  if (!second) {
+    return first;
+  }
+  return first + " \u00b7 " + second;
 }
 
 function overlaysWatermarkDescription(tok) {

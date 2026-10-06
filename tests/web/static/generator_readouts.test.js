@@ -383,8 +383,43 @@ test("candidate hover renders rank against model width", () => {
   assert.equal(candidate.value.textContent, "0.125");
   assert.equal(candidate.rank.textContent, "#3 of 128");
 
+  readouts.setCandidateHover({
+    t: " sampled",
+    p: 0.5,
+    rank: 1,
+    rankTotal: 3,
+    rankLabel: "retained",
+  });
+  assert.equal(
+    candidate.rank.textContent,
+    "#1 of 3 retained"
+  );
+
   readouts.setCandidateHover(null);
   assert.equal(candidate.group.hidden, true);
+});
+
+test("token hover reports Model KGW and Sampler green mass", () => {
+  const { page, state, readouts } = harness();
+  Object.assign(state.edited[0], {
+    gb: 0.1,
+    gk: 0.2,
+    gs: 0.35,
+  });
+
+  readouts.setTokenHover(0, null);
+
+  const extra = page.registry
+    .get("token-metrics")
+    .overlaysMetricNodes.extra;
+  assert.match(
+    extra.textContent,
+    /Model 10.0%.*KGW 20.0%.*Sampler 35.0%/
+  );
+
+  delete state.edited[0].gs;
+  readouts.setTokenHover(0, null);
+  assert.match(extra.textContent, /Sampler not sampled/);
 });
 
 test("adaptive stopping uses scrubber and segment snapshots", () => {

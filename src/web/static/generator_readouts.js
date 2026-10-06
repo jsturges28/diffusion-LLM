@@ -473,8 +473,11 @@ function generatorReadoutsCreate(options) {
         text: reading.t,
         probability: reading.p,
         rank: reading.rank || null,
-        vocabSize:
-          reading.vocab_size || metricsVocabSize(),
+        rankTotal:
+          reading.rankTotal
+          || reading.vocab_size
+          || metricsVocabSize(),
+        rankLabel: reading.rankLabel || null,
       };
     refreshMetrics();
   }
@@ -538,11 +541,14 @@ function generatorReadoutsCreate(options) {
       confidence:
         metricsConfidence(token, masked, remasked),
       entropy: entropy.value,
-      extra: overlaysEntropyNote(
-        canvas.tokenExtra(
-          index, token, metricsHoverOriginal
+      extra: overlaysJoinNotes(
+        overlaysEntropyNote(
+          canvas.tokenExtra(
+            index, token, metricsHoverOriginal
+          ),
+          entropy.asOfStep
         ),
-        entropy.asOfStep
+        overlaysWatermarkPressureReading(token)
       ),
       candidate: metricsCandidate,
       runLabel: metricsRunLabel(),

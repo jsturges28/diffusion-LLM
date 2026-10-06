@@ -38,9 +38,10 @@ without changing Analytics' one-row-per-run catalog.
 
 The newest XAI slice is experimental KGW watermarking on SmolLM3 and
 Mamba-3: keyed sampling, a shared accessible membership overlay,
-record-count-consistent per-run readouts, a tokenizer-only pasted-text detector and
-paired offline evaluation. It is deliberately a token statistic, not
-an authorship classifier.
+per-token Model → KGW → Sampler pressure readings, paired candidate
+views, record-count-consistent per-run readouts, a tokenizer-only
+pasted-text detector and paired offline evaluation. It is deliberately
+a token statistic, not an authorship classifier.
 
 The audit remediation campaign that ran from 2026-08-10 is complete except
 for a short remainder, tracked finding by finding in
@@ -667,6 +668,26 @@ green-list bias is applied before temperature, top-k, top-p and greedy
 argmax. Confidence, entropy, rank and Alternatives stay measurements of
 the unmodified model distribution.
 
+Pressure diagnostics preserve that boundary instead of redefining the
+existing signals. Every enabled token records the untempered
+base-model green mass, the same partition after KGW bias at temperature
+1, and the final green mass after the actual temperature, top-k and
+top-p sampler. These are distinct from the exact green vocabulary
+share: one quarter of ids need not hold one quarter of probability at
+an individual position. The KGW-only mass uses the closed-form
+two-partition tilt, and the final mass comes from the already-built
+sampling distribution, so neither requires another model forward or
+another sampler pass.
+
+The first generated token carries all three pressure values despite
+remaining detector-excluded. A What If token forced by the user carries
+the first two but no final sampler value or sampler candidates because
+it was not sampled; generation after it returns to the complete
+contract. Watermark-off runs carry none of these fields. Turning
+Alternatives off omits candidate sidecars but retains the three masses.
+The saved-run schema remains version 2 with optional additions, so old
+runs remain readable without invented pressure.
+
 One 256-bit host key is created only on the enabled generation path
 under `XDG_STATE_HOME/diffusion-llm`: directory mode 0700, key mode
 0600, both owned by the current account. Runs attest its one-way key
@@ -678,9 +699,11 @@ generator, whose without-replacement choice has exact cardinality and
 touches no global random state. A 32-entry host LRU keeps selected ids;
 a second 32-entry LRU per device keeps their tensor form, so a repeated
 predecessor neither reallocates nor retransfers it. In `.venv-ar` on
-this CPU, the synthetic 128,256-id benchmark measured about 1.1 ms
-median to select a cache miss, 0.18 ms to apply an uncached tensor bias,
-and 0.10 ms for a cached bias. CUDA remains a hardware checklist item.
+this CPU, the synthetic 128,256-id benchmark measured about 1.04 ms
+median to select a cache miss, 0.14 ms to apply an uncached tensor bias,
+0.08 ms for a cached bias, and about 0.37 ms to compute the three
+pressure masses plus the bounded sampler top five. CUDA remains a
+hardware checklist item.
 
 Detection reports the exact null rate
 `p0 = green_list_size / vocab_size`, its count and a
@@ -703,6 +726,18 @@ possible and checks count and derived-score consistency with worker
 attestation. This is not cryptographic membership validation; old records with
 membership but no attestation may still be colored, but no score is
 invented for them.
+
+Generator and Analytics also share the compact
+**Model → KGW → Sampler** mass reading. When Alternatives was captured,
+the candidate popover independently pages Model/Sampler and
+Original/Edited. Model keeps full-output-vocabulary ranks and remains
+the only actionable What If source. Sampler shows the actual retained
+support, labels favored/complement membership without relying on color,
+and is display-only. Distribution choice is sticky across token hovers
+within a run, falls back to Model at an unavailable position, and
+resets on new output. No chart and no watermark-off counterfactual were
+added: the three point reading answers the pressure question without
+implying a trajectory or another realized sample.
 
 The z threshold is a configurable **display threshold**. It changes
 only whether 50-or-more evidence tokens read `threshold crossed` or

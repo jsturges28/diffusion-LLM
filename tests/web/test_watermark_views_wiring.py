@@ -90,3 +90,26 @@ def test_docs_attribute_kgw_to_its_original_paper() -> None:
     assert "arXiv:2402.18059" in combined
     assert "not the origin" in combined
     assert "detector overlay remains a later feature" not in combined
+
+
+def test_pressure_copy_names_all_three_sampling_stages() -> None:
+    guide = _text(ROOT / "docs" / "GUIDE.md")
+    roadmap = _text(ROOT / "docs" / "ROADMAP.md")
+    in_app = _text(STATIC / "index.html")
+
+    for text in (guide, roadmap, in_app):
+        assert "Model → KGW → Sampler" in text
+    assert "vocabulary share" in guide
+    assert "not an exact or calibrated p-value" in guide
+
+
+def test_distribution_toggle_has_focus_and_touch_targets() -> None:
+    stylesheet = _text(STATIC / "style.css")
+    start = stylesheet.index(".alt-distribution-toggle button {")
+    button_rule = stylesheet[start : start + 300]
+
+    assert "min-height: 24px" in button_rule
+    assert (
+        ".alt-distribution-toggle button:focus-visible"
+        in stylesheet
+    )

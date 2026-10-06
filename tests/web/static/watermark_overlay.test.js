@@ -67,6 +67,92 @@ test("excluded evidence gets a non-color class and wording", () => {
   );
 });
 
+test("pressure reading names all three sampling stages", () => {
+  const { context } = load();
+
+  assert.equal(
+    context.overlaysWatermarkPressureReading({
+      gb: 0.1, gk: 0.2, gs: 0.35,
+    }),
+    "Green mass: Model 10.0% \u2192 KGW 20.0%"
+      + " \u2192 Sampler 35.0%"
+  );
+  assert.match(
+    context.overlaysWatermarkPressureReading({
+      gb: 0.1, gk: 0.2,
+    }),
+    /Sampler not sampled/
+  );
+  assert.equal(
+    context.overlaysWatermarkPressureReading({ gb: 0.1 }),
+    ""
+  );
+});
+
+test("candidate rows name membership without color alone", () => {
+  const page = load();
+  const row = page.context.overlaysBuildAltRow(
+    { id: 7, t: " token", p: 0.2, rank: 3, g: false },
+    2,
+    null,
+    0,
+    40,
+    "retained"
+  );
+  const tag = row.querySelector(".alt-watermark-tag");
+
+  assert.equal(tag.textContent, "complement");
+  assert.equal(tag.classList.contains("is-complement"), true);
+  assert.equal(
+    row.classList.contains("alt-row-outside"),
+    false
+  );
+  assert.equal(
+    page.context.overlaysMetricRank({
+      rank: 3, rankTotal: 40, rankLabel: "retained",
+    }),
+    "#3 of 40 retained"
+  );
+
+  const outside = page.context.overlaysBuildAltRow(
+    { id: 8, t: " outside", p: 0.01, rank: 6, g: true },
+    8,
+    null,
+    5,
+    40,
+    "retained"
+  );
+  assert.equal(
+    outside.classList.contains("alt-row-outside"),
+    true
+  );
+});
+
+test("distribution toggle is a labelled pressed-button group", () => {
+  const page = load();
+  const selected = [];
+  const group = page.context.overlaysBuildDistributionToggle(
+    "model",
+    (mode) => selected.push(mode)
+  );
+
+  assert.equal(group.getAttribute("role"), "group");
+  assert.equal(
+    group.getAttribute("aria-label"),
+    "Candidate probability distribution"
+  );
+  assert.equal(group.children[0].type, "button");
+  assert.equal(
+    group.children[0].getAttribute("aria-pressed"),
+    "true"
+  );
+  group.children[1].dispatch("click", {
+    preventDefault() {},
+    stopPropagation() {},
+  });
+  assert.deepEqual(selected, ["sampler"]);
+});
+
 test("score math excludes the first and forced tokens", () => {
   const { context } = load();
   const tokens = records(4, 3);
