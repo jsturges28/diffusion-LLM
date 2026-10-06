@@ -63,6 +63,7 @@ function generatorRunCreate(options) {
   var frames = runFramesCreate();
   var original = originalRunCreate();
   var positionAlts = [];
+  var positionSamplerAlts = [];
   var candidates = runCandidatesCreate();
   var originalCandidates = null;
 
@@ -96,6 +97,7 @@ function generatorRunCreate(options) {
     runFramesClear(frames);
     originalRunClear(original);
     positionAlts = [];
+    positionSamplerAlts = [];
     candidates = runCandidatesCreate();
     originalCandidates = null;
     runPrompt = null;
@@ -171,6 +173,9 @@ function generatorRunCreate(options) {
     if (data.alts && data.tokens && data.tokens.length > 0) {
       positionAlts[data.tokens.length - 1] = data.alts;
     }
+    if (data.salts && data.tokens && data.tokens.length > 0) {
+      positionSamplerAlts[data.tokens.length - 1] = data.salts;
+    }
     var storedTokens = sealTokens(data.tokens || null);
     runFramesAppend(frames, {
       history: data.text,
@@ -192,6 +197,9 @@ function generatorRunCreate(options) {
     var position = data.index - 1;
     if (data.alts) {
       positionAlts[position] = data.alts;
+    }
+    if (data.salts) {
+      positionSamplerAlts[position] = data.salts;
     }
     runFramesAppendPosition(frames, {
       index: data.index,
@@ -251,7 +259,9 @@ function generatorRunCreate(options) {
       runToken = data.run_token;
     }
     runWorker = residentWorker;
-    originalRunCapture(original, frames, positionAlts);
+    originalRunCapture(
+      original, frames, positionAlts, positionSamplerAlts
+    );
     if (originalCandidates === null) {
       originalCandidates = candidates;
     }
@@ -294,6 +304,7 @@ function generatorRunCreate(options) {
       );
     }
     positionAlts.length = count;
+    positionSamplerAlts.length = count;
   }
 
   function captureCheckpoint() {
@@ -301,6 +312,7 @@ function generatorRunCreate(options) {
     checkpoints.set(checkpoint, {
       frames: runFramesSnapshot(frames),
       positionAlts: positionAlts.slice(),
+      positionSamplerAlts: positionSamplerAlts.slice(),
       candidates: candidates,
       finalText: finalText,
       provenance: provenance === null
@@ -322,6 +334,7 @@ function generatorRunCreate(options) {
     }
     runFramesRestore(frames, state.frames);
     positionAlts = state.positionAlts.slice();
+    positionSamplerAlts = state.positionSamplerAlts.slice();
     candidates = state.candidates;
     finalText = state.finalText;
     provenance = state.provenance;
@@ -474,6 +487,20 @@ function generatorRunCreate(options) {
       ? original.positionAlts
       : positionAlts;
     return alternativesExist(source);
+  }
+
+  function positionSamplerAlternatives(position, fromOriginal) {
+    var source = fromOriginal
+      ? original.samplerAlts
+      : positionSamplerAlts;
+    return copySamplerAlternatives(source[position]);
+  }
+
+  function hasSamplerAlternatives(fromOriginal) {
+    var source = fromOriginal
+      ? original.samplerAlts
+      : positionSamplerAlts;
+    return samplerAlternativesExist(source);
   }
 
   function candidateSet(
@@ -631,6 +658,12 @@ function generatorRunCreate(options) {
     if (alternatives !== null) {
       payload.alternatives = alternatives;
     }
+    var samplerAlternatives = samplerAlternativeRecordsFrom(
+      positionSamplerAlts
+    );
+    if (samplerAlternatives !== null) {
+      payload.sampler_alternatives = samplerAlternatives;
+    }
     var record = candidatesRecordFrom(candidates);
     if (record !== null) {
       payload.candidates = record;
@@ -672,6 +705,12 @@ function generatorRunCreate(options) {
     );
     if (alternatives !== null) {
       payload.original_alternatives = alternatives;
+    }
+    var samplerAlternatives = samplerAlternativeRecordsFrom(
+      original.samplerAlts
+    );
+    if (samplerAlternatives !== null) {
+      payload.original_sampler_alternatives = samplerAlternatives;
     }
     var record = candidatesRecordFrom(originalCandidates);
     if (record !== null) {
@@ -736,6 +775,11 @@ function generatorRunCreate(options) {
     if (typeof token.we === "boolean") {
       record.we = token.we;
     }
+    for (var key of ["gb", "gk", "gs"]) {
+      if (typeof token[key] === "number") {
+        record[key] = token[key];
+      }
+    }
     return record;
   }
 
@@ -764,14 +808,50 @@ function generatorRunCreate(options) {
       if (typeof alternatives[i].rank === "number") {
         record.rank = alternatives[i].rank;
       }
+      if (typeof alternatives[i].g === "boolean") {
+        record.g = alternatives[i].g;
+      }
       records.push(record);
     }
     return records;
   }
 
+  function samplerAlternativeRecordsFrom(positions) {
+    if (!samplerAlternativesExist(positions)) {
+      return null;
+    }
+    var output = [];
+    for (var i = 0; i < positions.length; i++) {
+      var entry = positions[i];
+      if (!entry || !Array.isArray(entry.candidates)) {
+        output.push(null);
+        continue;
+      }
+      output.push({
+        support: entry.support,
+        candidates: alternativeSetRecord(entry.candidates),
+      });
+    }
+    return output;
+  }
+
   function alternativesExist(positions) {
     for (var i = 0; i < positions.length; i++) {
       if (positions[i] && positions[i].length > 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function samplerAlternativesExist(positions) {
+    for (var i = 0; i < positions.length; i++) {
+      var entry = positions[i];
+      if (
+        entry
+        && Array.isArray(entry.candidates)
+        && entry.candidates.length > 0
+      ) {
         return true;
       }
     }
@@ -1011,6 +1091,7 @@ function generatorRunCreate(options) {
       statusMessage: chrome.status.message,
       frames: frames,
       positionAlts: positionAlts,
+      positionSamplerAlts: positionSamplerAlts,
       original: original,
       candidates: candidates,
       originalCandidates: originalCandidates,
@@ -1095,6 +1176,7 @@ function generatorRunCreate(options) {
     originalRunAssign(original, restored.original);
     sealRunTokens();
     positionAlts = restored.positionAlts;
+    positionSamplerAlts = restored.positionSamplerAlts;
     candidates = restored.candidates;
     originalCandidates = restored.originalCandidates;
     runPrompt = restored.runPrompt;
@@ -1415,6 +1497,16 @@ function generatorRunCreate(options) {
     return output;
   }
 
+  function copySamplerAlternatives(entry) {
+    if (!entry || !Array.isArray(entry.candidates)) {
+      return null;
+    }
+    return {
+      support: entry.support,
+      candidates: copyAlternatives(entry.candidates) || [],
+    };
+  }
+
   function copyCandidateSet(set) {
     if (!set) {
       return null;
@@ -1506,6 +1598,8 @@ function generatorRunCreate(options) {
     originalPositions: originalPositions,
     positionAlternatives: positionAlternatives,
     hasAlternatives: hasAlternatives,
+    positionSamplerAlternatives: positionSamplerAlternatives,
+    hasSamplerAlternatives: hasSamplerAlternatives,
     candidateSet: candidateSet,
     candidateSets: candidateSets,
     candidateFrames: candidateFrames,

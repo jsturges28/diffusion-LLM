@@ -38,12 +38,14 @@ from src.web import server
 from src.web.save_pipeline import (
     CurrentModelFacts,
     RemaskEdit,
+    SamplerAlternativeSet,
     SaveRunRequest,
     TokenAlternative,
     TokenRecord,
     _context_metadata,
     _dump_alternatives,
     _dump_frame_tokens,
+    _dump_sampler_alternatives,
 )
 
 
@@ -181,6 +183,54 @@ def test_watermark_token_fields_require_provenance() -> None:
         )
 
 
+def test_watermark_pressure_survives_token_records() -> None:
+    record = TokenRecord(
+        t="he",
+        m=False,
+        id=5,
+        g=True,
+        we=True,
+        gb=0.1,
+        gk=0.2,
+        gs=0.3,
+    )
+    dumped = _dump_frame_tokens([[record]])
+
+    assert dumped[0] is not None
+    assert dumped[0][0]["gb"] == pytest.approx(0.1)
+    assert dumped[0][0]["gk"] == pytest.approx(0.2)
+    assert dumped[0][0]["gs"] == pytest.approx(0.3)
+
+
+def test_forced_watermark_pressure_has_no_sampler_mass() -> None:
+    record = TokenRecord(
+        t="he",
+        m=False,
+        id=5,
+        g=False,
+        we=False,
+        gb=0.1,
+        gk=0.2,
+    )
+
+    assert record.gs is None
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"g": True, "we": True, "gb": 0.1},
+        {"g": True, "we": True, "gb": 0.2, "gk": 0.1},
+        {"g": True, "we": True, "gb": 0.1, "gk": 0.2},
+    ],
+)
+def test_watermark_pressure_rejects_incomplete_records(
+    overrides: Dict[str, Any],
+) -> None:
+    with pytest.raises(ValidationError):
+        TokenRecord(t="he", m=False, id=5, **overrides)
+
+
 def test_alternatives_keep_position_alignment() -> None:
     dumped = _dump_alternatives(_request().alternatives)
     assert len(dumped) == 2
@@ -224,6 +274,62 @@ def test_alternatives_default_to_absent() -> None:
     assert body.alternatives is None
 
 
+def test_sampler_alternatives_keep_support_and_membership() -> None:
+    positions = [
+        SamplerAlternativeSet(
+            support=7,
+            candidates=[
+                TokenAlternative(
+                    id=5, t="he", p=0.6, rank=1, g=True
+                )
+            ],
+        ),
+        None,
+    ]
+    dumped = _dump_sampler_alternatives(positions)
+
+    assert dumped[0]["support"] == 7
+    assert dumped[0]["candidates"][0]["g"] is True
+    assert dumped[1] is None
+
+
+def test_sampler_alternatives_reject_impossible_support() -> None:
+    with pytest.raises(ValidationError):
+        SamplerAlternativeSet(
+            support=1,
+            candidates=[
+                TokenAlternative(id=5, t="he", p=0.6, g=True),
+                TokenAlternative(id=7, t="she", p=0.4, g=False),
+            ],
+        )
+
+
+def test_max_sampler_candidate_payload_stays_below_one_mib() -> None:
+    positions = []
+    for position in range(2048):
+        positions.append(
+            SamplerAlternativeSet(
+                support=128,
+                candidates=[
+                    TokenAlternative(
+                        id=position * 6 + rank,
+                        t=f" token{rank}",
+                        p=0.2 - rank * 0.02,
+                        rank=rank + 1,
+                        g=rank % 2 == 0,
+                    )
+                    for rank in range(6)
+                ],
+            )
+        )
+    encoded = json.dumps(
+        _dump_sampler_alternatives(positions),
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+    assert len(encoded) < 1024 * 1024
+
+
 def test_saved_signals_reload_for_analytics(
     tmp_path: Path,
 ) -> None:
@@ -239,13 +345,30 @@ def test_saved_signals_reload_for_analytics(
         json.dumps(_dump_alternatives(body.alternatives)),
         encoding="utf-8",
     )
+    sampler = [
+        SamplerAlternativeSet(
+            support=3,
+            candidates=[
+                TokenAlternative(
+                    id=5, t="he", p=0.7, rank=1, g=True
+                )
+            ],
+        ),
+        None,
+    ]
+    (run_dir / "sampler_alternatives.json").write_text(
+        json.dumps(_dump_sampler_alternatives(sampler)),
+        encoding="utf-8",
+    )
 
     loaded = load_run_frames(run_dir)
 
     assert loaded["records_available"] is True
     assert loaded["alternatives_available"] is True
+    assert loaded["sampler_alternatives_available"] is True
     assert loaded["frames"][0][0]["e"] == pytest.approx(0.31)
     assert loaded["alternatives"][1] is None
+    assert loaded["sampler_alternatives"][0]["support"] == 3
 
 
 def test_runs_without_candidates_report_unavailable(

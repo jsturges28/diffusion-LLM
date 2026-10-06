@@ -529,6 +529,7 @@ var ORIGINAL_RUN_FIELDS = [
   "elapsed",
   "meanConf",
   "positionAlts",
+  "samplerAlts",
 ];
 
 var ORIGINAL_RUN_JSON_KEYS = {
@@ -537,6 +538,7 @@ var ORIGINAL_RUN_JSON_KEYS = {
   elapsed: "originalPerFrameElapsed",
   meanConf: "originalMeanConf",
   positionAlts: "originalPositionAlts",
+  samplerAlts: "originalSamplerAlts",
 };
 
 function originalRunCreate() {
@@ -556,6 +558,7 @@ function originalRunCreate() {
     elapsed: [],
     meanConf: [],
     positionAlts: [],
+    samplerAlts: [],
   };
 }
 
@@ -567,7 +570,9 @@ function originalRunCaptured(original) {
 // terminal frame, and a no-op afterwards: every later `done` belongs
 // to a branch, and overwriting the baseline with one would leave
 // the comparison views diffing a run against itself.
-function originalRunCapture(original, frames, positionAlts) {
+function originalRunCapture(
+  original, frames, positionAlts, samplerAlts
+) {
   if (originalRunCaptured(original)) {
     return;
   }
@@ -579,6 +584,7 @@ function originalRunCapture(original, frames, positionAlts) {
   original.elapsed = frames.elapsed.slice();
   original.meanConf = frames.meanConf.slice();
   original.positionAlts = positionAlts.slice();
+  original.samplerAlts = (samplerAlts || []).slice();
 }
 
 function originalRunClear(original) {

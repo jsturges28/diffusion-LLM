@@ -157,6 +157,34 @@ def _smollm3_append() -> Dict[str, Any]:
     positions[0].update({"g": True, "we": False})
     positions[1].update({"g": True, "we": True})
     positions[2].update({"g": False, "we": True})
+    alternatives = []
+    sampler_alternatives = []
+    for index, record in enumerate(positions):
+        record.update({
+            "gb": 0.1 + index / 100,
+            "gk": 0.2 + index / 100,
+            "gs": 0.3 + index / 100,
+        })
+        alternatives.append([
+            {
+                "id": record["id"],
+                "t": record["t"],
+                "p": 0.5,
+                "g": record["g"],
+            }
+        ])
+        sampler_alternatives.append({
+            "support": 3,
+            "candidates": [
+                {
+                    "id": record["id"],
+                    "t": record["t"],
+                    "p": 0.7,
+                    "rank": 1,
+                    "g": record["g"],
+                }
+            ],
+        })
     p0 = 0.25
     z_score = (1 - 2 * p0) / math.sqrt(2 * p0 * (1 - p0))
     return {
@@ -167,8 +195,11 @@ def _smollm3_append() -> Dict[str, Any]:
             "watermark_gamma": 0.25,
             "watermark_delta": 2.0,
             "watermark_z_threshold": 3.5,
+            "alternatives": True,
         },
         "frame_positions": positions,
+        "alternatives": alternatives,
+        "sampler_alternatives": sampler_alternatives,
         "final_text": "".join(WORDS),
         "provenance": {
             "model_id": "smollm3",

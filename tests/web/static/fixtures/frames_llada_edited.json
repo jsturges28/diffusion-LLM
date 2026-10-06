@@ -194,6 +194,7 @@
   ]
  ],
  "original_positions": null,
+ "original_sampler_alternatives": null,
  "positions": null,
  "records_available": true,
  "remask_edits": [
@@ -205,6 +206,8 @@
   }
  ],
  "run_id": "fixture",
+ "sampler_alternatives": null,
+ "sampler_alternatives_available": false,
  "signals": [
   {
    "axes": [

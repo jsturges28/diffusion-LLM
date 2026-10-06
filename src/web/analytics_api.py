@@ -487,6 +487,13 @@ def _compute_run_frames(
         "alternatives": data["alternatives"],
         "alternatives_available": data["alternatives_available"],
         "original_alternatives": data["original_alternatives"],
+        "sampler_alternatives": data["sampler_alternatives"],
+        "sampler_alternatives_available": (
+            data["sampler_alternatives_available"]
+        ),
+        "original_sampler_alternatives": (
+            data["original_sampler_alternatives"]
+        ),
         "candidates": data["candidates"],
         "original_candidates": data["original_candidates"],
         "remask_edits": metadata.get("remask_edits", []),

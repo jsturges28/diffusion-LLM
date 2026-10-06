@@ -188,6 +188,7 @@ function finishedRecord(api, overrides) {
     statusMessage: "Done",
     frames: frames,
     positionAlts: [],
+    positionSamplerAlts: [],
     original: original,
     candidates: candidates,
     originalCandidates: candidates,

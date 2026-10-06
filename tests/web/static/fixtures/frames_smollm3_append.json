@@ -1,6 +1,31 @@
 {
- "alternatives": null,
- "alternatives_available": false,
+ "alternatives": [
+  [
+   {
+    "g": true,
+    "id": 200,
+    "p": 0.5,
+    "t": " Yeast"
+   }
+  ],
+  [
+   {
+    "g": true,
+    "id": 201,
+    "p": 0.5,
+    "t": " eats"
+   }
+  ],
+  [
+   {
+    "g": false,
+    "id": 202,
+    "p": 0.5,
+    "t": " sugar"
+   }
+  ]
+ ],
+ "alternatives_available": true,
  "candidates": null,
  "canvas_index": null,
  "frames": null,
@@ -8,11 +33,15 @@
  "original_candidates": null,
  "original_frames": null,
  "original_positions": null,
+ "original_sampler_alternatives": null,
  "positions": [
   {
    "c": 0.5,
    "e": 1.2,
    "g": true,
+   "gb": 0.1,
+   "gk": 0.2,
+   "gs": 0.3,
    "id": 200,
    "m": false,
    "t": " Yeast",
@@ -22,6 +51,9 @@
    "c": 0.5,
    "e": 1.3,
    "g": true,
+   "gb": 0.11,
+   "gk": 0.21000000000000002,
+   "gs": 0.31,
    "id": 201,
    "m": false,
    "t": " eats",
@@ -31,6 +63,9 @@
    "c": 0.5,
    "e": 1.4,
    "g": false,
+   "gb": 0.12000000000000001,
+   "gk": 0.22,
+   "gs": 0.32,
    "id": 202,
    "m": false,
    "t": " sugar",
@@ -40,6 +75,45 @@
  "records_available": true,
  "remask_edits": [],
  "run_id": "fixture",
+ "sampler_alternatives": [
+  {
+   "candidates": [
+    {
+     "g": true,
+     "id": 200,
+     "p": 0.7,
+     "rank": 1,
+     "t": " Yeast"
+    }
+   ],
+   "support": 3
+  },
+  {
+   "candidates": [
+    {
+     "g": true,
+     "id": 201,
+     "p": 0.7,
+     "rank": 1,
+     "t": " eats"
+    }
+   ],
+   "support": 3
+  },
+  {
+   "candidates": [
+    {
+     "g": false,
+     "id": 202,
+     "p": 0.7,
+     "rank": 1,
+     "t": " sugar"
+    }
+   ],
+   "support": 3
+  }
+ ],
+ "sampler_alternatives_available": true,
  "signals": [
   {
    "axes": [
@@ -106,6 +180,50 @@
    "location": "token_record",
    "name": "watermark_evidence",
    "unit": "categorical"
+  },
+  {
+   "axes": [
+    "position"
+   ],
+   "budget_records": null,
+   "capture": "opt_in",
+   "key": "gb",
+   "location": "token_record",
+   "name": "watermark_model_green_mass",
+   "unit": "probability"
+  },
+  {
+   "axes": [
+    "position"
+   ],
+   "budget_records": null,
+   "capture": "opt_in",
+   "key": "gk",
+   "location": "token_record",
+   "name": "watermark_kgw_green_mass",
+   "unit": "probability"
+  },
+  {
+   "axes": [
+    "position"
+   ],
+   "budget_records": null,
+   "capture": "opt_in",
+   "key": "gs",
+   "location": "token_record",
+   "name": "watermark_sampler_green_mass",
+   "unit": "probability"
+  },
+  {
+   "axes": [
+    "position"
+   ],
+   "budget_records": null,
+   "capture": "opt_in",
+   "key": "sampler_alternatives",
+   "location": "sidecar",
+   "name": "watermark_sampler_alternatives",
+   "unit": "probability"
   }
  ],
  "stop_rule": null,

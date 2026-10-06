@@ -72,6 +72,11 @@ SIDECAR_NAMES = (
     ("original_frame_tokens", "original_tokens.json"),
     ("alternatives", "alternatives.json"),
     ("original_alternatives", "original_alternatives.json"),
+    ("sampler_alternatives", "sampler_alternatives.json"),
+    (
+        "original_sampler_alternatives",
+        "original_sampler_alternatives.json",
+    ),
     ("candidates", "candidates.json"),
     ("original_candidates", "original_candidates.json"),
 )
@@ -219,6 +224,8 @@ class RunBundle:
     original_frame_tokens: Optional[List[Any]] = None
     alternatives: Optional[List[Any]] = None
     original_alternatives: Optional[List[Any]] = None
+    sampler_alternatives: Optional[List[Any]] = None
+    original_sampler_alternatives: Optional[List[Any]] = None
     candidates: Optional[Dict[str, Any]] = None
     original_candidates: Optional[Dict[str, Any]] = None
 
@@ -572,6 +579,10 @@ def _stage_and_publish(
         original_frame_tokens=bundle.original_frame_tokens,
         alternatives=bundle.alternatives,
         original_alternatives=bundle.original_alternatives,
+        sampler_alternatives=bundle.sampler_alternatives,
+        original_sampler_alternatives=(
+            bundle.original_sampler_alternatives
+        ),
         candidates=bundle.candidates,
         original_candidates=bundle.original_candidates,
     )

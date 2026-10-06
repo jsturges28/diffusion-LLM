@@ -130,6 +130,9 @@ class TokenRecord(BaseModel):
     f: Optional[float] = None
     g: Optional[StrictBool] = None
     we: Optional[StrictBool] = None
+    gb: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    gk: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    gs: Optional[float] = Field(default=None, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
     def _watermark_evidence_has_membership(self) -> "TokenRecord":
@@ -137,6 +140,24 @@ class TokenRecord(BaseModel):
             raise ValueError(
                 "watermark evidence needs green membership"
             )
+        masses = (self.gb, self.gk, self.gs)
+        if any(value is not None for value in masses):
+            if self.gb is None or self.gk is None:
+                raise ValueError(
+                    "watermark pressure needs base and KGW mass"
+                )
+            if self.g is None or self.we is None:
+                raise ValueError(
+                    "watermark pressure needs membership and evidence"
+                )
+            if self.we is True and self.gs is None:
+                raise ValueError(
+                    "sampled watermark evidence needs sampler mass"
+                )
+            if self.gk + 1e-4 < self.gb:
+                raise ValueError(
+                    "KGW green mass must not be below base mass"
+                )
         return self
 
 
@@ -149,6 +170,37 @@ class TokenAlternative(BaseModel):
     t: str = Field(max_length=TOKEN_TEXT_CHARS_MAX)
     p: float
     rank: Optional[int] = None
+    g: Optional[StrictBool] = None
+
+
+class SamplerAlternativeSet(BaseModel):
+    """One position's retained sampler support and top candidates."""
+
+    model_config = STRICT
+
+    support: int = Field(ge=1)
+    candidates: List[TokenAlternative] = Field(
+        min_length=1,
+        max_length=CANDIDATES_PER_POSITION + 1,
+    )
+
+    @model_validator(mode="after")
+    def _ranks_fit_support(self) -> "SamplerAlternativeSet":
+        if len(self.candidates) > self.support:
+            raise ValueError(
+                "sampler candidates exceed retained support"
+            )
+        for index, candidate in enumerate(self.candidates):
+            rank = candidate.rank or index + 1
+            if rank > self.support:
+                raise ValueError(
+                    "sampler candidate rank exceeds retained support"
+                )
+            if candidate.g is None:
+                raise ValueError(
+                    "sampler candidates need green membership"
+                )
+        return self
 
 
 class CandidateSet(BaseModel):
@@ -468,6 +520,9 @@ class SaveRunRequest(BaseModel):
     alternatives: Optional[List[Optional[List[TokenAlternative]]]] = (
         None
     )
+    sampler_alternatives: Optional[
+        List[Optional[SamplerAlternativeSet]]
+    ] = None
     canvas_index: Optional[List[int]] = None
     mean_conf: Optional[List[Optional[float]]] = None
     remask_edits: Optional[List[RemaskEdit]] = None
@@ -476,6 +531,9 @@ class SaveRunRequest(BaseModel):
     original_mean_conf: Optional[List[Optional[float]]] = None
     original_alternatives: Optional[
         List[Optional[List[TokenAlternative]]]
+    ] = None
+    original_sampler_alternatives: Optional[
+        List[Optional[SamplerAlternativeSet]]
     ] = None
     candidates: Optional[FrameCandidates] = None
     original_candidates: Optional[FrameCandidates] = None
@@ -686,6 +744,13 @@ def _check_watermark_records(body: SaveRunRequest) -> None:
         else None
     )
     if watermark is None:
+        if (
+            body.sampler_alternatives is not None
+            or body.original_sampler_alternatives is not None
+        ):
+            raise ValueError(
+                "sampler alternatives need watermark provenance"
+            )
         if records is not None and _has_watermark_fields(records):
             raise ValueError(
                 "watermark token fields need watermark provenance"
@@ -705,11 +770,32 @@ def _check_watermark_records(body: SaveRunRequest) -> None:
         vocab_size=watermark.vocab_size,
         label="watermarked tokens",
     )
+    _check_sampler_alternative_layer(
+        body.sampler_alternatives,
+        records=records,
+        alternatives_enabled=body.params.get("alternatives") is True,
+        label="sampler alternatives",
+    )
+    if (
+        original is None
+        and body.original_sampler_alternatives is not None
+    ):
+        raise ValueError(
+            "original sampler alternatives need original tokens"
+        )
     if original is not None:
         _check_watermark_record_set(
             original,
             vocab_size=watermark.vocab_size,
             label="original watermarked tokens",
+        )
+        _check_sampler_alternative_layer(
+            body.original_sampler_alternatives,
+            records=original,
+            alternatives_enabled=(
+                body.params.get("alternatives") is True
+            ),
+            label="original sampler alternatives",
         )
     scored = sum(record.we is True for record in records)
     green = sum(
@@ -792,6 +878,7 @@ def _check_watermark_record_set(
     vocab_size: int,
     label: str,
 ) -> None:
+    has_pressure = any(record.gb is not None for record in records)
     for record in records:
         if record.id < 0 or record.id >= vocab_size:
             raise ValueError(
@@ -802,6 +889,31 @@ def _check_watermark_record_set(
             raise ValueError(f"{label} need membership flags")
         if record.we is None:
             raise ValueError(f"{label} need evidence flags")
+        if has_pressure and (record.gb is None or record.gk is None):
+            raise ValueError(f"{label} need complete pressure fields")
+
+
+def _check_sampler_alternative_layer(
+    layer: Optional[List[Optional[SamplerAlternativeSet]]],
+    *,
+    records: List[TokenRecord],
+    alternatives_enabled: bool,
+    label: str,
+) -> None:
+    if layer is None:
+        return
+    if not alternatives_enabled:
+        raise ValueError(f"{label} require alternatives=true")
+    if len(layer) != len(records):
+        raise ValueError(f"{label} must align with token records")
+    for index, entry in enumerate(layer):
+        sampled = records[index].gs is not None
+        if sampled and entry is None:
+            raise ValueError(f"{label}[{index}] is missing")
+        if not sampled and entry is not None:
+            raise ValueError(
+                f"{label}[{index}] describes an unsampled token"
+            )
 
 
 def _live_token_records(
@@ -830,7 +942,11 @@ def _original_token_records(
 
 def _has_watermark_fields(records: List[TokenRecord]) -> bool:
     return any(
-        record.g is not None or record.we is not None
+        record.g is not None
+        or record.we is not None
+        or record.gb is not None
+        or record.gk is not None
+        or record.gs is not None
         for record in records
     )
 
@@ -898,6 +1014,11 @@ def _per_position(body: SaveRunRequest) -> List[CountedField]:
         ("original_frame_positions", body.original_frame_positions),
         ("alternatives", body.alternatives),
         ("original_alternatives", body.original_alternatives),
+        ("sampler_alternatives", body.sampler_alternatives),
+        (
+            "original_sampler_alternatives",
+            body.original_sampler_alternatives,
+        ),
     ]
 
 
@@ -932,6 +1053,17 @@ def _per_alternative_set(
     for name, layer in layers:
         for index, entries in enumerate(layer or []):
             fields.append((f"{name}[{index}]", entries))
+    sampler_layers = (
+        ("sampler_alternatives", body.sampler_alternatives),
+        (
+            "original_sampler_alternatives",
+            body.original_sampler_alternatives,
+        ),
+    )
+    for name, layer in sampler_layers:
+        for index, entry in enumerate(layer or []):
+            candidates = None if entry is None else entry.candidates
+            fields.append((f"{name}[{index}]", candidates))
     return fields
 
 
@@ -1005,6 +1137,27 @@ def _dump_alternatives(
                 candidate.model_dump(exclude_none=True)
                 for candidate in entry
             ]
+        )
+    return dumped
+
+
+def _dump_sampler_alternatives(
+    positions: List[Optional[SamplerAlternativeSet]],
+) -> List[Optional[Dict[str, Any]]]:
+    """Serialize sampler support and rows without losing alignment."""
+    dumped: List[Optional[Dict[str, Any]]] = []
+    for entry in positions:
+        if entry is None:
+            dumped.append(None)
+            continue
+        dumped.append(
+            {
+                "support": entry.support,
+                "candidates": [
+                    candidate.model_dump(exclude_none=True)
+                    for candidate in entry.candidates
+                ],
+            }
         )
     return dumped
 
@@ -1264,6 +1417,20 @@ def _build_bundle(
             None
             if body.original_alternatives is None
             else _dump_alternatives(body.original_alternatives)
+        ),
+        sampler_alternatives=(
+            None
+            if body.sampler_alternatives is None
+            else _dump_sampler_alternatives(
+                body.sampler_alternatives
+            )
+        ),
+        original_sampler_alternatives=(
+            None
+            if body.original_sampler_alternatives is None
+            else _dump_sampler_alternatives(
+                body.original_sampler_alternatives
+            )
         ),
         candidates=_dump_candidates(body.candidates),
         original_candidates=_dump_candidates(

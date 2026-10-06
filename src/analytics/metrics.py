@@ -772,6 +772,9 @@ def load_run_frames(
         "alternatives": None,
         "alternatives_available": False,
         "original_alternatives": None,
+        "sampler_alternatives": None,
+        "sampler_alternatives_available": False,
+        "original_sampler_alternatives": None,
         "candidates": None,
         "original_candidates": None,
     }
@@ -849,6 +852,20 @@ def load_run_frames(
     # discards the candidates from the edit position onward.
     result["original_alternatives"] = _load_alternatives(
         run_dir / "original_alternatives.json", run_dir
+    )
+    sampler_alternatives = _load_alternatives(
+        run_dir / "sampler_alternatives.json", run_dir
+    )
+    if sampler_alternatives is not None:
+        result["sampler_alternatives"] = sampler_alternatives
+        result["sampler_alternatives_available"] = any(
+            isinstance(entry, dict)
+            and isinstance(entry.get("candidates"), list)
+            and len(entry["candidates"]) > 0
+            for entry in sampler_alternatives
+        )
+    result["original_sampler_alternatives"] = _load_alternatives(
+        run_dir / "original_sampler_alternatives.json", run_dir
     )
 
     # Per captured frame rather than per position: a diffusion

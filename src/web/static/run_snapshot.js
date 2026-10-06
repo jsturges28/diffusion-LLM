@@ -62,6 +62,7 @@ var RUN_SNAPSHOT_FIELDS = [
 var RUN_SNAPSHOT_STORES = [
   "frames",
   "positionAlts",
+  "positionSamplerAlts",
   "original",
   "candidates",
   "originalCandidates",
@@ -81,7 +82,10 @@ function runSnapshotTiers(record) {
     {},
     light,
     runFramesToJson(record.frames),
-    { positionAlts: record.positionAlts },
+    {
+      positionAlts: record.positionAlts,
+      positionSamplerAlts: record.positionSamplerAlts,
+    },
     originalRunToJson(record.original)
   );
   // Candidates go first: packed, a default LLaDA run's are about a
@@ -235,6 +239,7 @@ function runSnapshotState(options) {
     source, runFramesLength(frames)
   );
   state.positionAlts = source.positionAlts || [];
+  state.positionSamplerAlts = source.positionSamplerAlts || [];
   state.candidates = runCandidatesFromSnapshot(source.candidates);
   state.originalCandidates = runSnapshotOriginalCandidates(
     source, state.candidates, state.remaskEdits

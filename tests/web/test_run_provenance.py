@@ -446,6 +446,72 @@ def test_original_watermark_flags_are_complete_but_separate() -> None:
     assert accepted.provenance.watermark.green_count == 28
 
 
+def test_watermark_pressure_and_sampler_candidates_are_coherent(
+) -> None:
+    positions = _watermark_positions()
+    sampler = []
+    for record in positions:
+        record.update({"gb": 0.1, "gk": 0.2, "gs": 0.3})
+        sampler.append(
+            {
+                "support": 2,
+                "candidates": [
+                    {
+                        "id": record["id"],
+                        "t": record["t"],
+                        "p": 0.7,
+                        "rank": 1,
+                        "g": record["g"],
+                    }
+                ],
+            }
+        )
+    accepted = _watermarked_request(
+        frame_positions=positions,
+        sampler_alternatives=sampler,
+        params={
+            "watermark": True,
+            "watermark_gamma": 0.25,
+            "watermark_delta": 2.0,
+            "alternatives": True,
+        },
+    )
+
+    assert accepted.frame_positions is not None
+    assert accepted.frame_positions[0].gb == pytest.approx(0.1)
+    assert accepted.sampler_alternatives is not None
+    assert accepted.sampler_alternatives[0] is not None
+    assert accepted.sampler_alternatives[0].support == 2
+
+
+def test_sampler_candidates_refuse_unsampled_forced_token(
+) -> None:
+    positions = _watermark_positions()
+    for index, record in enumerate(positions):
+        record.update({"gb": 0.1, "gk": 0.2})
+        if index > 0:
+            record["gs"] = 0.3
+    sampler = [None for _ in positions]
+    sampler[0] = {
+        "support": 1,
+        "candidates": [
+            {"id": 1, "t": "first", "p": 1.0, "g": False}
+        ],
+    }
+
+    with pytest.raises(ValueError, match="unsampled"):
+        _watermarked_request(
+            frame_positions=positions,
+            sampler_alternatives=sampler,
+            params={
+                "watermark": True,
+                "watermark_gamma": 0.25,
+                "watermark_delta": 2.0,
+                "alternatives": True,
+            },
+        )
+
+
 def test_the_model_commit_is_recorded_beside_the_app_s(
     switched_supervisor: None,
 ) -> None:

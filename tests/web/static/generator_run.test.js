@@ -257,6 +257,70 @@ test("snapshot and append operations read through one API", () => {
   assert.equal(append.resumeElapsedOffset(), 0);
 });
 
+test("watermark pressure and sampler candidates survive run state",
+  () => {
+  const { run, external } = harness();
+  run.begin("what ran", { watermark: true, alternatives: true });
+  const frame = appendFrame(1, "The");
+  Object.assign(frame.token, {
+    g: true,
+    we: false,
+    gb: 0.1,
+    gk: 0.2,
+    gs: 0.3,
+  });
+  frame.alts = [{ id: 3, t: "The", p: 0.4, g: true }];
+  frame.salts = {
+    support: 7,
+    candidates: [{
+      id: 3, t: "The", p: 0.6, rank: 1, g: true,
+    }],
+  };
+  run.appendFrame(frame);
+  const second = appendFrame(2, " cat");
+  Object.assign(second.token, {
+    g: false,
+    we: true,
+    gb: 0.2,
+    gk: 0.3,
+    gs: 0.4,
+  });
+  second.salts = {
+    support: 5,
+    candidates: [{
+      id: 4, t: " cat", p: 0.7, rank: 1, g: false,
+    }],
+  };
+  run.appendFrame(second);
+  finish(run, "The cat");
+  external.edit = {
+    remaskEdits: [{ frame_index: 0, token_positions: [0] }],
+  };
+
+  assert.equal(run.framePositions()[0].gb, 0.1);
+  assert.equal(
+    run.positionSamplerAlternatives(0, false).support,
+    7
+  );
+  assert.equal(run.hasSamplerAlternatives(false), true);
+  assert.equal(run.hasSamplerAlternatives(true), true);
+  const payload = run.buildSavePayload();
+  assert.equal(payload.frame_positions[0].gk, 0.2);
+  assert.equal(payload.alternatives[0][0].g, true);
+  assert.equal(payload.sampler_alternatives[0].support, 7);
+  assert.equal(
+    payload.original_sampler_alternatives[0].candidates[0].rank,
+    1
+  );
+  assert.equal(run.saveSession(), true);
+  run.reset();
+  assert.equal(run.restoreSession(), true);
+  assert.equal(
+    run.positionSamplerAlternatives(0, false).support,
+    7
+  );
+});
+
 test("reset retires every run identity and frame", () => {
   const { run } = harness();
   run.begin("what ran", { steps: 2 });
