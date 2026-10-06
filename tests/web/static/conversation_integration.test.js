@@ -59,6 +59,10 @@ function tick() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+function waitForCount() {
+  return new Promise((resolve) => setTimeout(resolve, 380));
+}
+
 function reply(body, status) {
   return Promise.resolve(response(body, status));
 }
@@ -155,6 +159,22 @@ function conversationApi() {
     state.revision = 1;
     state.turns = [];
     return reply({ conversation: manifest() }, 201);
+  }
+
+  function pagePayload() {
+    return {
+      schema_version: 2,
+      conversation_id: state.id,
+      branch_id: BRANCH_ID,
+      branch_revision: state.revision,
+      revision: state.revision,
+      catalog_revision: 1,
+      default_branch_id: BRANCH_ID,
+      turns: state.turns,
+      next_before: null,
+      has_more: false,
+      branch_points: [],
+    };
   }
 
   function append(body) {
@@ -286,19 +306,7 @@ function conversationApi() {
       return reply({ conversation: manifest() });
     }
     if (path.endsWith("/turns") && method === "GET") {
-      return reply({
-        schema_version: 2,
-        conversation_id: state.id,
-        branch_id: BRANCH_ID,
-        branch_revision: state.revision,
-        revision: state.revision,
-        catalog_revision: 1,
-        default_branch_id: BRANCH_ID,
-        turns: state.turns,
-        next_before: null,
-        has_more: false,
-        branch_points: [],
-      });
+      return reply(pagePayload());
     }
     if (path.endsWith("/turns") && method === "POST") {
       return append(body);
@@ -314,6 +322,8 @@ function conversationApi() {
 
   return {
     state,
+    manifest,
+    pagePayload,
     fetchImpl,
     releaseUpdates: () => release(state.updateWaiters),
     releaseLinks: () => release(state.linkWaiters),
@@ -571,6 +581,97 @@ test("a zero-token completion remains visible and explicit",
   assert.match(
     run.page.registry.get("status-message").textContent,
     /no text generated/
+  );
+  });
+
+test("the meter reuses the structured next-inference count",
+  async () => {
+  const api = conversationApi();
+  const run = await pageWithApi(api);
+  await finishRun(run, "First question", "First answer");
+  const prompt = run.page.registry.get("prompt-input");
+  prompt.value = "Follow up";
+  prompt.dispatch("input");
+  await waitForCount();
+  const requests = run.socket.sent
+    .map((raw) => JSON.parse(raw))
+    .filter((message) => message.type === "count_prompt");
+  assert.equal(requests.length, 1);
+  const request = requests[0];
+
+  assert.deepEqual(
+    request.messages.map((message) => message.content),
+    ["First question", "First answer", "Follow up"]
+  );
+  assert.equal(request.output_reserve, 1);
+  run.context.handleMessage({
+    type: "count_prompt_result",
+    request_id: request.request_id,
+    count: 12,
+    truncated: false,
+    context_pack: {
+      prompt_token_count: 12,
+      output_reserve: 1,
+      effective_total_budget: 4096,
+      requested_total_budget: 4096,
+      omitted_turn_count: 0,
+      first_included_index: 0,
+      included_turn_ids: [turnId(1), turnId(2), turnId(3)],
+    },
+  });
+
+  assert.equal(
+    run.page.registry.get("context-meter-value").textContent,
+    "1%"
+  );
+  assert.equal(
+    run.page.registry.get("prompt-context")
+      .classList.contains("is-empty"),
+    true
+  );
+  run.context.handleError({
+    type: "error",
+    request_type: "count_prompt",
+    request_id: request.request_id - 1,
+    message: "stale count",
+  });
+  assert.equal(
+    run.page.registry.get("context-meter-value").textContent,
+    "1%"
+  );
+  run.context.handleError({
+    type: "error",
+    request_type: "count_prompt",
+    request_id: request.request_id,
+    message: "Context count failed locally.",
+  });
+  assert.equal(
+    run.page.registry.get("context-meter-value").textContent,
+    "!"
+  );
+  assert.equal(
+    run.page.registry.get("prompt-context-note").textContent,
+    "Context count failed. Open details."
+  );
+  run.page.registry.get("btn-context-meter").click();
+  assert.equal(
+    run.page.registry.get("context-meter-detail-status").textContent,
+    "Context count failed locally."
+  );
+  run.page.registry.get("btn-context-meter-close").click();
+  run.context.applyConversationAction({
+    type: "loaded",
+    conversation: api.manifest(),
+    page: api.pagePayload(),
+  });
+  await waitForCount();
+  const recounted = run.socket.sent
+    .map((raw) => JSON.parse(raw))
+    .filter((message) => message.type === "count_prompt");
+  assert.equal(recounted.length, 2);
+  assert.equal(
+    recounted[1].request_id,
+    request.request_id + 1
   );
   });
 

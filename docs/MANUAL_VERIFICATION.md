@@ -350,6 +350,9 @@ kept when these were written:
   optional real power-loss check.
 - **449 to 450**: **not yet validated.** These cover native desktop
   message copy and stable completed-canvas height while scrubbing.
+- **451**: **not yet validated.** This covers the exact next-inference
+  context meter, its all-model recounts, omission signal, native dialog,
+  and narrow keyboard/touch layout.
 
 Update these ranges when you work through them. If an item turns out to
 be wrong rather than failing, fix the item; a scenario that no longer
@@ -5391,3 +5394,23 @@ models and target devices before anyone raises or lowers them.
     Analytics and back to verify session restore relocks the visible
     height. Finally Stop an Edit Frames resume before its first frame;
     the restored original canvas must relock at its prior height.
+
+451. **Context meter matches the next inference on every model.** On
+    LLaDA, DiffusionGemma, SmolLM3 and Mamba-3, type a Draft and compare
+    the wheel and its **Context / Token usage** dialog with the exact
+    packed-context attestation after Send. Change Thinking where
+    available, the output budget, model/device and selected Path; each
+    must dim while recounting and settle once on the new prompt, reserve
+    and effective budget. Build enough history to omit whole exchanges:
+    the amber dot and status line must appear, and included count, omitted
+    count and first included turn must agree with the run attestation.
+
+    Open and close the dialog by mouse, touch, keyboard, Escape and
+    backdrop, checking focus returns to the wheel. Resize below 700 px:
+    the fixed meter and Send must remain on one usable row and every
+    dialog value must remain reachable without horizontal clipping.
+    Disconnect and reconnect the worker during a count, and provoke an
+    over-budget Draft; stale numbers must disappear, a late result must
+    not repaint them, and the local error must remain readable. Ordinary
+    valid counts must leave the reserved footer line invisible rather
+    than moving the composer.

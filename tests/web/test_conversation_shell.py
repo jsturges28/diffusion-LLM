@@ -177,6 +177,7 @@ def test_composer_owns_prompt_settings_and_action() -> None:
         "btn-prompt-import",
         "prompt-history",
         "prompt-context",
+        "btn-context-meter",
         "btn-generate",
     }
 
@@ -184,6 +185,57 @@ def test_composer_owns_prompt_settings_and_action() -> None:
     assert "btn-save" not in _ids(block)
     assert "Draft" in block
     assert 'aria-label="Draft user message"' in block
+
+
+def test_context_meter_precedes_send_and_owns_native_dialog(
+) -> None:
+    composer = _block(_html(), "controls", "section")
+    meter_at = composer.index('id="btn-context-meter"')
+    send_at = composer.index('id="btn-generate"')
+    dialog = _block(
+        _html(), "modal-context-meter", "dialog"
+    )
+
+    assert meter_at < send_at
+    assert 'aria-haspopup="dialog"' in composer
+    assert 'aria-controls="modal-context-meter"' in composer
+    assert 'aria-labelledby="context-meter-title"' in dialog
+    assert 'id="btn-context-meter-close"' in dialog
+    assert "Packed prompt tokens" in dialog
+    assert "Omitted durable turns" in dialog
+
+
+def test_context_meter_keeps_touch_size_and_reduced_motion() -> None:
+    styles = CONVERSATION_CSS.read_text(encoding="utf-8")
+    meter = _rule(styles, "#btn-context-meter {", 500)
+    ring = _rule(styles, ".context-meter-ring {", 900)
+    output = _rule(
+        styles, ".context-meter-swatch.is-output {", 180
+    )
+    remaining = _rule(
+        styles, ".context-meter-swatch.is-remaining {", 220
+    )
+    terms = _rule(styles, ".context-meter-details dt {", 120)
+    mobile_start = styles.index("@media (max-width: 700px)")
+    mobile = _rule(
+        styles[mobile_start:], "#btn-context-meter {", 180
+    )
+    reduced_start = styles.index(
+        "@media (prefers-reduced-motion: reduce)"
+    )
+    reduced = styles[reduced_start : reduced_start + 500]
+
+    assert "width: 42px" in meter
+    assert "height: 42px" in meter
+    assert "width: 40px" in mobile
+    assert "height: 40px" in mobile
+    assert "var(--bg-surface)" in ring
+    assert "rgba(255, 255, 255, 0.4)" in ring
+    assert "border-radius: 2px" in output
+    assert "border: 2px solid" in remaining
+    assert "var(--text-secondary)" in terms
+    assert "context-meter-ring" in reduced
+    assert "animation: none" in reduced
 
 
 def test_run_settings_uses_native_disclosure_semantics() -> None:

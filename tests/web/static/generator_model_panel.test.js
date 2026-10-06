@@ -29,6 +29,7 @@ const COMPOSED_FILES = [
   "custom_select.js",
   "persist.js",
   "model_client.js",
+  "context_meter.js",
   "generator_composer.js",
   "run_settings_core.js",
   "run_settings_panel.js",

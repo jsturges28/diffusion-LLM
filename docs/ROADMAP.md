@@ -1009,32 +1009,30 @@ share one CAS-protected annotation store instead of becoming three unrelated
 flat fields. Collections still answer which artifacts belong together;
 annotations answer what the user concluded.
 
-**Conversation token usage needs two named quantities and a model-specific
-meter.** Raised on 2026-10-05 after cross-model follow-ups confirmed that the
-selected path is already packed correctly.
+**Conversation context pressure has an exact model-specific meter;
+cumulative usage remains separate.** Raised and shipped on 2026-10-05 after
+cross-model follow-ups confirmed that the selected path was already packed
+correctly.
 
-The useful Cursor-like wheel is context pressure for the next inference, not
-a claim that the model remembers every durable turn. Its ring should follow
-the selected path and resident model, using the exact context-pack count that
-already drives the Draft readout. A segmented ring can distinguish packed
-prompt tokens, the requested output reserve and remaining effective budget.
-Clicking it should open a Context / Token usage dialog that names:
+The Send-adjacent wheel is context pressure for the next inference, not a
+claim that the model remembers every durable turn. It reuses the existing
+fenced worker count, so there is no second estimate or network request. Blue
+is the exact packed prompt, amber is the output reserve, and the remainder is
+unused effective budget. A dot and status line make omitted history visible.
+The native Context / Token usage dialog names model, input mode, device,
+every token quantity, included and omitted turns, first included turn, and
+whether checkpoint capacity lowered policy.
 
-- the resident model and input mode whose tokenizer and template were used;
-- packed prompt tokens, output reserve and effective total budget;
-- included and omitted durable turn counts and the first included turn;
-- checkpoint or policy ceiling where one lowered the effective budget; and
-- optional cumulative input and generated-token totals for the selected path,
-  clearly separated from the next-request context figure.
+This recounts on Draft, output-setting, model/device and selected-path
+changes. That matters because identical conversation text tokenizes
+differently under LLaDA, DiffusionGemma and SmolLM3, while Mamba-3 packs raw
+chronological text rather than a chat template. The ordinary footer is
+status-only; exact numbers live in the wheel and dialog.
 
-That distinction matters after a model switch. The same conversation text can
-tokenize differently under LLaDA, DiffusionGemma and SmolLM3, while Mamba-3
-packs raw chronological text rather than a chat template. The ring must
-recount against the resident model and current output setting, update after a
-path change, and never describe omitted older turns as present in context.
-Cumulative totals are historical accounting and may need new per-turn token
-metadata; they must not be substituted for the exact next-inference count
-just because they are cheaper to display.
+Cumulative totals remain historical accounting. They need durable generated
+token counts per assistant turn and a decision about whether repeated input
+context counts again on every inference. They must not be substituted for
+the exact next-inference figure just because they are cheaper to display.
 
 **The Analytics table wants roving tabindex, and has not got it.**
 Recorded 2026-09-02, after the keyboard work made everything else on

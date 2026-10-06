@@ -20,6 +20,7 @@ const { loadPage } = require("./dom_stub.js");
 
 const SCRIPTS = [
   "persist.js",
+  "context_meter.js",
   "generator_composer.js",
 ];
 const HISTORY_KEY = "diffusion_prompt_history";
@@ -80,7 +81,9 @@ function loadComposer(settings) {
   composer.boot();
   composer.configure({
     modelId: "smollm3",
+    modelDisplay: "SmolLM3",
     inputMode: config.inputMode || "chat",
+    device: "cuda",
     contextLength: config.contextLength || null,
   });
   return {
@@ -151,6 +154,44 @@ test("configuration restores the draft and completion copy", () => {
   );
 });
 
+test("model reconfiguration retires and recounts old context",
+  async () => {
+  const h = loadComposer({
+    outputBudget: 20,
+    countReady: true,
+    contextLength: 4096,
+  });
+  h.input.value = "Recount this";
+  h.input.dispatch("input");
+  await waitForCount();
+  h.composer.handleCountResult({
+    request_id: 1,
+    count: 100,
+    truncated: false,
+  });
+  assert.equal(
+    h.page.registry.get("context-meter-value").textContent,
+    "3%"
+  );
+
+  h.composer.configure({
+    modelId: "mamba3",
+    modelDisplay: "Mamba-3",
+    inputMode: "completion",
+    device: "cpu",
+    contextLength: 2048,
+  });
+  assert.equal(
+    h.page.registry.get("context-meter-value").textContent,
+    "--"
+  );
+  h.composer.textChanged();
+  await waitForCount();
+
+  assert.equal(h.state.sent.length, 2);
+  assert.equal(h.state.sent[1].request_id, 3);
+});
+
 test("typing persists only the prompt member", () => {
   const h = loadComposer({
     draftState: {
@@ -198,6 +239,24 @@ test("Enter submits while Shift Enter remains text input", () => {
 
   assert.equal(h.state.submitted, 1);
   assert.equal(prevented, 1);
+});
+
+test("whitespace-only drafts have no next-inference context",
+  async () => {
+  const h = loadComposer({
+    countReady: true,
+    contextLength: 4096,
+  });
+  h.input.value = " \n ";
+
+  h.input.dispatch("input");
+  await waitForCount();
+
+  assert.deepEqual(h.state.sent, []);
+  assert.equal(
+    h.page.registry.get("context-meter-value").textContent,
+    "--"
+  );
 });
 
 test("generation records the same de-duplicated history", () => {
@@ -257,7 +316,6 @@ test("context requests are fenced and repaint budget warnings",
       contextLength: 100,
     });
     const row = h.page.registry.get("prompt-context");
-    const count = h.page.registry.get("prompt-context-count");
     const note = h.page.registry.get("prompt-context-note");
     h.input.value = "Explain diffusion";
 
@@ -269,13 +327,17 @@ test("context requests are fenced and repaint budget warnings",
       text: "Explain diffusion",
       thinking: true,
       request_id: 1,
+      output_reserve: 20,
     }]);
     h.composer.handleCountResult({
       request_id: 1,
       count: 90,
       truncated: false,
     });
-    assert.equal(count.textContent, "90 / 100 tokens");
+    assert.equal(
+      h.page.registry.get("context-meter-value").textContent,
+      "!"
+    );
     assert.equal(
       note.textContent,
       "prompt + 20 output exceeds the window"
@@ -289,6 +351,15 @@ test("context requests are fenced and repaint budget warnings",
     h.state.thinking = false;
     h.composer.parametersChanged();
     assert.equal(row.classList.contains("is-empty"), true);
+    h.composer.handleCountResult({
+      request_id: 1,
+      count: 1,
+      truncated: false,
+    });
+    assert.equal(
+      h.page.registry.get("context-meter-value").textContent,
+      "\u2026"
+    );
     await waitForCount();
 
     assert.equal(h.state.sent[1].request_id, 2);
@@ -326,14 +397,18 @@ test("structured counts report packed budget and omitted turns",
       truncated: false,
       context_pack: {
         prompt_token_count: 120,
+        output_reserve: 64,
         effective_total_budget: 4096,
+        requested_total_budget: 4096,
         omitted_turn_count: 6,
+        first_included_index: 6,
+        included_turn_ids: ["turn-3", "turn-4", "turn-5"],
       },
     });
 
     assert.equal(
-      h.page.registry.get("prompt-context-count").textContent,
-      "120 / 4,096 tokens packed"
+      h.page.registry.get("context-meter-value").textContent,
+      "4%"
     );
     assert.equal(
       h.page.registry.get("prompt-context-note").textContent,
@@ -341,3 +416,87 @@ test("structured counts report packed budget and omitted turns",
     );
   }
 );
+
+test("conversation changes recount unchanged draft text", async () => {
+  const h = loadComposer({
+    outputBudget: 64,
+    countReady: true,
+    contextLength: 4096,
+  });
+  h.input.value = "Same draft";
+  h.input.dispatch("input");
+  await waitForCount();
+  h.composer.handleCountResult({
+    request_id: 1,
+    count: 20,
+    truncated: false,
+    context_pack: {
+      prompt_token_count: 20,
+      output_reserve: 64,
+      effective_total_budget: 4096,
+      requested_total_budget: 4096,
+      omitted_turn_count: 0,
+      first_included_index: 0,
+      included_turn_ids: ["turn-1"],
+    },
+  });
+
+  h.composer.conversationChanged();
+  assert.equal(
+    h.page.registry.get("context-meter-value").textContent,
+    "\u2026"
+  );
+  await waitForCount();
+
+  assert.equal(h.state.sent.length, 2);
+  assert.equal(h.state.sent[1].request_id, 2);
+  assert.equal(
+    h.page.registry.get("prompt-context")
+      .classList.contains("is-empty"),
+    true
+  );
+});
+
+test("count errors are request-fenced and rendered locally",
+  async () => {
+  const h = loadComposer({
+    outputBudget: 64,
+    countReady: true,
+    contextLength: 4096,
+  });
+  h.input.value = "Too much context";
+  h.input.dispatch("input");
+  await waitForCount();
+
+  assert.equal(h.composer.handleCountError({
+    request_type: "count_prompt",
+    request_id: 0,
+    message: "stale",
+  }), true);
+  assert.equal(
+    h.page.registry.get("context-meter-value").textContent,
+    "\u2026"
+  );
+
+  assert.equal(h.composer.handleCountError({
+    request_type: "count_prompt",
+    request_id: 1,
+    message: "The pending turn exceeds the effective budget.",
+  }), true);
+  assert.equal(
+    h.page.registry.get("context-meter-value").textContent,
+    "!"
+  );
+  assert.equal(
+    h.page.registry.get("prompt-context-note").textContent,
+    "Context count failed. Open details."
+  );
+  assert.equal(
+    h.page.registry.get("prompt-context-note").title,
+    "The pending turn exceeds the effective budget."
+  );
+  assert.equal(h.composer.handleCountError({
+    request_type: "probe",
+    request_id: 1,
+  }), false);
+  });

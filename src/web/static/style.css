@@ -583,9 +583,9 @@ body {
   background: var(--accent-dim);
 }
 
-/* Context-window readout, under the prompt box. Right-aligned so it
-   reads as a meter on the box rather than as a caption competing with
-   the label above it. */
+/* Context warnings and omission status under the prompt box. Exact
+   ordinary counts live in the circular meter beside Send; this line
+   stays reserved so a warning never moves the composer. */
 .prompt-context {
   /* The reserved height and the filled height are the same number by
      construction. They used to be 13px against whatever a 10px line
@@ -604,18 +604,21 @@ body {
   line-height: var(--prompt-context-line);
   color: var(--text-dim);
   min-height: var(--prompt-context-line);
+  overflow: hidden;
 }
 
-/* No count yet, because only a ready worker can produce one. Holds
-   its line so everything below the prompt box stays put; `display:
-   none` here meant the whole column dropped a step on every load,
-   the moment the first count came back. */
+/* No warning or omission. Holds its line so a status never moves the
+   composer; `display: none` here caused layout shifts. */
 .prompt-context.is-empty {
   visibility: hidden;
 }
 
 .prompt-context-note {
+  min-width: 0;
   color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Amber for the run that will be cut short, red for the one that will

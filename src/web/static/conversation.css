@@ -721,7 +721,177 @@
   display: flex;
   flex: 0 0 auto;
   align-items: flex-end;
+  gap: 8px;
   padding-bottom: calc(1.3em + 4px);
+}
+
+#btn-context-meter {
+  --context-prompt-end: 0%;
+  --context-output-end: 0%;
+  position: relative;
+  display: grid;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--text-secondary);
+}
+
+#btn-context-meter:hover:not([aria-disabled="true"]),
+#btn-context-meter:focus-visible {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+#btn-context-meter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+#btn-context-meter[aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.context-meter-ring {
+  position: relative;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 50%;
+  background: conic-gradient(
+    #4fc3f7 0 calc(var(--context-prompt-end) - 0.35%),
+    var(--bg-surface)
+      calc(var(--context-prompt-end) - 0.35%)
+      calc(var(--context-prompt-end) + 0.35%),
+    var(--warn)
+      calc(var(--context-prompt-end) + 0.35%)
+      calc(var(--context-output-end) - 0.35%),
+    var(--bg-surface)
+      calc(var(--context-output-end) - 0.35%)
+      calc(var(--context-output-end) + 0.35%),
+    rgba(255, 255, 255, 0.4)
+      calc(var(--context-output-end) + 0.35%) 100%
+  );
+}
+
+.context-meter-ring::after {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--bg-surface);
+  content: "";
+}
+
+#context-meter-value {
+  position: relative;
+  z-index: 1;
+  font-size: 8px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.04em;
+}
+
+.context-meter-omitted {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 8px;
+  height: 8px;
+  border: 1px solid var(--bg-surface);
+  border-radius: 50%;
+  background: var(--warn);
+  box-shadow: 0 0 6px rgba(255, 177, 66, 0.7);
+}
+
+#btn-context-meter.is-pending .context-meter-ring {
+  animation: context-meter-pending 1.2s ease-in-out infinite;
+}
+
+#btn-context-meter.is-error .context-meter-ring,
+#btn-context-meter.is-over .context-meter-ring {
+  background: conic-gradient(var(--danger) 0 100%);
+}
+
+@keyframes context-meter-pending {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.context-meter-dialog {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.context-meter-detail-status {
+  min-height: 1.5em;
+  color: var(--text-secondary);
+}
+
+.context-meter-detail-status.is-error {
+  color: var(--danger);
+}
+
+.context-meter-detail-status.has-omissions {
+  color: var(--warn);
+}
+
+.context-meter-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 12px 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.context-meter-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.context-meter-swatch {
+  box-sizing: border-box;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.context-meter-swatch.is-prompt {
+  background: #4fc3f7;
+}
+
+.context-meter-swatch.is-output {
+  border-radius: 2px;
+  background: var(--warn);
+}
+
+.context-meter-swatch.is-remaining {
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  background: transparent;
+}
+
+.context-meter-details {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 7px 18px;
+  margin: 0;
+}
+
+.context-meter-details dt {
+  color: var(--text-secondary);
+}
+
+.context-meter-details dd {
+  margin: 0;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
 }
 
 #composer-actions #btn-generate {
@@ -806,6 +976,21 @@
     padding-left: 12px;
   }
 
+  #btn-context-meter {
+    width: 40px;
+    height: 40px;
+    flex-basis: 40px;
+  }
+
+  .context-meter-details {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
+  }
+
+  .context-meter-details dd {
+    margin-bottom: 7px;
+  }
+
   .conversation-retry-box {
     width: calc(100% - 20px);
     max-height: calc(100dvh - 20px);
@@ -840,6 +1025,10 @@
 
   .conversation-action-copy.is-copied
     .conversation-action-icon-check {
+    animation: none;
+  }
+
+  #btn-context-meter.is-pending .context-meter-ring {
     animation: none;
   }
 }

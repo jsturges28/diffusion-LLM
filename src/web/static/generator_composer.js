@@ -1,5 +1,5 @@
 // The generator's prompt composer: text entry, prompt history, file
-// import, draft persistence and the context-window readout.
+// import, draft persistence and exact next-inference context state.
 //
 // Loaded as a classic script before app.js. It defines one global
 // factory and keeps both its DOM references and mutable state inside
@@ -59,10 +59,9 @@ function generatorComposerCreate(options) {
   var promptModeInfo = requiredElement("prompt-mode-info");
   var promptModeTip = requiredElement("prompt-mode-tip");
   var promptContextRow = requiredElement("prompt-context");
-  var promptContextCount =
-    requiredElement("prompt-context-count");
   var promptContextNote =
     requiredElement("prompt-context-note");
+  var contextMeter = contextMeterCreate();
   var promptHistoryGroup = requiredElement("prompt-history");
   var btnPromptImport = requiredElement("btn-prompt-import");
   var promptFileInput = requiredElement("prompt-file-input");
@@ -97,6 +96,7 @@ function generatorComposerCreate(options) {
   // Counting is a readout, not a step blocking the user's gesture,
   // so it waits longer than typed-token preview requests.
   var PROMPT_COUNT_DEBOUNCE_MS = 350;
+  var PROMPT_COUNT_REQUEST_MAX = 2147483647;
 
   var PROMPT_MODE_COPY = {
     chat: {
@@ -129,6 +129,7 @@ function generatorComposerCreate(options) {
   var promptCountLatest = null;
   var promptCountThinkingSent = false;
   var promptCountOutputSent = 0;
+  var configured = false;
   var wired = false;
 
   function requiredElement(id) {
@@ -147,6 +148,7 @@ function generatorComposerCreate(options) {
     wirePrompt();
     wireHistory();
     wireImport();
+    contextMeter.wire();
   }
 
   function wirePrompt() {
@@ -251,13 +253,28 @@ function generatorComposerCreate(options) {
         "generatorComposer.configure needs a configuration"
       );
     }
+    if (configured) {
+      if (promptCountTimer !== null) {
+        clearTimeout(promptCountTimer);
+        promptCountTimer = null;
+      }
+      countUnavailable();
+    }
     modelId = typeof config.modelId === "string"
       ? config.modelId
       : null;
     contextLength = contextLengthFrom(config.contextLength);
+    contextMeter.configure({
+      modelId: modelId,
+      modelDisplay: config.modelDisplay,
+      inputMode: config.inputMode,
+      device: config.device,
+      contextLength: contextLength,
+    });
     applyPromptMode(config.inputMode);
     restoreDraft();
     renderPromptContext();
+    configured = true;
   }
 
   function contextLengthFrom(value) {
@@ -643,8 +660,14 @@ function generatorComposerCreate(options) {
   }
 
   function promptTextChanged() {
+    advancePromptCountRequest();
     promptCountLatest = null;
     renderPromptContext();
+    if (promptInput.value.trim() === "" || !isCountReady()) {
+      contextMeter.unavailable();
+    } else {
+      contextMeter.pending();
+    }
     if (promptCountTimer !== null) {
       clearTimeout(promptCountTimer);
     }
@@ -656,9 +679,10 @@ function generatorComposerCreate(options) {
   function requestPromptCount() {
     promptCountTimer = null;
     if (!isCountReady()) {
+      contextMeter.unavailable();
       return;
     }
-    var text = promptInput.value;
+    var text = promptInput.value.trim();
     var thinking = Boolean(readThinking());
     if (text === "") {
       promptCountLatest = {
@@ -666,19 +690,21 @@ function generatorComposerCreate(options) {
         truncated: false,
         thinking: thinking,
       };
+      contextMeter.unavailable();
       renderPromptContext();
       return;
     }
-    var requestId = promptCountRequest + 1;
+    var requestId = promptCountRequest;
+    var outputReserve = outputReserveTokens();
     sendCountPrompt({
       type: "count_prompt",
       text: text,
       thinking: thinking,
       request_id: requestId,
+      output_reserve: outputReserve,
     });
-    promptCountRequest = requestId;
     promptCountThinkingSent = thinking;
-    promptCountOutputSent = outputBudgetTokens();
+    promptCountOutputSent = outputReserve;
   }
 
   function handleCountResult(message) {
@@ -687,8 +713,8 @@ function generatorComposerCreate(options) {
       return;
     }
     promptCountLatest = {
-      count: Number(message.count) || 0,
-      truncated: Boolean(message.truncated),
+      count: message.count,
+      truncated: message.truncated,
       thinking: promptCountThinkingSent,
       outputReserve: promptCountOutputSent,
       contextPack:
@@ -697,62 +723,101 @@ function generatorComposerCreate(options) {
           ? message.context_pack
           : null,
     };
+    if (
+      promptCountLatest.contextPack === null
+      && contextLength === null
+    ) {
+      contextMeter.unavailable();
+    } else {
+      contextMeter.ready(promptCountLatest);
+    }
     renderPromptContext();
+  }
+
+  function handleCountError(message) {
+    if (
+      !message
+      || message.request_type !== "count_prompt"
+    ) {
+      return false;
+    }
+    if (message.request_id !== promptCountRequest) {
+      return true;
+    }
+    promptCountLatest = null;
+    var text = typeof message.message === "string"
+      ? message.message
+      : "Context could not be counted.";
+    contextMeter.error(text);
+    promptContextRow.classList.remove("is-empty", "is-warning");
+    promptContextRow.classList.add("is-over");
+    promptContextNote.textContent =
+      "Context count failed. Open details.";
+    promptContextNote.title = text;
+    return true;
+  }
+
+  function countUnavailable() {
+    advancePromptCountRequest();
+    promptCountLatest = null;
+    clearPromptContextStatus();
+    contextMeter.unavailable();
+  }
+
+  function advancePromptCountRequest() {
+    promptCountRequest = (
+      promptCountRequest % PROMPT_COUNT_REQUEST_MAX
+    ) + 1;
   }
 
   function parametersChanged() {
+    var thinking = Boolean(readThinking());
+    var outputReserve = outputReserveTokens();
     if (
-      promptCountLatest !== null
-      && promptCountLatest.thinking !== Boolean(readThinking())
+      promptInput.value.trim() !== ""
+      && promptCountThinkingSent !== thinking
     ) {
       promptTextChanged();
       return;
     }
+    if (promptCountLatest === null) {
+      if (
+        promptInput.value.trim() !== ""
+        && promptCountRequest > 0
+        && promptCountOutputSent !== outputReserve
+      ) {
+        promptTextChanged();
+      }
+      return;
+    }
     if (
-      promptCountLatest !== null
-      && promptCountLatest.contextPack !== null
+      promptCountLatest.contextPack !== null
       && promptCountLatest.outputReserve
-        !== outputBudgetTokens()
+        !== outputReserve
     ) {
       promptTextChanged();
       return;
+    }
+    promptCountLatest.outputReserve = outputReserve;
+    if (contextLength !== null) {
+      contextMeter.ready(promptCountLatest);
     }
     renderPromptContext();
   }
 
-  function outputBudgetTokens() {
+  function outputReserveTokens() {
     var budget = readOutputBudget();
     if (typeof budget !== "number" || !isFinite(budget)) {
-      return 0;
+      return 1;
     }
-    return Math.max(0, Math.round(budget));
+    return Math.max(1, Math.round(budget));
   }
 
   function renderPromptContext() {
     if (promptCountLatest === null) {
-      // Keep the row in the layout, empty. Removing it would move
-      // everything below the prompt when the first answer arrives.
-      promptContextRow.classList.add("is-empty");
+      clearPromptContextStatus();
       return;
     }
-    var count = promptCountLatest.count;
-    var text = count.toLocaleString();
-    var packed = promptCountLatest.contextPack;
-    if (
-      packed
-      && Number.isInteger(packed.effective_total_budget)
-    ) {
-      text += " / "
-        + packed.effective_total_budget.toLocaleString();
-      text += " tokens packed";
-    } else if (contextLength !== null) {
-      text += " / " + contextLength.toLocaleString();
-      text += count === 1 ? " token" : " tokens";
-    } else {
-      text += count === 1 ? " token" : " tokens";
-    }
-    promptContextCount.textContent = text;
-    promptContextRow.classList.remove("is-empty");
     applyPromptContextNote(promptCountLatest);
   }
 
@@ -760,12 +825,18 @@ function generatorComposerCreate(options) {
     var packed = latest.contextPack;
     if (packed && Number.isInteger(packed.omitted_turn_count)) {
       var omitted = packed.omitted_turn_count;
+      if (omitted === 0) {
+        clearPromptContextStatus();
+        return;
+      }
+      promptContextRow.classList.remove("is-empty", "is-over");
+      promptContextRow.classList.add("is-warning");
       promptContextNote.textContent =
         omitted.toLocaleString()
         + " earlier turn"
         + (omitted === 1 ? "" : "s")
         + " omitted from this inference";
-      promptContextRow.classList.remove("is-warning", "is-over");
+      promptContextNote.title = promptContextNote.textContent;
       return;
     }
     applyPromptContextWarning(latest.count, latest.truncated);
@@ -775,7 +846,7 @@ function generatorComposerCreate(options) {
     var note = "";
     var over = false;
     if (contextLength !== null) {
-      var budget = outputBudgetTokens();
+      var budget = outputReserveTokens();
       // A truncated count hit a cap beyond every supported context,
       // so truncation itself proves that the prompt is over.
       if (truncated || count > contextLength) {
@@ -788,11 +859,20 @@ function generatorComposerCreate(options) {
           + " output exceeds the window";
       }
     }
-    promptContextNote.textContent = note;
     promptContextRow.classList.toggle(
       "is-warning", note !== ""
     );
     promptContextRow.classList.toggle("is-over", over);
+    promptContextRow.classList.toggle("is-empty", note === "");
+    promptContextNote.textContent = note;
+    promptContextNote.title = note;
+  }
+
+  function clearPromptContextStatus() {
+    promptContextNote.textContent = "";
+    promptContextNote.title = "";
+    promptContextRow.classList.add("is-empty");
+    promptContextRow.classList.remove("is-warning", "is-over");
   }
 
   return {
@@ -807,8 +887,12 @@ function generatorComposerCreate(options) {
     saveDraft: saveDraft,
     prepareGeneration: prepareGeneration,
     textChanged: promptTextChanged,
+    conversationChanged: promptTextChanged,
     parametersChanged: parametersChanged,
     handleCountResult: handleCountResult,
+    handleCountError: handleCountError,
+    countUnavailable: countUnavailable,
     closeImport: closeImport,
+    closeContextMeter: contextMeter.close,
   };
 }

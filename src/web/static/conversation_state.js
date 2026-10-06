@@ -92,6 +92,21 @@ function conversationStateReduce(state, action) {
   return conversationStateSeal(next);
 }
 
+function conversationStateActionChangesMessages(action) {
+  if (!action || typeof action.type !== "string") {
+    return false;
+  }
+  return (
+    action.type === "clear"
+    || action.type === "created"
+    || action.type === "loaded"
+    || action.type === "forked"
+    || action.type === "older_loaded"
+    || action.type === "appended"
+    || action.type === "assistant_updated"
+  );
+}
+
 function conversationStateCreated(conversation) {
   var manifest = conversationStateManifest(conversation);
   return {

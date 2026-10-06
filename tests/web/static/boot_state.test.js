@@ -162,7 +162,7 @@ test("the resident model is known at first paint", () => {
   assert.equal(panel.activeModel().display_name, "SmolLM3-3B");
 });
 
-test("the composed context readout uses the boot window",
+test("the first-turn context meter uses structured policy packing",
   async () => {
     const page = loadPage({
       WebSocket: OpenSocket,
@@ -180,24 +180,40 @@ test("the composed context readout uses the boot window",
 
     const request = JSON.parse(socket.sent[0]);
     assert.deepEqual(request, {
+      messages: [{
+        role: "user",
+        content: "Explain diffusion",
+        turn_id: "00000001",
+      }],
+      candidate_turn_offset: 0,
       type: "count_prompt",
-      text: "Explain diffusion",
       thinking: false,
       request_id: 1,
+      output_reserve: 256,
     });
     socket.deliver({
       type: "count_prompt_result",
       request_id: 1,
-      count: 65400,
+      count: 120,
       truncated: false,
+      context_pack: {
+        included_turn_ids: ["00000001"],
+        first_included_index: 0,
+        omitted_turn_count: 0,
+        prompt_token_count: 120,
+        output_reserve: 256,
+        requested_total_budget: 4096,
+        effective_total_budget: 4096,
+      },
     });
     assert.equal(
-      page.registry.get("prompt-context-count").textContent,
-      "65,400 / 65,536 tokens"
+      page.registry.get("context-meter-value").textContent,
+      "9%"
     );
     assert.equal(
-      page.registry.get("prompt-context-note").textContent,
-      "prompt + 256 output exceeds the window"
+      page.registry.get("prompt-context")
+        .classList.contains("is-empty"),
+      true
     );
   }
 );

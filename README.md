@@ -164,6 +164,8 @@ browser. Inference packs the newest exact whole exchanges that fit,
 reports omitted earlier turns, and sends Mamba-3 the same chronology as
 raw completion text. Earlier responses retain text; only an explicitly
 saved response retains and links its XAI run.
+A Send-adjacent meter shows exact next-inference context pressure and
+opens the complete packed prompt, output reserve and omission details.
 User cards offer Copy, Edit and Delete from this path, assistant cards
 offer Copy and Retry, and visible Path arrows browse every preserved
 alternate.

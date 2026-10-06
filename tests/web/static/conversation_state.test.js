@@ -100,6 +100,37 @@ function page(start, finish, hasMore, revision) {
   };
 }
 
+test("only message-changing actions request a context recount", () => {
+  const api = load();
+  for (const type of [
+    "clear",
+    "created",
+    "loaded",
+    "forked",
+    "older_loaded",
+    "appended",
+    "assistant_updated",
+  ]) {
+    assert.equal(
+      api.conversationStateActionChangesMessages({ type }),
+      true,
+      type
+    );
+  }
+  for (const type of [
+    "older_started",
+    "run_linked",
+    "catalog_refreshed",
+    "failed",
+  ]) {
+    assert.equal(
+      api.conversationStateActionChangesMessages({ type }),
+      false,
+      type
+    );
+  }
+});
+
 function loaded(api, start, finish, hasMore) {
   return api.conversationStateReduce(
     api.conversationStateCreate(),

@@ -472,13 +472,26 @@
               placeholder="Enter a prompt..."
               spellcheck="false">Write a short explanation of REST APIs and show a Python requests example.</textarea>
             <div id="prompt-context"
-              class="prompt-context is-empty">
-              <span id="prompt-context-count"></span>
+              class="prompt-context is-empty"
+              role="status" aria-live="polite" aria-atomic="true">
               <span id="prompt-context-note"
                 class="prompt-context-note"></span>
             </div>
           </div>
           <div id="composer-actions">
+            <button id="btn-context-meter" class="context-meter"
+              type="button" aria-disabled="true"
+              aria-label="Next-inference context unavailable"
+              aria-haspopup="dialog"
+              aria-controls="modal-context-meter"
+              aria-expanded="false">
+              <span class="context-meter-ring" aria-hidden="true">
+                <span id="context-meter-value">--</span>
+              </span>
+              <span id="context-meter-omitted"
+                class="context-meter-omitted"
+                aria-hidden="true" hidden></span>
+            </button>
             <button id="btn-generate" type="button" disabled>
               <span id="btn-generate-label">Send</span>
             </button>
@@ -573,6 +586,60 @@
     </div>
   </dialog>
 
+  <dialog id="modal-context-meter" class="modal-overlay"
+    aria-labelledby="context-meter-title"
+    aria-describedby="context-meter-intro
+      context-meter-detail-status">
+    <div class="modal-box context-meter-dialog"
+      tabindex="-1" autofocus>
+      <button class="modal-close" id="btn-context-meter-close"
+        type="button" aria-label="Close">&times;</button>
+      <h2 id="context-meter-title">Context / Token usage</h2>
+      <div class="modal-body">
+        <p id="context-meter-intro">Exact context reserved for the
+          next inference. This is not a cumulative conversation
+          total.</p>
+        <p id="context-meter-detail-status"
+          class="context-meter-detail-status"
+          role="status" aria-live="polite"></p>
+        <div class="context-meter-legend" aria-label="Ring legend">
+          <span><i class="context-meter-swatch is-prompt"
+            aria-hidden="true"></i>Packed prompt</span>
+          <span><i class="context-meter-swatch is-output"
+            aria-hidden="true"></i>Reserved output</span>
+          <span><i class="context-meter-swatch is-remaining"
+            aria-hidden="true"></i>Remaining</span>
+        </div>
+        <dl class="context-meter-details">
+          <dt>Model</dt>
+          <dd id="context-meter-model"></dd>
+          <dt>Input mode</dt>
+          <dd id="context-meter-mode"></dd>
+          <dt>Device</dt>
+          <dd id="context-meter-device"></dd>
+          <dt>Packed prompt tokens</dt>
+          <dd id="context-meter-prompt"></dd>
+          <dt>Reserved output tokens</dt>
+          <dd id="context-meter-output"></dd>
+          <dt>Remaining tokens</dt>
+          <dd id="context-meter-remaining"></dd>
+          <dt>Effective total budget</dt>
+          <dd id="context-meter-effective"></dd>
+          <dt>Requested policy budget</dt>
+          <dd id="context-meter-requested"></dd>
+          <dt>Included turns, including Draft</dt>
+          <dd id="context-meter-included"></dd>
+          <dt>Omitted durable turns</dt>
+          <dd id="context-meter-omitted-detail"></dd>
+          <dt>First included turn</dt>
+          <dd id="context-meter-first"></dd>
+          <dt>Budget source</dt>
+          <dd id="context-meter-limit-note"></dd>
+        </dl>
+      </div>
+    </div>
+  </dialog>
+
   <!-- Tokenizer-only KGW detector for the resident AR worker. -->
   <dialog id="modal-watermark-detector" class="modal-overlay">
     <div class="modal-box watermark-detector-box" tabindex="-1"
@@ -625,7 +692,7 @@
       <h2><span class="title-accent">LLM</span> Visualizer</h2>
       <div class="modal-body">
         <p>This tool visualizes how language models actually produce text, in real time. Its depth is in <strong>discrete diffusion</strong>: instead of generating one token at a time (left to right), a diffusion LLM starts from noise or masked tokens and iteratively refines an entire block over many denoising steps. A compact <strong>autoregressive</strong> (left-to-right) model runs alongside them as a baseline for contrast, and a <strong>state-space</strong> model shows what a fixed-size memory keeps and forgets. Use the <strong>Model</strong> selector in the header to switch between the available models (only one is resident in GPU memory at a time).</p>
-        <p>Generation is organized as a durable, branching conversation: compact cards stay in chronological order, the newest selected assistant owns the live explainability workspace, and a <strong>Draft</strong> user card follows the thread. User messages offer Copy, Edit and Delete from this path; assistant messages offer Copy and Retry, with visible Path arrows preserving every alternate. Edit and Retry each open independent <strong>Run settings</strong> seeded from the Draft, then freeze the first valid configuration through generation and deferred recovery without changing the Draft. These conversation paths change which messages led to a response, while <strong>Edit Frames</strong> and <strong>What If?</strong> intervene only inside the exact active tail run. Context is packed from a bounded recent suffix without summaries or partial exchanges, and explicitly saved XAI runs link back to the response that produced them.</p>
+        <p>Generation is organized as a durable, branching conversation: compact cards stay in chronological order, the newest selected assistant owns the live explainability workspace, and a <strong>Draft</strong> user card follows the thread. User messages offer Copy, Edit and Delete from this path; assistant messages offer Copy and Retry, with visible Path arrows preserving every alternate. Edit and Retry each open independent <strong>Run settings</strong> seeded from the Draft, then freeze the first valid configuration through generation and deferred recovery without changing the Draft. A circular meter beside Send shows exact context pressure for the next inference and opens a detailed token-usage dialog. These conversation paths change which messages led to a response, while <strong>Edit Frames</strong> and <strong>What If?</strong> intervene only inside the exact active tail run. Context is packed from a bounded recent suffix without summaries or partial exchanges, and explicitly saved XAI runs link back to the response that produced them.</p>
         <h3>How diffusion LLMs work</h3>
         <p>The <strong>forward process</strong> corrupts text by independently replacing each token with a placeholder at a rate controlled by a noise schedule. The <strong>reverse process</strong> starts from a corrupted canvas and uses a Transformer with bidirectional attention to predict all positions simultaneously, then re-noises (re-masks) the least confident predictions. This repeats for <em>N</em> steps until the sequence converges. Unresolved positions are shown as <code>░</code> until they stabilize, and a Settings toggle can draw the prediction behind each one instead.</p>
         <h3>Models</h3>
@@ -714,12 +781,11 @@
           <li>Use the icons below a user message to Copy, Edit or Delete from this path, and those below an assistant response to Copy or Retry. Edit and Retry open independent Run settings seeded from the Draft. Adjust or Reset them without changing the Draft; the first valid confirmation freezes that action's exact configuration through launch, replay and deferred recovery. Visible Path arrows browse the preserved alternatives.</li>
         </ol>
         <h4>The prompt box</h4>
-        <p>Below the text area, a readout says what your prompt costs against the model's <strong>context window</strong>, as in <code>1,240 / 65,536</code>. The figure on the left is not a character count: it is the number of tokens the model will actually receive, which includes the chat template's role markers and changes when <strong>Thinking</strong> is switched on, so it is counted by the same code that builds the real input rather than estimated here. The figure on the right is read from the checkpoint that is loaded, not from a table of model names, so it is right even for a checkpoint that has since changed. It appears once a model is resident and updates as you type, a moment behind your keystrokes.</p>
-        <p>Conversation history uses a separate <strong>provisional context policy</strong>, not a measured checkpoint window. On GPU it defaults to 4,096 total tokens and allows a request up to 8,192; SmolLM3 and Mamba-3 use 2,048 by default and at most 4,096 on CPU. Packing reserves the requested output first, always keeps the pending user turn, then keeps as many newest whole exchanges as fit. It never summarizes or cuts a turn. The readout shows the packed count, effective budget, and how many earlier durable turns this inference omitted.</p>
-        <p>The readout warns in two ways, and they mean different things, so they are coloured differently. <em>Over the context window</em>, in <strong>red</strong>, means the prompt alone does not fit, so the run is <strong>refused</strong> if you try it: there is no output length that would make it work, and the message says by how much you are over. <em>Prompt + N output exceeds the window</em>, in <strong>amber</strong>, means the prompt fits but the whole output budget will not, and that run <strong>does</strong> go ahead: it generates until the window is full and stops there, which is often the shorter answer you wanted rather than a mistake. Lower <strong>Max Tokens</strong> (or <strong>Gen Length</strong>) if you would rather have the full budget on a shorter prompt. Apart from either warning, a prompt over 1,000,000 characters is refused on every model, Mamba-3 included, though it has no window to be over.</p>
+        <p>The circular meter immediately left of <strong>Send</strong> shows exact context pressure for the next inference. Blue is the packed prompt, including the resident model's real chat template where it has one; amber is the requested output reserve; and the remainder is unused effective capacity. The center is their combined percentage. It updates a moment after you type or change a path or output budget. This is not a cumulative total of tokens used across the conversation.</p>
+        <p>Click the meter to open <strong>Context / Token usage</strong>. The dialog names the model, input mode and device; packed prompt, reserved output, remaining and effective tokens; included and omitted turn counts; the first included turn; and whether the loaded checkpoint lowered the policy budget. Conversation history uses a <strong>provisional context policy</strong>: 4,096 total tokens by default and up to 8,192 on GPU, or 2,048 / 4,096 for SmolLM3 and Mamba-3 on CPU. Packing always keeps the pending user turn, then keeps as many newest whole exchanges as fit. It never summarizes or cuts a turn.</p>
+        <p>A small amber dot and the line under the prompt warn when older turns were omitted. A red meter and status mean the next inference could not be counted or does not fit. Lower <strong>Max Tokens</strong> or <strong>Gen Length</strong> if the output reserve is the problem. A prompt over 1,000,000 characters is refused on every model.</p>
         <p>The label above the box tells you what kind of prompt the resident model wants. <strong>Prompt</strong> means an instruction-tuned model that answers what you write. <strong>Text to continue</strong> means a base model, Mamba-3 today, that writes on from where your text stops instead, so a question typed at one gets a longer list of questions rather than a reply. The <strong>?</strong> beside that label says how to get an answer anyway: begin it yourself, as in <em>A REST API is</em>, and the model finishes it. If it selects EOS before writing a token, the turn says <strong>No output</strong>; Retry can sample another continuation. The distinction is declared per model rather than guessed, so the box cannot describe one wrongly.</p>
-        <p>It turns <strong style="color:#ffb400;">amber</strong> when the prompt plus your output budget would not fit in the window (<strong>Gen Length</strong> for LLaDA, <strong>Max Tokens</strong> for the others), which is the case worth catching before you run rather than after. For DiffusionGemma the comparison is against the window, not the 256-token canvas: a longer budget legitimately chains several canvases.</p>
-        <p>The <strong>import</strong> button, at the top right of the prompt box, loads a <code>.txt</code> or <code>.md</code> file into it. You can also drag a file onto the text area. The file is read in your browser and never uploaded anywhere. Markdown goes in as written, since the model reads it perfectly well and stripping it would misrepresent the file. If the prompt box is not empty, you are asked before it is replaced. Very large files are refused rather than truncated silently, and an import that lands tells you how many characters arrived; the readout above then says immediately what fraction of the window the file has taken, which is usually the thing you wanted to know.</p>
+        <p>The <strong>import</strong> button, at the top right of the prompt box, loads a <code>.txt</code> or <code>.md</code> file into it. You can also drag a file onto the text area. The file is read in your browser and never uploaded anywhere. Markdown goes in as written, since the model reads it perfectly well and stripping it would misrepresent the file. If the prompt box is not empty, you are asked before it is replaced. Very large files are refused rather than truncated silently, and an import that lands tells you how many characters arrived; the context meter then updates with its exact token cost.</p>
         <p>The <strong>history</strong> button beside it brings back prompts you have run. <strong>&lsaquo;</strong> and <strong>&rsaquo;</strong> step through them, the check keeps the one shown, and the cross puts back what you had typed. The <strong>trash</strong> deletes the prompt shown, on a second press: the first turns it red, and moving away takes that back. Browsing after a run is safe, because a save records the prompt the run was generated from, not what the box shows by then.</p>
         <h4>The active turn</h4>
         <p>The selected path reads top to bottom: compact earlier cards, one rich active assistant card, then the next <strong>Draft</strong>. <strong>Run settings</strong> is the disclosure in that Draft; its collapsed chips show the main output and sampling values, and opening it reveals grouped controls, Experimental and Reset. Message Edit, Delete and Retry create alternate conversation paths, and Delete removes the selected user message plus later dependent turns only from its new path. Arrow browsing is read-only and restores the original path without borrowing its live frames. <strong>Edit Frames</strong> and <strong>What If?</strong> are separate run interventions and stay limited to the exact selected active tail. <strong>Save Run</strong> explicitly preserves that response's frames and signals; a saved frozen response links to its exact Analytics run, while an unsaved one remains honest <strong>Text only</strong>. Path changes wait for a generation, save, pending response or open run edit to settle; an open message action also blocks Send, Save, New Conversation and model changes until it closes. An explicit path conflict closes the stale action so you can reopen it against refreshed history; only a lost response after a successful reload replays the same operation automatically. <strong>Load older messages</strong> pages backward within the 200-turn browser cache. <strong>New Conversation</strong> creates durable state first and clears the workspace only after that succeeds.</p>
@@ -1087,6 +1153,7 @@
   <script src="/run_phases.js"></script>
   <script src="/download_client.js"></script>
   <script src="/download_toast.js"></script>
+  <script src="/context_meter.js"></script>
   <script src="/generator_composer.js"></script>
   <script src="/run_settings_core.js"></script>
   <script src="/run_settings_panel.js"></script>

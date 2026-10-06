@@ -378,6 +378,7 @@ function generatorSocketOpened() {
 function generatorSocketClosed() {
   generatorChrome.setConnection("disconnected");
   modelReady = false;
+  generatorComposer.countUnavailable();
   // Nothing is sampling this machine any more, so the meter must
   // stop claiming to. A switch between models comes through here.
   generatorChrome.clearResourceMeter();
@@ -452,6 +453,7 @@ function handleModelStatus(data) {
   if (data.status === "loading") {
     generatorChrome.setConnection("loading");
     modelReady = false;
+    generatorComposer.countUnavailable();
     generatorChrome.setLoadingText(
       "Loading "
       + (generatorModelPanel.activeDisplayName() || "model")
@@ -956,6 +958,9 @@ function handleDone(data) {
 }
 
 function handleError(data) {
+  if (generatorComposer.handleCountError(data)) {
+    return;
+  }
   if (generatorWatermark.handleError(data)) {
     return;
   }
@@ -998,7 +1003,7 @@ function setPromptImportStatus(text, danger) {
   });
 }
 
-// ---- Context window readout ----
+// ---- Exact next-inference context ----
 
 // The page mediates between the two form controllers. Each controller
 // writes only its members of the shared draft record.
@@ -1021,7 +1026,7 @@ function sendComposerCount(payload) {
   var messages = conversationStateMessages(
     conversationState, payload.text
   );
-  if (messages === null || conversationState.conversation === null) {
+  if (messages === null) {
     generatorSocket.send(payload);
     return;
   }
@@ -1029,7 +1034,7 @@ function sendComposerCount(payload) {
     type: "count_prompt",
     thinking: payload.thinking,
     request_id: payload.request_id,
-    output_reserve: Math.max(1, composerOutputBudget()),
+    output_reserve: payload.output_reserve,
   });
   generatorSocket.send(structured);
 }
@@ -1249,6 +1254,9 @@ function applyConversationAction(action) {
     conversationState, action
   );
   conversationState = nextState;
+  if (conversationStateActionChangesMessages(action)) {
+    generatorComposer.conversationChanged();
+  }
   conversationActions.reconcile(action);
   var runIdentity = generatorRun
     ? generatorRun.conversationIdentity()
@@ -2562,6 +2570,7 @@ function raiseLoadingOverlay() {
   conversationActions.closeAll();
   generatorModals.closeAll();
   generatorComposer.closeImport();
+  generatorComposer.closeContextMeter();
   generatorWatermark.close();
   generatorChrome.showLoading();
 }
@@ -2611,7 +2620,9 @@ function applyModelInfo(info) {
   var capabilities = generatorModelPanel.capabilities();
   generatorComposer.configure({
     modelId: generatorModelPanel.activeModelId(),
+    modelDisplay: generatorModelPanel.activeDisplayName(),
     inputMode: capabilities.input_mode,
+    device: generatorModelPanel.activeDevice(),
     contextLength: generatorModelPanel.activeContext(),
   });
   generatorWatermark.configure(capabilities);

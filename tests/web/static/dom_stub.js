@@ -64,6 +64,7 @@ const GENERATOR_SCRIPTS = [
   "run_phases.js",
   "download_client.js",
   "download_toast.js",
+  "context_meter.js",
   "generator_composer.js",
   "run_settings_core.js",
   "run_settings_panel.js",
