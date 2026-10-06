@@ -204,19 +204,18 @@ def test_run_settings_uses_native_disclosure_semantics() -> None:
     assert 'role="button"' not in summary.group(0)
 
 
-def test_signal_tooltips_open_inside_scrollport() -> None:
-    """Right-edge watermark help must not create clipped overflow."""
+def test_run_settings_tooltips_escape_the_scrollport() -> None:
+    """Help is viewport-clamped instead of clipped by its panel."""
     styles = RUN_SETTINGS_CSS.read_text(encoding="utf-8")
     body = _rule(styles, "#run-settings-body {", 260)
-    tooltip = _rule(
-        styles,
-        '#run-settings [data-param-group="signals"] .tooltip {',
-        180,
+    portal = _rule(
+        styles, ".tooltip.run-settings-tooltip-portal {", 260
     )
 
     assert "overflow-x: hidden" in body
-    assert "right: 24px" in tooltip
-    assert "left: auto" in tooltip
+    assert "display: block" in portal
+    assert "position: fixed" in portal
+    assert "max-width: calc(100vw - 16px)" in portal
 
 
 def test_run_settings_tooltips_close_while_focus_remains() -> None:
@@ -250,10 +249,7 @@ def test_run_settings_styles_support_mounted_instances() -> None:
     assert 'class="run-settings"' in details.group(0)
     assert ".run-settings," in styles
     assert ".run-settings-body," in styles
-    assert (
-        '.run-settings [data-param-group="signals"] .tooltip,'
-        in styles
-    )
+    assert ".tooltip.run-settings-tooltip-portal" in styles
 
 
 def test_new_actions_are_native_buttons_with_names() -> None:

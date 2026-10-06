@@ -126,9 +126,10 @@ def test_confirm_lands_on_the_last_frame_by_itself() -> None:
     confirming from frame 12 would leave the scrubber at 12 over a
     saved run, which is the failure mode a snap-first workaround was
     going to defend against."""
-    body = _region("function activate()", 500)
+    body = _region("function activate()", 900)
 
-    assert "currentFrame = run.frameCount() - 1" in body
+    assert "var frameCount = run.frameCount()" in body
+    assert "currentFrame = frameCount - 1" in body
 
 
 def test_retry_does_not_read_the_scrubber() -> None:

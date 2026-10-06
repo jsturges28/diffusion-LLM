@@ -186,13 +186,16 @@
   width: min(280px, calc(100vw - 80px));
 }
 
-/* The Signals column sits against the disclosure's right edge. Open
-   its help inward so watermark copy stays inside the scrollport
-   instead of creating a clipped horizontal overflow. */
-.run-settings [data-param-group="signals"] .tooltip,
-#run-settings [data-param-group="signals"] .tooltip {
-  right: 24px;
-  left: auto;
+/* Open help is moved to the viewport (or its top-layer dialog) and
+   clamped in JavaScript. It therefore escapes every settings
+   scrollport, including right-edge Sampling and Signals controls. */
+.tooltip.run-settings-tooltip-portal {
+  display: block;
+  position: fixed;
+  right: auto;
+  max-width: calc(100vw - 16px);
+  transform: none;
+  z-index: 200;
 }
 
 .run-settings .run-settings-param-row,

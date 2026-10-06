@@ -481,6 +481,29 @@ test("session snapshots bind the active run to its conversation", () => {
   );
 });
 
+test("an empty completion still advances its conversation identity",
+  () => {
+  const { run, external } = harness();
+  external.conversation = conversationIdentity();
+  run.begin("what ran", { steps: 2 });
+  finish(run, "");
+  external.conversation = conversationIdentity({
+    branch_revision: 3,
+    assistant_turn_version: 2,
+    assistant_text: "",
+  });
+
+  assert.equal(run.finalText(), "");
+  assert.equal(
+    run.refreshConversation(assistantAction("", 2, false)),
+    true
+  );
+  assert.equal(
+    run.conversationIdentity().assistant_turn_version,
+    2
+  );
+});
+
 test("a reload cannot relabel frames to a newer same-text turn", () => {
   const { run, external } = harness();
   external.conversation = conversationIdentity();

@@ -110,13 +110,27 @@ function generatorChromeCreate(options) {
   }
 
   function showOutputPlaceholder(displayName) {
-    outputArea.textContent = "";
+    showOutputNotice(
+      displayName
+        ? displayName + " output will appear here..."
+        : "Output will appear here..."
+    );
+  }
+
+  function showNoOutput(stopped) {
+    showOutputNotice(
+      stopped === true
+        ? "The run stopped before producing any text."
+        : "The model ended before producing any text."
+          + " Retry to sample another continuation."
+    );
+  }
+
+  function showOutputNotice(message) {
     var placeholder = document.createElement("span");
     placeholder.id = "output-placeholder";
-    placeholder.textContent = displayName
-      ? displayName + " output will appear here..."
-      : "Output will appear here...";
-    outputArea.appendChild(placeholder);
+    placeholder.textContent = message;
+    outputArea.replaceChildren(placeholder);
   }
 
   function setConnection(state) {
@@ -568,6 +582,7 @@ function generatorChromeCreate(options) {
     wire: wire,
     boot: boot,
     showOutputPlaceholder: showOutputPlaceholder,
+    showNoOutput: showNoOutput,
     setConnection: setConnection,
     setLoadingText: setLoadingText,
     setLoadingProgress: setLoadingProgress,

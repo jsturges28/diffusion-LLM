@@ -909,11 +909,15 @@ function handleDone(data) {
   // screen says which. The flag also rides along to the save, so
   // the record cannot outlive the distinction.
   var completed = generatorRun.finish(data);
-  var terminalMessage =
-    completed.interrupted ? "Stopped." : "Done.";
+  var responseText = generatorRun.finalText() || "";
+  var terminalMessage = completed.interrupted
+    ? "Stopped."
+    : (responseText === ""
+      ? "Done: no text generated."
+      : "Done.");
   if (!editing) {
     queueConversationAssistant({
-      text: generatorRun.finalText() || "",
+      text: responseText,
       partial: completed.interrupted,
       status: completed.interrupted ? "cancelled" : "completed",
     });
@@ -930,7 +934,16 @@ function handleDone(data) {
       thinkingContent.textContent = "";
     }
   }
-  setSaveAvailable(true);
+  if (generatorRun.frameCount() === 0) {
+    if (responseText === "") {
+      generatorChrome.showNoOutput(completed.interrupted);
+    } else {
+      generatorCanvas.renderFinalText(responseText);
+    }
+  }
+  setSaveAvailable(
+    responseText !== "" && generatorRun.frameCount() > 0
+  );
 
   generatorEdit.completeStream();
   generatorCanvas.finishRunSegment();

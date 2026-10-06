@@ -119,7 +119,7 @@ def test_the_click_handler_follows_the_same_order() -> None:
 
 def test_the_terminal_frame_is_read_for_the_stopped_flag() -> None:
     body = _run()
-    done = _region("function handleDone(data)", 900)
+    done = _region("function handleDone(data)", 1300)
 
     assert "data.cancelled === true" in body
     assert '"Stopped."' in done

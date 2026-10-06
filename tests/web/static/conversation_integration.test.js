@@ -541,6 +541,39 @@ test("Send reserves, generates, completes, then appends once",
   );
   });
 
+test("a zero-token completion remains visible and explicit",
+  async () => {
+  const api = conversationApi();
+  const run = await pageWithApi(api);
+  run.page.registry.get("prompt-input").value = "Repeated prompt";
+
+  assert.equal(await run.context.startGeneration(), true);
+  run.context.handleDone({
+    type: "done",
+    final_text: "",
+    run_token: "nonce:empty",
+  });
+  await run.context.conversationCompletion;
+  await run.context.conversationClient.flush();
+
+  assert.equal(api.state.turns.at(-1).text, "");
+  assert.equal(run.context.generatorRun.finalText(), "");
+  assert.equal(
+    run.page.registry.get("active-assistant-card").hidden,
+    false
+  );
+  assert.match(
+    run.page.registry.get("output-area")
+      .querySelector("#output-placeholder").textContent,
+    /ended before producing any text/
+  );
+  assert.equal(run.page.registry.get("btn-save").disabled, true);
+  assert.match(
+    run.page.registry.get("status-message").textContent,
+    /no text generated/
+  );
+  });
+
 test("a failed generation retries its reserved assistant",
   async () => {
   const api = conversationApi();

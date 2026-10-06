@@ -203,6 +203,11 @@
   border-color: rgba(160, 170, 180, 0.24);
 }
 
+.conversation-turn-badge-empty {
+  border-color: rgba(255, 177, 66, 0.35);
+  color: #ffb142;
+}
+
 .conversation-turn-badge-editing {
   border-color: rgba(112, 211, 255, 0.58);
   color: #9bddff;
@@ -215,6 +220,11 @@
   line-height: 1.55;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.conversation-turn-text.is-empty {
+  color: var(--text-secondary);
+  font-style: italic;
 }
 
 .conversation-turn-actions,

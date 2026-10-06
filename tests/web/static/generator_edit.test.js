@@ -152,10 +152,13 @@ function harness(settings) {
     substitutions: [],
     saves: 0,
     commits: 0,
+    canvasActivations: 0,
     canEdit: true,
   };
   const canvas = {
-    activate() {},
+    activate() {
+      external.canvasActivations += 1;
+    },
     deactivate() {},
     refreshControls() {},
     renderFrame() {},
@@ -256,6 +259,26 @@ test("activation always opens the latest current run frame", () => {
   edit.activate();
 
   assert.equal(edit.currentFrame(), 5);
+});
+
+test("one frame activates overlays without inventing a scrubber", () => {
+  const { edit, run, external, elements } = harness();
+  run.setFrameCount(1);
+
+  assert.equal(edit.activate(), true);
+  assert.equal(external.canvasActivations, 1);
+  assert.equal(
+    elements.get("scrubber-section").classList.contains("is-idle"),
+    true
+  );
+});
+
+test("an empty run leaves every completed-run surface inactive", () => {
+  const { edit, run, external } = harness();
+  run.setFrameCount(0);
+
+  assert.equal(edit.activate(), false);
+  assert.equal(external.canvasActivations, 0);
 });
 
 test("guided actions follow the declared phase transitions", () => {

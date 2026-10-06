@@ -293,6 +293,51 @@ test("parameter help is reachable by keyboard and touch", () => {
   assert.equal(info.classList.contains("is-open"), false);
 });
 
+test("parameter help escapes and clamps to the viewport", () => {
+  const page = pageHarness();
+  const harness = mountPanel(page, "clipped-help-");
+  const info = input(
+    harness, "clipped-help-", "temperature"
+  ).closest(".param-group").querySelector(".info-icon");
+  const tooltip = info.querySelector(".tooltip");
+  page.context.innerWidth = 320;
+  page.context.innerHeight = 200;
+  info.getBoundingClientRect = () => ({
+    top: 10,
+    left: 290,
+    right: 306,
+    bottom: 26,
+    width: 16,
+    height: 16,
+  });
+  tooltip.getBoundingClientRect = () => ({
+    top: 0,
+    left: 0,
+    right: 280,
+    bottom: 80,
+    width: 280,
+    height: 80,
+  });
+
+  info.dispatch("mouseenter");
+
+  assert.equal(tooltip.parent, page.document.body);
+  assert.equal(
+    tooltip.classList.contains("run-settings-tooltip-portal"),
+    true
+  );
+  assert.equal(tooltip.style.left, "8px");
+  assert.equal(tooltip.style.top, "8px");
+  assert.equal(tooltip.style.width, "280px");
+
+  info.dispatch("mouseleave");
+  assert.equal(tooltip.parent, info);
+  assert.equal(
+    tooltip.classList.contains("run-settings-tooltip-portal"),
+    false
+  );
+});
+
 test("two seeded panels keep independent values", () => {
   const page = pageHarness();
   const first = mountPanel(page, "first-");

@@ -174,6 +174,17 @@ function runSettingsPanelCreate(options) {
     info.setAttribute("aria-describedby", tooltipId);
     tooltip.id = tooltipId;
     tooltip.setAttribute("role", "tooltip");
+    info._runSettingsTooltip = tooltip;
+    info._runSettingsInfoHovered = false;
+    tooltip._runSettingsInfo = info;
+    info.addEventListener("mouseenter", function () {
+      info._runSettingsInfoHovered = true;
+      syncInfoTooltip(info);
+    });
+    info.addEventListener("mouseleave", function () {
+      info._runSettingsInfoHovered = false;
+      syncInfoTooltip(info);
+    });
     info.addEventListener("click", function (event) {
       event.preventDefault();
       event.stopPropagation();
@@ -210,6 +221,96 @@ function runSettingsPanelCreate(options) {
   function setInfoOpen(info, open) {
     info.classList.toggle("is-open", open);
     info.setAttribute("aria-expanded", open ? "true" : "false");
+    syncInfoTooltip(info);
+  }
+
+  function syncInfoTooltip(info) {
+    var open = info.classList.contains("is-open");
+    if (open || info._runSettingsInfoHovered === true) {
+      showInfoTooltip(info);
+    } else {
+      hideInfoTooltip(info);
+    }
+  }
+
+  function showInfoTooltip(info) {
+    var tooltip = info._runSettingsTooltip;
+    var viewport = infoTooltipViewport();
+    if (!tooltip || viewport === null) {
+      return;
+    }
+    var infoRect = info.getBoundingClientRect();
+    if (infoRect.width <= 0 || infoRect.height <= 0) {
+      return;
+    }
+    tooltip.classList.add("run-settings-tooltip-portal");
+    tooltip.style.visibility = "hidden";
+    infoTooltipHost(info).appendChild(tooltip);
+    var margin = 8;
+    var width = Math.min(280, viewport.width - 2 * margin);
+    tooltip.style.width = Math.floor(width) + "px";
+    var tooltipRect = tooltip.getBoundingClientRect();
+    var left = infoRect.right + margin;
+    if (left + width > viewport.width - margin) {
+      left = infoRect.left - margin - width;
+    }
+    left = infoTooltipClamp(
+      left, margin, viewport.width - margin - width
+    );
+    var centeredTop = infoRect.top
+      + (infoRect.height - tooltipRect.height) / 2;
+    var top = infoTooltipClamp(
+      centeredTop,
+      margin,
+      viewport.height - margin - tooltipRect.height
+    );
+    tooltip.style.left = Math.floor(left) + "px";
+    tooltip.style.top = Math.floor(top) + "px";
+    tooltip.style.visibility = "";
+  }
+
+  function hideInfoTooltip(info) {
+    var tooltip = info._runSettingsTooltip;
+    if (!tooltip) {
+      return;
+    }
+    tooltip.classList.remove("run-settings-tooltip-portal");
+    tooltip.style.left = "";
+    tooltip.style.top = "";
+    tooltip.style.width = "";
+    tooltip.style.visibility = "";
+    info.appendChild(tooltip);
+  }
+
+  function infoTooltipViewport() {
+    var root = document.documentElement;
+    var fallbackWidth = root ? root.clientWidth : 0;
+    var fallbackHeight = root ? root.clientHeight : 0;
+    var width = infoTooltipDimension(
+      window.innerWidth, fallbackWidth
+    );
+    var height = infoTooltipDimension(
+      window.innerHeight, fallbackHeight
+    );
+    if (width <= 16 || height <= 16) {
+      return null;
+    }
+    return { width: width, height: height };
+  }
+
+  function infoTooltipDimension(primary, fallback) {
+    if (typeof primary === "number" && primary > 0) {
+      return primary;
+    }
+    return typeof fallback === "number" ? fallback : 0;
+  }
+
+  function infoTooltipHost(info) {
+    return info.closest("dialog") || document.body;
+  }
+
+  function infoTooltipClamp(value, minimum, maximum) {
+    return Math.max(minimum, Math.min(value, maximum));
   }
 
   function buildResetButton() {
@@ -463,6 +564,7 @@ function runSettingsPanelCreate(options) {
   }
 
   function clearControls() {
+    restoreInfoTooltips();
     clearListeners(inputListeners);
     var names = Object.keys(inputs);
     for (var index = 0; index < names.length; index++) {
@@ -476,6 +578,14 @@ function runSettingsPanelCreate(options) {
     refs.fields.innerHTML = "";
     refs.modeExtra.innerHTML = "";
     refs.chips.innerHTML = "";
+  }
+
+  function restoreInfoTooltips() {
+    var icons = refs.root.querySelectorAll(".info-icon");
+    for (var index = 0; index < icons.length; index++) {
+      icons[index]._runSettingsInfoHovered = false;
+      setInfoOpen(icons[index], false);
+    }
   }
 
   function specGroup(spec) {
@@ -764,6 +874,10 @@ function runSettingsPanelCreate(options) {
       description.className = "tooltip-desc";
       description.textContent = spec.help;
       tooltip.appendChild(description);
+    }
+    var info = tooltip._runSettingsInfo;
+    if (info) {
+      syncInfoTooltip(info);
     }
   }
 

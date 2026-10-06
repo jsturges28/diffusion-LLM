@@ -90,7 +90,7 @@ function appendFrame(index, withForgetting) {
 }
 
 // The generator after a whole run from a model declaring `signals`.
-function generator(signals, withForgetting) {
+function generator(signals, withForgetting, frameCount) {
   const { context } = loadPage({});
   const model = stateSpaceModel(signals);
   context.generatorModelPanel.configure({
@@ -98,7 +98,8 @@ function generator(signals, withForgetting) {
     active: model.id,
     active_device: "cpu",
   });
-  for (let index = 1; index <= WORDS.length; index++) {
+  const count = frameCount === undefined ? WORDS.length : frameCount;
+  for (let index = 1; index <= count; index++) {
     context.handleFrame(appendFrame(index, withForgetting));
   }
   return context;
@@ -135,6 +136,17 @@ test("a model that declares forgetting offers it", () => {
   const context = generator([FORGETTING], true);
 
   assert.equal(context.generatorCanvas.forgettingAvailable(), true);
+  assert.ok(pickerValues(context).includes("forgetting"));
+});
+
+test("a one-token Mamba run still opens its overlay drawer", () => {
+  const context = generator([FORGETTING], true, 1);
+  const drawer = context.document.getElementById(
+    "overlay-select-group"
+  );
+
+  assert.equal(context.generatorEdit.activate(), true);
+  assert.equal(drawer.hidden, false);
   assert.ok(pickerValues(context).includes("forgetting"));
 });
 

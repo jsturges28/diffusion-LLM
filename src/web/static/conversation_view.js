@@ -220,11 +220,23 @@ function conversationViewTurn(
 
   var text = document.createElement("div");
   text.className = "conversation-turn-text";
-  text.textContent = turn.text;
+  conversationViewTurnText(text, turn);
   article.appendChild(header);
   article.appendChild(text);
   decorateTurn(article, turn, branchPoints);
   return article;
+}
+
+function conversationViewTurnText(element, turn) {
+  if (turn.role !== "assistant" || turn.text !== "") {
+    element.textContent = turn.text;
+    return;
+  }
+  element.classList.add("is-empty");
+  element.textContent = turn.partial
+    ? "The run stopped before producing any text."
+    : "The model ended before producing any text."
+      + " Retry to sample another continuation.";
 }
 
 function conversationViewBadges(header, turn) {
@@ -240,6 +252,13 @@ function conversationViewBadges(header, turn) {
     header.appendChild(
       conversationViewBadge("Partial", "partial")
     );
+  }
+  if (turn.text === "") {
+    var noOutput = conversationViewBadge("No output", "empty");
+    noOutput.title =
+      "The model completed without producing text or token data.";
+    header.appendChild(noOutput);
+    return;
   }
   if (turn.run_link) {
     header.appendChild(

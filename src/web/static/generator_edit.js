@@ -312,11 +312,24 @@ function generatorEditCreate(options) {
   }
 
   function activate() {
-    if (run.frameCount() < 2) {
+    var frameCount = run.frameCount();
+    if (frameCount === 0) {
       return false;
     }
+    canvas.activate();
+    if (frameCount === 1) {
+      // One token has no useful scrub range, but its confidence and
+      // model-specific signals still belong in the overlay drawer.
+      scrubberActive = false;
+      currentFrame = 0;
+      setScrubberVisible(false);
+      guidedEditControls.hidden = true;
+      clearSelections();
+      readouts.updateProfile();
+      return true;
+    }
     scrubberActive = true;
-    currentFrame = run.frameCount() - 1;
+    currentFrame = frameCount - 1;
     scrubberSlider.min = "0";
     scrubberSlider.max = String(currentFrame);
     scrubberSlider.value = String(currentFrame);
@@ -325,7 +338,6 @@ function generatorEditCreate(options) {
     setScrubberVisible(true);
     applyEntryGates();
     refreshLocks();
-    canvas.activate();
     guidedEditControls.hidden = true;
     clearSelections();
     unlockNavigation();

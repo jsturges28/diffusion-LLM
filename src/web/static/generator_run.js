@@ -240,7 +240,7 @@ function generatorRunCreate(options) {
       );
     }
     interrupted = data.cancelled === true;
-    if (data.final_text) {
+    if (typeof data.final_text === "string") {
       finalText = data.final_text;
     }
     if (typeof data.prompt_len === "number") {

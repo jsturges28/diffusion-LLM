@@ -33,7 +33,7 @@ function turn(index, overrides) {
   }, overrides || {});
 }
 
-function state(page, overrides) {
+function state(page, overrides, tailOverrides) {
   const api = page.context;
   return api.conversationStateReduce(
     api.conversationStateCreate(),
@@ -57,7 +57,9 @@ function state(page, overrides) {
             run_link: { run_id: "saved-run", revision: 1 },
           }),
           turn(3),
-          turn(4, { partial: true }),
+          turn(4, Object.assign(
+            { partial: true }, tailOverrides || {}
+          )),
         ],
         next_before: "00000001",
         has_more: true,
@@ -186,6 +188,35 @@ test("an unsaved frozen response says its XAI is text only", () => {
   );
   assert.equal(
     oldTail.querySelector(".conversation-run-link"),
+    null
+  );
+});
+
+test("an empty completion is explicit instead of a blank card", () => {
+  const h = harness();
+  h.view.render(state(h.page, null, {
+    text: "",
+    partial: false,
+    model_id: "mamba3",
+    input_mode: "completion",
+  }));
+  const assistant = h.page.registry.get(
+    "conversation-turns"
+  ).children.at(-1);
+
+  assert.match(
+    assistant.querySelector(
+      ".conversation-turn-text"
+    ).textContent,
+    /ended before producing any text/
+  );
+  assert.ok(
+    assistant.querySelector(".conversation-turn-badge-empty")
+  );
+  assert.equal(
+    assistant.querySelector(
+      ".conversation-turn-badge-text-only"
+    ),
     null
   );
 });

@@ -172,6 +172,23 @@ test("placeholder and loading chrome preserve their page IDs", () => {
   assert.equal(overlay.classList.contains("hidden"), true);
 });
 
+test("an empty terminal result is named in the output area", () => {
+  const { page, chrome } = loadChrome({});
+  const output = page.registry.get("output-area");
+
+  chrome.showNoOutput(false);
+  assert.match(
+    output.children[0].textContent,
+    /model ended before producing any text/
+  );
+
+  chrome.showNoOutput(true);
+  assert.match(
+    output.children[0].textContent,
+    /run stopped before producing any text/
+  );
+});
+
 test("TPS controls call the page callback", () => {
   const { page, state } = loadChrome({});
   const tps = page.registry.get("status-tps");
